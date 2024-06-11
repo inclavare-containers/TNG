@@ -1,0 +1,14 @@
+[package]
+edition = "2021"
+name = "tng"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.81"
+clap = {version = "4.5.4", features = ["derive"]}
+ctrlc = "3.4.4"
+env_logger = {version = "0.11.2", features = ["auto-color", "humantime", "regex"]}
+log = "0.4.20"
+tempfile = "3.10.1"
