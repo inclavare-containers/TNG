@@ -1,96 +1,77 @@
-use clap::error::Result;
-use std::net::IpAddr;
 use std::str::FromStr;
 
-// --add-ingress='direct,in=7001,dst=127.0.0.1:19991'
-// --add-ingress='http-proxy,dst=127.0.0.1:9991'
-// --add-ingress='netfilter,dst=127.0.0.1:9991'
+use anyhow::{bail, Result};
+
+use super::Endpoint;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum AddIngressArgs {
-    Direct { in_port: u16, dst: (IpAddr, u16) },
-    HttpProxy { dst: (IpAddr, u16) },
-    Netfilter { dst: (IpAddr, u16) },
+    /// --add-ingress='mapping,in=10001,out=127.0.0.1:20001'
+    Mapping { r#in: Endpoint, out: Endpoint },
+    /// --add-ingress='http-proxy,dst=127.0.0.1:9991'
+    HttpProxy { dst: Endpoint },
+    /// --add-ingress='netfilter,dst=127.0.0.1:9991'
+    Netfilter { dst: Endpoint },
 }
 
-impl AddIngressArgs {
-    fn parse_parts(s: &str) -> Result<Self, String> {
+impl FromStr for AddIngressArgs {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split(',').collect();
         match parts[0] {
-            "direct" => {
-                if let (Some(in_port_part), Some(dst_part)) = (parts.get(1), parts.get(2)) {
-                    let in_port = in_port_part
-                        .split('=')
-                        .nth(1)
-                        .ok_or_else(|| "Invalid 'in' parameter format".to_string())?
-                        .parse::<u16>()
-                        .map_err(|_| "Invalid port number".to_string())?;
-                    let dst = Self::parse_dst(dst_part)?;
-                    Ok(AddIngressArgs::Direct { in_port, dst })
+            "mapping" => {
+                if let (Some(in_part), Some(out_part)) = (parts.get(1), parts.get(2)) {
+                    if !in_part.starts_with("in=") {
+                        bail!("Missing 'in=' prefix")
+                    }
+                    let r#in = Endpoint::from_str(&in_part[3..])?;
+
+                    if !out_part.starts_with("out=") {
+                        bail!("Missing 'out=' prefix")
+                    }
+                    let out = Endpoint::from_str(&out_part[4..])?;
+                    Ok(AddIngressArgs::Mapping { r#in, out })
                 } else {
-                    Err("Missing 'in' or 'dst' parameter for direct".to_string())
+                    bail!("Missing 'in=' or 'out=' parameter for 'mapping' ingress type")
                 }
             }
             "http-proxy" | "netfilter" => {
                 if let Some(dst_part) = parts.get(1) {
-                    let dst = Self::parse_dst(dst_part)?;
+                    if !dst_part.starts_with("dst=") {
+                        bail!("Missing 'dst=' prefix")
+                    }
+                    let dst = Endpoint::from_str(&dst_part[4..])?;
                     Ok(match parts[0] {
                         "http-proxy" => AddIngressArgs::HttpProxy { dst },
                         "netfilter" => AddIngressArgs::Netfilter { dst },
                         _ => unreachable!(), // We already matched the variants above
                     })
                 } else {
-                    Err("Missing 'dst' parameter".to_string())
+                    bail!("Missing 'dst=' parameter")
                 }
             }
-            v => Err(format!("Unsupported ingress type '{v}'")),
+            v => bail!("Unsupported ingress type '{v}'"),
         }
-    }
-
-    fn parse_dst(dst_part: &str) -> Result<(IpAddr, u16), String> {
-        if !dst_part.starts_with("dst=") {
-            return Err("Missing 'dst=' prefix".to_string());
-        }
-        let remaining = &dst_part[4..];
-
-        let parts: Vec<&str> = remaining.split(':').collect();
-        if parts.len() != 2 {
-            return Err("Invalid format after 'dst='. Expected IP:Port".to_string());
-        }
-
-        let ip_str = parts[0];
-        let port_str = parts[1];
-
-        let ip = ip_str
-            .parse::<IpAddr>()
-            .map_err(|_| format!("Invalid IP address: {}", ip_str))?;
-
-        let port = port_str
-            .parse::<u16>()
-            .map_err(|_| format!("Invalid port number: {}", port_str))?;
-
-        Ok((ip, port))
-    }
-}
-
-impl FromStr for AddIngressArgs {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        AddIngressArgs::parse_parts(s)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_direct_ingress_args() {
         let args_str = "direct,in=7001,dst=127.0.0.1:19991";
-        let expected = AddIngressArgs::Direct {
-            in_port: 7001,
-            dst: (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 19991),
+        let expected = AddIngressArgs::Mapping {
+            r#in: Endpoint {
+                host: None,
+                port: 7001,
+            },
+            out: Endpoint {
+                host: Some("127.0.0.1".to_owned()),
+                port: 19991,
+            },
         };
         assert_eq!(args_str.parse::<AddIngressArgs>().unwrap(), expected);
     }
@@ -99,7 +80,10 @@ mod tests {
     fn test_http_proxy_ingress_args() {
         let args_str = "http-proxy,dst=127.0.0.1:9991";
         let expected = AddIngressArgs::HttpProxy {
-            dst: (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9991),
+            dst: Endpoint {
+                host: Some("127.0.0.1".to_owned()),
+                port: 9991,
+            },
         };
         assert_eq!(args_str.parse::<AddIngressArgs>().unwrap(), expected);
     }
@@ -108,7 +92,10 @@ mod tests {
     fn test_netfilter_ingress_args() {
         let args_str = "netfilter,dst=127.0.0.1:9991";
         let expected = AddIngressArgs::Netfilter {
-            dst: (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9991),
+            dst: Endpoint {
+                host: Some("127.0.0.1".to_owned()),
+                port: 9991,
+            },
         };
         assert_eq!(args_str.parse::<AddIngressArgs>().unwrap(), expected);
     }
