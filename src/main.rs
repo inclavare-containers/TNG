@@ -1,12 +1,18 @@
-use std::{io::Write as _, process::Command};
+use std::{
+    fs::File,
+    io::{BufReader, Write as _},
+    process::Command,
+};
 
 use anyhow::{bail, Context, Result};
-use args::{egress::AddEgressArgs, ingress::AddIngressArgs, Args};
+use args::Args;
 use clap::Parser as _;
+use config::{egress::EgressType, ingress::IngressType, Config};
 use log::{debug, info};
 
 mod args;
 mod confgen;
+mod config;
 
 fn main() -> Result<()> {
     let env = env_logger::Env::default()
@@ -23,9 +29,22 @@ fn main() -> Result<()> {
             let mut listeners = vec![];
             let mut clusters = vec![];
 
-            for (id, add_ingress) in options.add_ingress.iter().enumerate() {
-                match add_ingress {
-                    AddIngressArgs::Mapping { r#in, out } => {
+            // Load config
+            let config: Config = match (options.config_file, options.config_content) {
+                (Some(_), Some(_)) | (None, None) => {
+                    bail!("Either --config_file or --config_content should be set")
+                }
+                (None, Some(s)) => serde_json::from_str(&s)?,
+                (Some(path), None) => {
+                    let file = File::open(path)?;
+                    let reader = BufReader::new(file);
+                    serde_json::from_reader(reader)?
+                }
+            };
+
+            for (id, add_ingress) in config.add_ingress.iter().enumerate() {
+                match &add_ingress.ingress_type {
+                    IngressType::Mapping { r#in, out } => {
                         let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
                         let in_port = r#in.port;
 
@@ -77,21 +96,21 @@ r#"
                 "@type": type.inclavare-containers.io/envoy.extensions.transport_sockets.tls.v3.RatsTlsCertValidatorConfig
                 coco_verifier:
                   evidence_mode:
-                    as_addr: http://127.0.0.1:50004/ 
+                    as_addr: http://127.0.0.1:50004/
                   policy_ids:
                   - default
                   trusted_certs_paths:
 "#
                 ))
                     }
-                    AddIngressArgs::HttpProxy { dst: _ } => todo!(),
-                    AddIngressArgs::Netfilter { dst: _ } => todo!(),
+                    IngressType::HttpProxy { dst: _ } => todo!(),
+                    IngressType::Netfilter { dst: _ } => todo!(),
                 }
             }
 
-            for (id, add_egress) in options.add_egress.iter().enumerate() {
-                match add_egress {
-                    AddEgressArgs::Mapping { r#in, out } => {
+            for (id, add_egress) in config.add_egress.iter().enumerate() {
+                match &add_egress.egress_type {
+                    EgressType::Mapping { r#in, out } => {
                         let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
                         let in_port = r#in.port;
 

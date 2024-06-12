@@ -1,0 +1,22 @@
+use serde::{Deserialize, Serialize};
+
+use super::{attest::AttestArgs, verify::VerifyArgs, Endpoint};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AddEgressArgs {
+    #[serde(flatten)]
+    pub egress_type: EgressType,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attest: Option<AttestArgs>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify: Option<VerifyArgs>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum EgressType {
+    /// --add-ingress='mapping,in=20001,out=127.0.0.1:30001'
+    #[serde(rename = "mapping")]
+    Mapping { r#in: Endpoint, out: Endpoint },
+}
