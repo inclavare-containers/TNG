@@ -7,6 +7,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use args::Args;
 use clap::Parser as _;
+use confgen::RuntimeData;
 use config::TngConfig;
 use log::{debug, info};
 
@@ -39,28 +40,18 @@ fn main() -> Result<()> {
                 }
             };
 
-            let envoy_config = confgen::gen_envoy_config(config)?;
+            let runtime_data = RuntimeData::new(config)?;
+            let envoy_config = runtime_data.envoy_config();
+            let envoy_config_file = runtime_data.envoy_config_file();
 
             debug!("Generated Envoy config: {envoy_config}");
 
-            // Write config to temp file
-            let temp_file = tempfile::Builder::new()
-                .prefix(".tng-envoy-conf-")
-                .suffix(".yaml")
-                .tempfile()
-                .context("Failed to create temp file")?;
-            let (mut temp_file, temp_file_path) = temp_file.keep()?;
-
-            temp_file
-                .write_all(envoy_config.as_bytes())
-                .expect("Failed to write data");
-
-            info!("Generated Envoy config written to: {temp_file_path:?}");
+            info!("Generated Envoy config written to: {envoy_config_file:?}");
 
             // Start Envoy
             let mut cmd = Command::new("/envoy_librats/bazel-bin/source/exe/envoy-static");
             cmd.arg("-c")
-                .arg(&temp_file_path)
+                .arg(envoy_config_file)
                 .arg("-l")
                 .arg("debug")
                 .arg("--base-id")
@@ -80,7 +71,7 @@ fn main() -> Result<()> {
             info!("Envoy exited with status {exit_status}");
 
             if exit_status.success() {
-                let _ = std::fs::remove_file(temp_file_path);
+                runtime_data.clean_up();
                 info!("TNG now exit gracefully");
             } else {
                 bail!("Envoy exited with unexpected status {exit_status}, cmd: {cmd:?}")

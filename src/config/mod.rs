@@ -45,11 +45,11 @@ mod tests {
                         port: 20001,
                     },
                 },
-                attest: Some(AttestArgs {
+                attest: None,
+                verify: Some(VerifyArgs {
                     as_addr: "http://127.0.0.1:50004/".to_owned(),
                     policy_ids: vec!["default".to_owned()],
                 }),
-                verify: None,
             }],
             add_egress: vec![AddEgressArgs {
                 egress_type: EgressType::Mapping {
@@ -62,10 +62,10 @@ mod tests {
                         port: 30001,
                     },
                 },
-                attest: None,
-                verify: Some(VerifyArgs {
+                attest: Some(AttestArgs {
                     aa_addr: "unix:///tmp/attestation.sock".to_owned(),
                 }),
+                verify: None,
             }],
         };
 
