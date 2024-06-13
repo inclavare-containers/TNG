@@ -7,7 +7,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use args::Args;
 use clap::Parser as _;
-use config::{egress::EgressType, ingress::IngressType, Config};
+use config::TngConfig;
 use log::{debug, info};
 
 mod args;
@@ -26,11 +26,8 @@ fn main() -> Result<()> {
 
     match cmd {
         Args::Launch(options) => {
-            let mut listeners = vec![];
-            let mut clusters = vec![];
-
             // Load config
-            let config: Config = match (options.config_file, options.config_content) {
+            let config: TngConfig = match (options.config_file, options.config_content) {
                 (Some(_), Some(_)) | (None, None) => {
                     bail!("Either --config_file or --config_content should be set")
                 }
@@ -42,143 +39,9 @@ fn main() -> Result<()> {
                 }
             };
 
-            for (id, add_ingress) in config.add_ingress.iter().enumerate() {
-                match &add_ingress.ingress_type {
-                    IngressType::Mapping { r#in, out } => {
-                        let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
-                        let in_port = r#in.port;
+            let envoy_config = confgen::gen_envoy_config(config)?;
 
-                        let out_ip = out
-                            .host
-                            .as_deref()
-                            .context("format of 'out' should be 'host:port'")?;
-                        let out_port = out.port;
-
-                        listeners.push(format!(
-                            r#"
-  - name: tng_ingress{id}
-    address:
-      socket_address:
-        address: {in_addr}
-        port_value: {in_port}
-    filter_chains:
-    - filters:
-        - name: envoy.filters.network.tcp_proxy
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-            stat_prefix: tcp_proxy
-            cluster: tng_ingress{id}_upstream
-"#
-                        ));
-                        clusters.push(format!(
-r#"
-  - name: tng_ingress{id}_upstream
-    type: LOGICAL_DNS
-    dns_lookup_family: V4_ONLY
-    load_assignment:
-      cluster_name: tng_ingress{id}_upstream
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: {out_ip}
-                port_value: {out_port}
-    transport_socket:
-      name: envoy.transport_sockets.tls
-      typed_config:
-        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-        common_tls_context:
-          validation_context:
-            custom_validator_config:
-              name: envoy.tls.cert_validator.rats_tls
-              typed_config:
-                "@type": type.inclavare-containers.io/envoy.extensions.transport_sockets.tls.v3.RatsTlsCertValidatorConfig
-                coco_verifier:
-                  evidence_mode:
-                    as_addr: http://127.0.0.1:50004/
-                  policy_ids:
-                  - default
-                  trusted_certs_paths:
-"#
-                ))
-                    }
-                    IngressType::HttpProxy { dst: _ } => todo!(),
-                    IngressType::Netfilter { dst: _ } => todo!(),
-                }
-            }
-
-            for (id, add_egress) in config.add_egress.iter().enumerate() {
-                match &add_egress.egress_type {
-                    EgressType::Mapping { r#in, out } => {
-                        let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
-                        let in_port = r#in.port;
-
-                        let out_ip = out
-                            .host
-                            .as_deref()
-                            .context("format of 'out' should be 'host:port'")?;
-                        let out_port = out.port;
-
-                        listeners.push(format!(
-                            r#"
-  - name: tng_egress{id}
-    address:
-      socket_address:
-        address: {in_addr}
-        port_value: {in_port}
-    filter_chains:
-    - filters:
-      - name: envoy.filters.network.tcp_proxy
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-          stat_prefix: tcp_proxy
-          cluster: tng_egress{id}_upstream
-      transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-          common_tls_context:
-            rats_tls_cert_generator_configs:
-            - coco_attester:
-                aa_addr: unix:///tmp/attestation.sock
-                evidence_mode: {{}}
-"#
-                        ));
-
-                        clusters.push(format!(
-                            r#"
-  - name: tng_egress{id}_upstream
-    type: LOGICAL_DNS
-    dns_lookup_family: V4_ONLY
-    load_assignment:
-      cluster_name: tng_egress{id}_upstream
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: {out_ip}
-                port_value: {out_port}
-"#
-                        ))
-                    }
-                }
-            }
-
-            let config = format!(
-                r#"
-static_resources:
-
-  listeners:{}
-
-  clusters:{}
-"#,
-                listeners.join("\n"),
-                clusters.join("\n")
-            );
-
-            debug!("Generated Envoy config: {config}");
+            debug!("Generated Envoy config: {envoy_config}");
 
             // Write config to temp file
             let temp_file = tempfile::Builder::new()
@@ -189,7 +52,7 @@ static_resources:
             let (mut temp_file, temp_file_path) = temp_file.keep()?;
 
             temp_file
-                .write_all(config.as_bytes())
+                .write_all(envoy_config.as_bytes())
                 .expect("Failed to write data");
 
             info!("Generated Envoy config written to: {temp_file_path:?}");

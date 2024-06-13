@@ -17,7 +17,7 @@ cargo run launch --config-content='
           "port": 20001
         }
       },
-      "attest": {
+      "verify": {
         "as_addr": "http://127.0.0.1:50004/",
         "policy_ids": [
           "default"
@@ -37,12 +37,16 @@ cargo run launch --config-content='
           "port": 30001
         }
       },
-      "verify": {
+      "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }
     }
   ]
 }
 '
+```
 
+```sh
+openssl ecparam -out ./src/confgen/serverkey.pem -name secp256r1 -genkey
+openssl req -new -key ./src/confgen/serverkey.pem -x509 -nodes -days 365000 -subj "/CN=TNG Dummy Cert,O=Inclavare Containers" -out ./src/confgen/servercert.pem
 ```

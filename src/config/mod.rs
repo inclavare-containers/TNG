@@ -8,7 +8,7 @@ pub mod ingress;
 pub mod verify;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Config {
+pub struct TngConfig {
     pub add_ingress: Vec<AddIngressArgs>,
     pub add_egress: Vec<AddEgressArgs>,
 }
@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize() -> Result<()> {
-        let config = Config {
+        let config = TngConfig {
             add_ingress: vec![AddIngressArgs {
                 ingress_type: IngressType::Mapping {
                     r#in: Endpoint {
