@@ -1,0 +1,104 @@
+use anyhow::Result;
+use itertools::Itertools;
+
+use crate::config::Endpoint;
+
+pub enum IpTablesAction {
+    Redirect {
+        capture_dst: Endpoint,
+        listen_port: u16,
+        so_mark: u32,
+    },
+}
+
+pub struct IpTablesActions {
+    pub actions: Vec<IpTablesAction>,
+}
+
+impl IpTablesActions {
+    pub fn new(actions: Vec<IpTablesAction>) -> Self {
+        Self { actions }
+    }
+
+    ///
+    /// Example output:
+    ///
+    /// ```sh
+    /// # invoke_script
+    /// iptables -t nat -N TNG_ENGRESS
+    /// iptables -t nat -A TNG_ENGRESS -p tcp -m mark --mark 565 -j RETURN
+    /// iptables -t nat -A TNG_ENGRESS -p tcp --dst 127.0.0.1 --dport 30001 -j REDIRECT --to-ports 30000
+    /// iptables -t nat -A PREROUTING -p tcp -j TNG_ENGRESS
+    /// iptables -t nat -A OUTPUT -p tcp -j TNG_ENGRESS
+    ///
+    /// # revoke_script
+    /// iptables -t nat -D PREROUTING -p tcp -j TNG_ENGRESS
+    /// iptables -t nat -D OUTPUT -p tcp -j TNG_ENGRESS
+    /// iptables -t nat -F TNG_ENGRESS
+    /// iptables -t nat -X TNG_ENGRESS
+    /// ```
+    ///
+    pub fn gen_script(&self) -> Result<(String, String)> {
+        let mut invoke_script = "".to_owned();
+        let mut revoke_script = "".to_owned();
+
+        if !self.actions.is_empty() {
+            // Handle 'Redirect' case
+            let mut redirect_invoke_script = "".to_owned();
+
+            redirect_invoke_script += "iptables -t nat -N TNG_ENGRESS ; ";
+
+            for so_mark in self
+                .actions
+                .iter()
+                .filter_map(|action| match action {
+                    IpTablesAction::Redirect {
+                        capture_dst: _,
+                        listen_port: _,
+                        so_mark,
+                    } => Some(so_mark),
+                })
+                .unique()
+            {
+                redirect_invoke_script += &format!(
+                    "iptables -t nat -A TNG_ENGRESS -p tcp -m mark --mark {so_mark} -j RETURN ; "
+                )
+            }
+
+            for action in &self.actions {
+                match action {
+                    IpTablesAction::Redirect {
+                        capture_dst,
+                        listen_port,
+                        so_mark: _,
+                    } => {
+                        if let Some(addr) = &capture_dst.host {
+                            redirect_invoke_script += &format!(
+                                "iptables -t nat -A TNG_ENGRESS -p tcp --dst {addr}/32 --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                            );
+                        } else {
+                            redirect_invoke_script += &format!(
+                                "iptables -t nat -A TNG_ENGRESS -p tcp --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                            );
+                        }
+                    }
+                }
+            }
+
+            redirect_invoke_script += "iptables -t nat -A PREROUTING -p tcp -j TNG_ENGRESS ; ";
+            redirect_invoke_script += "iptables -t nat -A OUTPUT -p tcp -j TNG_ENGRESS ; ";
+
+            let redirect_revoke_script = "\
+            iptables -t nat -D PREROUTING -p tcp -j TNG_ENGRESS || true ; \
+            iptables -t nat -D OUTPUT -p tcp -j TNG_ENGRESS || true ; \
+            iptables -t nat -F TNG_ENGRESS || true ; \
+            iptables -t nat -X TNG_ENGRESS || true ; \
+            "
+            .to_owned();
+
+            invoke_script += &redirect_invoke_script;
+            revoke_script += &redirect_revoke_script;
+        }
+        Ok((invoke_script, revoke_script))
+    }
+}
