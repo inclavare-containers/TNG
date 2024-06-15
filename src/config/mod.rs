@@ -8,12 +8,14 @@ pub mod ingress;
 pub mod verify;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TngConfig {
     pub add_ingress: Vec<AddIngressArgs>,
     pub add_egress: Vec<AddEgressArgs>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Endpoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -24,8 +26,8 @@ pub struct Endpoint {
 mod tests {
     use anyhow::Result;
     use attest::AttestArgs;
-    use egress::EgressType;
-    use ingress::IngressType;
+    use egress::EgressMode;
+    use ingress::IngressMode;
     use verify::VerifyArgs;
 
     use super::*;
@@ -34,7 +36,7 @@ mod tests {
     fn test_serialize_deserialize() -> Result<()> {
         let config = TngConfig {
             add_ingress: vec![AddIngressArgs {
-                ingress_type: IngressType::Mapping {
+                ingress_mode: IngressMode::Mapping {
                     r#in: Endpoint {
                         // host: Some("127.0.0.1".to_owned()),
                         host: None,
@@ -52,7 +54,7 @@ mod tests {
                 }),
             }],
             add_egress: vec![AddEgressArgs {
-                egress_type: EgressType::Mapping {
+                egress_mode: EgressMode::Mapping {
                     r#in: Endpoint {
                         host: Some("127.0.0.1".to_owned()),
                         port: 20001,

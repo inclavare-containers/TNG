@@ -9,7 +9,7 @@ use args::Args;
 use clap::Parser as _;
 use confgen::RuntimeData;
 use config::TngConfig;
-use log::{debug, info};
+use log::{debug, error, info, warn};
 
 mod args;
 mod confgen;
@@ -48,7 +48,19 @@ fn main() -> Result<()> {
 
             info!("Generated Envoy config written to: {envoy_config_file:?}");
 
+            // Setup Iptables
+            info!("Setting up iptables rule (if needed)");
+            if let Err(e) = runtime_data.iptable_setup() {
+                let msg = format!("Failed setting up iptables rule: {e}");
+                error!("{msg}");
+                if let Err(e) = runtime_data.iptable_clean_up() {
+                    warn!("Failed cleaning up iptables rule: {}", e);
+                };
+                bail!("{msg}");
+            }
+
             // Start Envoy
+            info!("Starting Envoy now");
             let mut cmd = Command::new("/envoy_librats/bazel-bin/source/exe/envoy-static");
             cmd.arg("-c")
                 .arg(envoy_config_file)
@@ -70,8 +82,14 @@ fn main() -> Result<()> {
             let exit_status = child.wait().context("Failed to wait for Envoy process")?;
             info!("Envoy exited with status {exit_status}");
 
+            info!("Cleaning up iptables rule (if needed)");
+            if let Err(e) = runtime_data.iptable_clean_up() {
+                warn!("Failed cleaning up iptables rule: {}", e);
+            };
+
             if exit_status.success() {
-                runtime_data.clean_up();
+                runtime_data.envoy_clean_up();
+
                 info!("TNG now exit gracefully");
             } else {
                 bail!("Envoy exited with unexpected status {exit_status}, cmd: {cmd:?}")
