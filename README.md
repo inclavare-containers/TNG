@@ -1,7 +1,32 @@
 # Tng
 
+## Build Docker Image
 
-Example:
+To get tng ready you need to git clone all of the three repos (`rats-rs`, `tng-envoy`, `tng`)
+
+1. build rats-rs with docker
+
+```sh
+cd rats-rs
+docker build --tag rats-rs:builder-c-api --target builder-c-api .
+```
+
+2. build envoy with docker
+
+```sh
+cd tng-envoy
+docker build -t tng-envoy:latest --target envoy -f tng/Dockerfile .
+```
+
+3. build envoy with docker
+
+```sh
+cd tng
+docker build -t tng:latest --target release -f tng/Dockerfile .
+```
+
+
+## Example
 
 - tng client as verifier and tng server as attester:
 
