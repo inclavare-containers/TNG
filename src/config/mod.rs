@@ -10,7 +10,9 @@ pub mod verify;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TngConfig {
+    #[serde(default)]
     pub add_ingress: Vec<AddIngressArgs>,
+    #[serde(default)]
     pub add_egress: Vec<AddEgressArgs>,
 }
 
