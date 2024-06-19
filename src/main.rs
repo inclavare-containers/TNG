@@ -10,6 +10,7 @@ use clap::Parser as _;
 use confgen::RuntimeData;
 use config::TngConfig;
 use log::{debug, error, info, warn};
+use rand::Rng;
 
 mod args;
 mod confgen;
@@ -67,7 +68,7 @@ fn main() -> Result<()> {
                 .arg("-l")
                 .arg("debug")
                 .arg("--base-id")
-                .arg(std::process::id().to_string()); // Use pid of tng process as base-id of envoy to avoid conflicts
+                .arg(rand::thread_rng().gen::<u32>().to_string()); // Use pid of tng process as base-id of envoy to avoid conflicts
             let mut child = cmd
                 .spawn()
                 .with_context(|| format!("Failed to start Envoy with cmd: {cmd:?}"))?;
