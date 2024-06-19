@@ -61,7 +61,7 @@ fn main() -> Result<()> {
 
             // Start Envoy
             info!("Starting Envoy now");
-            let mut cmd = Command::new("/envoy_librats/bazel-bin/source/exe/envoy-static");
+            let mut cmd = Command::new("envoy-static");
             cmd.arg("-c")
                 .arg(envoy_config_file)
                 .arg("-l")
