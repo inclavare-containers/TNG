@@ -63,20 +63,7 @@ pub fn gen(
         );
 
         if no_ra {
-            // Add a dummy tls cert here to avoid 'No TLS certificates found for server context' envoy error
-            cluster += &format!(
-                r#"
-          tls_certificates:
-            certificate_chain:
-              inline_string: |
-                {}
-            private_key:
-              inline_string: |
-                {}
-    "#,
-                ENVOY_DUMMY_CERT.replace("\n", "\n                  "),
-                ENVOY_DUMMY_KEY.replace("\n", "\n                  "),
-            );
+            // Nothing
         } else {
             if let Some(attest) = &attest {
                 cluster += &format!(

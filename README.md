@@ -363,6 +363,44 @@ iptables -t nat -A OUTPUT -p tcp -j TNG_ENGRESS ;
 ```
 
 
+- both tng client and tng server are in non-tee env:
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 20001
+        }
+      },
+      "no_ra": true
+    }
+  ],
+  "add_egress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "127.0.0.1",
+          "port": 20001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "no_ra": true
+    }
+  ]
+}
+'
+```
+
 - Generate dummy TLS cert used by TNG, which is used as a fallback cert when the tng server is not an attester.
 
 ```sh
