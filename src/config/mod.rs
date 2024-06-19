@@ -47,6 +47,7 @@ mod tests {
                         port: 20001,
                     },
                 },
+                no_ra: false,
                 attest: None,
                 verify: Some(VerifyArgs {
                     as_addr: "http://127.0.0.1:50004/".to_owned(),
@@ -64,6 +65,7 @@ mod tests {
                         port: 30001,
                     },
                 },
+                no_ra: false,
                 attest: Some(AttestArgs {
                     aa_addr: "unix:///tmp/attestation.sock".to_owned(),
                 }),

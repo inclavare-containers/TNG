@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use crate::config::{attest::AttestArgs, verify::VerifyArgs};
+use crate::{
+    confgen::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
+    config::{attest::AttestArgs, verify::VerifyArgs},
+};
 
 pub fn gen(
     id: usize,
@@ -8,14 +11,17 @@ pub fn gen(
     in_port: u16,
     out_addr: &str,
     out_port: u16,
+    no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let mut listeners = vec![];
     let mut clusters = vec![];
 
-    listeners.push(format!(
-        r#"
+    // Add a listener for client app connection
+    {
+        listeners.push(format!(
+            r#"
   - name: tng_ingress{id}
     address:
       socket_address:
@@ -29,10 +35,13 @@ pub fn gen(
           stat_prefix: tcp_proxy
           cluster: tng_ingress{id}_upstream
 "#
-    ));
+        ));
+    }
 
-    let mut cluster = format!(
-        r#"
+    // Add a cluster for encrypting with rats-tls
+    {
+        let mut cluster = format!(
+            r#"
   - name: tng_ingress{id}_upstream
     type: LOGICAL_DNS
     dns_lookup_family: V4_ONLY
@@ -51,23 +60,39 @@ pub fn gen(
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
 "#
-    );
+        );
 
-    if let Some(attest) = &attest {
-        cluster += &format!(
-            r#"
+        if no_ra {
+            // Add a dummy tls cert here to avoid 'No TLS certificates found for server context' envoy error
+            cluster += &format!(
+                r#"
+          tls_certificates:
+            certificate_chain:
+              inline_string: |
+                {}
+            private_key:
+              inline_string: |
+                {}
+    "#,
+                ENVOY_DUMMY_CERT.replace("\n", "\n                  "),
+                ENVOY_DUMMY_KEY.replace("\n", "\n                  "),
+            );
+        } else {
+            if let Some(attest) = &attest {
+                cluster += &format!(
+                    r#"
           rats_tls_cert_generator_configs:
           - coco_attester:
               aa_addr: {}
               evidence_mode: {{}}
 "#,
-            attest.aa_addr
-        );
-    }
+                    attest.aa_addr
+                );
+            }
 
-    if let Some(verify) = &verify {
-        cluster += &format!(
-            r#"
+            if let Some(verify) = &verify {
+                cluster += &format!(
+                    r#"
           validation_context:
             custom_validator_config:
               name: envoy.tls.cert_validator.rats_tls
@@ -80,17 +105,19 @@ pub fn gen(
 {}
                   trusted_certs_paths:
 "#,
-            verify.as_addr,
-            verify
-                .policy_ids
-                .iter()
-                .map(|s| format!("                  - {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
+                    verify.as_addr,
+                    verify
+                        .policy_ids
+                        .iter()
+                        .map(|s| format!("                  - {s}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+        }
 
-    clusters.push(cluster);
+        clusters.push(cluster);
+    }
 
     Ok((listeners, clusters))
 }

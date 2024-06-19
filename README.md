@@ -117,7 +117,7 @@ docker build -t tng:latest --target release -f Dockerfile .
 
 ### 远程证明选项
 
-不论是`add_ingress`还是`add_egress`选项，都可以指定`verify`和`attest`参数，表示在隧道端点上的远程证明相关配置。
+不论是`add_ingress`还是`add_egress`选项，都可以指定`verify`和`attest`或者`no_ra`参数，表示在隧道端点上的远程证明相关配置。
 
 #### 配置示例
 

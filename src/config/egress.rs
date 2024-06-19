@@ -8,6 +8,9 @@ pub struct AddEgressArgs {
     #[serde(flatten)]
     pub egress_mode: EgressMode,
 
+    #[serde(default = "bool::default")]
+    pub no_ra: bool,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attest: Option<AttestArgs>,
 

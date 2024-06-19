@@ -8,6 +8,9 @@ pub struct AddIngressArgs {
     #[serde(flatten)]
     pub ingress_mode: IngressMode,
 
+    #[serde(default = "bool::default")]
+    pub no_ra: bool,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attest: Option<AttestArgs>,
 

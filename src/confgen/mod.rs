@@ -7,7 +7,7 @@ use std::{
 use crate::config::{egress::EgressMode, ingress::IngressMode, TngConfig};
 use anyhow::{bail, Context, Result};
 use iptables::{IpTablesAction, IpTablesActions};
-use log::{debug, info};
+use log::{debug, info, warn};
 
 mod envoy;
 mod iptables;
@@ -18,7 +18,6 @@ pub struct RuntimeData {
     iptables_invoke_script: String,
     iptables_revoke_script: String,
 }
-
 
 const NETFILTER_LISTEN_PORT_DEFAULT: u16 = 40000;
 const NETFILTER_SO_MARK_DEFAULT: u32 = 565;
@@ -128,6 +127,14 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
 
     let mut iptables_actions = vec![];
     for (id, add_ingress) in config.add_ingress.iter().enumerate() {
+        if add_ingress.attest == None && add_ingress.verify == None && add_ingress.no_ra == false {
+            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_ingress'");
+        }
+
+        if add_ingress.no_ra {
+            warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment")
+        }
+
         match &add_ingress.ingress_mode {
             IngressMode::Mapping { r#in, out } => {
                 let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
@@ -139,16 +146,13 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                if add_ingress.attest == None && add_ingress.verify == None {
-                    bail!("At least one of 'attest' and 'verify' field should be set for 'add_ingress'");
-                }
-
                 let mut yamls = self::envoy::ingress::mapping::gen(
                     id,
                     in_addr,
                     in_port,
                     out_addr,
                     out_port,
+                    add_ingress.no_ra,
                     &add_ingress.attest,
                     &add_ingress.verify,
                 )?;
@@ -161,6 +165,14 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
     }
 
     for (id, add_egress) in config.add_egress.iter().enumerate() {
+        if add_egress.attest == None && add_egress.verify == None && add_egress.no_ra == false {
+            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
+        }
+
+        if add_egress.no_ra {
+            warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment")
+        }
+
         match &add_egress.egress_mode {
             EgressMode::Mapping { r#in, out } => {
                 let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
@@ -172,16 +184,13 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                if add_egress.attest == None && add_egress.verify == None {
-                    bail!("At least one of 'attest' and 'verify' field should be set for 'add_egress'");
-                }
-
                 let mut yamls = self::envoy::egress::mapping::gen(
                     id,
                     in_addr,
                     in_port,
                     out_addr,
                     out_port,
+                    add_egress.no_ra,
                     &add_egress.attest,
                     &add_egress.verify,
                 )?;
@@ -207,6 +216,7 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     id,
                     listen_port,
                     so_mark,
+                    add_egress.no_ra,
                     &add_egress.attest,
                     &add_egress.verify,
                 )?;

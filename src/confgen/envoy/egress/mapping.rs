@@ -11,14 +11,17 @@ pub fn gen(
     in_port: u16,
     out_addr: &str,
     out_port: u16,
+    no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let mut listeners = vec![];
     let mut clusters = vec![];
 
-    let mut listener = format!(
-        r#"
+    // Add a listener for terminating rats-tls
+    {
+        let mut listener = format!(
+            r#"
   - name: tng_egress{id}
     address:
       socket_address:
@@ -37,21 +40,9 @@ pub fn gen(
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
           common_tls_context:
 "#
-    );
+        );
 
-    match &attest {
-        Some(attest) => {
-            listener += &format!(
-                r#"
-            rats_tls_cert_generator_configs:
-            - coco_attester:
-                aa_addr: {}
-                evidence_mode: {{}}
-"#,
-                attest.aa_addr
-            );
-        }
-        None => {
+        if no_ra {
             // Add a dummy tls cert here to avoid 'No TLS certificates found for server context' envoy error
             listener += &format!(
                 r#"
@@ -66,12 +57,40 @@ pub fn gen(
                 ENVOY_DUMMY_CERT.replace("\n", "\n                  "),
                 ENVOY_DUMMY_KEY.replace("\n", "\n                  "),
             );
-        }
-    }
+        } else {
+            match &attest {
+                Some(attest) => {
+                    listener += &format!(
+                        r#"
+            rats_tls_cert_generator_configs:
+            - coco_attester:
+                aa_addr: {}
+                evidence_mode: {{}}
+"#,
+                        attest.aa_addr
+                    );
+                }
+                None => {
+                    // Add a dummy tls cert here to avoid 'No TLS certificates found for server context' envoy error
+                    listener += &format!(
+                        r#"
+            tls_certificates:
+              certificate_chain:
+                inline_string: |
+                  {}
+              private_key:
+                inline_string: |
+                  {}
+"#,
+                        ENVOY_DUMMY_CERT.replace("\n", "\n                  "),
+                        ENVOY_DUMMY_KEY.replace("\n", "\n                  "),
+                    );
+                }
+            }
 
-    if let Some(verify) = verify {
-        listener += &format!(
-            r#"
+            if let Some(verify) = verify {
+                listener += &format!(
+                    r#"
             validation_context:
               custom_validator_config:
                 name: envoy.tls.cert_validator.rats_tls
@@ -86,20 +105,24 @@ pub fn gen(
 
           require_client_certificate: true
 "#,
-            verify.as_addr,
-            verify
-                .policy_ids
-                .iter()
-                .map(|s| format!("                    - {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+                    verify.as_addr,
+                    verify
+                        .policy_ids
+                        .iter()
+                        .map(|s| format!("                    - {s}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+        }
+
+        listeners.push(listener);
     }
 
-    listeners.push(listener);
-
-    clusters.push(format!(
-        r#"
+    // Add a cluster for upstream service
+    {
+        clusters.push(format!(
+            r#"
   - name: tng_egress{id}_upstream
     type: LOGICAL_DNS
     dns_lookup_family: V4_ONLY
@@ -113,7 +136,7 @@ pub fn gen(
                 address: {out_addr}
                 port_value: {out_port}
 "#
-    ));
-
+        ));
+    }
     Ok((listeners, clusters))
 }
