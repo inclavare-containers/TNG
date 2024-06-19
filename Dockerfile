@@ -5,7 +5,7 @@ COPY . .
 RUN cargo install --path .
 
 
-FROM envoy:light as release
+FROM tng-envoy:latest as release
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
