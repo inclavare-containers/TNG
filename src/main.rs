@@ -30,7 +30,7 @@ fn main() -> Result<()> {
             // Load config
             let config: TngConfig = match (options.config_file, options.config_content) {
                 (Some(_), Some(_)) | (None, None) => {
-                    bail!("Either --config_file or --config_content should be set")
+                    bail!("Either --config-file or --config-content should be set")
                 }
                 (None, Some(s)) => serde_json::from_str(&s)?,
                 (Some(path), None) => {
