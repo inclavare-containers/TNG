@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{BufReader, Write as _},
-    process::Command,
-};
+use std::{fs::File, io::BufReader, process::Command};
 
 use anyhow::{bail, Context, Result};
 use args::Args;
@@ -11,10 +7,13 @@ use confgen::RuntimeData;
 use config::TngConfig;
 use log::{debug, error, info, warn};
 use rand::Rng;
+use shadow_rs::shadow;
 
 mod args;
 mod confgen;
 mod config;
+
+shadow!(build);
 
 fn main() -> Result<()> {
     let env = env_logger::Env::default()
@@ -24,6 +23,12 @@ fn main() -> Result<()> {
 
     let cmd = Args::parse();
     info!("Welcome to TNG!");
+    info!(
+        "TNG version: v{}  commit: {}  buildtime: {}",
+        build::PKG_VERSION,
+        build::COMMIT_HASH,
+        build::BUILD_TIME
+    );
     debug!("cmd: {cmd:?}");
 
     match cmd {
