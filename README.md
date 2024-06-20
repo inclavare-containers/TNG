@@ -61,6 +61,18 @@ docker build -t tng:latest --target release -f Dockerfile .
 }
 ```
 
+#### http_proxy代理方式（http-proxy）
+
+在该场景中，tng监听一个本地http proxy端口，用户容器通过设置`http_proxy`环境变量，将流量走代理到tng client监听的端口，后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
+
+> 实现中
+
+#### 透明代理方式（netfilter）
+
+在该场景中，tng监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
+
+> 实现中
+
 ### 流量从tng隧道出站
 
 在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
