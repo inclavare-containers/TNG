@@ -88,7 +88,7 @@ pub fn gen(
                 }
             }
 
-            if let Some(verify) = verify {
+            if let Some(verify) = &verify {
                 listener += &format!(
                     r#"
             validation_context:

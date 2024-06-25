@@ -85,11 +85,10 @@ pub fn gen(
                     );
                 }
             }
-        }
 
-        if let Some(verify) = &verify {
-            listener += &format!(
-                r#"
+            if let Some(verify) = &verify {
+                listener += &format!(
+                    r#"
             validation_context:
               custom_validator_config:
                 name: envoy.tls.cert_validator.rats_tls
@@ -104,14 +103,15 @@ pub fn gen(
 
           require_client_certificate: true
 "#,
-                verify.as_addr,
-                verify
-                    .policy_ids
-                    .iter()
-                    .map(|s| format!("                    - {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
+                    verify.as_addr,
+                    verify
+                        .policy_ids
+                        .iter()
+                        .map(|s| format!("                    - {s}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
         }
 
         listener += &r#"
