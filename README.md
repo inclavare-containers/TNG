@@ -170,6 +170,101 @@ docker build -t tng:latest --target release -f Dockerfile .
 |（逆）单向|`attest`|`verify`|tng server在普通环境，tng client在TEE中。此时等于只验证client证书，在tls握手中，tng server会用tng代码中内嵌的一个固定的P256 X509自签名证书来作为自己的证书|
 |无TEE（仅作调试用途）|`no_ra`|`no_ra`|tng server和tng client都在非TEE环境中，此时tng client和tng server之间通过单向验证建立普通的TLS会话|
 
+### 伪装成七层流量
+
+在一些业务场景中，app client和app server之间采用http的方式通信，且链路中可能经过如nginx反向代理、7层负载均衡SLB之类的中间组件，这些中间组件无法通过tng的rats-tls流量。为了在业务中以尽可能少的负担接入tng，需要将tng的rats-tls流量伪装成七层http流量。
+
+鉴于这些中间组件的特性，tng在伪装成http流量后通常需要保留原始流量的一些字段，以便路由、负载均衡等功能正常运作。但出于数据机密性的考虑，伪装后http流量中的字段不应该包含敏感信息。因此，tng提供了一些规则来配置伪装后http流量的字段：
+1. 伪装后http流量的请求method统一为`POST`
+2. 伪装后http流量的请求路径path默认为`/`，也可以通过指定`path_rewrites`字段，根据内层被保护的业务http请求的path以正则表达式的方式重写出伪装后http流量的path。
+3. 伪装后http流量的Host（或者`:authority`）和内层被保护的业务http请求保持一致。
+4. 伪装后http流量将带有一个名为`tng-metadata`的请求头，可用于区分普通流量和伪装后流量。同时原业务流量中的请求头将被隐去。
+
+> [!WARNING]  
+> 当前的tng实现，在配置「伪装成七层流量」特性时，要求内层被保护的业务必须是http流量，而不能是普通的tcp流量。
+
+#### 入站侧流量的伪装
+
+可通过在`add_ingress`对象中指定的`encap_in_http`字段来开启伪装能力。如未指定`encap_in_http`则不会开启伪装能力。
+
+示例如下：
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "0.0.0.0",
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 20001
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+```
+
+其中，`path_rewrites`字段是一个列表，其中指定了以正则表达式的方式进行流量path重写的参数。例如，指定
+
+```json
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+```
+表示将path能够匹配上`"^/api/predict/([^/]+)([/]?.*)$"`的内层http请求，对应的伪装后http流量的path被重写为`"/api/predict/\\1"`。注意这里支持`\数字`的方式来引用正则匹配到的group。
+
+所有的重写将按照在`path_rewrites`列表中的顺序进行，且只会匹配上列表中的一项。对于未能匹配任何`path_rewrites`列表成员的请求，将默认设置伪装后http流量的path为`/`
+
+#### 出站侧流量的伪装
+
+与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`decap_from_http`字段的值为`true`，来开启对已伪装流量的拆解。`decap_from_http`的默认值为`false`。
+
+示例如下：
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "127.0.0.1",
+          "port": 20001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "decap_from_http": true,
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+```
+
 ## Example
 
 For simplicity, in the following examples, the running tng instance serves as both the tng client and the tng server.
@@ -322,7 +417,7 @@ cargo run launch --config-content='
 ```
 
 
-- tng client as verifier and tng server as attester, while tng server is using `netfilter` mode instead of `mapping` mode :
+- tng client as verifier and tng server as attester, while tng server is using `netfilter` mode instead of `mapping` mode:
 
 ```sh
 cargo run launch --config-content='
@@ -412,6 +507,130 @@ cargo run launch --config-content='
 }
 '
 ```
+
+- tng client as verifier and tng server as attester, with "HTTP encapulation" enabled.
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "0.0.0.0",
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 20001
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ],
+  "add_egress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "127.0.0.1",
+          "port": 20001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "decap_from_http": true,
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+'
+```
+
+You may test it by launch a python http server and connect it with curl via tng:
+
+```sh
+python3 -m http.server 30001
+```
+
+```sh
+curl --connect-to example.com:80:127.0.0.1:10001 http://example.com:80/api/predict/service_name/foo/bar -vvvv
+```
+
+You can use tcpdump to observe the encapsulated HTTP traffic:
+
+```sh
+tcpdump -n -vvvvvvvvvv -qns 0 -X -i any tcp port 20001
+```
+
+You will see a POST request with `/api/predict/service_name` as path and `tng-metadata` as one of the headers.
+
+
+- tng client as verifier and tng server as attester, with "HTTP encapulation" enabled, while tng server is using `netfilter` mode instead of `mapping` mode:
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ],
+  "add_egress": [
+    {
+      "netfilter": {
+        "capture_dst": {
+          "port": 30001
+        }
+      },
+      "decap_from_http": true,
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+'
+```
+
 
 - Generate dummy TLS cert used by TNG, which is used as a fallback cert when the tng server is not an attester.
 

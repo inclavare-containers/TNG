@@ -9,6 +9,9 @@ pub struct AddEgressArgs {
     pub egress_mode: EgressMode,
 
     #[serde(default = "bool::default")]
+    pub decap_from_http: bool,
+
+    #[serde(default = "bool::default")]
     pub no_ra: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]

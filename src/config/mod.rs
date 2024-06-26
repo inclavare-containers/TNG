@@ -29,7 +29,7 @@ mod tests {
     use anyhow::Result;
     use attest::AttestArgs;
     use egress::EgressMode;
-    use ingress::IngressMode;
+    use ingress::{EncapInHttp, IngressMode, PathRewrite};
     use verify::VerifyArgs;
 
     use super::*;
@@ -40,7 +40,6 @@ mod tests {
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping {
                     r#in: Endpoint {
-                        // host: Some("127.0.0.1".to_owned()),
                         host: None,
                         port: 10001,
                     },
@@ -49,6 +48,12 @@ mod tests {
                         port: 20001,
                     },
                 },
+                encap_in_http: Some(EncapInHttp {
+                    path_rewrites: vec![PathRewrite {
+                        match_regex: "^/api/predict/([^/]+)([/]?.*)$".to_owned(),
+                        substitution: "/api/predict/\\1".to_owned(),
+                    }],
+                }),
                 no_ra: false,
                 attest: None,
                 verify: Some(VerifyArgs {
@@ -67,6 +72,7 @@ mod tests {
                         port: 30001,
                     },
                 },
+                decap_from_http: true,
                 no_ra: false,
                 attest: Some(AttestArgs {
                     aa_addr: "unix:///tmp/attestation.sock".to_owned(),

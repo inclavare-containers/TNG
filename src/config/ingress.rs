@@ -8,6 +8,9 @@ pub struct AddIngressArgs {
     #[serde(flatten)]
     pub ingress_mode: IngressMode,
 
+    #[serde(default = "Option::default")]
+    pub encap_in_http: Option<EncapInHttp>,
+
     #[serde(default = "bool::default")]
     pub no_ra: bool,
 
@@ -30,4 +33,18 @@ pub enum IngressMode {
     /// --add-ingress='netfilter,dst=127.0.0.1:9991'
     #[serde(rename = "netfilter")]
     Netfilter { dst: Endpoint },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EncapInHttp {
+    #[serde(default)]
+    pub path_rewrites: Vec<PathRewrite>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PathRewrite {
+    pub match_regex: String,
+    pub substitution: String,
 }

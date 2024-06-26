@@ -146,16 +146,29 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                let mut yamls = self::envoy::ingress::mapping::gen(
-                    id,
-                    in_addr,
-                    in_port,
-                    out_addr,
-                    out_port,
-                    add_ingress.no_ra,
-                    &add_ingress.attest,
-                    &add_ingress.verify,
-                )?;
+                let mut yamls = match &add_ingress.encap_in_http {
+                    Some(encap_in_http) => self::envoy::ingress::mapping::l7::gen(
+                        id,
+                        in_addr,
+                        in_port,
+                        out_addr,
+                        out_port,
+                        encap_in_http,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
+                    None => self::envoy::ingress::mapping::l4::gen(
+                        id,
+                        in_addr,
+                        in_port,
+                        out_addr,
+                        out_port,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
+                };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
@@ -184,16 +197,29 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                let mut yamls = self::envoy::egress::mapping::gen(
-                    id,
-                    in_addr,
-                    in_port,
-                    out_addr,
-                    out_port,
-                    add_egress.no_ra,
-                    &add_egress.attest,
-                    &add_egress.verify,
-                )?;
+                let mut yamls = if add_egress.decap_from_http {
+                    self::envoy::egress::mapping::l7::gen(
+                        id,
+                        in_addr,
+                        in_port,
+                        out_addr,
+                        out_port,
+                        add_egress.no_ra,
+                        &add_egress.attest,
+                        &add_egress.verify,
+                    )?
+                } else {
+                    self::envoy::egress::mapping::l4::gen(
+                        id,
+                        in_addr,
+                        in_port,
+                        out_addr,
+                        out_port,
+                        add_egress.no_ra,
+                        &add_egress.attest,
+                        &add_egress.verify,
+                    )?
+                };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
@@ -212,14 +238,25 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                     so_mark,
                 });
 
-                let mut yamls = self::envoy::egress::netfilter::gen(
-                    id,
-                    listen_port,
-                    so_mark,
-                    add_egress.no_ra,
-                    &add_egress.attest,
-                    &add_egress.verify,
-                )?;
+                let mut yamls = if add_egress.decap_from_http {
+                    self::envoy::egress::netfilter::l7::gen(
+                        id,
+                        listen_port,
+                        so_mark,
+                        add_egress.no_ra,
+                        &add_egress.attest,
+                        &add_egress.verify,
+                    )?
+                } else {
+                    self::envoy::egress::netfilter::l4::gen(
+                        id,
+                        listen_port,
+                        so_mark,
+                        add_egress.no_ra,
+                        &add_egress.attest,
+                        &add_egress.verify,
+                    )?
+                };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
@@ -227,6 +264,11 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
     }
     let config = format!(
         r#"
+bootstrap_extensions:
+- name: envoy.bootstrap.internal_listener
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener
+
 static_resources:
 
   listeners:{}

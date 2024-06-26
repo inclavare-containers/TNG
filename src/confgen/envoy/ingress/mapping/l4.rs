@@ -1,9 +1,6 @@
 use anyhow::Result;
 
-use crate::{
-    confgen::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
-    config::{attest::AttestArgs, verify::VerifyArgs},
-};
+use crate::config::{attest::AttestArgs, verify::VerifyArgs};
 
 pub fn gen(
     id: usize,
