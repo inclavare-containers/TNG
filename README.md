@@ -26,6 +26,13 @@ cd tng
 docker build -t tng:latest --target release -f Dockerfile .
 ```
 
+4. (optional) push docker image to ACR
+
+```sh
+docker tag tng:latest tng-registry.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
+docker push tng-registry.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
+```
+
 ## 参数手册
 
 ### 流量入站到tng隧道
