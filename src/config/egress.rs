@@ -24,9 +24,9 @@ pub struct AddEgressArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum EgressMode {
-    /// --add-ingress='mapping,in=20001,out=127.0.0.1:30001'
     #[serde(rename = "mapping")]
     Mapping { r#in: Endpoint, out: Endpoint },
+
     #[serde(rename = "netfilter")]
     Netfilter {
         capture_dst: Endpoint,

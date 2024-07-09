@@ -24,13 +24,15 @@ pub struct AddIngressArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
-    /// --add-ingress='mapping,in=10001,out=127.0.0.1:20001'
     #[serde(rename = "mapping")]
     Mapping { r#in: Endpoint, out: Endpoint },
-    /// --add-ingress='http-proxy,dst=127.0.0.1:9991'
+
     #[serde(rename = "http_proxy")]
-    HttpProxy { dst: Endpoint },
-    /// --add-ingress='netfilter,dst=127.0.0.1:9991'
+    HttpProxy {
+        proxy_listen: Endpoint,
+        dst_filter: EndpointFilter,
+    },
+
     #[serde(rename = "netfilter")]
     Netfilter { dst: Endpoint },
 }
@@ -47,4 +49,17 @@ pub struct EncapInHttp {
 pub struct PathRewrite {
     pub match_regex: String,
     pub substitution: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EndpointFilter {
+    /// Host name to match.
+    ///
+    /// Only some of the wildcards types are supported. See "domains" field in https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }

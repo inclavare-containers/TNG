@@ -4,7 +4,11 @@ use std::{
     process::Command,
 };
 
-use crate::config::{egress::EgressMode, ingress::IngressMode, TngConfig};
+use crate::config::{
+    egress::EgressMode,
+    ingress::{EndpointFilter, IngressMode},
+    TngConfig,
+};
 use anyhow::{bail, Context, Result};
 use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, info, warn};
@@ -172,7 +176,31 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
-            IngressMode::HttpProxy { dst: _ } => todo!(),
+            IngressMode::HttpProxy {
+                proxy_listen,
+                dst_filter: EndpointFilter { domain, port },
+            } => {
+                let proxy_listen_addr = proxy_listen.host.as_deref().unwrap_or("0.0.0.0");
+                let proxy_listen_port = proxy_listen.port;
+                let domain = domain.as_deref().unwrap_or("*");
+                let port = port.unwrap_or(80); // Default port is 80
+
+                let mut yamls = match &add_ingress.encap_in_http {
+                    Some(_encap_in_http) => todo!(),
+                    None => self::envoy::ingress::http_proxy::l4::gen(
+                        id,
+                        proxy_listen_addr,
+                        proxy_listen_port,
+                        domain,
+                        port,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
+                };
+                listeners.append(&mut yamls.0);
+                clusters.append(&mut yamls.1);
+            }
             IngressMode::Netfilter { dst: _ } => todo!(),
         }
     }

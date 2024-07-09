@@ -68,11 +68,41 @@ docker push tng-registry.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
 }
 ```
 
-#### http_proxy代理方式（http-proxy）
+#### http_proxy代理方式（http_proxy）
 
-在该场景中，tng监听一个本地http proxy端口，用户容器通过设置`http_proxy`环境变量，将流量走代理到tng client监听的端口，后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
+在该场景中，tng监听一个本地http proxy端口，用户容器可通过设置`http_proxy`环境变量（或在业务代码中发送请求时特地设置`http_proxy`代理），将流量走代理到tng client监听的端口，后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
 
-> 实现中
+
+```json
+{
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",  // 可选，默认为0.0.0.0
+          "port": 41000
+        },
+        "dst_filter": {
+          "domain": "*.pai-eas.aliyuncs.com", // 可选，默认为 "*"
+          "port": 80 // 可选，默认为 80
+        }
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+```
+
+- `proxy_listen`指定了tng暴露的`http_proxy`协议监听端口的监听地址(`host`)和端口(`port`)值。
+- `dst_filter`指定了一个过滤规则，指示需要被rats-tls隧道保护的目标域名（或ip）和端口的组合。
+- `dst_filter`的`domain`字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+
+> 目前该模式暂不支持与`encap_in_http`配合使用
 
 #### 透明代理方式（netfilter）
 
@@ -637,6 +667,75 @@ cargo run launch --config-content='
 }
 '
 ```
+
+
+- The cachefs case, where both tng client and tng server are verifier and attester, while tng client is using `http_proxy` mode, and tng server is using `netfilter` mode:
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",
+          "port": 41000
+        },
+        "dst_filter": {
+          "domain": "*",
+          "port": 9991
+        }
+      },
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ],
+  "add_egress": [
+    {
+      "netfilter": {
+        "capture_dst": {
+          "port": 9991
+        }
+      },
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+'
+```
+
+launch a netcat TCP listener instance to act as a cachefs node
+
+```sh
+nc -l -v 9991
+```
+
+and launch a netcat client instance to act as another cachefs node, who connects other cachefs nodes (127.0.0.1 9991) via a http_proxy endpoint (127.0.0.1:41000)
+
+```sh
+nc -X connect -x 127.0.0.1:41000 -v 127.0.0.1 9991
+```
+
+You can take a look at the encrypted rats-tls traffic
+```sh
+tcpdump -n -vvvvvvvvvv -qns 0 -X -i any tcp port 40000
+```
+where `40000` is the value of `listen_port` of `add_egress.netfilter`.
 
 
 - Generate dummy TLS cert used by TNG, which is used as a fallback cert when the tng server is not an attester.
