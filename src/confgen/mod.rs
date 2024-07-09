@@ -23,7 +23,7 @@ pub struct RuntimeData {
     iptables_revoke_script: String,
 }
 
-const NETFILTER_LISTEN_PORT_DEFAULT: u16 = 40000;
+const NETFILTER_LISTEN_PORT_BEGIN_DEFAULT: u16 = 40000;
 const NETFILTER_SO_MARK_DEFAULT: u32 = 565;
 
 impl RuntimeData {
@@ -257,7 +257,7 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                 so_mark,
             } => {
                 let listen_port =
-                    listen_port.unwrap_or(NETFILTER_LISTEN_PORT_DEFAULT + (id as u16));
+                    listen_port.unwrap_or(NETFILTER_LISTEN_PORT_BEGIN_DEFAULT + (id as u16));
                 let so_mark = so_mark.unwrap_or(NETFILTER_SO_MARK_DEFAULT);
 
                 iptables_actions.push(IpTablesAction::Redirect {

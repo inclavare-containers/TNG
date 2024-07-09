@@ -27,7 +27,7 @@ impl IpTablesActions {
     /// # invoke_script
     /// iptables -t nat -N TNG_ENGRESS
     /// iptables -t nat -A TNG_ENGRESS -p tcp -m mark --mark 565 -j RETURN
-    /// iptables -t nat -A TNG_ENGRESS -p tcp --dst 127.0.0.1 --dport 30001 -j REDIRECT --to-ports 30000
+    /// iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype --dst-type LOCAL --dport 30001 -j REDIRECT --to-ports 30000
     /// iptables -t nat -A PREROUTING -p tcp -j TNG_ENGRESS
     /// iptables -t nat -A OUTPUT -p tcp -j TNG_ENGRESS
     ///
@@ -78,7 +78,7 @@ impl IpTablesActions {
                             );
                         } else {
                             redirect_invoke_script += &format!(
-                                "iptables -t nat -A TNG_ENGRESS -p tcp --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                                "iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype --dst-type LOCAL --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
                             );
                         }
                     }

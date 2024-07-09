@@ -150,7 +150,7 @@ docker push tng-registry.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
     {
       "netfilter": {
         "capture_dst": {
-          "host": "127.0.0.1",  // 可选，若不填则过滤时忽略tcp请求的目标ip
+          "host": "127.0.0.1",  // 可选，若不填，则默认匹配本机上所有端口的本地ip地址（见iptables的 -m addrtype --dst-type LOCAL 选项：https://ipset.netfilter.org/iptables-extensions.man.html）
           "port": 30001
         },
         "listen_port": 40000,   // 可选，tng server监听的端口号，用于接收由netfilter重定向的流量。默认从40000端口开始递增取值。
@@ -499,7 +499,7 @@ tng will generate iptables rules like the following, before running envoy:
 ```sh
 iptables -t nat -N TNG_ENGRESS
 iptables -t nat -A TNG_ENGRESS -p tcp -m mark --mark 565 -j RETURN
-iptables -t nat -A TNG_ENGRESS -p tcp --dport 30001 -j REDIRECT --to-ports 30000
+iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype --dst-type LOCAL --dport 30001 -j REDIRECT --to-ports 30000
 # Or with specific dst ip address if capture_dst.host is provided in tng config file:
 # iptables -t nat -A TNG_ENGRESS -p tcp --dst 127.0.0.1/32 --dport 30001 -j REDIRECT --to-ports 30000
 iptables -t nat -A PREROUTING -p tcp -j TNG_ENGRESS
