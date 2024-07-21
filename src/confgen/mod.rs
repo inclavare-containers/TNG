@@ -186,7 +186,17 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
                 let port = port.unwrap_or(80); // Default port is 80
 
                 let mut yamls = match &add_ingress.encap_in_http {
-                    Some(_encap_in_http) => todo!(),
+                    Some(encap_in_http) => self::envoy::ingress::http_proxy::l7::gen(
+                        id,
+                        proxy_listen_addr,
+                        proxy_listen_port,
+                        domain,
+                        port,
+                        encap_in_http,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
                     None => self::envoy::ingress::http_proxy::l4::gen(
                         id,
                         proxy_listen_addr,

@@ -102,7 +102,6 @@ docker push tng-registry-vpc.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
 - `dst_filter`指定了一个过滤规则，指示需要被rats-tls隧道保护的目标域名（或ip）和端口的组合。
 - `dst_filter`的`domain`字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
 
-> 目前该模式暂不支持与`encap_in_http`配合使用
 
 #### 透明代理方式（netfilter）
 
@@ -607,7 +606,7 @@ python3 -m http.server 30001
 ```
 
 ```sh
-curl --connect-to example.com:80:127.0.0.1:10001 http://example.com:80/api/predict/service_name/foo/bar -vvvv
+curl --connect-to 1242424451954755.vpc.cn-shanghai.pai-eas.aliyuncs.com:80:127.0.0.1:10001 http://1242424451954755.vpc.cn-shanghai.pai-eas.aliyuncs.com:80/api/predict/service_name/foo/bar -vvvv
 ```
 
 You can use tcpdump to observe the encapsulated HTTP traffic:
@@ -666,6 +665,70 @@ cargo run launch --config-content='
   ]
 }
 '
+```
+
+- tng client as verifier and tng server as attester, with "HTTP encapulation" enabled, while tng server is using `netfilter` mode, and tng client is using `http_proxy` mode:
+
+Here the http_proxy ingress only accept all domain `*` and any port (because `port` is not set).
+
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",
+          "port": 41000
+        },
+        "dst_filter": {
+          "domain": "*",
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:50004/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ],
+  "add_egress": [
+    {
+      "netfilter": {
+        "capture_dst": {
+          "port": 30001
+        }
+      },
+      "decap_from_http": true,
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+'
+```
+
+To test this case, first setup a http server on 3001 port.
+
+```sh
+python3 -m http.server 30001
+```
+
+And then, send http request via proxy with `all_proxy` environment variable set.
+
+```sh
+all_proxy="http://127.0.0.1:41000" curl http://127.0.0.1:30001 -vvvvv
 ```
 
 
