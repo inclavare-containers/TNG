@@ -20,7 +20,7 @@ pub fn gen(
 
     // Add a listener for client app connection
     {
-        let mut listener = format!(
+        listeners.push(format!(
             r#"
   - name: tng_ingress{id}
     address:
@@ -40,27 +40,7 @@ pub fn gen(
             virtual_hosts:
             - name: local_service
               domains:
-"#
-        );
-
-        if port != 80 {
-            listener += &format!(
-                // See https://github.com/envoyproxy/envoy/issues/13704#issuecomment-716808324
-                r#"
-              - "{domain}:{port}"
-"#
-            )
-        } else {
-            listener += &format!(
-                r#"
-              - "{domain}:{port}"
-              - "{domain}"
-"#
-            )
-        }
-
-        listener += &format!(
-            r#"
+                {}
               routes:
               - match:
                   connect_matcher:
@@ -93,9 +73,22 @@ pub fn gen(
           upgrade_configs:
           - upgrade_type: CONNECT
 "#,
-        );
-
-        listeners.push(listener);
+            if port != 80 {
+                format!(
+                    // See https://github.com/envoyproxy/envoy/issues/13704#issuecomment-716808324
+                    r#"
+              - "{domain}:{port}"
+"#
+                )
+            } else {
+                format!(
+                    r#"
+              - "{domain}:{port}"
+              - "{domain}"
+"#
+                )
+            }
+        ));
     }
 
     // Add a cluster for forwarding to the entry internal listener

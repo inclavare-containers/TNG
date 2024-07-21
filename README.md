@@ -683,7 +683,7 @@ cargo run launch --config-content='
           "port": 41000
         },
         "dst_filter": {
-          "domain": "*",
+          "domain": "*"
         }
       },
       "encap_in_http": {
