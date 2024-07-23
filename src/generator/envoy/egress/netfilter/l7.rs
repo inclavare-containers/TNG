@@ -1,16 +1,14 @@
 use anyhow::Result;
 
 use crate::{
-    confgen::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
     config::{attest::AttestArgs, verify::VerifyArgs},
+    generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
 };
 
 pub fn gen(
     id: usize,
-    in_addr: &str,
-    in_port: u16,
-    out_addr: &str,
-    out_port: u16,
+    listen_port: u16,
+    so_mark: u32,
     no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
@@ -20,16 +18,34 @@ pub fn gen(
 
     // Add a listener to accept HTTP encapsulated traffic and decapsulate them to rats-tls traffic.
     // The HTTP encapsulated traffic should be a POST request with "tng-metadata" header set.
+    //
+    // It may be a bit tricky to make 'netfilter' egress mode works works with HTTP encapsulation.
+    // The decapsulation process is almost identical to that in mapping egress mode, but the major problem is how to make the last cluster aware of the "SO_ORIGINAL_DST" value seen by the first listener while "internal listener" is used.
+    // We have following steps to solve this:
+    // 1. Add a listener filter "envoy.filters.listener.original_dst" to the "listener_filters" field of first listener, which will gather value of "SO_ORIGINAL_DST" and set it as "local address" of the current connection. This can be observed in logging with message "original_dst: set destination to ".
+    // 2. Add a network filter "envoy.filters.network.set_filter_state" to set value of filter state object "envoy.network.transport_socket.original_dst_address" to the "local address" we overrided in last step. Also set "shared_with_upstream" to "TRANSITIVE".
+    // 3. Add a transport socket "envoy.transport_sockets.internal_upstream" to the cluster object of internal listener, for sharing filter state object cross the internal listener.
+    // 4. Set cluster type of last cluster to ORIGINAL_DST, which will consume the filter state object "envoy.network.transport_socket.original_dst_address" and forward the plaintext to upstream service.
     {
         listeners.push(format!(
             r#"
-  - name: tng_egress{id}
+  - name: tng_egress{id}_decap
     address:
       socket_address:
-        address: {in_addr}
-        port_value: {in_port}
+        address: 0.0.0.0
+        port_value: {listen_port}
     filter_chains:
     - filters:
+      - name: envoy.filters.network.set_filter_state
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.set_filter_state.v3.Config
+          on_new_connection:
+          - object_key: envoy.network.transport_socket.original_dst_address
+            format_string:
+              text_format_source:
+                inline_string: "%DOWNSTREAM_LOCAL_ADDRESS%"
+            shared_with_upstream: TRANSITIVE
+
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
@@ -50,7 +66,7 @@ pub fn gen(
                   - name: "tng-metadata"
                     present_match: true
                 route:
-                  cluster: tng_egress{id}_decap_upstream
+                  cluster: tng_egress{id}_decrypt_upstream
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
@@ -60,6 +76,10 @@ pub fn gen(
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
+    listener_filters:
+    - name: envoy.filters.listener.original_dst
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
 "#
         ));
     }
@@ -68,24 +88,32 @@ pub fn gen(
     {
         clusters.push(format!(
             r#"
-  - name: tng_egress{id}_decap_upstream
+  - name: tng_egress{id}_decrypt_upstream
     load_assignment:
-      cluster_name: tng_egress{id}_decap_upstream
+      cluster_name: tng_egress{id}_decrypt_upstream
       endpoints:
       - lb_endpoints:
         - endpoint:
             address:
               envoy_internal_address:
-                server_listener_name: tng_egress{id}_decap
-    "#
+                server_listener_name: tng_egress{id}_decrypt
+    transport_socket:
+      name: envoy.transport_sockets.internal_upstream
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport
+        transport_socket:
+          name: envoy.transport_sockets.raw_buffer
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer
+"#
         ));
     }
 
-    // Add a listener for terminating rats-tls
+    // Add a internal listener for terminating rats-tls
     {
         let mut listener = format!(
             r#"
-  - name: tng_egress{id}_decap
+  - name: tng_egress{id}_decrypt
     internal_listener: {{}}
     filter_chains:
     - filters:
@@ -147,10 +175,11 @@ pub fn gen(
                     );
                 }
             }
+        }
 
-            if let Some(verify) = verify {
-                listener += &format!(
-                    r#"
+        if let Some(verify) = &verify {
+            listener += &format!(
+                r#"
             validation_context:
               custom_validator_config:
                 name: envoy.tls.cert_validator.rats_tls
@@ -165,15 +194,14 @@ pub fn gen(
 
           require_client_certificate: true
 "#,
-                    verify.as_addr,
-                    verify
-                        .policy_ids
-                        .iter()
-                        .map(|s| format!("                    - {s}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-            }
+                verify.as_addr,
+                verify
+                    .policy_ids
+                    .iter()
+                    .map(|s| format!("                    - {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
         }
 
         listeners.push(listener);
@@ -184,20 +212,22 @@ pub fn gen(
         clusters.push(format!(
             r#"
   - name: tng_egress{id}_upstream
-    type: LOGICAL_DNS
+    type: ORIGINAL_DST
+    lb_policy: CLUSTER_PROVIDED
     dns_lookup_family: V4_ONLY
-    load_assignment:
-      cluster_name: tng_egress{id}_upstream
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: {out_addr}
-                port_value: {out_port}
+    upstream_bind_config:
+      source_address:
+        address: "0.0.0.0"
+        port_value: 0
+        protocol: TCP
+      socket_options:
+      - description: SO_KEEPALIVE
+        int_value: {so_mark}
+        level: 1 # SOL_SOCKET
+        name: 36 # SO_MARK
+        state: STATE_PREBIND
 "#
         ));
     }
-
     Ok((listeners, clusters))
 }

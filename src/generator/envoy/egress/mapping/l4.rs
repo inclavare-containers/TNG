@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use crate::{
-    confgen::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
     config::{attest::AttestArgs, verify::VerifyArgs},
+    generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
 };
 
 pub fn gen(
