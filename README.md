@@ -33,6 +33,20 @@ docker tag tng:latest tng-registry-vpc.cn-shanghai.cr.aliyuncs.com/dev/tng:lates
 docker push tng-registry-vpc.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
 ```
 
+## Create tarball
+
+1. First you should build `tng:latest` docker image with the steps above.
+
+2. Then run the script to package a tarball
+
+```sh
+./pack-sdk.sh
+```
+
+The tarball will be generated with name `tng-<version>.tar.gz`
+
+
+
 ## 参数手册
 
 ### 流量入站到tng隧道
