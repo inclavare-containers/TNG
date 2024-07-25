@@ -9,7 +9,7 @@ To get tng ready you need to git clone all of the three repos (`rats-rs`, `tng-e
 ```sh
 cd rats-rs
 git submodule update --init --recursive
-docker build --tag rats-rs:builder-c-api --target builder-c-api .
+docker build --tag rats-rs:builder-c-api --target builder-c-api-coco-only .
 ```
 
 2. build envoy with docker
