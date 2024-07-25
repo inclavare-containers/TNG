@@ -45,6 +45,31 @@ docker push tng-registry-vpc.cn-shanghai.cr.aliyuncs.com/dev/tng:latest
 
 The tarball will be generated with name `tng-<version>.tar.gz`
 
+3. To install the tarball in a new environment
+
+```sh
+tar -xvf tng-*.tar.gz -C /
+```
+
+To use the tng binary, you also need to install some dependencies. For ubuntu20.04:
+
+```
+apt-get install -y libssl1.1 iptables
+```
+
+4. Run tng
+
+```sh
+PATH=:/opt/tng-0.1.0/bin/$PATH LD_LIBRARY_PATH=/opt/tng-0.1.0/lib/ \
+  /opt/tng-0.1.0/bin/tng launch --config-content='<your config json string>'
+```
+
+
+5. To uninstall it, just remove the dir
+
+```sh
+rm -rf /opt/tng-*
+```
 
 
 ## 参数手册
