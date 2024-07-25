@@ -1,4 +1,4 @@
-FROM rust:latest as builder
+FROM rust:bullseye as builder
 
 WORKDIR /root/tng/
 COPY . .
