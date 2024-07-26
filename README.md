@@ -19,7 +19,7 @@ cd tng-envoy
 docker build -t tng-envoy:latest --target envoy -f tng/Dockerfile .
 ```
 
-3. build envoy with docker
+3. build tng with docker
 
 ```sh
 cd tng
