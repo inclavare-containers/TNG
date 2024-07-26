@@ -2,7 +2,10 @@ FROM rust:bullseye as builder
 
 WORKDIR /root/tng/
 COPY . .
+
 RUN cargo install --path .
+
+RUN strip /usr/local/cargo/bin/tng
 
 
 FROM tng-envoy:latest as release
