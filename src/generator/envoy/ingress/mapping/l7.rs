@@ -122,11 +122,13 @@ pub fn gen(
                     coco_verifier:
                       evidence_mode:
                         as_addr: {}
+                        as_is_grpc: {}
                       policy_ids:
 {}
                       trusted_certs_paths:
 "#,
                     verify.as_addr,
+                    verify.as_is_grpc,
                     verify
                         .policy_ids
                         .iter()

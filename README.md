@@ -97,7 +97,7 @@ rm -rf /opt/tng-*
         }
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -127,7 +127,7 @@ rm -rf /opt/tng-*
         }
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -220,12 +220,25 @@ rm -rf /opt/tng-*
 
 ```json
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
       }
 ```
+
+`as_addr`默认是AS的Restful HTTP地址，但也支持通过`as_is_grpc`选项来使用Grpc地址，例如：
+
+```json
+      "verify": {
+        "as_addr": "http://127.0.0.1:5000/",
+        "as_is_grpc": true,
+        "policy_ids": [
+          "default"
+        ]
+      }
+```
+
 
 - `no_ra`：表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。
 
@@ -287,7 +300,7 @@ rm -rf /opt/tng-*
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -361,7 +374,7 @@ cargo run launch --config-content='
         }
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -424,7 +437,7 @@ cargo run launch --config-content='
         }
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -457,7 +470,7 @@ cargo run launch --config-content='
         "aa_addr": "unix:///tmp/attestation.sock"
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -480,7 +493,7 @@ cargo run launch --config-content='
         "aa_addr": "unix:///tmp/attestation.sock"
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -509,7 +522,7 @@ cargo run launch --config-content='
         }
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -609,7 +622,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -682,7 +695,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -734,7 +747,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -792,7 +805,7 @@ cargo run launch --config-content='
         "aa_addr": "unix:///tmp/attestation.sock"
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -810,7 +823,7 @@ cargo run launch --config-content='
         "aa_addr": "unix:///tmp/attestation.sock"
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:50004/",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
