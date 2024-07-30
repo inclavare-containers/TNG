@@ -266,7 +266,7 @@ rm -rf /opt/tng-*
 1. 伪装后http流量的请求method统一为`POST`
 2. 伪装后http流量的请求路径path默认为`/`，也可以通过指定`path_rewrites`字段，根据内层被保护的业务http请求的path以正则表达式的方式重写出伪装后http流量的path。
 3. 伪装后http流量的Host（或者`:authority`）和内层被保护的业务http请求保持一致。
-4. 伪装后http流量将带有一个名为`tng-metadata`的请求头，可用于区分普通流量和伪装后流量。同时原业务流量中的请求头将被隐去。
+4. 伪装后http流量将带有一个名为`tng`的请求头，可用于区分普通流量和伪装后流量。同时原业务流量中的请求头将被隐去。
 
 > [!WARNING]  
 > 当前的tng实现，在配置「伪装成七层流量」特性时，要求内层被保护的业务必须是http流量，而不能是普通的tcp流量。
@@ -667,7 +667,7 @@ You can use tcpdump to observe the encapsulated HTTP traffic:
 tcpdump -n -vvvvvvvvvv -qns 0 -X -i any tcp port 20001
 ```
 
-You will see a POST request with `/api/predict/service_name` as path and `tng-metadata` as one of the headers.
+You will see a POST request with `/api/predict/service_name` as path and `tng` as one of the headers.
 
 
 - tng client as verifier and tng server as attester, with "HTTP encapulation" enabled, while tng server is using `netfilter` mode instead of `mapping` mode:

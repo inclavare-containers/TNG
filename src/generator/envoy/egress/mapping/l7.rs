@@ -19,7 +19,7 @@ pub fn gen(
     let mut clusters = vec![];
 
     // Add a listener to accept HTTP encapsulated traffic and decapsulate them to rats-tls traffic.
-    // The HTTP encapsulated traffic should be a POST request with "tng-metadata" header set.
+    // The HTTP encapsulated traffic should be a POST request with "tng" header set.
     {
         listeners.push(format!(
             r#"
@@ -47,7 +47,7 @@ pub fn gen(
                   - name: ":method"
                     string_match:
                       exact: "POST"
-                  - name: "tng-metadata"
+                  - name: "tng"
                     present_match: true
                 route:
                   cluster: tng_egress{id}_decap_upstream
@@ -56,6 +56,16 @@ pub fn gen(
                     connect_config:
                       allow_post: true
           http_filters:
+          - name: add-tng-header
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+              mutations:
+                response_mutations:
+                - append:
+                    header:
+                      key: "tng"
+                      value: "{{}}"
+                    append_action: APPEND_IF_EXISTS_OR_ADD
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

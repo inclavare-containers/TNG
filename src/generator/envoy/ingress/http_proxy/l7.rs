@@ -242,7 +242,7 @@ pub fn gen(
     // Add a internal listener to encapsulate encrypted rats-tls data into a HTTP CONNECT connection. Note that we are actually using POST method instead of CONNECT keyword to masquerade as normal HTTP traffic.
     // This listener will also set the `:AUTHORITY` of the external HTTP encapsulation to the same value of client APP's HTTP request.
     {
-        let tng_metadata = "{}"; // A HTTP request header "tng-metadata" which will be produced by tng ingress and consumed by tng egress, can be arbitrary json data. Now, we leave it as an empty object.
+        let tng_metadata = "{}"; // A HTTP request header "tng" which will be produced by tng ingress and consumed by tng egress, can be arbitrary json data. Now, we leave it as an empty object.
 
         // Also we will add a HTTP request header "tng-tmp-orig-path" to the external HTTP encapsulation. This header is temporary and is only used for the next level of internal listener in this tng instance.
         listeners.push(format!(
@@ -262,7 +262,7 @@ pub fn gen(
             post_path: "/"
             headers_to_add:
             - header:
-                key: tng-metadata
+                key: tng
                 value: "{tng_metadata}"
             - header:
                 key: tng-tmp-orig-path
