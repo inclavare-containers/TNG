@@ -308,6 +308,7 @@ pub fn gen(
       - name: envoy.filters.network.sni_dynamic_forward_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig
+          port_value: 80 # Set the default port when the host (:AUTHORITY header) has no port. See https://github.com/envoyproxy/envoy/blob/7976424646e63daa384ef51fdb9ac40cb6cb6d98/source/extensions/common/dynamic_forward_proxy/dns_cache.h#L34
           dns_cache_config:
             name: dynamic_forward_proxy_cache_config
             dns_lookup_family: V4_ONLY
