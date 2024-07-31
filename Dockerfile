@@ -10,7 +10,7 @@ RUN strip /usr/local/cargo/bin/tng
 
 FROM tng-envoy:latest as release
 
-RUN apt-get update && apt-get install -y iptables && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y iptables && rm -rf /var/lib/apt/lists/* && update-alternatives --set iptables /usr/sbin/iptables-nft
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
