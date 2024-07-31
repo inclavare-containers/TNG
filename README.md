@@ -326,7 +326,14 @@ rm -rf /opt/tng-*
 
 #### 出站侧流量的伪装
 
-与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`decap_from_http`字段的值为`true`，来开启对已伪装流量的拆解。`decap_from_http`的默认值为`false`。
+与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`decap_from_http`字段来开启对已伪装流量的拆解，例如。
+```json
+      "decap_from_http": {},
+```
+
+如不指定`decap_from_http`字段则不开启。
+
+此外，还可通过配置`allow_non_tng_traffic`子项，开启后，除了允许tng加密流量传入端点，还将允许非tng隧道的流量传入，这可以满足一些同时需要两种流量的场景，其默认值为`false`。
 
 示例如下：
 
@@ -344,7 +351,9 @@ rm -rf /opt/tng-*
           "port": 30001
         }
       },
-      "decap_from_http": true,
+      "decap_from_http": {
+        "allow_non_tng_traffic": false
+      },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }
@@ -641,7 +650,9 @@ cargo run launch --config-content='
           "port": 30001
         }
       },
-      "decap_from_http": true,
+      "decap_from_http": {
+        "allow_non_tng_traffic": false
+      },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }
@@ -709,7 +720,9 @@ cargo run launch --config-content='
           "port": 30001
         }
       },
-      "decap_from_http": true,
+      "decap_from_http": {
+        "allow_non_tng_traffic": false
+      },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }
@@ -761,7 +774,9 @@ cargo run launch --config-content='
           "port": 30001
         }
       },
-      "decap_from_http": true,
+      "decap_from_http": {
+        "allow_non_tng_traffic": false
+      },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }

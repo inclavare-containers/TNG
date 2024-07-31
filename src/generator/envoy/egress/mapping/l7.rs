@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    config::{attest::AttestArgs, verify::VerifyArgs},
+    config::{attest::AttestArgs, egress::DecapFromHttp, verify::VerifyArgs},
     generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
 };
 
@@ -11,6 +11,7 @@ pub fn gen(
     in_port: u16,
     out_addr: &str,
     out_port: u16,
+    decap_from_http: &DecapFromHttp,
     no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
@@ -21,7 +22,7 @@ pub fn gen(
     // Add a listener to accept HTTP encapsulated traffic and decapsulate them to rats-tls traffic.
     // The HTTP encapsulated traffic should be a POST request with "tng" header set.
     {
-        listeners.push(format!(
+        let mut listener = format!(
             r#"
   - name: tng_egress{id}
     address:
@@ -55,6 +56,22 @@ pub fn gen(
                   - upgrade_type: CONNECT
                     connect_config:
                       allow_post: true
+"#
+        );
+
+        if decap_from_http.allow_non_tng_traffic {
+            listener += &format!(
+                r#"
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: tng_egress{id}_not_tng_traffic
+"#
+            );
+        }
+
+        listener += &format!(
+            r#"
           http_filters:
           - name: add-tng-header
             typed_config:
@@ -71,6 +88,27 @@ pub fn gen(
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
 "#
+        );
+        listeners.push(listener);
+    }
+
+    // Add a cluster for forwarding not tng traffic
+    {
+        clusters.push(format!(
+            r#"
+  - name: tng_egress{id}_not_tng_traffic
+    type: LOGICAL_DNS
+    dns_lookup_family: V4_ONLY
+    load_assignment:
+      cluster_name: tng_egress{id}_not_tng_traffic
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: {out_addr}
+                port_value: {out_port}
+  "#
         ));
     }
 

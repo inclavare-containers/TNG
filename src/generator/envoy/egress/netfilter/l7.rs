@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    config::{attest::AttestArgs, verify::VerifyArgs},
+    config::{attest::AttestArgs, egress::DecapFromHttp, verify::VerifyArgs},
     generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
 };
 
@@ -9,6 +9,7 @@ pub fn gen(
     id: usize,
     listen_port: u16,
     so_mark: u32,
+    decap_from_http: &DecapFromHttp,
     no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
@@ -27,7 +28,7 @@ pub fn gen(
     // 3. Add a transport socket "envoy.transport_sockets.internal_upstream" to the cluster object of internal listener, for sharing filter state object cross the internal listener.
     // 4. Set cluster type of last cluster to ORIGINAL_DST, which will consume the filter state object "envoy.network.transport_socket.original_dst_address" and forward the plaintext to upstream service.
     {
-        listeners.push(format!(
+        let mut listener = format!(
             r#"
   - name: tng_egress{id}_decap
     address:
@@ -71,6 +72,22 @@ pub fn gen(
                   - upgrade_type: CONNECT
                     connect_config:
                       allow_post: true
+"#
+        );
+
+        if decap_from_http.allow_non_tng_traffic {
+            listener += &format!(
+                r#"
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: tng_egress{id}_not_tng_traffic
+"#
+            );
+        }
+
+        listener += &format!(
+            r#"
           http_filters:
           - name: add-tng-header
             typed_config:
@@ -91,6 +108,30 @@ pub fn gen(
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.filters.listener.original_dst.v3.OriginalDst
 "#
+        );
+        listeners.push(listener);
+    }
+
+    // Add a cluster for forwarding not tng traffic
+    {
+        clusters.push(format!(
+            r#"
+  - name: tng_egress{id}_not_tng_traffic
+    type: ORIGINAL_DST
+    lb_policy: CLUSTER_PROVIDED
+    dns_lookup_family: V4_ONLY
+    upstream_bind_config:
+      source_address:
+        address: "0.0.0.0"
+        port_value: 0
+        protocol: TCP
+      socket_options:
+      - description: SO_KEEPALIVE
+        int_value: {so_mark}
+        level: 1 # SOL_SOCKET
+        name: 36 # SO_MARK
+        state: STATE_PREBIND
+  "#
         ));
     }
 

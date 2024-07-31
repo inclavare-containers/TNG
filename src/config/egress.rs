@@ -8,8 +8,7 @@ pub struct AddEgressArgs {
     #[serde(flatten)]
     pub egress_mode: EgressMode,
 
-    #[serde(default = "bool::default")]
-    pub decap_from_http: bool,
+    pub decap_from_http: Option<DecapFromHttp>,
 
     #[serde(default = "bool::default")]
     pub no_ra: bool,
@@ -37,4 +36,11 @@ pub enum EgressMode {
         #[serde(skip_serializing_if = "Option::is_none")]
         so_mark: Option<u32>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DecapFromHttp {
+    #[serde(default = "bool::default")]
+    pub allow_non_tng_traffic: bool,
 }

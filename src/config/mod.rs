@@ -28,7 +28,7 @@ pub struct Endpoint {
 mod tests {
     use anyhow::Result;
     use attest::AttestArgs;
-    use egress::EgressMode;
+    use egress::{DecapFromHttp, EgressMode};
     use ingress::{EncapInHttp, IngressMode, PathRewrite};
     use verify::VerifyArgs;
 
@@ -73,7 +73,9 @@ mod tests {
                         port: 30001,
                     },
                 },
-                decap_from_http: true,
+                decap_from_http: Some(DecapFromHttp {
+                    allow_non_tng_traffic: false,
+                }),
                 no_ra: false,
                 attest: Some(AttestArgs {
                     aa_addr: "unix:///tmp/attestation.sock".to_owned(),
