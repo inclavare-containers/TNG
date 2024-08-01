@@ -138,7 +138,7 @@ rm -rf /opt/tng-*
 ```
 
 - `proxy_listen`指定了tng暴露的`http_proxy`协议监听端口的监听地址(`host`)和端口(`port`)值。
-- `dst_filter`指定了一个过滤规则，指示需要被rats-tls隧道保护的目标域名（或ip）和端口的组合。
+- `dst_filter`指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出
 - `dst_filter`的`domain`字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
 
 
@@ -798,6 +798,17 @@ And then, send http request via proxy with `all_proxy` environment variable set.
 ```sh
 all_proxy="http://127.0.0.1:41000" curl http://127.0.0.1:30001 -vvvvv
 ```
+
+You will see the correct response.
+
+And then, test sending request to target which is not matched by the `dst_filter` filter rule, for example, `http://www.baidu.com` and `https://www.baidu.com`.
+
+```sh
+all_proxy="http://127.0.0.1:41000" curl http://www.baidu.com -vvvvv
+all_proxy="http://127.0.0.1:41000" curl https://www.baidu.com -vvvvv
+```
+
+You can see it also works since tng will not send these request via tng tunnel.
 
 
 - The cachefs case, where both tng client and tng server are verifier and attester, while tng client is using `http_proxy` mode, and tng server is using `netfilter` mode:

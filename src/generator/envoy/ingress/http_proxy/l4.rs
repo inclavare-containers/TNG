@@ -19,6 +19,8 @@ pub fn gen(
 
     // Add a listener for client app connection
     {
+        let need_add_fallback_route = !(domain == "*" && port == 80);
+
         listeners.push(format!(
             r#"
   - name: tng_ingress{id}
@@ -54,6 +56,7 @@ pub fn gen(
                   prefix: "/"
                 route:
                   cluster: tng_ingress{id}_upstream
+            {}
           http_filters:
           - name: envoy.filters.http.dynamic_forward_proxy
             typed_config:
@@ -91,8 +94,35 @@ pub fn gen(
               - "{domain}"
 "#
                 )
+            },
+            if need_add_fallback_route{
+            format!(r#"
+            - name: direct # Fallback route
+              domains:
+                - "*"
+              routes:
+              - match:
+                  connect_matcher:
+                    {{}}
+                route:
+                  cluster: tng_ingress{id}_direct_entry_upstream
+                  upgrade_configs:
+                  - upgrade_type: CONNECT
+                    connect_config:
+                      {{}}
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: tng_ingress{id}_direct_entry_upstream
+              "#)
+            }else{
+              "".to_owned()
             }
         ));
+
+        if need_add_fallback_route {
+            add_fallback_route(&mut clusters, &mut listeners, id);
+        }
     }
 
     // Add a cluster for encrypting with rats-tls
@@ -172,4 +202,40 @@ pub fn gen(
     }
 
     Ok((listeners, clusters))
+}
+
+fn add_fallback_route(clusters: &mut Vec<String>, listeners: &mut Vec<String>, id: usize) {
+    // Add a cluster for forwording traffics to upstream directly, without going through TNG tunnel.
+    {
+        clusters.push(format!(
+      r#"
+  - name: tng_ingress{id}_direct_entry_upstream
+    lb_policy: CLUSTER_PROVIDED
+    cluster_type:
+      name: envoy.clusters.dynamic_forward_proxy
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+        dns_cache_config:
+          name: dynamic_forward_proxy_cache_config
+          dns_lookup_family: V4_ONLY
+          typed_dns_resolver_config:
+            name: envoy.network.dns_resolver.cares
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.cares.v3.CaresDnsResolverConfig
+              resolvers:
+              use_resolvers_as_fallback: true
+              dns_resolver_options:
+                use_tcp_for_dns_lookups: false
+                no_default_search_domain: true
+    transport_socket:
+      name: envoy.transport_sockets.internal_upstream
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport
+        transport_socket:
+          name: envoy.transport_sockets.raw_buffer
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer
+  "#
+      ));
+    }
 }
