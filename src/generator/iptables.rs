@@ -1,4 +1,12 @@
-use anyhow::Result;
+use std::{
+    mem::forget,
+    os::{
+        linux::net::SocketAddrExt,
+        unix::net::{SocketAddr, UnixListener},
+    },
+};
+
+use anyhow::{Context, Result};
 use itertools::Itertools;
 
 use crate::config::Endpoint;
@@ -43,9 +51,21 @@ impl IpTablesActions {
         let mut revoke_script = "".to_owned();
 
         if !self.actions.is_empty() {
+            // Check if there is annother TNG instance running in same network namespace.
+            let listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Currently we don't support running TNG instance which need iptables rules concurrently")?;
+            forget(listener);
+
             // Handle 'Redirect' case
             let mut redirect_invoke_script = "".to_owned();
 
+            let clean_up_iptables_script = "\
+                iptables -t nat -D PREROUTING -p tcp -j TNG_ENGRESS 2>/dev/null || true ; \
+                iptables -t nat -D OUTPUT -p tcp -j TNG_ENGRESS 2>/dev/null || true ; \
+                iptables -t nat -F TNG_ENGRESS 2>/dev/null || true ; \
+                iptables -t nat -X TNG_ENGRESS 2>/dev/null || true ; \
+            ";
+
+            redirect_invoke_script += clean_up_iptables_script;
             redirect_invoke_script += "iptables -t nat -N TNG_ENGRESS ; ";
 
             for so_mark in self
@@ -88,16 +108,8 @@ impl IpTablesActions {
             redirect_invoke_script += "iptables -t nat -A PREROUTING -p tcp -j TNG_ENGRESS ; ";
             redirect_invoke_script += "iptables -t nat -A OUTPUT -p tcp -j TNG_ENGRESS ; ";
 
-            let redirect_revoke_script = "\
-            iptables -t nat -D PREROUTING -p tcp -j TNG_ENGRESS || true ; \
-            iptables -t nat -D OUTPUT -p tcp -j TNG_ENGRESS || true ; \
-            iptables -t nat -F TNG_ENGRESS || true ; \
-            iptables -t nat -X TNG_ENGRESS || true ; \
-            "
-            .to_owned();
-
             invoke_script += &redirect_invoke_script;
-            revoke_script += &redirect_revoke_script;
+            revoke_script += clean_up_iptables_script;
         }
         Ok((invoke_script, revoke_script))
     }
