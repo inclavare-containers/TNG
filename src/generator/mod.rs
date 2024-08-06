@@ -306,6 +306,7 @@ bootstrap_extensions:
 - name: envoy.bootstrap.internal_listener
   typed_config:
     "@type": type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener
+{}
 
 static_resources:
 
@@ -313,6 +314,25 @@ static_resources:
 
   clusters:{}
 "#,
+        if let Some(admin_bind) = config.admin_bind {
+            let host = admin_bind.host.as_deref().unwrap_or("0.0.0.0");
+            let port = admin_bind.port;
+
+            debug!("Admin interface is enabled for envoy: http://{host}:{port}");
+
+            format!(
+                r#"
+admin:
+  address:
+    socket_address:
+      address: {}
+      port_value: {}
+            "#,
+                host, port
+            )
+        } else {
+            "".to_owned()
+        },
         listeners.join("\n"),
         clusters.join("\n")
     );

@@ -204,7 +204,7 @@ pub fn gen(
     Ok((listeners, clusters))
 }
 
-fn add_fallback_route(clusters: &mut Vec<String>, listeners: &mut Vec<String>, id: usize) {
+fn add_fallback_route(clusters: &mut Vec<String>, _listeners: &mut Vec<String>, id: usize) {
     // Add a cluster for forwording traffics to upstream directly, without going through TNG tunnel.
     {
         clusters.push(format!(

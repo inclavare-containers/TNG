@@ -362,6 +362,19 @@ rm -rf /opt/tng-*
 }
 ```
 
+### Envoy Admin Interface
+
+可使用`admin_bind`选项开启envoy实例的[admin interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin)。在未指定该选项时默认不开启。请不要在生产环境中使用该选项。
+
+例如：
+
+```json
+  "admin_bind": {
+    "host": "0.0.0.0",
+    "port": 9901
+  },
+```
+
 ## Example
 
 For simplicity, in the following examples, the running tng instance serves as both the tng client and the tng server.
@@ -631,7 +644,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
+        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
         "policy_ids": [
           "default"
         ]
@@ -761,7 +774,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
+        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
         "policy_ids": [
           "default"
         ]
@@ -879,6 +892,46 @@ tcpdump -n -vvvvvvvvvv -qns 0 -X -i any tcp port 40000
 ```
 where `40000` is the value of `listen_port` of `add_egress.netfilter`.
 
+- Enable Admin interface of envoy for debugging
+
+```sh
+cargo run launch --config-content='
+{
+  "admin_bind": {
+    "host": "0.0.0.0",
+    "port": 9901
+  },
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",
+          "port": 41000
+        },
+        "dst_filter": {
+          "domain": "*",
+          "port": 8080
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+'
+```
 
 - Generate dummy TLS cert used by TNG, which is used as a fallback cert when the tng server is not an attester.
 

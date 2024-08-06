@@ -10,8 +10,13 @@ pub mod verify;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TngConfig {
+    /// The [address]:port where the envoy admin interface to bind on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admin_bind: Option<Endpoint>,
+
     #[serde(default)]
     pub add_ingress: Vec<AddIngressArgs>,
+
     #[serde(default)]
     pub add_egress: Vec<AddEgressArgs>,
 }
@@ -37,6 +42,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize() -> Result<()> {
         let config = TngConfig {
+            admin_bind: None,
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping {
                     r#in: Endpoint {
