@@ -36,6 +36,10 @@ pub fn gen(
           stat_prefix: tng_ingress{id}
           http_protocol_options:
             accept_http_10: true  # Some http_proxy clients (e.g. netcat) only send HTTP/1.0 CONNECT request
+          http2_protocol_options:
+            allow_connect: true
+          upgrade_configs:
+          - upgrade_type: CONNECT
           route_config:
             name: local_route
             virtual_hosts:
@@ -80,8 +84,6 @@ pub fn gen(
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
-          upgrade_configs:
-          - upgrade_type: CONNECT
 "#,
             if port != 80 {
                 format!(
