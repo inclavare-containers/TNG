@@ -34,7 +34,7 @@ pub fn gen(
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
+          stat_prefix: tng_ingress{id}
           http_protocol_options:
             accept_http_10: true  # Some http_proxy clients (e.g. netcat) only send HTTP/1.0 CONNECT request
           route_config:
@@ -168,7 +168,7 @@ pub fn gen(
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
+          stat_prefix: tng_ingress{id}_entry
           route_config:
             name: local_route
             virtual_hosts:
@@ -295,7 +295,7 @@ pub fn gen(
       - name: envoy.filters.network.tcp_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-          stat_prefix: tcp_stats
+          stat_prefix: tng_ingress{id}_encap
           cluster: "tng_ingress{id}_rewrite_upstream"
           tunneling_config:
             hostname: "%FILTER_STATE(io.inclavare-containers.tng.authority:PLAIN)%"
@@ -365,7 +365,7 @@ pub fn gen(
       - name: envoy.filters.network.http_connection_manager
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-          stat_prefix: ingress_http
+          stat_prefix: tng_ingress{id}_rewrite
           http_filters:
           - name: envoy.lua
             typed_config:
@@ -514,7 +514,7 @@ fn add_fallback_route(clusters: &mut Vec<String>, listeners: &mut Vec<String>, i
       - name: envoy.filters.network.tcp_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-          stat_prefix: tcp_proxy
+          stat_prefix: tng_ingress{id}_direct_entry
           cluster: tng_ingress{id}_direct_upstream
     "#
         ));

@@ -29,7 +29,7 @@ pub fn gen(
       - name: envoy.filters.network.tcp_proxy
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-          stat_prefix: tcp_proxy
+          stat_prefix: tng_ingress{id}
           cluster: tng_ingress{id}_upstream
 "#
         ));
