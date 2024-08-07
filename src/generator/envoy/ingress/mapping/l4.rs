@@ -30,7 +30,55 @@ pub fn gen(
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
           stat_prefix: tng_ingress{id}
-          cluster: tng_ingress{id}_upstream
+          cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
+"#
+        ));
+    }
+
+    // Add a cluster for forwarding to next internal listener
+    {
+        clusters.push(format!(
+          r#"
+  - name: tng_ingress{id}_wrap_in_h2_tls_upstream
+    load_assignment:
+      cluster_name: tng_ingress{id}_wrap_in_h2_tls_upstream
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              envoy_internal_address:
+                server_listener_name: tng_ingress{id}_wrap_in_h2_tls
+    transport_socket:
+      name: envoy.transport_sockets.internal_upstream
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport
+        transport_socket:
+          name: envoy.transport_sockets.raw_buffer
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer
+"#
+      ));
+    }
+
+    // Add a listener for wrapping downstream connections to one http2 CONNECT connection
+    {
+        listeners.push(format!(
+            r#"
+  - name: tng_ingress{id}_wrap_in_h2_tls
+    internal_listener: {{}}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: tng_ingress{id}_wrap_in_h2_tls
+          cluster: "tng_ingress{id}_upstream"
+          tunneling_config:
+            hostname: "tng.internal"
+            headers_to_add:
+            - header:
+                key: tng
+                value: '{{"type": "wrap_in_h2_tls"}}'
 "#
         ));
     }
@@ -51,6 +99,11 @@ pub fn gen(
               socket_address:
                 address: {out_addr}
                 port_value: {out_port}
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {{}}
     transport_socket:
       name: envoy.transport_sockets.tls
       typed_config:

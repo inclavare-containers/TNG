@@ -16,7 +16,7 @@ pub fn gen(
     let mut listeners = vec![];
     let mut clusters = vec![];
 
-    // Add a listener for terminating rats-tls
+    // Add a listener for terminating rats-tls and unwrapping inner http2 CONNECT
     {
         let mut listener = format!(
             r#"
@@ -27,11 +27,36 @@ pub fn gen(
         port_value: {listen_port}
     filter_chains:
     - filters:
-      - name: envoy.filters.network.tcp_proxy
+      - name: envoy.filters.network.http_connection_manager
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: tng_egress{id}
-          cluster: tng_egress{id}_upstream
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains:
+              - "*"
+              routes:
+              - match:
+                  connect_matcher:
+                    {{}}
+                route:
+                  cluster: tng_egress{id}_upstream
+                  upgrade_configs:
+                  - upgrade_type: CONNECT
+                    connect_config:
+                      {{}}
+
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+              suppress_envoy_headers: true
+          http2_protocol_options:
+            allow_connect: true
+          upgrade_configs:
+          - upgrade_type: CONNECT
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:

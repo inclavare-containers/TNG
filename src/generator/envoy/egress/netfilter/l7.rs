@@ -67,11 +67,16 @@ pub fn gen(
                   - name: "tng"
                     present_match: true
                 route:
-                  cluster: tng_egress{id}_decrypt_upstream
+                  cluster: tng_egress{id}_unwrap_from_h2_tls_upstream
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
                       allow_post: true
+                response_headers_to_add:
+                  header:
+                    key: tng
+                    value: '{{"type": "egress_decap_http_post_response"}}'
+                  append: false
 "#
         );
 
@@ -89,16 +94,6 @@ pub fn gen(
         listener += &format!(
             r#"
           http_filters:
-          - name: add-tng-header
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
-              mutations:
-                response_mutations:
-                - append:
-                    header:
-                      key: "tng"
-                      value: "{{}}"
-                    append_action: APPEND_IF_EXISTS_OR_ADD
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -139,15 +134,15 @@ pub fn gen(
     {
         clusters.push(format!(
             r#"
-  - name: tng_egress{id}_decrypt_upstream
+  - name: tng_egress{id}_unwrap_from_h2_tls_upstream
     load_assignment:
-      cluster_name: tng_egress{id}_decrypt_upstream
+      cluster_name: tng_egress{id}_unwrap_from_h2_tls_upstream
       endpoints:
       - lb_endpoints:
         - endpoint:
             address:
               envoy_internal_address:
-                server_listener_name: tng_egress{id}_decrypt
+                server_listener_name: tng_egress{id}_unwrap_from_h2_tls
     transport_socket:
       name: envoy.transport_sockets.internal_upstream
       typed_config:
@@ -160,19 +155,44 @@ pub fn gen(
         ));
     }
 
-    // Add a internal listener for terminating rats-tls
+    // Add a internal listener for terminating rats-tls and unwrapping inner http2 CONNECT
     {
         let mut listener = format!(
             r#"
-  - name: tng_egress{id}_decrypt
+  - name: tng_egress{id}_unwrap_from_h2_tls
     internal_listener: {{}}
     filter_chains:
     - filters:
-      - name: envoy.filters.network.tcp_proxy
+      - name: envoy.filters.network.http_connection_manager
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-          stat_prefix: tng_egress{id}_decrypt
-          cluster: tng_egress{id}_upstream
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: tng_egress{id}_unwrap_from_h2_tls
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains:
+              - "*"
+              routes:
+              - match:
+                  connect_matcher:
+                    {{}}
+                route:
+                  cluster: tng_egress{id}_upstream
+                  upgrade_configs:
+                  - upgrade_type: CONNECT
+                    connect_config:
+                      {{}}
+
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+              suppress_envoy_headers: true
+          http2_protocol_options:
+            allow_connect: true
+          upgrade_configs:
+          - upgrade_type: CONNECT
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:
