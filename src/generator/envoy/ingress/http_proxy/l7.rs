@@ -55,6 +55,9 @@ pub fn gen(
                       {{}}
               - match:  # Although http_proxy supports proxying arbitrary tcp requests, some http_proxy clients may not always send HTTP CONNECT messages, especially if the proxied TCP is itself http (for example, `http_proxy="http://127.0.0.1:41000" curl http://127.0.0.1:9991 -vvvvv`).
                   prefix: "/"
+                  headers:
+                  - name: tng
+                    present_match: false # Prevent from loops
                 route:
                   cluster: tng_ingress{id}_entry_upstream
             {}
@@ -108,8 +111,16 @@ pub fn gen(
                       {{}}
               - match:
                   prefix: "/"
+                  headers:
+                  - name: tng
+                    present_match: false # Prevent from loops
                 route:
                   cluster: tng_ingress{id}_direct_entry_upstream
+                request_headers_to_add: # Add a header to prevent from loops
+                  header:
+                    key: tng
+                    value: '{{"type": "direct"}}'
+                  append: false
               "#)
             }else{
               "".to_owned()
