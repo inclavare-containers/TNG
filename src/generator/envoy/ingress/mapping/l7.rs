@@ -283,6 +283,11 @@ pub fn gen(
             r#"
   - name: tng_ingress{id}_upstream
     type: LOGICAL_DNS
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {{}}
     dns_lookup_family: V4_ONLY
     load_assignment:
       cluster_name: tng_ingress{id}_upstream
