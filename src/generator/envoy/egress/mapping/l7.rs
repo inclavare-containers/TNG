@@ -2,7 +2,10 @@ use anyhow::Result;
 
 use crate::{
     config::{attest::AttestArgs, egress::DecapFromHttp, verify::VerifyArgs},
-    generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_LISTENER_SOCKET_OPTIONS},
+    generator::envoy::{
+        ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
+        ENVOY_LISTENER_SOCKET_OPTIONS,
+    },
 };
 
 pub fn gen(
@@ -164,6 +167,7 @@ pub fn gen(
             allow_connect: true
           upgrade_configs:
           - upgrade_type: CONNECT
+          stream_idle_timeout: {ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT}
       transport_socket:
         name: envoy.transport_sockets.tls
         typed_config:

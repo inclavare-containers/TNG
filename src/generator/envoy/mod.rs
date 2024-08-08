@@ -26,3 +26,5 @@ pub const ENVOY_LISTENER_SOCKET_OPTIONS: &'static str = r#"
       name: 6
       state: STATE_PREBIND
 "#;
+
+pub const ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT: &'static str = "3600s"; // 1 hour
