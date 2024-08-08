@@ -165,7 +165,7 @@ pub fn gen(
         port_value: 0
         protocol: TCP
       socket_options:
-      - description: SO_KEEPALIVE
+      - description: SO_MARK
         int_value: {so_mark}
         level: 1 # SOL_SOCKET
         name: 36 # SO_MARK
