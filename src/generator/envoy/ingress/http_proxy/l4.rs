@@ -233,6 +233,7 @@ pub fn gen(
               dns_resolver_options:
                 use_tcp_for_dns_lookups: false
                 no_default_search_domain: true
+        allow_insecure_cluster_options: true
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
         "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
