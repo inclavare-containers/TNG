@@ -84,7 +84,7 @@ pub fn gen(
           # Create a "envoy.network.transport_socket.original_dst_address" filter state object (the only "Hashable" filter state object type currently in envoy) here for dispatch downstream connections for different destination to different connection pool.
           # See:
           # - https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling#number-of-connection-pools
-          # - https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/data_sharing_between_filters#filter-state-sharing 
+          # - https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/data_sharing_between_filters#filter-state-sharing
           - name: envoy.filters.http.set_filter_state
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
