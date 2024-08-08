@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use crate::config::{attest::AttestArgs, verify::VerifyArgs};
+use crate::{
+    config::{attest::AttestArgs, verify::VerifyArgs},
+    generator::envoy::ENVOY_LISTENER_SOCKET_OPTIONS,
+};
 
 pub fn gen(
     id: usize,
@@ -28,6 +31,8 @@ pub fn gen(
       socket_address:
         address: {proxy_listen_addr}
         port_value: {proxy_listen_port}
+    socket_options:
+      {ENVOY_LISTENER_SOCKET_OPTIONS}
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager

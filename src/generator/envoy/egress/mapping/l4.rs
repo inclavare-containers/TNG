@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::{
     config::{attest::AttestArgs, verify::VerifyArgs},
-    generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
+    generator::envoy::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_LISTENER_SOCKET_OPTIONS},
 };
 
 pub fn gen(
@@ -27,6 +27,8 @@ pub fn gen(
       socket_address:
         address: {in_addr}
         port_value: {in_port}
+    socket_options:
+      {ENVOY_LISTENER_SOCKET_OPTIONS}
     filter_chains:
     - filters:
       - name: envoy.filters.network.http_connection_manager
