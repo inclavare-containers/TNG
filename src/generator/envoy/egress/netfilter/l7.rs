@@ -196,6 +196,7 @@ pub fn gen(
               suppress_envoy_headers: true
           http2_protocol_options:
             allow_connect: true
+            max_outbound_frames: 50000
           upgrade_configs:
           - upgrade_type: CONNECT
           stream_idle_timeout: {ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT}
