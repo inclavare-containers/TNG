@@ -55,7 +55,9 @@ impl TngBuilder {
         cmd.arg("-c")
             .arg(envoy_config_file)
             .arg("-l")
-            .arg("debug")
+            .arg("info")
+            .arg("--component-log-level")
+            .arg("rats_tls:debug")
             .arg("--base-id")
             .arg(rand::thread_rng().gen::<u32>().to_string()); // Use pid of tng process as base-id of envoy to avoid conflicts
         let child = cmd
