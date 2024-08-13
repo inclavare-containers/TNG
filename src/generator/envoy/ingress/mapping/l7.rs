@@ -276,7 +276,6 @@ pub fn gen(
                   -- Get original path from "tng-tmp-orig-path" header
                   local original_path = request_handle:headers():get("tng-tmp-orig-path")
 
-                  print(":path is " .. original_path)
                   -- Check if original_path exist, and set path of request to it
                   if original_path then
                     -- Use gsub to remove query strings
