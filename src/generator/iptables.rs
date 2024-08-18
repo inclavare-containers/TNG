@@ -52,7 +52,7 @@ impl IpTablesActions {
 
         if !self.actions.is_empty() {
             // Check if there is annother TNG instance running in same network namespace.
-            let listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Currently we don't support running TNG instance which need iptables rules concurrently")?;
+            let listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Running more than 1 TNG instances concurrently in same network namespace which need iptables rules is not supported in current TNG version")?;
             forget(listener);
 
             // Handle 'Redirect' case
