@@ -191,6 +191,7 @@ rm -rf /opt/tng-*
           "host": "127.0.0.1",  // 可选，若不填，则默认匹配本机上所有端口的本地ip地址（见iptables的 -m addrtype --dst-type LOCAL 选项：https://ipset.netfilter.org/iptables-extensions.man.html）
           "port": 30001
         },
+        "capture_local_traffic": false, // 可选（默认为false），若值为false则在捕获时会忽略源ip为本机ip的请求，不会将它们重定向到listen_port。若值为true，则会连带捕获源ip为本机ip到请求。
         "listen_port": 40000,   // 可选，tng server监听的端口号，用于接收由netfilter重定向的流量。默认从40000端口开始递增取值。
         "so_mark": 565          // 可选，tng server解密后，承载明文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量流量再次被netfilter转发到tng server。默认值为565
       },
@@ -556,7 +557,8 @@ cargo run launch --config-content='
       "netfilter": {
         "capture_dst": {
           "port": 30001
-        }
+        },
+        "capture_local_traffic": true
       },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
@@ -731,7 +733,8 @@ cargo run launch --config-content='
       "netfilter": {
         "capture_dst": {
           "port": 30001
-        }
+        },
+        "capture_local_traffic": true
       },
       "decap_from_http": {
         "allow_non_tng_traffic": false
@@ -786,7 +789,8 @@ cargo run launch --config-content='
       "netfilter": {
         "capture_dst": {
           "port": 30001
-        }
+        },
+        "capture_local_traffic": true
       },
       "decap_from_http": {
         "allow_non_tng_traffic": false
@@ -857,7 +861,8 @@ cargo run launch --config-content='
       "netfilter": {
         "capture_dst": {
           "port": 9991
-        }
+        },
+        "capture_local_traffic": true
       },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"

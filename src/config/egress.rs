@@ -30,6 +30,9 @@ pub enum EgressMode {
     Netfilter {
         capture_dst: Endpoint,
 
+        #[serde(default = "bool::default")]
+        capture_local_traffic: bool,
+
         #[serde(skip_serializing_if = "Option::is_none")]
         listen_port: Option<u16>,
 

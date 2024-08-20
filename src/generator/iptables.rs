@@ -14,6 +14,7 @@ use crate::config::Endpoint;
 pub enum IpTablesAction {
     Redirect {
         capture_dst: Endpoint,
+        capture_local_traffic: bool,
         listen_port: u16,
         so_mark: u32,
     },
@@ -75,6 +76,7 @@ impl IpTablesActions {
                     IpTablesAction::Redirect {
                         capture_dst: _,
                         listen_port: _,
+                        capture_local_traffic: _,
                         so_mark,
                     } => Some(so_mark),
                 })
@@ -90,16 +92,29 @@ impl IpTablesActions {
                     IpTablesAction::Redirect {
                         capture_dst,
                         listen_port,
+                        capture_local_traffic,
                         so_mark: _,
                     } => {
                         if let Some(addr) = &capture_dst.host {
-                            redirect_invoke_script += &format!(
-                                "iptables -t nat -A TNG_ENGRESS -p tcp --dst {addr}/32 --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
-                            );
+                            if *capture_local_traffic {
+                                redirect_invoke_script += &format!(
+                                    "iptables -t nat -A TNG_ENGRESS -p tcp --dst {addr}/32 --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                                );
+                            } else {
+                                redirect_invoke_script += &format!(
+                                    "iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype ! --src-type LOCAL --dst {addr}/32 --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                                );
+                            }
                         } else {
-                            redirect_invoke_script += &format!(
-                                "iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype --dst-type LOCAL --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
-                            );
+                            if *capture_local_traffic {
+                                redirect_invoke_script += &format!(
+                                    "iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype --dst-type LOCAL --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                                );
+                            } else {
+                                redirect_invoke_script += &format!(
+                                    "iptables -t nat -A TNG_ENGRESS -p tcp -m addrtype ! --src-type LOCAL --dst-type LOCAL --dport {} -j REDIRECT --to-ports {listen_port} ; ",capture_dst.port
+                                );
+                            }
                         }
                     }
                 }

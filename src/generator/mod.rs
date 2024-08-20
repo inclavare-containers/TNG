@@ -263,6 +263,7 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
             }
             EgressMode::Netfilter {
                 capture_dst,
+                capture_local_traffic,
                 listen_port,
                 so_mark,
             } => {
@@ -272,6 +273,7 @@ fn handle_config(config: TngConfig) -> Result<(String, IpTablesActions)> {
 
                 iptables_actions.push(IpTablesAction::Redirect {
                     capture_dst: capture_dst.clone(),
+                    capture_local_traffic: *capture_local_traffic,
                     listen_port,
                     so_mark,
                 });
