@@ -97,6 +97,8 @@ pub fn gen(
               - match:
                   prefix: "/"
                 route:
+                  upgrade_configs:
+                  - upgrade_type: websocket
                   cluster: tng_egress{id}_not_tng_traffic
 "#
             );

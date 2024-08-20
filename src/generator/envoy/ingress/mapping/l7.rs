@@ -51,6 +51,8 @@ pub fn gen(
               - match:
                   prefix: "/"
                 route:
+                  upgrade_configs:
+                  - upgrade_type: websocket
                   cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
 
           http_filters:

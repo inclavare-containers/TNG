@@ -73,6 +73,8 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  upgrade_configs:
+                  - upgrade_type: websocket
                   cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
             {}
           http_filters:
@@ -142,6 +144,8 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  upgrade_configs:
+                  - upgrade_type: websocket
                   cluster: tng_ingress{id}_direct_entry_upstream
                 request_headers_to_add: # Add a header to prevent from loops
                   header:
