@@ -4,7 +4,7 @@ use crate::{
     config::{attest::AttestArgs, egress::DecapFromHttp, verify::VerifyArgs},
     generator::envoy::{
         ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
-        ENVOY_LISTENER_SOCKET_OPTIONS,
+        ENVOY_L7_RESPONSE_BODY_DENIED, ENVOY_LISTENER_SOCKET_OPTIONS,
     },
 };
 
@@ -101,6 +101,19 @@ pub fn gen(
                   - upgrade_type: websocket
                   cluster: tng_egress{id}_not_tng_traffic
 "#
+            );
+        } else {
+            listener += &format!(
+                r#"
+              - match:
+                  prefix: "/"
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: |
+                      {}
+"#,
+                ENVOY_L7_RESPONSE_BODY_DENIED.replace("\n", "\n                      "),
             );
         }
 
