@@ -79,6 +79,14 @@ pub fn gen(
                   cluster: tng_ingress{id}_entry_upstream
             {}
           http_filters:
+          - name: envoy.filters.http.health_check
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.health_check.v3.HealthCheck
+              pass_through_mode: false
+              headers:
+                - name: ":path"
+                  string_match:
+                    exact: "/tng/v1/healthcheck"
           - name: envoy.filters.http.set_filter_state
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
