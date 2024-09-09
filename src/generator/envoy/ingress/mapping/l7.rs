@@ -86,7 +86,8 @@ pub fn gen(
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
 "#,
-          if web_page_inject{
+          if web_page_inject && verify.is_some() {
+            let verify = verify.as_ref().unwrap();
             format!(r#"
           - name: envoy.filters.http.lua
             typed_config:
@@ -103,6 +104,7 @@ pub fn gen(
                   local html = nil
 
                   if response_handle:headers():get(":status") == "503" then
+                    body = response_handle:body()
                     html = '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body></body></html>'
                     response_handle:headers():replace("content-type", "text/html; charset=utf-8")
                     response_handle:headers():replace(":status", "203")
@@ -130,7 +132,18 @@ pub fn gen(
                   print("response_handle:attestationInfo(): " .. response_handle:attestationInfo(authority))
 
                   local attestation_info = response_handle:attestationInfo(authority)
-                  attestation_info = string.gsub(attestation_info, "\n", "\\n")
+                  if attestation_info == "" then
+                    -- fallback attestation info
+                    attestation_info = string.format([===[
+                    {{
+                      "is_secure": false,
+                      "target_url": "%s",
+                      "trustee_url": "{}",
+                      "policy_ids": {:?},
+                      "msg": "%s"
+                    }}
+                    ]===], authority, tostring(body:getBytes(0, body:length())))
+                  end
                   body_inject = string.gsub(body_inject, "ATTESTATION_INFO_PLACEHOLDER", attestation_info)
                   html = string.gsub(html, "</body>", body_inject .. "</body>")
 
@@ -139,6 +152,8 @@ pub fn gen(
               "#,
               ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD.replace("\n", "\n                "),
               ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY.replace("\n", "\n                "),
+              verify.as_addr,
+              verify.policy_ids,
             )
           }else{
             "".to_owned()
