@@ -363,6 +363,28 @@ rm -rf /opt/tng-*
 }
 ```
 
+### 网页注入
+
+有些场景中希望让浏览器用户强感知到远程证明的存在，可使用ingress的`web_page_inject`选项在网页流量中注入一个顶栏，显示当前页面的远程证明信息。
+
+> 注意该功能目前仅支持开启了「伪装成七层流量」的ingress
+
+例如：
+```json
+{
+  "add_ingress": [
+    {
+      ...
+      "encap_in_http": {
+        ...
+      },
+      "web_page_inject": true
+      ...
+    }
+  ]
+}
+```
+
 ### Envoy Admin Interface
 
 可使用`admin_bind`选项开启envoy实例的[admin interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin)。在未指定该选项时默认不开启。请不要在生产环境中使用该选项。

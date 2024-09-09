@@ -54,6 +54,7 @@ mod tests {
                         port: 20001,
                     },
                 },
+                web_page_inject: false,
                 encap_in_http: Some(EncapInHttp {
                     path_rewrites: vec![PathRewrite {
                         match_regex: "^/api/predict/([^/]+)([/]?.*)$".to_owned(),

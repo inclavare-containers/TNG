@@ -2,7 +2,10 @@ use anyhow::Result;
 
 use crate::{
     config::{attest::AttestArgs, ingress::EncapInHttp, verify::VerifyArgs},
-    generator::envoy::ENVOY_LISTENER_SOCKET_OPTIONS,
+    generator::envoy::{
+        ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY, ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD,
+        ENVOY_LISTENER_SOCKET_OPTIONS,
+    },
 };
 
 pub fn gen(
@@ -11,6 +14,7 @@ pub fn gen(
     in_port: u16,
     out_addr: &str,
     out_port: u16,
+    web_page_inject: bool,
     encap_in_http: &EncapInHttp,
     no_ra: bool,
     attest: &Option<AttestArgs>,
@@ -76,11 +80,69 @@ pub fn gen(
                   text_format_source:
                     inline_string: "%REQ(:PATH)%"
                 shared_with_upstream: TRANSITIVE
+{}
           - name: envoy.filters.http.router
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
-"#
+"#,
+          if web_page_inject{
+            format!(r#"
+          - name: envoy.filters.http.lua
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+              inline_code: |
+
+                function envoy_on_request(request_handle)
+                  local authority = request_handle:headers():get(":AUTHORITY")
+                  request_handle:streamInfo():dynamicMetadata():set("io.inclavare-containers.tng.lua-filter", "request.authority", authority)
+                end
+
+                function envoy_on_response(response_handle)
+                  local body = nil
+                  local html = nil
+
+                  if response_handle:headers():get(":status") == "503" then
+                    html = '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body></body></html>'
+                    response_handle:headers():replace("content-type", "text/html; charset=utf-8")
+                    response_handle:headers():replace(":status", "203")
+                  else
+                    local content_type = response_handle:headers():get("content-type")
+                    if content_type and string.find(content_type:lower(), "text/html") then
+                      body = response_handle:body()
+                      html = tostring(body:getBytes(0, body:length()))
+                    else
+                      -- Do nothing
+                      return
+                    end
+                  end
+
+                  local head_inject = [===[
+                  {}
+                  ]===]
+                  html = string.gsub(html, "<head>", "<head>" .. head_inject)
+
+                  local body_inject = [===[
+                  {}
+                  ]===]
+
+                  local authority = response_handle:streamInfo():dynamicMetadata():get("io.inclavare-containers.tng.lua-filter")["request.authority"]
+                  print("response_handle:attestationInfo(): " .. response_handle:attestationInfo(authority))
+
+                  local attestation_info = response_handle:attestationInfo(authority)
+                  attestation_info = string.gsub(attestation_info, "\n", "\\n")
+                  body_inject = string.gsub(body_inject, "ATTESTATION_INFO_PLACEHOLDER", attestation_info)
+                  html = string.gsub(html, "</body>", body_inject .. "</body>")
+
+                  body:setBytes(html)
+                end
+              "#,
+              ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD.replace("\n", "\n                "),
+              ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY.replace("\n", "\n                "),
+            )
+          }else{
+            "".to_owned()
+          }
         ));
     }
 

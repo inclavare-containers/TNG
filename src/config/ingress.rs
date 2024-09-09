@@ -12,6 +12,9 @@ pub struct AddIngressArgs {
     pub encap_in_http: Option<EncapInHttp>,
 
     #[serde(default = "bool::default")]
+    pub web_page_inject: bool,
+
+    #[serde(default = "bool::default")]
     pub no_ra: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
