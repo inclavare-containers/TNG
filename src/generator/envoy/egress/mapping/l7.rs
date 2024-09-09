@@ -92,7 +92,7 @@ pub fn gen(
               - match:
                   prefix: "/"
                 direct_response:
-                  status: 403
+                  status: 418
                   body:
                     inline_string: |
                       {}
