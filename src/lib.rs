@@ -3,7 +3,7 @@ use std::process::{Child, Command, ExitStatus};
 
 use anyhow::{bail, Context as _, Result};
 use config::TngConfig;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use nix::{
     libc::pid_t,
     sys::signal::{self, Signal},
@@ -31,10 +31,8 @@ impl TngBuilder {
 
     pub fn launch(self) -> Result<TngInstance> {
         let runtime_data = RuntimeData::new(self.config)?;
-        let envoy_config = runtime_data.envoy_config();
+        let _envoy_config = runtime_data.envoy_config();
         let envoy_config_file = runtime_data.envoy_config_file();
-
-        debug!("Generated Envoy config: {envoy_config}");
 
         info!("Generated Envoy config written to: {envoy_config_file:?}");
 

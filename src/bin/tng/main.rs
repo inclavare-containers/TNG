@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         build::COMMIT_HASH,
         build::BUILD_TIME
     );
-    debug!("cmd: {cmd:?}");
+    debug!("cmd: {cmd:#?}");
 
     match cmd {
         Args::Launch(options) => {
