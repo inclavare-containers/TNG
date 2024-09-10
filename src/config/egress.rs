@@ -44,6 +44,6 @@ pub enum EgressMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DecapFromHttp {
-    #[serde(default = "bool::default")]
-    pub allow_non_tng_traffic: bool,
+    #[serde(default = "Option::default")]
+    pub allow_non_tng_traffic_regexes: Option<Vec<String>>,
 }

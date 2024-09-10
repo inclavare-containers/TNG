@@ -334,7 +334,7 @@ rm -rf /opt/tng-*
 
 如不指定`decap_from_http`字段则不开启。
 
-此外，还可通过配置`allow_non_tng_traffic`子项，开启后，除了允许tng加密流量传入端点，还将允许非tng隧道的流量传入，这可以满足一些同时需要两种流量的场景，其默认值为`false`。
+此外，还可通过配置`allow_non_tng_traffic_regexes`子项，除了允许tng加密流量传入端点，还将允许非加密http请求流量传入，这可以满足一些同时需要两种流量的场景（如healthcheck）。该子项的值为一个json字符串列表，其中的每项是一个正则表达式匹配语句，只有http请求PATH与该正则语句完全匹配的非加密http请求流量，才会被TNG放行。子项的默认值为`[]`，即拒绝任何非加密http请求。
 
 示例如下：
 
@@ -353,7 +353,7 @@ rm -rf /opt/tng-*
         }
       },
       "decap_from_http": {
-        "allow_non_tng_traffic": false
+        "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
       },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
@@ -687,9 +687,7 @@ cargo run launch --config-content='
           "port": 30001
         }
       },
-      "decap_from_http": {
-        "allow_non_tng_traffic": false
-      },
+      "decap_from_http": {},
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }
@@ -758,8 +756,58 @@ cargo run launch --config-content='
         },
         "capture_local_traffic": true
       },
+      "decap_from_http": {},
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+'
+```
+
+- tng client as verifier and tng server as attester, with "HTTP encapulation" enabled and `allow_non_tng_traffic_regexes` set, while tng server is using `netfilter` mode instead of `mapping` mode:
+
+```sh
+cargo run launch --config-content='
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/api/predict/([^/]+)([/]?.*)$",
+            "substitution": "/api/predict/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ],
+  "add_egress": [
+    {
+      "netfilter": {
+        "capture_dst": {
+          "port": 30001
+        },
+        "capture_local_traffic": true
+      },
       "decap_from_http": {
-        "allow_non_tng_traffic": false
+        "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
       },
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
@@ -769,6 +817,38 @@ cargo run launch --config-content='
 }
 '
 ```
+
+To test this, Launch a http server:
+
+```sh
+python3 -m http.server 30001
+```
+
+First, try to send request via tng client. It should work.
+
+```sh
+all_proxy="http://127.0.0.1:41000" curl http://127.0.0.1:30001 -vvvvv
+```
+
+Then, try to send non-tng traffic, it should be denied.
+
+```sh
+curl http://127.0.0.1:30001 -vvvvv
+```
+
+Finally, try to send non-tng traffic which is in the configed `allow_non_tng_traffic_regexes` option.
+
+```sh
+# it should not work, since `/api/builtin` not matches `/api/builtin/.*`
+curl http://127.0.0.1:30001/api/builtin
+# it should work, since `/api/builtin/` matches `/api/builtin/.*`
+curl http://127.0.0.1:30001/api/builtin/
+# it should work, since `/api/builtin/abc` matches `/api/builtin/.*`
+curl http://127.0.0.1:30001/api/builtin/abc
+# it should work, since `/api/builtin/abc` matches `/api/builtin/.*`
+curl -X POST http://127.0.0.1:30001/api/builtin/abc
+```
+
 
 - tng client as verifier and tng server as attester, with "HTTP encapulation" enabled, while tng server is using `netfilter` mode, and tng client is using `http_proxy` mode:
 
@@ -814,9 +894,7 @@ cargo run launch --config-content='
         },
         "capture_local_traffic": true
       },
-      "decap_from_http": {
-        "allow_non_tng_traffic": false
-      },
+      "decap_from_http": {},
       "attest": {
         "aa_addr": "unix:///tmp/attestation.sock"
       }

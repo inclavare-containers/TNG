@@ -75,20 +75,24 @@ pub fn gen(
 "#
         );
 
-        if decap_from_http.allow_non_tng_traffic {
-            listener += &format!(
-                r#"
+        if let Some(path_regexs) = &decap_from_http.allow_non_tng_traffic_regexes {
+            for path_regex in path_regexs {
+                listener += &format!(
+                    r#"
               - match:
-                  prefix: "/"
+                  safe_regex:
+                    regex: "{path_regex}"
                 route:
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_egress{id}_not_tng_traffic
 "#
-            );
-        } else {
-            listener += &format!(
-                r#"
+                );
+            }
+        }
+
+        listener += &format!(
+            r#"
               - match:
                   prefix: "/"
                 direct_response:
@@ -97,9 +101,8 @@ pub fn gen(
                     inline_string: |
                       {}
 "#,
-                ENVOY_L7_RESPONSE_BODY_DENIED.replace("\n", "\n                      "),
-            );
-        }
+            ENVOY_L7_RESPONSE_BODY_DENIED.replace("\n", "\n                      "),
+        );
 
         listener += &format!(
             r#"

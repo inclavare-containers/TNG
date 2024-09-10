@@ -81,7 +81,7 @@ mod tests {
                     },
                 },
                 decap_from_http: Some(DecapFromHttp {
-                    allow_non_tng_traffic: false,
+                    allow_non_tng_traffic_regexes: None,
                 }),
                 no_ra: false,
                 attest: Some(AttestArgs {
