@@ -668,7 +668,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -879,7 +879,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
@@ -1027,7 +1027,7 @@ cargo run launch --config-content='
         ]
       },
       "verify": {
-        "as_addr": "http://alb-kjezxjtrexppqzehvk.cn-hangzhou.alb.aliyuncs.com/trustee-instance/as",
+        "as_addr": "http://127.0.0.1:8080/",
         "policy_ids": [
           "default"
         ]
