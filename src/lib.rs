@@ -3,13 +3,14 @@ use std::process::{Child, Command, ExitStatus};
 
 use anyhow::{bail, Context as _, Result};
 use config::TngConfig;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use nix::{
     libc::pid_t,
     sys::signal::{self, Signal},
     unistd::Pid,
 };
 use rand::Rng as _;
+use which::which;
 
 pub mod config;
 mod generator;
@@ -49,7 +50,17 @@ impl TngBuilder {
 
         // Start Envoy
         info!("Starting Envoy now");
-        let mut cmd = Command::new("envoy-static");
+        let envoy_exe = match which("envoy-static") {
+            Ok(p) => p,
+            Err(_) => std::env::current_exe()
+                .context("Failed to get current exe path")?
+                .parent()
+                .unwrap()
+                .join("envoy-static"),
+        };
+
+        debug!("Trying envoy executable path: {envoy_exe:?}");
+        let mut cmd = Command::new(envoy_exe);
         cmd.arg("-c")
             .arg(envoy_config_file)
             .arg("-l")
