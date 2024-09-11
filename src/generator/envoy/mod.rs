@@ -216,7 +216,7 @@ pub const ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY: &'static str = r#"
         Object.entries(data.claims).forEach(([key, value]) => {
           if (!key.startsWith("tcb-status.tdx.x-nv-gpu")){
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td class="border-b border-border px-2 py-1 w-1/2 break-words text-wrap">${key}</td><td class="border-b border-border px-2 py-1 w-1/2 break-words text-wrap">${value}</td>`;
+            tr.innerHTML = `<td class="border-b border-border px-2 py-1 w-1/2 break-words break-all">${key}</td><td class="border-b border-border px-2 py-1 w-1/2 break-words break-all">${value}</td>`;
             cpu_claims.appendChild(tr);
           }
         });
@@ -226,7 +226,7 @@ pub const ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY: &'static str = r#"
         Object.entries(data.claims).forEach(([key, value]) => {
           if (key.startsWith("tcb-status.tdx.x-nv-gpu")){
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td class="border-b border-border px-2 py-1 w-1/2 break-words text-wrap">${key}</td><td class="border-b border-border px-2 py-1 w-1/2 break-words text-wrap">${value}</td>`;
+            tr.innerHTML = `<td class="border-b border-border px-2 py-1 w-1/2 break-words break-all">${key}</td><td class="border-b border-border px-2 py-1 w-1/2 break-words break-all">${value}</td>`;
             gpu_claims.appendChild(tr);
           }
         });
