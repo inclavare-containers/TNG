@@ -60,8 +60,7 @@ apt-get install -y libssl1.1 iptables
 4. Run tng
 
 ```sh
-PATH=:/opt/tng-0.1.0/bin/$PATH LD_LIBRARY_PATH=/opt/tng-0.1.0/lib/ \
-  /opt/tng-0.1.0/bin/tng launch --config-content='<your config json string>'
+/opt/tng-0.1.0/bin/tng launch --config-content='<your config json string>'
 ```
 
 
