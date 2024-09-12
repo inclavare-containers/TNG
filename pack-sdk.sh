@@ -63,8 +63,10 @@ bin_dir=\$(dirname \`realpath \$0\`)
 exec \${bin_dir}/../lib/$ld \${bin_dir}/envoy-static.real "\$@"
 EOF
 chmod +x $temp_dir/bin/envoy-static
+# Fix rpath of executable and library
+patchelf --set-interpreter /do-not-run-this-exec-directly $temp_dir/bin/envoy-static.real
 patchelf --set-rpath '$ORIGIN/../lib/' $temp_dir/bin/envoy-static.real
-# Fix rpath of executable
+patchelf --set-rpath '$ORIGIN/../lib/' $temp_dir/lib/librats_rs.so
 
 docker rm ${id}
 
