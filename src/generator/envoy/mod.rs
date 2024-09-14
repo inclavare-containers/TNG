@@ -231,7 +231,18 @@ pub const ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY: &'static str = r#"
           }
         });
       } else {
-        msg_element.textContent = data.msg.replaceAll("\\n", "").replaceAll("\\\"","\"").replaceAll("\"", "");
+        const fallback_msg = data.msg.replaceAll("\\n", "").replaceAll("\\\"","\"").replaceAll("\"", "")
+        if (data.msg.search('InternalError') != -1 && data.msg.search('source:') != -1){
+          const regex = /source:\s*\\"([^"]*)\\"/;
+          const match = data.msg.match(regex);
+          if (match) {
+            msg_element.textContent = match[1];
+          } else {
+            msg_element.textContent = fallback_msg;
+          }
+        } else {
+          msg_element.textContent = fallback_msg;
+        }
       }
 
       // Set Trustee URL and policy
