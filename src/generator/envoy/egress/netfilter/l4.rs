@@ -75,6 +75,7 @@ pub fn gen(
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
           common_tls_context:
+            alpn_protocols: h2
 "#
         );
 
