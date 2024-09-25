@@ -5,6 +5,7 @@ use clap::Parser as _;
 use cli::Args;
 use log::{debug, info};
 use shadow_rs::shadow;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use tng::config::TngConfig;
 use tng::TngBuilder;
@@ -14,6 +15,16 @@ mod cli;
 shadow!(build);
 
 fn main() -> Result<()> {
+    // TODO: here
+    // tracing_subscriber::registry()
+    //     .with(
+    //         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+    //             format!("{}=trace,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
+    //         }),
+    //     )
+    //     .with(tracing_subscriber::fmt::layer())
+    //     .init();
+
     let env = env_logger::Env::default()
         .filter_or("TNG_LOG_LEVEL", "debug")
         .write_style_or("TNG_LOG_STYLE", "always"); // enable color
@@ -40,7 +51,7 @@ fn main() -> Result<()> {
                     info!("Loading config from: {path:?}");
                     let file = File::open(path)?;
                     let reader = BufReader::new(file);
-                    serde_json::from_reader(reader)?
+                    serde_json::from_reader(reader)? // TODO: 显示详细的错误，并在具体的json字符串位置上标出，看下serde有没有自带这个功能
                 }
             };
 

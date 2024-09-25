@@ -5,18 +5,33 @@ version = "1.0.4"
 
 [dependencies]
 anyhow = "1.0.81"
+axum = "0.7.5"
 clap = {version = "4.5.4", features = ["derive"]}
 ctrlc = {version = "3.4.4", features = ["termination"]}
 env_logger = {version = "0.11.2", features = ["auto-color", "humantime", "regex"]}
+http = "1.1.0"
+http-body-util = "0.1.2"
+hyper = {version = "1", features = ["full"]}
+hyper-rustls = {version = "0.27.3", features = ["http2"]}
+hyper-util = {version = "0.1.8", features = ["service"]}
 itertools = "0.13.0"
 log = "0.4.20"
 nix = {version = "0.29.0", features = ["process", "signal"]}
+pin-project = "1"
 rand = "0.8.5"
+rustls = "0.23.13"
+rustls-pemfile = "2.1.3"
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0.89"
 serde_with = {version = "3.11.0", features = ["json"]}
 shadow-rs = "=0.20.1"
 tempfile = "3.10.1"
+tokio = {version = "1.40.0", features = ["rt-multi-thread", "sync"]}
+tokio-rustls = "0.26.0"
+tower = {version = "0.4", features = ["make", "util"]}
+tower-http = {version = "0.6.1", features = ["trace", "set-header"]}
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 which = "6.0.3"
 
 [build-dependencies]

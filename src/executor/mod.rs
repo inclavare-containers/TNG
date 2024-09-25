@@ -82,15 +82,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         &add_ingress.attest,
                         &add_ingress.verify,
                     )?,
-                    None => self::envoy::confgen::ingress::http_proxy::l4::gen(
-                        id,
-                        proxy_listen_addr,
-                        proxy_listen_port,
-                        dst_filters,
-                        add_ingress.no_ra,
-                        &add_ingress.attest,
-                        &add_ingress.verify,
-                    )?,
+                    None => (vec![], vec![]),
                 };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
@@ -200,7 +192,7 @@ static_resources:
 
   clusters:{}
 "#,
-        if let Some(admin_bind) = config.admin_bind {
+        if let Some(admin_bind) = &config.admin_bind {
             let host = admin_bind.host.as_deref().unwrap_or("0.0.0.0");
             let port = admin_bind.port;
 
