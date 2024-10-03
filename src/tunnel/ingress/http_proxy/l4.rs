@@ -1,67 +1,81 @@
-use anyhow::{Context, Result};
+use std::sync::Arc;
 
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use axum::{
     body::Body,
     http::{Method, StatusCode},
     response::{IntoResponse, Response},
 };
-
-use http::{HeaderValue, Request};
+use http::{uri::Scheme, HeaderValue, Request, Uri};
 use hyper::body::Incoming;
-use tokio::net::TcpListener;
-
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     service::TowerToHyperService,
 };
+use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
-use crate::config::{attest::AttestArgs, ingress::EndpointFilter, verify::VerifyArgs};
+use crate::tunnel::ingress::core::client::stream::manager::StreamManager;
+use crate::{
+    config::{attest::AttestArgs, ingress::EndpointFilter, verify::VerifyArgs},
+    tunnel::ingress::core::TngEndpoint,
+};
 
-async fn l4_svc(req: Request<Incoming>) -> Result<Response> {
+async fn tunnel<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin>(
+    stream_manager: Arc<StreamManager>,
+    endpoint: TngEndpoint,
+    mut stream: S,
+) -> Result<()> {
+    let mut server = TokioIo::new(
+        stream_manager
+            .new_stream(&endpoint)
+            .await
+            .with_context(|| format!("Failed to get stream for '{}'", endpoint))?,
+    );
+
+    let (from_client, from_server) = tokio::io::copy_bidirectional(&mut stream, &mut server)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed during copy streams bidirectionally between input and '{}'",
+                endpoint,
+            )
+        })?;
+    tracing::debug!(
+        "Finished tunneling stream to '{}'. (tx: {} bytes, rx: {} bytes)",
+        endpoint,
+        from_client,
+        from_server
+    );
+
+    Ok(())
+}
+
+async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> Result<Response> {
     let mut req = req.map(Body::new);
 
-    async fn tunnel<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin>(
-        host_addr: impl AsRef<str>,
-        mut stream: S,
-    ) -> Result<()> {
-        let mut server = TokioIo::new(
-            crate::tunnel::ingress::core::client::get_stream_for_addr(&host_addr)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to get stream for target host '{}'",
-                        host_addr.as_ref(),
-                    )
-                })?,
-        );
-
-        let (from_client, from_server) = tokio::io::copy_bidirectional(&mut stream, &mut server)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed during copy streams bidirectionally between input and target host '{}'",
-                    host_addr.as_ref(),
-                )
-            })?;
-        tracing::debug!(
-            "Finished tunneling stream to target host '{}'. (tx: {} bytes, rx: {} bytes)",
-            host_addr.as_ref(),
-            from_client,
-            from_server
-        );
-
-        Ok(())
-    }
-
     if req.method() == Method::CONNECT {
-        if let Some(host_addr) = req.uri().authority().map(|auth| auth.to_string()) {
+        if let Some(authority) = req.uri().authority() {
             tracing::debug!("Got CONNECT request, waiting for upgrading");
+            let endpoint = TngEndpoint::new(
+                authority.host(),
+                authority.port_u16().unwrap_or_else(|| {
+                    if req.uri().scheme() == Some(&Scheme::HTTPS) {
+                        443u16
+                    } else {
+                        80u16
+                    }
+                }),
+            ); // TODO: handle support for something else like ftp ...
+
             tokio::task::spawn(async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
-                        if let Err(e) = tunnel(host_addr, TokioIo::new(upgraded)).await {
+                        if let Err(e) =
+                            tunnel(stream_manager, endpoint, TokioIo::new(upgraded)).await
+                        {
                             tracing::warn!("{e:#}");
                         }
                     }
@@ -75,15 +89,38 @@ async fn l4_svc(req: Request<Incoming>) -> Result<Response> {
         }
     } else {
         match req.headers().get(http::header::HOST) {
-            Some(host_addr) => {
-                let host_addr = host_addr
+            Some(host) => {
+                // Determine the host and port of endpoint
+                let host = host
                     .to_str()
                     .context("No valid 'HOST' value in request header")?
                     .to_owned();
 
+                let authority = host
+                    .parse::<Uri>()
+                    .map_err(|e| anyhow!(e))
+                    .and_then(|uri| {
+                        uri.into_parts()
+                            .authority
+                            .ok_or(anyhow!("The authority is empty"))
+                    })
+                    .context("The 'HOST' value in request header is not a valid host")?;
+
+                let endpoint = TngEndpoint::new(
+                    authority.host(),
+                    authority.port_u16().unwrap_or_else(|| {
+                        if req.uri().scheme() == Some(&Scheme::HTTPS) {
+                            443u16
+                        } else {
+                            80u16
+                        }
+                    }),
+                );
+
+                // TODO: optimize this mem copy
                 let (s1, s2) = tokio::io::duplex(4 * 1024);
                 tokio::task::spawn(async move {
-                    if let Err(e) = tunnel(&host_addr, s2).await {
+                    if let Err(e) = tunnel(stream_manager, endpoint, s2).await {
                         tracing::warn!("{e:#}");
                     }
                 });
@@ -125,19 +162,23 @@ pub async fn run(
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
 ) -> Result<()> {
+    let stream_manager = Arc::new(StreamManager::new());
+
     let svc = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
         .layer(SetResponseHeaderLayer::overriding(
             http::header::SERVER,
             HeaderValue::from_static("tng"),
         ))
-        .service(tower::service_fn(l4_svc));
+        .service(tower::service_fn(move |req| {
+            l4_svc(req, stream_manager.clone())
+        }));
     let svc = TowerToHyperService::new(svc);
 
-    let addr = format!("{proxy_listen_addr}:{proxy_listen_port}");
-    tracing::debug!("Add listener on {}", addr);
+    let ingress_addr = format!("{proxy_listen_addr}:{proxy_listen_port}");
+    tracing::debug!("Add listener (ingress {id}) on {}", ingress_addr);
 
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(ingress_addr).await.unwrap();
     // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
     loop {
