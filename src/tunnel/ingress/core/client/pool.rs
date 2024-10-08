@@ -6,9 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::{bail, Context as _, Result};
-use http::{Request, StatusCode, Version};
-use hyper::upgrade::Upgraded;
+use anyhow::Result;
 use hyper_rustls::HttpsConnector;
 use hyper_util::{
     client::legacy::Client,
@@ -17,27 +15,22 @@ use hyper_util::{
 use tokio::{net::TcpStream, sync::RwLock};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
-use crate::tunnel::ingress::core::{client::stream::verifier::NoRaCertVerifier, TngEndpoint};
+use crate::tunnel::ingress::core::{client::verifier::NoRaCertVerifier, TngEndpoint};
 
 type PoolKey = TngEndpoint;
 
 type ClientType = Client<HttpsConnector<HttpConnector>, axum::body::Body>;
 
-pub struct StreamManager {
-    pool: RwLock<HashMap<PoolKey, ClientType>>,
+#[derive(Default)]
+pub struct ClientPool {
+    clients: RwLock<HashMap<PoolKey, ClientType>>,
 }
 
-impl StreamManager {
-    pub fn new() -> Self {
-        Self {
-            pool: Default::default(),
-        }
-    }
-
-    async fn get_client(&self, endpoint: &TngEndpoint) -> Result<ClientType> {
+impl ClientPool {
+    pub async fn get_client(&self, endpoint: &TngEndpoint) -> Result<ClientType> {
         // Try to get the client from pool
         let client = {
-            let read = self.pool.read().await;
+            let read = self.clients.read().await;
             read.get(endpoint).map(|c| c.clone())
         };
 
@@ -45,7 +38,7 @@ impl StreamManager {
             Some(c) => c,
             None => {
                 // If client not exist then we need to create one
-                let mut write = self.pool.write().await;
+                let mut write = self.clients.write().await;
                 // Check if client has been created by other "thread"
                 match write.get(endpoint) {
                     Some(c) => c.clone(),
@@ -80,41 +73,10 @@ impl StreamManager {
 
         Ok(client)
     }
-
-    pub async fn new_stream(&self, endpoint: &TngEndpoint) -> Result<Upgraded> {
-        let client = self.get_client(endpoint).await?;
-
-        let req = Request::connect("https://tng.internal/")
-            .version(Version::HTTP_2)
-            .body(axum::body::Body::empty())
-            .unwrap();
-
-        tracing::debug!("Send HTTP/2 CONNECT request to '{}'", endpoint);
-        let mut resp = client
-            .request(req)
-            .await
-            .context("Failed to send HTTP/2 CONNECT request")?;
-
-        if resp.status() != StatusCode::OK {
-            bail!(
-                "Failed to send HTTP/2 CONNECT request, bad status '{}', got: {:?}",
-                resp.status(),
-                resp
-            );
-        }
-        let upgraded = hyper::upgrade::on(&mut resp).await.with_context(|| {
-            format!(
-                "Failed to establish HTTP/2 CONNECT tunnel with '{}'",
-                endpoint
-            )
-        })?;
-
-        Ok(upgraded)
-    }
 }
 
 #[derive(Debug, Clone)]
-struct HttpConnector {
+pub struct HttpConnector {
     endpoint: TngEndpoint,
 }
 
@@ -138,7 +100,7 @@ impl<Req> tower::Service<Req> for HttpConnector {
 
         let endpoint_owned = self.endpoint.to_owned();
         let fut = async move {
-            TcpStream::connect((endpoint_owned.host(), endpoint_owned.port))
+            TcpStream::connect((endpoint_owned.host(), endpoint_owned.port()))
                 .await
                 .map(|s| TokioIo::new(s))
                 .map_err(|e| e.into())

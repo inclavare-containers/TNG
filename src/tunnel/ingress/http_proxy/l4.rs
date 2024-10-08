@@ -13,29 +13,26 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     service::TowerToHyperService,
 };
+use regex::Regex;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
-use crate::tunnel::ingress::core::client::stream::manager::StreamManager;
+use crate::tunnel::ingress::core::client::stream_manager::RatsTlsStreamManager;
+use crate::tunnel::ingress::core::{RawStreamManager, StreamManager};
 use crate::{
     config::{attest::AttestArgs, ingress::EndpointFilter, verify::VerifyArgs},
     tunnel::ingress::core::TngEndpoint,
 };
 
-async fn tunnel<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin>(
-    stream_manager: Arc<StreamManager>,
-    endpoint: TngEndpoint,
-    mut stream: S,
-) -> Result<()> {
-    let mut server = TokioIo::new(
-        stream_manager
-            .new_stream(&endpoint)
-            .await
-            .with_context(|| format!("Failed to get stream for '{}'", endpoint))?,
-    );
+use super::endpoint_matcher::RegexEndpointMatcher;
 
-    let (from_client, from_server) = tokio::io::copy_bidirectional(&mut stream, &mut server)
+async fn tunnel(
+    endpoint: TngEndpoint,
+    mut upstream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+    mut input: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+) -> Result<()> {
+    let (from_client, from_server) = tokio::io::copy_bidirectional(&mut input, &mut upstream)
         .await
         .with_context(|| {
             format!(
@@ -44,7 +41,7 @@ async fn tunnel<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::U
             )
         })?;
     tracing::debug!(
-        "Finished tunneling stream to '{}'. (tx: {} bytes, rx: {} bytes)",
+        "Finished transmit stream to '{}'. (tx: {} bytes, rx: {} bytes)",
         endpoint,
         from_client,
         from_server
@@ -53,7 +50,7 @@ async fn tunnel<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::U
     Ok(())
 }
 
-async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> Result<Response> {
+async fn l4_svc(req: Request<Incoming>, tunnel_context: Arc<TunnelContext>) -> Result<Response> {
     let mut req = req.map(Body::new);
 
     if req.method() == Method::CONNECT {
@@ -70,18 +67,47 @@ async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> R
                 }),
             ); // TODO: handle support for something else like ftp ...
 
-            tokio::task::spawn(async move {
-                match hyper::upgrade::on(req).await {
-                    Ok(upgraded) => {
-                        if let Err(e) =
-                            tunnel(stream_manager, endpoint, TokioIo::new(upgraded)).await
-                        {
-                            tracing::warn!("{e:#}");
+            // Filter the endpoint
+            if !tunnel_context.endpoint_matcher.matches(&endpoint) {
+                // Forward as normal traffic
+                let upstream = tunnel_context
+                    .raw_stream_manager
+                    .new_stream(&endpoint)
+                    .await
+                    .with_context(|| format!("Failed to get stream for '{}'", endpoint))?;
+
+                // TODO: show error msg in result of CONNECT request.
+                tokio::task::spawn(async move {
+                    match hyper::upgrade::on(req).await {
+                        Ok(upgraded) => {
+                            if let Err(e) = tunnel(endpoint, upstream, TokioIo::new(upgraded)).await
+                            {
+                                tracing::warn!("{e:#}");
+                            }
                         }
-                    }
-                    Err(e) => tracing::warn!("upgrade error: {e:#}"),
-                };
-            });
+                        Err(e) => tracing::warn!("upgrade error: {e:#}"),
+                    };
+                });
+            } else {
+                let upstream = tunnel_context
+                    .rats_tls_stream_manager
+                    .new_stream(&endpoint)
+                    .await
+                    .with_context(|| format!("Failed to get stream for '{}'", endpoint))?;
+
+                tokio::task::spawn(async move {
+                    match hyper::upgrade::on(req).await {
+                        Ok(upgraded) => {
+                            if let Err(e) = tunnel(endpoint, upstream, TokioIo::new(upgraded)).await
+                            {
+                                tracing::warn!("{e:#}");
+                            }
+                        }
+                        Err(e) => tracing::warn!("upgrade error: {e:#}"),
+                    };
+                });
+            }
+
             Ok(Response::new(Body::empty()).into_response())
         } else {
             tracing::warn!("CONNECT uri contains no host addr: {:?}", req.uri());
@@ -119,11 +145,34 @@ async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> R
 
                 // TODO: optimize this mem copy
                 let (s1, s2) = tokio::io::duplex(4 * 1024);
-                tokio::task::spawn(async move {
-                    if let Err(e) = tunnel(stream_manager, endpoint, s2).await {
-                        tracing::warn!("{e:#}");
-                    }
-                });
+
+                // Filter the endpoint
+                if !tunnel_context.endpoint_matcher.matches(&endpoint) {
+                    // Forward as normal traffic
+                    let upstream = tunnel_context
+                        .raw_stream_manager
+                        .new_stream(&endpoint)
+                        .await
+                        .with_context(|| format!("Failed to get stream for '{}'", endpoint))?;
+
+                    tokio::task::spawn(async move {
+                        if let Err(e) = tunnel(endpoint, s2, upstream).await {
+                            tracing::warn!("{e:#}");
+                        }
+                    });
+                } else {
+                    let upstream = tunnel_context
+                        .rats_tls_stream_manager
+                        .new_stream(&endpoint)
+                        .await
+                        .with_context(|| format!("Failed to get stream for '{}'", endpoint))?;
+
+                    tokio::task::spawn(async move {
+                        if let Err(e) = tunnel(endpoint, s2, upstream).await {
+                            tracing::warn!("{e:#}");
+                        }
+                    });
+                }
 
                 // TODO: support both http1 and http2 payload
                 let (mut sender, conn) =
@@ -140,6 +189,7 @@ async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> R
                 *req.uri_mut() = http::Uri::from_parts(parts)
                     .with_context(|| format!("Failed to convert URI '{}'", req.uri()))?;
 
+                // TODO support upgrade
                 Ok(sender
                     .send_request(req)
                     .await
@@ -153,6 +203,12 @@ async fn l4_svc(req: Request<Incoming>, stream_manager: Arc<StreamManager>) -> R
     }
 }
 
+struct TunnelContext {
+    pub rats_tls_stream_manager: RatsTlsStreamManager,
+    pub raw_stream_manager: RawStreamManager,
+    pub endpoint_matcher: RegexEndpointMatcher,
+}
+
 pub async fn run(
     id: usize,
     proxy_listen_addr: &str,
@@ -162,7 +218,11 @@ pub async fn run(
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
 ) -> Result<()> {
-    let stream_manager = Arc::new(StreamManager::new());
+    let tunnel_context = Arc::new(TunnelContext {
+        rats_tls_stream_manager: RatsTlsStreamManager::new(),
+        raw_stream_manager: RawStreamManager::new(),
+        endpoint_matcher: RegexEndpointMatcher::new(dst_filters)?,
+    });
 
     let svc = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
@@ -171,7 +231,7 @@ pub async fn run(
             HeaderValue::from_static("tng"),
         ))
         .service(tower::service_fn(move |req| {
-            l4_svc(req, stream_manager.clone())
+            l4_svc(req, tunnel_context.clone())
         }));
     let svc = TowerToHyperService::new(svc);
 
