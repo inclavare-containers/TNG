@@ -56,6 +56,7 @@ pub fn gen(
                     {{}}
                 route:
                   cluster: tng_egress{id}_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:

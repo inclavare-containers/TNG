@@ -68,6 +68,7 @@ pub fn gen(
                     {{}}
                 route:
                   cluster: tng_ingress{id}_entry_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
@@ -78,6 +79,7 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_ingress{id}_entry_upstream
@@ -147,6 +149,7 @@ pub fn gen(
                     {{}}
                 route:
                   cluster: tng_ingress{id}_direct_entry_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
@@ -157,6 +160,7 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_ingress{id}_direct_entry_upstream
@@ -222,6 +226,7 @@ pub fn gen(
               - match:
                   prefix: "/"
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
@@ -575,6 +580,7 @@ pub fn gen(
                   prefix: /
                 route:
                   cluster: tng_ingress{id}_upstream
+                  timeout: 0s
                   regex_rewrite:
                     pattern:
                       regex: "^.*$"
@@ -590,6 +596,7 @@ pub fn gen(
                     regex: "{}"
                 route:
                   cluster: tng_ingress{id}_upstream
+                  timeout: 0s
                   regex_rewrite:
                     pattern:
                       regex: "{}"

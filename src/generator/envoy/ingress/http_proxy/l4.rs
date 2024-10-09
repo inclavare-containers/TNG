@@ -63,6 +63,7 @@ pub fn gen(
                     {{}}
                 route:
                   cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
@@ -73,6 +74,7 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_ingress{id}_wrap_in_h2_tls_upstream
@@ -141,6 +143,7 @@ pub fn gen(
                   connect_matcher:
                     {{}}
                 route:
+                  timeout: 0s
                   cluster: tng_ingress{id}_direct_entry_upstream
                   upgrade_configs:
                   - upgrade_type: CONNECT
@@ -152,6 +155,7 @@ pub fn gen(
                   - name: tng
                     present_match: false # Prevent from loops
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_ingress{id}_direct_entry_upstream

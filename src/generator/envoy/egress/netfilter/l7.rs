@@ -79,6 +79,7 @@ pub fn gen(
                     present_match: true
                 route:
                   cluster: tng_egress{id}_unwrap_from_h2_tls_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
@@ -99,6 +100,7 @@ pub fn gen(
                   safe_regex:
                     regex: "{path_regex}"
                 route:
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: websocket
                   cluster: tng_egress{id}_not_tng_traffic
@@ -208,6 +210,7 @@ pub fn gen(
                     {{}}
                 route:
                   cluster: tng_egress{id}_upstream
+                  timeout: 0s
                   upgrade_configs:
                   - upgrade_type: CONNECT
                     connect_config:
