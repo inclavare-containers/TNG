@@ -1,7 +1,12 @@
 use anyhow::Result;
+use itertools::Itertools;
 
 use crate::{
-    config::{attest::AttestArgs, ingress::EncapInHttp, verify::VerifyArgs},
+    config::{
+        attest::AttestArgs,
+        ingress::{EncapInHttp, EndpointFilter},
+        verify::VerifyArgs,
+    },
     generator::envoy::{
         ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY, ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD,
         ENVOY_LISTENER_SOCKET_OPTIONS,
@@ -12,8 +17,7 @@ pub fn gen(
     id: usize,
     proxy_listen_addr: &str,
     proxy_listen_port: u16,
-    domain: &str,
-    port: u16,
+    dst_filters: &[EndpointFilter],
     web_page_inject: bool,
     encap_in_http: &EncapInHttp,
     no_ra: bool,
@@ -27,7 +31,23 @@ pub fn gen(
 
     // Add a listener for client app connection
     {
-        let need_add_fallback_route = !(domain == "*" && port == 80);
+        let dst_filters = dst_filters
+            .iter()
+            .map(|dst_filter| {
+                (
+                    dst_filter.domain.as_deref().unwrap_or("*"),
+                    dst_filter.port.unwrap_or(80), // Default port is 80
+                )
+            })
+            .collect_vec();
+
+        let need_add_fallback_route = if dst_filters.len() == 0 {
+            false // All requests will be sent to upstream
+        } else {
+            !dst_filters
+                .iter()
+                .any(|(domain, port)| *domain == "*" && *port == 80)
+        };
 
         listeners.push(format!(
             r#"
@@ -123,20 +143,30 @@ pub fn gen(
               "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
               suppress_envoy_headers: true
 "#,
-            if port != 80 {
+            if dst_filters.len() == 0{
                 format!(
-                    // See https://github.com/envoyproxy/envoy/issues/13704#issuecomment-716808324
                     r#"
-              - "{domain}:{port}"
+              - "*"
 "#
                 )
             } else {
-                format!(
+              dst_filters.iter().map(|(domain, port)|{
+                if *port != 80 {
+                  format!(
+                      // See https://github.com/envoyproxy/envoy/issues/13704#issuecomment-716808324
+                    r#"
+              - "{domain}:{port}"
+"#
+                    )
+                } else {
+                  format!(
                     r#"
               - "{domain}:{port}"
               - "{domain}"
 "#
-                )
+                    )
+                }
+              }).join("\n")
             },
             if need_add_fallback_route{
             format!(r#"

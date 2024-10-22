@@ -120,10 +120,12 @@ rm -rf /opt/tng-*
           "host": "0.0.0.0",  // 可选，默认为0.0.0.0
           "port": 41000
         },
-        "dst_filter": {
-          "domain": "*.pai-eas.aliyuncs.com", // 可选，默认为 "*"
-          "port": 80 // 可选，默认为 80
-        }
+        "dst_filters": [
+          {
+            "domain": "*.pai-eas.aliyuncs.com", // 可选，默认为 "*"
+            "port": 80 // 可选，默认为 80
+          }
+        ]
       },
       "verify": {
         "as_addr": "http://127.0.0.1:8080/",
@@ -136,9 +138,12 @@ rm -rf /opt/tng-*
 }
 ```
 
+> 在 <= 1.0.1 的TNG中，`dst_filters`被命名为`dst_filter`，为必选参数
+
 - `proxy_listen`指定了tng暴露的`http_proxy`协议监听端口的监听地址(`host`)和端口(`port`)值。
-- `dst_filter`指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出
-- `dst_filter`的`domain`字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+- `dst_filters`指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出）。
+  - `dst_filters`是一个可选参数，当未指定或者指定为空数组时，所有流量都会进入tng隧道。
+  - `dst_filters`中元素的`domain`字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
 
 
 #### 透明代理方式（netfilter）
@@ -864,7 +869,7 @@ cargo run launch --config-content='
           "host": "0.0.0.0",
           "port": 41000
         },
-        "dst_filter": {
+        "dst_filters": {
           "domain": "*",
           "port": 30001
         }
@@ -939,7 +944,7 @@ cargo run launch --config-content='
           "host": "0.0.0.0",
           "port": 41000
         },
-        "dst_filter": {
+        "dst_filters": {
           "domain": "*",
           "port": 9991
         }
@@ -1012,7 +1017,7 @@ cargo run launch --config-content='
           "host": "0.0.0.0",
           "port": 41000
         },
-        "dst_filter": {
+        "dst_filters": {
           "domain": "*",
           "port": 8080
         }

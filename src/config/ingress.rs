@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
 use super::{attest::AttestArgs, verify::VerifyArgs, Endpoint};
 
@@ -24,6 +25,7 @@ pub struct AddIngressArgs {
     pub verify: Option<VerifyArgs>,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
@@ -33,7 +35,11 @@ pub enum IngressMode {
     #[serde(rename = "http_proxy")]
     HttpProxy {
         proxy_listen: Endpoint,
-        dst_filter: EndpointFilter,
+        #[serde_as(as = "OneOrMany<_, PreferMany>")]
+        #[serde(default = "Vec::new")]
+        // In TNG version <= 1.0.1, this field is named as `dst_filter`
+        #[serde(alias = "dst_filter")]
+        dst_filters: Vec<EndpointFilter>,
     },
 
     #[serde(rename = "netfilter")]

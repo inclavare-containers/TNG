@@ -27,7 +27,6 @@ fn main() -> Result<()> {
         build::COMMIT_HASH,
         build::BUILD_TIME
     );
-    debug!("cmd: {cmd:#?}");
 
     match cmd {
         Args::Launch(options) => {
@@ -38,11 +37,14 @@ fn main() -> Result<()> {
                 }
                 (None, Some(s)) => serde_json::from_str(&s)?,
                 (Some(path), None) => {
+                    info!("Loading config from: {path:?}");
                     let file = File::open(path)?;
                     let reader = BufReader::new(file);
                     serde_json::from_reader(reader)?
                 }
             };
+
+            debug!("TNG config: {config:#?}");
 
             let mut instance = TngBuilder::new(config).launch()?;
 
