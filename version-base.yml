@@ -1,0 +1,16 @@
+# BaseOS 版本定义 [BaseOS 应用名, 版本号, 镜像地址]
+Dependency:
+  AnolisOS:
+    Anolis8:
+      8.6: &AnolisOS8.6 [anolisos, 8.6, openanolis/anolisos:8.6]
+      8.8: &AnolisOS8.8 [anolisos, 8.8, openanolis/anolisos:8.8]
+    Anolis23:
+      23: &AnolisOS23 [anolisos, 23, openanolis/anolisos:23]
+  Alinux:
+    3: &Alinux3 [ alinux, 3, alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3 ]
+    2: &Alinux2 [ alinux, 2, alibaba-cloud-linux-2-registry.cn-hangzhou.cr.aliyuncs.com/alinux2 ]
+    3-inc: &Alinux3-inc [ alinux, 3, reg.docker.alibaba-inc.com/alinux/base ]
+    2-inc: &Alinux2-inc [ alinux, 2, reg.docker.alibaba-inc.com/aliyun-linux/aliyunlinux ]
+    3.2304: &Alinux3.2304 [ alinux, 3.2304, reg.docker.alibaba-inc.com/alinux/base ]
+  Ubuntu:
+    22.04: &Ubuntu22.04 [ ubuntu, 22.04, docker.io/library/ubuntu ]
