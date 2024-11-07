@@ -36,14 +36,13 @@ FROM rats-rs-builder as rats-rs-builder-c-api-coco-only
 WORKDIR /root/rats-rs
 COPY ./deps/rats-rs/. .
 
-# build headers and librarys (with CoCo attester and CoCo verifier only)
-RUN just prepare-repo && \
-    cmake -Hc-api -Bbuild -DCOCO_ONLY=ON && make -Cbuild install
+# Some hacks to convert git submodule to standalone git repo
+RUN rm -f .git && mkdir .git
+COPY ./.git/modules/deps/rats-rs/. .git/
+RUN sed -i '/worktree/d' .git/config
 
-# build cert-app for testing
-RUN cd ./examples/cert-app/ && \
-    cmake -H. -Bbuild && \
-    make -Cbuild all
+# build headers and librarys (with CoCo attester and CoCo verifier only)
+RUN just install-c-api-coco
 
 #
 # tng-envoy
@@ -53,13 +52,17 @@ FROM envoyproxy/envoy-build-ubuntu:26c6bcc3af3d6ad166c42b550de672d40209bc1c as t
 ENV DEBIAN_FRONTEND noninteractive
 
 # Copy rats-rs products as dependency
-COPY --from=rats-rs:builder-c-api /usr/local/include/rats-rs /usr/local/include/rats-rs
-COPY --from=rats-rs:builder-c-api /usr/local/lib/rats-rs/ /usr/local/lib/rats-rs/
+COPY --from=rats-rs-builder-c-api-coco-only /usr/local/include/rats-rs /usr/local/include/rats-rs
+COPY --from=rats-rs-builder-c-api-coco-only /usr/local/lib/rats-rs/ /usr/local/lib/rats-rs/
 
 # prepare envoy source code
 RUN useradd -m -s /bin/bash newuser
 WORKDIR /home/newuser/envoy
 COPY ./deps/tng-envoy/. .
+## Some hacks to convert git submodule to standalone git repo
+RUN rm -f .git && mkdir .git
+COPY ./.git/modules/deps/tng-envoy/. .git/
+RUN sed -i '/worktree/d' .git/config
 RUN chown -R newuser:newuser .
 USER newuser
 
@@ -69,6 +72,19 @@ RUN echo "build --config=clang" >> user.bazelrc
 RUN bazel build -c opt envoy
 RUN chmod 0777 bazel-bin/source/exe/envoy-static && \
     strip bazel-bin/source/exe/envoy-static
+
+
+FROM ubuntu:20.04 as tng-envoy-release
+
+RUN apt-get update && apt-get install -y libssl1.1
+
+# copy envoy-static
+COPY --from=tng-envoy-builder /home/newuser/envoy/bazel-bin/source/exe/envoy-static /usr/local/bin/envoy-static
+
+# copy dependencies
+COPY --from=rats-rs-builder-c-api-coco-only /usr/local/lib/rats-rs/ /usr/local/lib/rats-rs/
+
+CMD ["envoy-static", "-c", "/etc/envoy.yaml", "-l", "off", "--component-log-level", "upstream:error,connection:debug,rats-rs:debug"]
 
 
 #
@@ -82,13 +98,14 @@ WORKDIR /root/tng/
 COPY ./rust-toolchain.toml .
 RUN rustup target add x86_64-unknown-linux-musl
 
-COPY --exclude=./deps/rats-rs/ --exclude=./deps/tng-envoy/ . .
+COPY . .
 
 RUN cargo install --path . --target=x86_64-unknown-linux-musl
 
 RUN strip /usr/local/cargo/bin/tng
 
-FROM tng-envoy:latest as release
+
+FROM tng-envoy-release as tng-release
 
 RUN apt-get update && apt-get install -y curl iptables && rm -rf /var/lib/apt/lists/* && update-alternatives --set iptables /usr/sbin/iptables-nft
 
