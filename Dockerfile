@@ -1,4 +1,18 @@
 #
+# A special image to pull all code from git submodule
+#
+FROM ubuntu:20.04 as code-pull
+
+RUN apt-get update && apt-get install -y git
+
+WORKDIR /code/
+
+COPY . /code/
+
+RUN { [ -e ./.git/modules/deps/rats-rs ] || git submodule update --init ./deps/rats-rs ; } \
+    && { [ -e ./.git/modules/deps/tng-envoy ] || git submodule update --init ./deps/tng-envoy ; }
+
+#
 # rats-rs
 #
 FROM ubuntu:20.04 as rats-rs-builder
@@ -34,11 +48,11 @@ RUN echo "deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu foc
 FROM rats-rs-builder as rats-rs-builder-c-api-coco-only
 
 WORKDIR /root/rats-rs
-COPY ./deps/rats-rs/. .
+COPY --from=code-pull /code/deps/rats-rs/. .
 
 # Some hacks to convert git submodule to standalone git repo
 RUN rm -f .git && mkdir .git
-COPY ./.git/modules/deps/rats-rs/. .git/
+COPY --from=code-pull /code/.git/modules/deps/rats-rs/. .git/
 RUN sed -i '/worktree/d' .git/config
 
 # build headers and librarys (with CoCo attester and CoCo verifier only)
@@ -58,10 +72,10 @@ COPY --from=rats-rs-builder-c-api-coco-only /usr/local/lib/rats-rs/ /usr/local/l
 # prepare envoy source code
 RUN useradd -m -s /bin/bash newuser
 WORKDIR /home/newuser/envoy
-COPY ./deps/tng-envoy/. .
+COPY --from=code-pull /code/deps/tng-envoy/. .
 ## Some hacks to convert git submodule to standalone git repo
 RUN rm -f .git && mkdir .git
-COPY ./.git/modules/deps/tng-envoy/. .git/
+COPY --from=code-pull /code/.git/modules/deps/tng-envoy/. .git/
 RUN sed -i '/worktree/d' .git/config
 RUN chown -R newuser:newuser .
 USER newuser
@@ -95,10 +109,10 @@ FROM rust:bullseye as tng-builder
 RUN apt update && apt install -y musl-tools
 
 WORKDIR /root/tng/
-COPY ./rust-toolchain.toml .
+COPY --from=code-pull /code/rust-toolchain.toml .
 RUN rustup target add x86_64-unknown-linux-musl
 
-COPY . .
+COPY --from=code-pull /code/. .
 
 RUN cargo install --path . --target=x86_64-unknown-linux-musl
 
