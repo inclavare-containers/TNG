@@ -21,3 +21,15 @@ which = "6.0.3"
 
 [build-dependencies]
 shadow-rs = "=0.20.1"
+
+[dev-dependencies]
+again = "0.1.2"
+axum = "0.7.7"
+futures = "0.3.31"
+netns-rs = "0.1.0"
+reqwest = {version = "0.12.9", features = ["json"]}
+rtnetlink = "0.14.1"
+# tokio = {version = "1.41.1", features = ["full"]}
+console-subscriber = "0.4.1"
+tokio = {version = "1.41.1", features = ["full", "tracing"]}
+tokio-util = "0.7.12"
