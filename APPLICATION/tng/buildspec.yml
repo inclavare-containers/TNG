@@ -1,0 +1,36 @@
+name: &NAME
+version: &VERSION
+image_type: &IMAGE_TYPE
+baseos_version: &BASEOS_VERSION
+
+# 定义镜像仓库信息
+repository_info:
+  acr: &ACR_PROD confidential-ai-registry.cn-shanghai.cr.aliyuncs.com/product
+
+# 定义镜像测试信息
+t-one:
+  # 配置测试信息 workspace 和模版
+  workspace: &WORKSPACE anolis
+  project: &PROJECT default_anolis
+  test_suite: &TEST_SUITE image-ci-test
+  # 执行测试 case, 多个用数组表示
+  test_conf: &TEST_CONF baseos_container
+  test_case: &TEST_CASE baseos_container_default
+  cloud_server_tag: &CLOUD_SERVER_TAG [alinux-image-ci-x86-ecs]
+
+# 构建镜像配置
+images:
+  # 分组名称，支持自定义
+  Tng:
+    build: true
+    test: false
+    region: cn-hongkong
+    platform: [linux/amd64]
+    docker_file:
+      path: Dockerfile
+      scene:
+        args: []
+        tags: [[2.0.0, latest]]
+        registry: [*ACR_PROD]
+      # 测试配置
+      test_config: [*WORKSPACE, *PROJECT, *TEST_SUITE, *TEST_CONF, *TEST_CASE, *CLOUD_SERVER_TAG[0], '']
