@@ -65,13 +65,50 @@ Example:
 
 In this scenario, tng listens on a local HTTP proxy port. User containers can route traffic through the proxy to the tng client’s listening port by setting the `http_proxy` environment variable (or explicitly setting the `http_proxy` proxy when sending requests in the application code). The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
 
-> TBD
+#### Field Descriptions
+
+- **`proxy_listen`** (Endpoint): Specifies the listening address (`host`) and port (`port`) values for the `http_proxy` protocol exposed by tng.
+  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+  - **`port`** (integer): The port number to listen on.
+- **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
+  - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
+  - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
+- (Deprecated) **`dst_filter`** (EndpointFilter): Used in TNG version 1.0.1 and earlier as a required parameter, now replaced by `dst_filters`. This is retained for compatibility with older configurations.
+
+Example:
+
+```json
+{
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",
+          "port": 41000
+        },
+        "dst_filters": [
+          {
+            "domain": "*.pai-eas.aliyuncs.com",
+            "port": 80
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+```
 
 ### netfilter: Transparent Proxy Mode
 
 In this scenario, tng listens on a local TCP port and forwards user traffic to this port by configuring iptables rules. The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
 
-> TBD
+> Not yet implemented
 
 ## Egress
 

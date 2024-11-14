@@ -23,6 +23,7 @@ async fn test() -> Result<()> {
         &AppType::TcpClient {
             host: "127.0.0.1",
             port: 10001,
+            http_proxy: None,
         },
         r#"
         {

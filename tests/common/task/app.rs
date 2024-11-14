@@ -2,6 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use again::RetryPolicy;
 use anyhow::{bail, Context as _, Result};
+use async_http_proxy::http_connect_tokio;
 use axum::{
     body::Body,
     extract::{Host, Request},
@@ -34,11 +35,16 @@ pub enum AppType {
         port: u16,
         host_header: &'static str,
         path_and_query: &'static str,
+        http_proxy: Option<HttpProxy>,
     },
     #[allow(dead_code)]
     TcpServer { port: u16 },
     #[allow(dead_code)]
-    TcpClient { host: &'static str, port: u16 },
+    TcpClient {
+        host: &'static str,
+        port: u16,
+        http_proxy: Option<HttpProxy>,
+    },
 }
 
 impl AppType {
@@ -56,11 +62,24 @@ impl AppType {
                 port,
                 host_header,
                 path_and_query,
-            } => launch_http_client(token, host, port, host_header, path_and_query).await,
+                http_proxy,
+            } => {
+                launch_http_client(token, host, port, host_header, path_and_query, http_proxy).await
+            }
             AppType::TcpServer { port } => launch_tcp_server(token, port).await,
-            AppType::TcpClient { host, port } => launch_tcp_client(token, host, port).await,
+            AppType::TcpClient {
+                host,
+                port,
+                http_proxy,
+            } => launch_tcp_client(token, host, port, http_proxy).await,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct HttpProxy {
+    pub host: &'static str,
+    pub port: u16,
 }
 
 async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHandle<Result<()>>> {
@@ -98,15 +117,28 @@ async fn launch_tcp_client(
     token: CancellationToken,
     host: &str,
     port: u16,
+    http_proxy: Option<HttpProxy>,
 ) -> Result<JoinHandle<Result<()>>> {
     let host = host.to_owned();
     Ok(tokio::spawn(async move {
         let _drop_guard = token.drop_guard();
         info!("Connecting to TCP server at {}:{}", host, port);
 
-        let mut stream = TcpStream::connect(format!("{}:{}", host, port))
-            .await
-            .context("Failed to connect to app server")?;
+        let mut stream = match http_proxy {
+            Some(http_proxy) => {
+                let mut stream =
+                    TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
+                        .await
+                        .context("Failed to connect to http proxy server")?;
+                http_connect_tokio(&mut stream, &host, port)
+                    .await
+                    .context("Failed to connect to app server via http proxy server")?;
+                stream
+            }
+            None => TcpStream::connect(format!("{}:{}", host, port))
+                .await
+                .context("Failed to connect to app server")?,
+        };
         info!("Connected to the server");
 
         let message = TCP_PAYLOAD.as_bytes();
@@ -186,10 +218,12 @@ pub async fn launch_http_client(
     port: u16,
     host_header: &str,
     path_and_query: &str,
+    http_proxy: Option<HttpProxy>,
 ) -> Result<JoinHandle<Result<()>>> {
     let host = host.to_owned();
     let host_header = host_header.to_owned();
     let path_and_query = path_and_query.to_owned();
+    let http_proxy = http_proxy.map(|t| t.to_owned());
 
     Ok(tokio::spawn(async move {
         let _drop_guard = token.drop_guard();
@@ -198,7 +232,15 @@ pub async fn launch_http_client(
         let resp = RetryPolicy::fixed(Duration::from_secs(1))
             .with_max_retries(5)
             .retry(|| async {
-                let builder = reqwest::Client::builder();
+                let mut builder = reqwest::Client::builder();
+
+                if let Some(http_proxy) = &http_proxy {
+                    let proxy = reqwest::Proxy::http(format!(
+                        "http://{}:{}",
+                        http_proxy.host, http_proxy.port
+                    ))?;
+                    builder = builder.proxy(proxy);
+                }
 
                 let client = builder.build()?;
                 client

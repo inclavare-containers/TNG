@@ -66,13 +66,53 @@
 
 在该场景中，tng监听一个本地http proxy端口，用户容器可通过设置`http_proxy`环境变量（或在业务代码中发送请求时特地设置`http_proxy`代理），将流量走代理到tng client监听的端口，后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
 
-> TBD
+
+#### 字段说明
+
+- **`proxy_listen`** (Endpoint)：指定tng暴露的`http_proxy`协议监听端口的监听地址(`host`)和端口(`port`)值
+  - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+  - **`port`** (integer)：监听的端口号。
+- **`dst_filters`** (array [EndpointFilter], 可选，默认为空数组)：该项指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出）。当未指定该字段或者指定为空数组时，所有流量都会进入tng隧道。
+  - **`domain`** (string, 可选，默认为`*`)：匹配的目标域名。该字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+  - **`port`** (integer, 可选，默认为`80`)：匹配的目标端口。如不指定则默认为80端口
+- （已废弃）**`dst_filter`** (EndpointFilter)：在1.0.1及以前版本的TNG中使用，为必选参数，现已被`dst_filters`替代，保留此项是为了兼容旧版中的配置
+
+
+示例：
+
+```json
+{
+  "add_ingress": [
+    {
+      "http_proxy": {
+        "proxy_listen": {
+          "host": "0.0.0.0",
+          "port": 41000
+        },
+        "dst_filters": [
+          {
+            "domain": "*.pai-eas.aliyuncs.com",
+            "port": 80
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+```
+
 
 ### netfilter：透明代理方式
 
 在该场景中，tng监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
 
-> TBD
+> 暂未实现
 
 
 ## Egress

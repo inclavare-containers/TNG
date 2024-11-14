@@ -63,6 +63,39 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
+            IngressMode::HttpProxy {
+                proxy_listen,
+                dst_filters,
+            } => {
+                let proxy_listen_addr = proxy_listen.host.as_deref().unwrap_or("0.0.0.0");
+                let proxy_listen_port = proxy_listen.port;
+
+                let mut yamls = match &add_ingress.encap_in_http {
+                    Some(encap_in_http) => self::envoy::confgen::ingress::http_proxy::l7::gen(
+                        id,
+                        proxy_listen_addr,
+                        proxy_listen_port,
+                        dst_filters,
+                        add_ingress.web_page_inject,
+                        encap_in_http,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
+                    None => self::envoy::confgen::ingress::http_proxy::l4::gen(
+                        id,
+                        proxy_listen_addr,
+                        proxy_listen_port,
+                        dst_filters,
+                        add_ingress.no_ra,
+                        &add_ingress.attest,
+                        &add_ingress.verify,
+                    )?,
+                };
+                listeners.append(&mut yamls.0);
+                clusters.append(&mut yamls.1);
+            }
+            IngressMode::Netfilter { dst: _ } => todo!(),
         }
     }
 
