@@ -9,6 +9,12 @@ pub struct AddIngressArgs {
     #[serde(flatten)]
     pub ingress_mode: IngressMode,
 
+    #[serde(default = "Option::default")]
+    pub encap_in_http: Option<EncapInHttp>,
+
+    #[serde(default = "bool::default")]
+    pub web_page_inject: bool,
+
     #[serde(default = "bool::default")]
     pub no_ra: bool,
 
@@ -25,6 +31,20 @@ pub struct AddIngressArgs {
 pub enum IngressMode {
     #[serde(rename = "mapping")]
     Mapping { r#in: Endpoint, out: Endpoint },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EncapInHttp {
+    #[serde(default)]
+    pub path_rewrites: Vec<PathRewrite>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PathRewrite {
+    pub match_regex: String,
+    pub substitution: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -13,6 +13,8 @@ The `Ingress` object is used to configure the ingress endpoints of the tng tunne
 ### Field Descriptions
 
 - **`ingress_mode`** (IngressMode): Specifies the method for inbound traffic, which can be `mapping`, `http_proxy`, or `netfilter`.
+- **`encap_in_http`** (EncapInHttp, optional): HTTP encapsulation configuration.
+- **`web_page_inject`** (boolean, optional, default is `false`): When enabled, this option injects a header bar at the top of the webpage to display the remote attestation status of the current page, providing strong awareness of remote attestation to browser users. Note that this feature requires the `encap_in_http` field to be specified simultaneously.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
@@ -78,6 +80,7 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 ### Field Descriptions
 
 - **`egress_mode`** (EgressMode): Specifies the outbound traffic method, which can be `mapping` or `netfilter`.
+- **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
@@ -221,6 +224,106 @@ By configuring different combinations of `attest` and `verify` properties at bot
 | (Reverse) Unidirectional | `attest` | `verify` | The TNG server is in a normal environment, and the TNG client is in a TEE. In this case, only the client certificate is verified. During the TLS handshake, the TNG server will use a fixed P256 X509 self-signed certificate embedded in the TNG code as its certificate. |
 | No TEE (For Debugging Purposes Only) | `no_ra` | `no_ra` | Both the TNG server and TNG client are in non-TEE environments. In this case, a normal TLS session is established between the TNG client and TNG server through unidirectional verification. |
 
+## Disguising as Layer 7 Traffic
+
+In modern server-side development, communication between app clients and app servers commonly uses the HTTP protocol, and the link may pass through HTTP middleware (such as nginx reverse proxy, or Layer 7-only load balancing services). However, TNG's rats-tls traffic might not pass through these HTTP middlewares. To integrate TNG with minimal burden in the business, we offer a feature to disguise TNG's rats-tls traffic as Layer 7 HTTP traffic.
+
+This feature can be achieved by configuring `EncapInHttp` in Ingress and `DecapFromHttp` in Egress.
+
+Considering the characteristics of these intermediate components, TNG needs to retain some fields of the original traffic after being disguised as HTTP traffic to ensure normal operation of functions like routing and load balancing. However, for data confidentiality, the fields in the disguised HTTP traffic should not contain sensitive information. Therefore, TNG provides some rules to configure the fields of the disguised HTTP traffic:
+
+1. The request method of the disguised HTTP traffic is uniformly `POST`.
+2. The request path of the disguised HTTP traffic defaults to `/`, but it can be rewritten to the path of the disguised HTTP traffic using the `path_rewrites` field based on the path of the protected business HTTP request inside, using regular expressions.
+3. The Host (or `:authority`) of the disguised HTTP traffic remains consistent with the protected business HTTP request inside.
+4. The disguised HTTP traffic carries a request header named `tng`, which can be used to distinguish between normal traffic and disguised traffic. Meanwhile, the request headers in the original business traffic will be concealed.
+
+> [!WARNING]  
+> If the "Disguising as Layer 7 Traffic" feature is enabled, the protected business inside must be HTTP traffic, not ordinary TCP traffic.
+
+### EncapInHttp: Disguising Inbound Traffic
+
+The disguising capability can be enabled by specifying the `encap_in_http` field in the `add_ingress` object. If `encap_in_http` is not specified, the disguising capability will not be enabled.
+
+#### Field Descriptions
+
+- **`path_rewrites`** (array [PathRewrite], optional, default is an empty array): This field specifies a list of parameters for traffic path rewriting using regular expressions. All rewrites will be performed in the order they appear in the path_rewrites list, and only one item in the list will be matched. If the HTTP request does not match any valid member of the path_rewrites list, the path of the disguised HTTP traffic will default to `/`.
+
+  - **`match_regex`** (string): A regular expression used to match the path of the protected business HTTP request inside.
+  - **`substitution`** (string): When the path matches the match_regex, the path of the disguised HTTP traffic will be rewritten to this substitution. It supports using `\digit` to reference the groups matched by the regular expression.
+
+Example:
+
+In this example, we add a PathRewrite rule indicating that for all user HTTP requests whose paths match `^/foo/bar/([^/]+)([/]?.*)$`, the path of the TNG tunnel's HTTP wrapper traffic will be rewritten to `/foo/bar/\1` (note that `\1` is a regex substitution rule).
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "0.0.0.0",
+          "port": 10001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 20001
+        }
+      },
+      "encap_in_http": {
+        "path_rewrites": [
+          {
+            "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
+            "substitution": "/foo/bar/\\1"
+          }
+        ]
+      },
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ]
+      }
+    }
+  ]
+}
+```
+
+### DecapFromHttp: Disguising Outbound Traffic
+
+Corresponding to the inbound configuration, the outbound side can enable the dismantling of already disguised traffic by specifying the `decap_from_http` field in the `add_egress` object. If the `decap_from_http` field is not specified, it will not be enabled.
+
+Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you can allow non-encrypted HTTP request traffic to enter the endpoint in addition to the encrypted TNG traffic. This can meet scenarios where both types of traffic are needed (such as health checks). The value of this sub-item is a JSON string list, where each item is a regular expression match statement. Only non-encrypted HTTP request traffic whose HTTP request PATH completely matches these regular expression statements will be allowed by TNG. The default value of the sub-item is `[]`, which means any non-encrypted HTTP requests are denied.
+
+#### Field Descriptions
+
+- **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
+
+Example:
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping": {
+        "in": {
+          "host": "127.0.0.1",
+          "port": 20001
+        },
+        "out": {
+          "host": "127.0.0.1",
+          "port": 30001
+        }
+      },
+      "decap_from_http": {
+        "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
+      },
+      "attest": {
+        "aa_addr": "unix:///tmp/attestation.sock"
+      }
+    }
+  ]
+}
+```
 
 ### Envoy Admin Interface
 

@@ -33,8 +33,8 @@ pub struct Endpoint {
 mod tests {
     use anyhow::Result;
     use attest::AttestArgs;
-    use egress::EgressMode;
-    use ingress::IngressMode;
+    use egress::{DecapFromHttp, EgressMode};
+    use ingress::{EncapInHttp, IngressMode, PathRewrite};
     use verify::VerifyArgs;
 
     use super::*;
@@ -54,6 +54,13 @@ mod tests {
                         port: 20001,
                     },
                 },
+                web_page_inject: false,
+                encap_in_http: Some(EncapInHttp {
+                    path_rewrites: vec![PathRewrite {
+                        match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
+                        substitution: "/foo/bar/\\1".to_owned(),
+                    }],
+                }),
                 no_ra: false,
                 attest: None,
                 verify: Some(VerifyArgs {
@@ -73,6 +80,9 @@ mod tests {
                         port: 30001,
                     },
                 },
+                decap_from_http: Some(DecapFromHttp {
+                    allow_non_tng_traffic_regexes: None,
+                }),
                 no_ra: false,
                 attest: Some(AttestArgs {
                     aa_addr: "unix:///tmp/attestation.sock".to_owned(),
