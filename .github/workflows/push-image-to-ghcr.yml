@@ -31,8 +31,8 @@ jobs:
       uses: docker/build-push-action@v2
       with:
         push: true
-        tags: 
-          - ghcr.io/inclavare-containers/tng:latest
-          - ghcr.io/inclavare-containers/tng:${{ github.sha }}
+        tags: |
+          ghcr.io/inclavare-containers/tng:latest
+          ghcr.io/inclavare-containers/tng:${{ github.sha }}
         target: tng-release
         context: .
