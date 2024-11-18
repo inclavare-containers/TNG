@@ -1,4 +1,6 @@
 # TNG
+[![Testing](/../../actions/workflows/docker-build.yml/badge.svg)](/../../actions/workflows/docker-build.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## What is TNG?
 
@@ -6,7 +8,7 @@ TNG (TEE Network Gateway) 是一个用于建立安全通信隧道的工具，支
 
 ## 使用方法
 
-启动 TNG 实例最简单的方法是使用 launch 子命令。以下是用法：
+TNG的最主要部分是其 launch 子命令。以下是其用法：
 
 ```txt
 Usage: tng launch [OPTIONS]
@@ -18,6 +20,12 @@ Options:
 ```
 
 在开始之前，需要提供一个 JSON 配置文件，或者直接从命令行参数中提供 JSON 格式的配置内容，这些配置将被用来配置 TNG 实例。
+
+启动 TNG 实例最简单的方法是使用我们预构建好的Docker镜像：
+
+```sh
+docker run -it --rm --network host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
+```
 
 请参考[配置文档](docs/configuration_zh.md)获取详细的配置说明。
 

@@ -1,4 +1,6 @@
 # TNG
+[![Testing](/../../actions/workflows/docker-build.yml/badge.svg)](/../../actions/workflows/docker-build.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## What is TNG?
 
@@ -6,7 +8,7 @@ TNG (TEE Network Gateway) is a tool for establishing secure communication tunnel
 
 ## Usage
 
-The simplest way to launch a TNG instance is the `launch` subcommand. Here is the usage:
+The main part of TNG is the `launch` subcommand. Here is the usage:
 
 ```txt
 Usage: tng launch [OPTIONS]
@@ -17,7 +19,13 @@ Options:
   -h, --help                             Print help
 ```
 
-You should provide a JSON config file, or provide configuration content in JSON directly from the command line arguments, which will be used to configure the TNG instance.
+You have to provide a JSON config file, or provide configuration content in JSON directly from the command line arguments, which will be used to configure the TNG instance.
+
+The simplest way to launch a TNG instance is using our pre-built Docker image:
+
+```sh
+docker run -it --rm --network host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
+```
 
 Check the [reference document](docs/configuration.md) for the configuration. 
 
