@@ -36,7 +36,7 @@ async fn test() -> Result<()> {
                         "capture_local_traffic": true
                     },
                     "attest": {
-                        "aa_addr": "unix:///tmp/attestation.sock"
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     }
                 }
             ]

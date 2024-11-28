@@ -4,7 +4,7 @@ set -e
 
 trap 'catch' ERR
 catch() {
-  echo "An error has occurred. Exit now"
+    echo "An error has occurred. Exit now"
 }
 
 script_dir=$(dirname `realpath "$0"`)

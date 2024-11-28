@@ -153,7 +153,7 @@
         }
       },
       "attest": {
-        "aa_addr": "unix:///tmp/attestation.sock"
+        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
       }
     }
   ]
@@ -188,7 +188,7 @@
         "so_mark": 565
       },
       "attest": {
-        "aa_addr": "unix:///tmp/attestation.sock"
+        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
       }
     }
   ]
@@ -208,7 +208,7 @@
 
 ```json
       "attest": {
-        "aa_addr": "unix:///tmp/attestation.sock"
+        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
       }
 ```
 
@@ -348,7 +348,7 @@
         "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
       },
       "attest": {
-        "aa_addr": "unix:///tmp/attestation.sock"
+        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
       }
     }
   ]

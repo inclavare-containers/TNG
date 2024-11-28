@@ -85,7 +85,7 @@ mod tests {
                 }),
                 no_ra: false,
                 attest: Some(AttestArgs {
-                    aa_addr: "unix:///tmp/attestation.sock".to_owned(),
+                    aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
                 }),
                 verify: None,
             }],

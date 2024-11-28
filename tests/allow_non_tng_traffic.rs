@@ -52,7 +52,7 @@ async fn test_access_via_tng() -> Result<()> {
                         "allow_non_tng_traffic_regexes": ["/public/.*"]
                     },
                     "attest": {
-                        "aa_addr": "unix:///tmp/attestation.sock"
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     }
                 }
             ]

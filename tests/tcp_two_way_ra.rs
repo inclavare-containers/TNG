@@ -28,7 +28,7 @@ async fn test() -> Result<()> {
 						}
 					},
 					"attest": {
-						"aa_addr": "unix:///tmp/attestation.sock"
+						"aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
 					},
 					"verify": {
 						"as_addr": "http://127.0.0.1:8080/",
@@ -54,7 +54,7 @@ async fn test() -> Result<()> {
 						}
 					},
 					"attest": {
-						"aa_addr": "unix:///tmp/attestation.sock"
+						"aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
 					},
 					"verify": {
 						"as_addr": "http://127.0.0.1:8080/",

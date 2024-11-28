@@ -55,7 +55,7 @@ async fn test() -> Result<()> {
                     },
                     "decap_from_http": {},
                     "attest": {
-                        "aa_addr": "unix:///tmp/attestation.sock"
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     }
                 }
             ]
