@@ -10,7 +10,8 @@ catch() {
 script_dir=$(dirname `realpath "$0"`)
 
 # Run tests under 'tests/' dir
-test_cases=`ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g'`
+# Note: we ignore tcp_two_way_ra_ingress_httpproxy_egress_netfilter here since the test for it is not finished 
+test_cases=`ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | grep -v 'tcp_two_way_ra_ingress_httpproxy_egress_netfilter' | sed 's/\.rs//g'`
 
 failed=0
 test_result_msgs=""
