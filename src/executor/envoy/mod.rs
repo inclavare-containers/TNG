@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus};
 use std::{io::Write as _, path::PathBuf};
 
@@ -12,6 +13,8 @@ use rand::Rng as _;
 use which::which;
 
 pub mod confgen;
+
+const ENVOY_EXE_PATH_DEFAULT: &str = "/usr/local/lib/tng/envoy-static";
 
 pub struct EnvoyConfig(pub String);
 
@@ -39,13 +42,21 @@ impl EnvoyExecutor {
 
         info!("Generated Envoy config written to: {config_file:?}");
 
+        // Seach for envoy-static binary
         let envoy_exe = match which("envoy-static") {
             Ok(p) => p,
-            Err(_) => std::env::current_exe()
-                .context("Failed to get current exe path")?
-                .parent()
-                .unwrap()
-                .join("envoy-static"),
+            Err(_) => {
+                let path = Path::new(ENVOY_EXE_PATH_DEFAULT);
+                if path.exists() {
+                    path.into()
+                } else {
+                    std::env::current_exe()
+                        .context("Failed to get current exe path")?
+                        .parent()
+                        .unwrap()
+                        .join("envoy-static")
+                }
+            }
         };
 
         debug!("Trying envoy executable path: {envoy_exe:?}");
