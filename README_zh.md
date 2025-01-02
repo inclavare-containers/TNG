@@ -4,7 +4,7 @@
 
 ## What is TNG?
 
-TNG (TEE Network Gateway) 是一个用于建立安全通信隧道的工具，支持多种流量入站和出站方式，并且能够提供基于远程证明（Remote Attestation）的安全会话能力。通过配置不同的入口（Ingress）和出口（Egress）端点，用户可以在无需修改已有应用程序的同时，根据自己的需求灵活地控制流量的加密和解密过程。
+TNG (Trusted Network Gateway) 是一个用于建立安全通信隧道的工具，支持多种流量入站和出站方式，并且能够提供基于远程证明（Remote Attestation）的安全会话能力。通过配置不同的入口（Ingress）和出口（Egress）端点，用户可以在无需修改已有应用程序的同时，根据自己的需求灵活地控制流量的加密和解密过程。
 
 ## 使用方法
 

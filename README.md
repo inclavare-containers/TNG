@@ -4,7 +4,7 @@
 
 ## What is TNG?
 
-TNG (TEE Network Gateway) is a tool for establishing secure communication tunnels, supporting various inbound and outbound traffic methods. It also provides secure session capabilities based on remote attestation (Remote Attestation). By configuring different ingress (Ingress) and egress (Egress) endpoints, users can flexibly control the encryption and decryption of traffic without modifying existing applications.
+TNG (Trusted Network Gateway) is a tool for establishing secure communication tunnels, supporting various inbound and outbound traffic methods. It also provides secure session capabilities based on remote attestation (Remote Attestation). By configuring different ingress (Ingress) and egress (Egress) endpoints, users can flexibly control the encryption and decryption of traffic without modifying existing applications.
 
 ## Usage
 
