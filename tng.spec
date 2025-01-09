@@ -34,7 +34,7 @@ BuildRequires: clang
 BuildRequires: jq
 BuildRequires: cargo
 BuildRequires: rust
-BuildRequires: patchelf
+BuildRequires: chrpath
 
 ExclusiveArch: x86_64
 
@@ -75,8 +75,7 @@ cargo install --path . --root %{_builddir}/%{name}-%{version}/install/tng/
 strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
 # Patch tng-envoy
-patchelf --set-rpath '$ORIGIN' %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static
-
+chrpath --replace '$ORIGIN' %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static
 
 %install
 # Install rats-rs
