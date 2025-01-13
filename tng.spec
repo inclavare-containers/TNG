@@ -7,11 +7,11 @@ Summary: TEE Network Gateway
 Group: Applications/System
 License: Alibaba
 URL: www.alibaba.com
-Requires: curl iptables openssl
-Provides: librats_rs.so()(64bit)
-Recommends: Attestation-Agent
-
 Source0: https://github.com/inclavare-containers/tng/archive/refs/tags/%{name}-%{version}.tar.gz
+Source1: config
+
+Requires: curl iptables openssl
+Recommends: Attestation-Agent
 
 BuildRequires: make
 BuildRequires: git
@@ -47,55 +47,44 @@ A tool for establishing secure communication tunnels in confidential computing.
 %setup -q -n %{name}-%{version}
 # Add cargo source replacement configs
 mkdir -p ~/.cargo/
-cat > ~/.cargo/config <<EOF
-[source.crates-io]
-replace-with = "vendored-sources"
-[source."git+https://github.com/intel/SGXDataCenterAttestationPrimitives?tag=DCAP_1.20"]
-git = "https://github.com/intel/SGXDataCenterAttestationPrimitives"
-tag = "DCAP_1.20"
-replace-with = "vendored-sources"
-[source."git+https://github.com/occlum/occlum?tag=v0.29.7"]
-git = "https://github.com/occlum/occlum"
-tag = "v0.29.7"
-replace-with = "vendored-sources"
-[source.vendored-sources]
-directory = "%{_builddir}/%{name}-%{version}/vendor"
-EOF
+cp %{SOURCE1} ~/.cargo/config
 
 
 %build
+ln -s `realpath %{_builddir}/%{name}-%{version}/vendor` ~/vendor
 # Build rats-rs
-pushd %{_builddir}/%{name}-%{version}/src/deps/rats-rs
+pushd src/deps/rats-rs
 cmake -Hc-api -Bbuild -DCOCO_ONLY=ON
 make -Cbuild install DESTDIR=%{_builddir}/%{name}-%{version}/install/rats-rs/
 popd
 # Build tng
-pushd %{_builddir}/%{name}-%{version}/src/
+pushd src/
 cargo install --path . --root %{_builddir}/%{name}-%{version}/install/tng/
 strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
 # Patch tng-envoy
 chrpath --replace '$ORIGIN' %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static
+# Remove vendor
+rm -f ~/vendor
+
 
 %install
 # Install rats-rs
-mkdir -p %{buildroot}/usr/local/lib/tng/
-install -p -m 644 %{_builddir}/%{name}-%{version}/install/rats-rs/usr/local/lib/rats-rs/librats_rs.so %{buildroot}/usr/local/lib/tng/
+mkdir -p %{buildroot}/usr/lib64/tng/
+install -p -m 644 %{_builddir}/%{name}-%{version}/install/rats-rs/usr/local/lib/rats-rs/librats_rs.so %{buildroot}/usr/lib64/tng/
 # Install tng
-mkdir -p %{buildroot}/usr/local/bin/
-install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroot}/usr/local/bin/tng
+mkdir -p %{buildroot}/usr/bin/
+install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroot}/usr/bin/tng
 # Install tng-envoy
-install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static %{buildroot}/usr/local/lib/tng/envoy-static
+install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static %{buildroot}/usr/lib64/tng/envoy-static
 
 
-%clean
-rm -f ~/.cargo/config
-rm -rf %{buildroot}
+%define __requires_exclude librats_rs.so
 
 %files
-/usr/local/bin/tng
-/usr/local/lib/tng/envoy-static
-/usr/local/lib/tng/librats_rs.so
+/usr/bin/tng
+/usr/lib64/tng/envoy-static
+/usr/lib64/tng/librats_rs.so
 
 
 %changelog

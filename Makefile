@@ -40,7 +40,7 @@ create-tarball:
 	rm -fr /tmp/tng-tarball/tng-${VERSION}/vendor/winapi*/lib/*.lib
 	rm -fr /tmp/tng-tarball/tng-${VERSION}/vendor/windows*/lib/*.lib
 
-	rsync -a --exclude target --exclude .git/modules/deps/tng-envoy ./ /tmp/tng-tarball/tng-${VERSION}/src/
+	rsync -a --exclude target --exclude deps/rats-rs/build --exclude .git/modules/deps/tng-envoy ./ /tmp/tng-tarball/tng-${VERSION}/src/
 	docker rm -f tng-envoy-copy-bin && docker run -d --rm --name tng-envoy-copy-bin ghcr.io/inclavare-containers/tng:${COMMIT_ID} sleep 1000
 	mkdir -p /tmp/tng-tarball/tng-${VERSION}/overlay/usr/local/bin/
 	docker cp tng-envoy-copy-bin:/usr/local/bin/envoy-static /tmp/tng-tarball/tng-${VERSION}/overlay/usr/local/bin/envoy-static
@@ -51,24 +51,61 @@ create-tarball:
 	@echo "Tarball generated:" /tmp/tng-${VERSION}.tar.gz
 
 
+define CARGO_CONFIG
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/intel/SGXDataCenterAttestationPrimitives?tag=DCAP_1.20"]
+git = "https://github.com/intel/SGXDataCenterAttestationPrimitives"
+tag = "DCAP_1.20"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/occlum/occlum?tag=v0.29.7"]
+git = "https://github.com/occlum/occlum"
+tag = "v0.29.7"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+endef
+export CARGO_CONFIG
+
 .PHONE: rpm-build
 rpm-build:
 	# setup build tree
 	which rpmdev-setuptree || { yum install -y rpmdevtools ; }
 	rpmdev-setuptree
 
-	# copy tarball
-	# cp /tmp/tng-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+	# copy sources
+	cp /tmp/tng-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+	@echo "$$CARGO_CONFIG" > ~/rpmbuild/SOURCES/config
 
 	# install build dependencies
 	which yum-builddep || { yum install -y yum-utils ; }
-	yum-builddep ./tng.spec
+	yum-builddep -y ./tng.spec
 	
-	# build 
+	# build
 	rpmbuild -ba ./tng.spec
 	@echo "RPM package is:" ~/rpmbuild/RPMS/*/tng-*
+
+.PHONE: rpm-build-in-docker
+rpm-build-in-docker:
+	# copy sources
+	mkdir -p ~/rpmbuild/SOURCES/
+	cp /tmp/tng-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+	@echo "$$CARGO_CONFIG" > ~/rpmbuild/SOURCES/config
+
+	docker run -it --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y ./tng.spec ; rpmbuild -ba ./tng.spec"
 
 .PHONE: rpm-install
 rpm-install: rpm-build
 	yum remove tng -y
 	ls -t ~/rpmbuild/RPMS/*/tng-* | head -n 1 | xargs yum install -y
+
+.PHONE: update-rpm-tree
+update-rpm-tree:
+	# copy sources
+	rm -f ../rpm-tree-tng/tng-*.tar.gz
+	cp /tmp/tng-${VERSION}.tar.gz ../rpm-tree-tng/
+	cp ./tng.spec ../rpm-tree-tng/
+	@echo "$$CARGO_CONFIG" > ../rpm-tree-tng/config
