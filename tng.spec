@@ -11,7 +11,7 @@ Source0: https://github.com/inclavare-containers/tng/archive/refs/tags/%{name}-%
 Source1: config
 
 Requires: curl iptables openssl
-Recommends: Attestation-Agent
+Recommends: attestation-agent
 
 BuildRequires: make
 BuildRequires: git
