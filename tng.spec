@@ -5,7 +5,7 @@ Version: 1.0.3
 Release: 1%{?dist}
 Summary: TEE Network Gateway
 Group: Applications/System
-License: Alibaba
+License: ASL 2.0
 URL: www.alibaba.com
 Source0: https://github.com/inclavare-containers/tng/archive/refs/tags/%{name}-%{version}.tar.gz
 Source1: config
@@ -82,6 +82,7 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 %define __requires_exclude librats_rs.so
 
 %files
+%license src/LICENSE
 /usr/bin/tng
 /usr/lib64/tng/envoy-static
 /usr/lib64/tng/librats_rs.so
