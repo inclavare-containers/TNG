@@ -14,7 +14,7 @@ use which::which;
 
 pub mod confgen;
 
-const ENVOY_EXE_PATH_DEFAULT: &str = "/usr/local/lib/tng/envoy-static";
+const ENVOY_EXE_PATH_DEFAULT: &str = "/usr/lib64/tng/envoy-static";
 
 pub struct EnvoyConfig(pub String);
 
