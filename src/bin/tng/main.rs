@@ -15,20 +15,12 @@ mod cli;
 shadow!(build);
 
 fn main() -> Result<()> {
-    // TODO: here
-    // tracing_subscriber::registry()
-    //     .with(
-    //         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-    //             format!("{}=trace,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
-    //         }),
-    //     )
-    //     .with(tracing_subscriber::fmt::layer())
-    //     .init();
-
-    let env = env_logger::Env::default()
-        .filter_or("TNG_LOG_LEVEL", "debug")
-        .write_style_or("TNG_LOG_STYLE", "always"); // enable color
-    env_logger::Builder::from_env(env).init();
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let cmd = Args::parse();
     info!("Welcome to TNG!");

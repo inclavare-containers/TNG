@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use log::{info, warn};
+use tracing::Instrument;
 
 use crate::config::{ingress::IngressMode, TngConfig};
 
@@ -46,6 +47,7 @@ pub async fn run_native_part(
                                 &add_ingress.attest,
                                 &add_ingress.verify,
                             )
+                            .instrument(tracing::info_span!("ingress", id))
                             .await
                         }
                     }

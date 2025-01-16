@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::{Context, Poll},
 };
 
@@ -19,32 +22,46 @@ use crate::tunnel::ingress::core::{client::trusted::verifier::NoRaCertVerifier, 
 
 type PoolKey = TngEndpoint;
 
-type ClientType = Client<HttpsConnector<HttpConnector>, axum::body::Body>;
+type HyperClientType = Client<HttpsConnector<HttpConnector>, axum::body::Body>;
+
+#[derive(Clone)]
+pub struct RatsTlsClient {
+    pub id: u64,
+    pub hyper: HyperClientType,
+}
 
 #[derive(Default)]
 pub struct ClientPool {
-    clients: RwLock<HashMap<PoolKey, ClientType>>,
+    pub next_id: AtomicU64,
+    clients: RwLock<HashMap<PoolKey, RatsTlsClient>>,
 }
 
 impl ClientPool {
-    pub async fn get_client(&self, endpoint: &TngEndpoint) -> Result<ClientType> {
+    pub async fn get_client(&self, dst: &TngEndpoint) -> Result<RatsTlsClient> {
         // Try to get the client from pool
         let client = {
             let read = self.clients.read().await;
-            read.get(endpoint).map(|c| c.clone())
+            read.get(dst).map(|c| c.clone())
         };
 
         let client = match client {
-            Some(c) => c,
+            Some(c) => {
+                tracing::debug!(%dst, rats_tls_session_id=c.id, "Reuse existing rats-tls session");
+                c
+            }
             None => {
                 // If client not exist then we need to create one
                 let mut write = self.clients.write().await;
-                // Check if client has been created by other "thread"
-                match write.get(endpoint) {
-                    Some(c) => c.clone(),
+                // Check if client has been created by other "task"
+                match write.get(dst) {
+                    Some(c) => {
+                        tracing::debug!(%dst, rats_tls_session_id=c.id, "Reuse existing rats-tls session");
+                        c.clone()
+                    }
                     None => {
-                        tracing::info!("Creating client for '{}'", endpoint);
-                        let http_connector = HttpConnector::new(endpoint.clone());
+                        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+                        tracing::debug!(%dst, rats_tls_session_id=id, "Creating new rats-tls client");
+                        let http_connector = HttpConnector::new(dst.clone());
 
                         // TLS client config using the custom CA store for lookups
                         let mut tls = ClientConfig::builder_with_protocol_versions(&[
@@ -63,8 +80,11 @@ impl ClientPool {
                             .wrap_connector(http_connector);
 
                         // Build the hyper client from the HTTPS connector.
-                        let client = Client::builder(TokioExecutor::new()).build(https_connector);
-                        write.insert(endpoint.to_owned(), client.clone());
+                        let client = RatsTlsClient {
+                            id: id,
+                            hyper: Client::builder(TokioExecutor::new()).build(https_connector),
+                        };
+                        write.insert(dst.to_owned(), client.clone());
                         client
                     }
                 }
@@ -96,7 +116,7 @@ impl<Req> tower::Service<Req> for HttpConnector {
     }
 
     fn call(&mut self, _: Req) -> Self::Future {
-        tracing::debug!("Establish TCP connection to '{}'", self.endpoint);
+        tracing::debug!("Establish the underlying tcp connection for rats-tls");
 
         let endpoint_owned = self.endpoint.to_owned();
         let fut = async move {

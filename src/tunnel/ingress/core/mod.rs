@@ -3,9 +3,6 @@ pub mod server;
 
 use std::fmt::Display;
 
-use anyhow::{Context as _, Result};
-use tokio::net::TcpStream;
-
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TngEndpoint {
     host: String,

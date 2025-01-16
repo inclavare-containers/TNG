@@ -9,6 +9,7 @@ use tokio::{
     task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 static INIT: OnceCell<()> = OnceCell::const_new();
 
@@ -19,13 +20,13 @@ pub async fn run_test(
     tng_client_config: &str,
 ) -> Result<()> {
     INIT.get_or_init(|| async {
-        env_logger::Builder::from_env(
-            env_logger::Env::default()
-                .filter_or("TNG_LOG_LEVEL", "debug")
-                .write_style_or("TNG_LOG_STYLE", "always"),
-        )
-        .is_test(true)
-        .init();
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "debug".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
     })
     .await;
 
