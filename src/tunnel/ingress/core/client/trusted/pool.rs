@@ -15,7 +15,7 @@ use hyper_util::{
 use tokio::{net::TcpStream, sync::RwLock};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
-use crate::tunnel::ingress::core::{client::verifier::NoRaCertVerifier, TngEndpoint};
+use crate::tunnel::ingress::core::{client::trusted::verifier::NoRaCertVerifier, TngEndpoint};
 
 type PoolKey = TngEndpoint;
 

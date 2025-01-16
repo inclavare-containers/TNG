@@ -34,34 +34,3 @@ impl Display for TngEndpoint {
         f.write_fmt(format_args!("tcp://{}:{}", self.host, self.port))
     }
 }
-
-pub trait StreamManager {
-    type StreamType: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin;
-
-    async fn new_stream(&self, endpoint: &TngEndpoint) -> Result<Self::StreamType>;
-}
-
-pub struct RawStreamManager {}
-
-impl RawStreamManager {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl StreamManager for RawStreamManager {
-    type StreamType = TcpStream;
-
-    async fn new_stream(
-        &self,
-        endpoint: &TngEndpoint,
-    ) -> Result<<Self as StreamManager>::StreamType> {
-        let upstream = TcpStream::connect((endpoint.host(), endpoint.port()))
-            .await
-            .with_context(|| {
-                format!("Failed to establish TCP connection with upstream '{endpoint}'")
-            })?;
-
-        Ok(upstream)
-    }
-}

@@ -1,3 +1,3 @@
-mod pool;
 pub mod stream_manager;
-mod verifier;
+pub mod trusted;
+pub mod unprotected;
