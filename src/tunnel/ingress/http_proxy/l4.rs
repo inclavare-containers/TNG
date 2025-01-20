@@ -19,13 +19,11 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
+use crate::config::ingress::{CommonArgs, HttpProxyArgs};
 use crate::tunnel::ingress::core::client::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::client::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::client::unprotected::UnprotectedStreamManager;
-use crate::{
-    config::{attest::AttestArgs, ingress::EndpointFilter, verify::VerifyArgs},
-    tunnel::ingress::core::TngEndpoint,
-};
+use crate::tunnel::ingress::core::TngEndpoint;
 
 use super::endpoint_matcher::RegexEndpointMatcher;
 
@@ -278,20 +276,25 @@ struct TunnelContext {
     pub endpoint_matcher: RegexEndpointMatcher,
 }
 
-pub async fn run(
-    _id: usize,
-    proxy_listen_addr: &str,
-    proxy_listen_port: u16,
-    dst_filters: &[EndpointFilter],
-    no_ra: bool,
-    attest: &Option<AttestArgs>,
-    verify: &Option<VerifyArgs>,
-) -> Result<()> {
+pub async fn run(http_proxy_args: &HttpProxyArgs, common_args: &CommonArgs) -> Result<()> {
     let tunnel_context = Arc::new(TunnelContext {
-        trusted_stream_manager: TrustedStreamManager::new(),
+        trusted_stream_manager: TrustedStreamManager::new(common_args)?,
         unprotected_stream_manager: UnprotectedStreamManager::new(),
-        endpoint_matcher: RegexEndpointMatcher::new(dst_filters)?,
+        endpoint_matcher: RegexEndpointMatcher::new(&http_proxy_args.dst_filters)?,
     });
+
+    let proxy_listen_addr = http_proxy_args
+        .proxy_listen
+        .host
+        .as_deref()
+        .unwrap_or("0.0.0.0");
+    let proxy_listen_port = http_proxy_args.proxy_listen.port;
+
+    let ingress_addr = format!("{proxy_listen_addr}:{proxy_listen_port}");
+    tracing::debug!("Add TCP listener on {}", ingress_addr);
+
+    let listener = TcpListener::bind(ingress_addr).await.unwrap();
+    // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
     let svc = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http())
@@ -304,12 +307,6 @@ pub async fn run(
             async { Result::<_, String>::Ok(l4_svc(req, tunnel_context).await) }
         }));
     let svc = TowerToHyperService::new(svc);
-
-    let ingress_addr = format!("{proxy_listen_addr}:{proxy_listen_port}");
-    tracing::debug!("Add TCP listener on {}", ingress_addr);
-
-    let listener = TcpListener::bind(ingress_addr).await.unwrap();
-    // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();

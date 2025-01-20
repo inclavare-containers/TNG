@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    config::{attest::AttestArgs, egress::DecapFromHttp, verify::VerifyArgs},
+    config::{egress::DecapFromHttp, ra::AttestArgs, ra::VerifyArgs},
     executor::envoy::confgen::{
         ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
         ENVOY_L7_RESPONSE_BODY_DENIED, ENVOY_LISTENER_SOCKET_OPTIONS,

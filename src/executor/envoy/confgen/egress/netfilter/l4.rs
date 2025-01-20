@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    config::{attest::AttestArgs, verify::VerifyArgs},
+    config::{ra::AttestArgs, ra::VerifyArgs},
     executor::envoy::confgen::{
         ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
         ENVOY_LISTENER_SOCKET_OPTIONS,

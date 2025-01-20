@@ -7,11 +7,11 @@ use tokio_rustls::rustls::RootCertStore;
 use crate::executor::envoy::confgen::ENVOY_DUMMY_CERT;
 
 #[derive(Debug)]
-pub struct NoRaCertVerifier {
+pub struct DummyCertVerifier {
     inner: Arc<WebPkiServerVerifier>,
 }
 
-impl NoRaCertVerifier {
+impl DummyCertVerifier {
     pub fn new() -> Result<Self> {
         let mut cert = ENVOY_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
@@ -23,7 +23,7 @@ impl NoRaCertVerifier {
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for NoRaCertVerifier {
+impl rustls::client::danger::ServerCertVerifier for DummyCertVerifier {
     fn verify_server_cert(
         &self,
         _end_entity: &rustls::pki_types::CertificateDer<'_>,

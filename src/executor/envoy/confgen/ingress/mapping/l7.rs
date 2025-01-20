@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    config::{attest::AttestArgs, ingress::EncapInHttp, verify::VerifyArgs},
+    config::{ingress::EncapInHttp, ra::AttestArgs, ra::VerifyArgs},
     executor::envoy::confgen::{
         ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY, ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD,
         ENVOY_LISTENER_SOCKET_OPTIONS,

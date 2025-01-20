@@ -3,7 +3,11 @@ use envoy::EnvoyConfig;
 use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, warn};
 
-use crate::config::{egress::EgressMode, ingress::IngressMode, TngConfig};
+use crate::config::{
+    egress::EgressMode,
+    ingress::{HttpProxyArgs, IngressMode, MappingArgs, NetfilterArgs},
+    TngConfig,
+};
 
 pub mod envoy;
 pub mod iptables;
@@ -17,16 +21,19 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
 
     let mut iptables_actions = vec![];
     for (id, add_ingress) in config.add_ingress.iter().enumerate() {
-        if add_ingress.attest == None && add_ingress.verify == None && add_ingress.no_ra == false {
+        if add_ingress.common.ra_args.attest == None
+            && add_ingress.common.ra_args.verify == None
+            && add_ingress.common.ra_args.no_ra == false
+        {
             bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_ingress'");
         }
 
-        if add_ingress.no_ra {
+        if add_ingress.common.ra_args.no_ra {
             warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment")
         }
 
         match &add_ingress.ingress_mode {
-            IngressMode::Mapping { r#in, out } => {
+            IngressMode::Mapping(MappingArgs { r#in, out }) => {
                 let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
                 let in_port = r#in.port;
 
@@ -36,18 +43,18 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                let mut yamls = match &add_ingress.encap_in_http {
+                let mut yamls = match &add_ingress.common.encap_in_http {
                     Some(encap_in_http) => self::envoy::confgen::ingress::mapping::l7::gen(
                         id,
                         in_addr,
                         in_port,
                         out_addr,
                         out_port,
-                        add_ingress.web_page_inject,
+                        add_ingress.common.web_page_inject,
                         encap_in_http,
-                        add_ingress.no_ra,
-                        &add_ingress.attest,
-                        &add_ingress.verify,
+                        add_ingress.common.ra_args.no_ra,
+                        &add_ingress.common.ra_args.attest,
+                        &add_ingress.common.ra_args.verify,
                     )?,
                     None => self::envoy::confgen::ingress::mapping::l4::gen(
                         id,
@@ -55,48 +62,51 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         in_port,
                         out_addr,
                         out_port,
-                        add_ingress.no_ra,
-                        &add_ingress.attest,
-                        &add_ingress.verify,
+                        add_ingress.common.ra_args.no_ra,
+                        &add_ingress.common.ra_args.attest,
+                        &add_ingress.common.ra_args.verify,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
-            IngressMode::HttpProxy {
+            IngressMode::HttpProxy(HttpProxyArgs {
                 proxy_listen,
                 dst_filters,
-            } => {
+            }) => {
                 let proxy_listen_addr = proxy_listen.host.as_deref().unwrap_or("0.0.0.0");
                 let proxy_listen_port = proxy_listen.port;
 
-                let mut yamls = match &add_ingress.encap_in_http {
+                let mut yamls = match &add_ingress.common.encap_in_http {
                     Some(encap_in_http) => self::envoy::confgen::ingress::http_proxy::l7::gen(
                         id,
                         proxy_listen_addr,
                         proxy_listen_port,
                         dst_filters,
-                        add_ingress.web_page_inject,
+                        add_ingress.common.web_page_inject,
                         encap_in_http,
-                        add_ingress.no_ra,
-                        &add_ingress.attest,
-                        &add_ingress.verify,
+                        add_ingress.common.ra_args.no_ra,
+                        &add_ingress.common.ra_args.attest,
+                        &add_ingress.common.ra_args.verify,
                     )?,
                     None => (vec![], vec![]),
                 };
                 listeners.append(&mut yamls.0);
                 clusters.append(&mut yamls.1);
             }
-            IngressMode::Netfilter { dst: _ } => todo!(),
+            IngressMode::Netfilter(NetfilterArgs { dst: _ }) => todo!(),
         }
     }
 
     for (id, add_egress) in config.add_egress.iter().enumerate() {
-        if add_egress.attest == None && add_egress.verify == None && add_egress.no_ra == false {
+        if add_egress.common.ra_args.attest == None
+            && add_egress.common.ra_args.verify == None
+            && add_egress.common.ra_args.no_ra == false
+        {
             bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
         }
 
-        if add_egress.no_ra {
+        if add_egress.common.ra_args.no_ra {
             warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment")
         }
 
@@ -111,7 +121,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                     .context("'host' of 'out' field must be set")?;
                 let out_port = out.port;
 
-                let mut yamls = match &add_egress.decap_from_http {
+                let mut yamls = match &add_egress.common.decap_from_http {
                     Some(decap_from_http) => self::envoy::confgen::egress::mapping::l7::gen(
                         id,
                         in_addr,
@@ -119,9 +129,9 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         out_addr,
                         out_port,
                         decap_from_http,
-                        add_egress.no_ra,
-                        &add_egress.attest,
-                        &add_egress.verify,
+                        add_egress.common.ra_args.no_ra,
+                        &add_egress.common.ra_args.attest,
+                        &add_egress.common.ra_args.verify,
                     )?,
                     None => self::envoy::confgen::egress::mapping::l4::gen(
                         id,
@@ -129,9 +139,9 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         in_port,
                         out_addr,
                         out_port,
-                        add_egress.no_ra,
-                        &add_egress.attest,
-                        &add_egress.verify,
+                        add_egress.common.ra_args.no_ra,
+                        &add_egress.common.ra_args.attest,
+                        &add_egress.common.ra_args.verify,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
@@ -154,23 +164,23 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                     so_mark,
                 });
 
-                let mut yamls = match &add_egress.decap_from_http {
+                let mut yamls = match &add_egress.common.decap_from_http {
                     Some(decap_from_http) => self::envoy::confgen::egress::netfilter::l7::gen(
                         id,
                         listen_port,
                         so_mark,
                         decap_from_http,
-                        add_egress.no_ra,
-                        &add_egress.attest,
-                        &add_egress.verify,
+                        add_egress.common.ra_args.no_ra,
+                        &add_egress.common.ra_args.attest,
+                        &add_egress.common.ra_args.verify,
                     )?,
                     None => self::envoy::confgen::egress::netfilter::l4::gen(
                         id,
                         listen_port,
                         so_mark,
-                        add_egress.no_ra,
-                        &add_egress.attest,
-                        &add_egress.verify,
+                        add_egress.common.ra_args.no_ra,
+                        &add_egress.common.ra_args.attest,
+                        &add_egress.common.ra_args.verify,
                     )?,
                 };
                 listeners.append(&mut yamls.0);

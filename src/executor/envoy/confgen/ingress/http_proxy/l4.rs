@@ -2,7 +2,7 @@ use anyhow::Result;
 use itertools::Itertools;
 
 use crate::{
-    config::{attest::AttestArgs, ingress::EndpointFilter, verify::VerifyArgs},
+    config::{ingress::EndpointFilter, ra::AttestArgs, ra::VerifyArgs},
     executor::envoy::confgen::ENVOY_LISTENER_SOCKET_OPTIONS,
 };
 

@@ -2,10 +2,9 @@ use egress::AddEgressArgs;
 use ingress::AddIngressArgs;
 use serde::{Deserialize, Serialize};
 
-pub mod attest;
 pub mod egress;
 pub mod ingress;
-pub mod verify;
+pub mod ra;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -32,10 +31,9 @@ pub struct Endpoint {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use attest::AttestArgs;
     use egress::{DecapFromHttp, EgressMode};
     use ingress::{EncapInHttp, IngressMode, PathRewrite};
-    use verify::VerifyArgs;
+    use ra::{AttestArgs, RaArgs, VerifyArgs};
 
     use super::*;
 
@@ -44,7 +42,7 @@ mod tests {
         let config = TngConfig {
             admin_bind: None,
             add_ingress: vec![AddIngressArgs {
-                ingress_mode: IngressMode::Mapping {
+                ingress_mode: IngressMode::Mapping(ingress::MappingArgs {
                     r#in: Endpoint {
                         host: None,
                         port: 10001,
@@ -53,21 +51,24 @@ mod tests {
                         host: Some("127.0.0.1".to_owned()),
                         port: 20001,
                     },
-                },
-                web_page_inject: false,
-                encap_in_http: Some(EncapInHttp {
-                    path_rewrites: vec![PathRewrite {
-                        match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
-                        substitution: "/foo/bar/\\1".to_owned(),
-                    }],
                 }),
-                no_ra: false,
-                attest: None,
-                verify: Some(VerifyArgs {
-                    as_addr: "http://127.0.0.1:8080/".to_owned(),
-                    as_is_grpc: false,
-                    policy_ids: vec!["default".to_owned()],
-                }),
+                common: ingress::CommonArgs{
+                    web_page_inject: false,
+                    encap_in_http: Some(EncapInHttp {
+                        path_rewrites: vec![PathRewrite {
+                            match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
+                            substitution: "/foo/bar/\\1".to_owned(),
+                        }],
+                    }),
+                    ra_args: RaArgs {
+                        no_ra: false,
+                        attest: None,
+                        verify: Some(VerifyArgs {
+                            as_addr: "http://127.0.0.1:8080/".to_owned(),
+                            as_is_grpc: false,
+                            policy_ids: vec!["default".to_owned()],
+                        })},
+                }
             }],
             add_egress: vec![AddEgressArgs {
                 egress_mode: EgressMode::Mapping {
@@ -80,14 +81,18 @@ mod tests {
                         port: 30001,
                     },
                 },
-                decap_from_http: Some(DecapFromHttp {
-                    allow_non_tng_traffic_regexes: None,
-                }),
-                no_ra: false,
-                attest: Some(AttestArgs {
-                    aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
-                }),
-                verify: None,
+                common:egress::CommonArgs{
+                    decap_from_http: Some(DecapFromHttp {
+                        allow_non_tng_traffic_regexes: None,
+                    }),
+                    ra_args: RaArgs {
+                        no_ra: false,
+                        attest: Some(AttestArgs {
+                            aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                        }),
+                        verify: None,
+                    },
+                }
             }],
         };
 

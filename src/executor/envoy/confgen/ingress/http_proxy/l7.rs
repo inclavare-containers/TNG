@@ -3,9 +3,9 @@ use itertools::Itertools;
 
 use crate::{
     config::{
-        attest::AttestArgs,
         ingress::{EncapInHttp, EndpointFilter},
-        verify::VerifyArgs,
+        ra::AttestArgs,
+        ra::VerifyArgs,
     },
     executor::envoy::confgen::{
         ENVOY_L7_RESPONSE_BODY_INJECT_TAG_BODY, ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD,

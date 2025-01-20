@@ -15,44 +15,19 @@ pub async fn run_native_part(
     for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
         let add_ingress = add_ingress.clone();
         tokio::task::spawn(async move {
-            if add_ingress.attest == None
-                && add_ingress.verify == None
-                && add_ingress.no_ra == false
-            {
-                bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_ingress'");
-            }
-
-            if add_ingress.no_ra {
-                warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment")
-            }
-
             match &add_ingress.ingress_mode {
-                IngressMode::Mapping { r#in, out } => Ok(()),
-                IngressMode::HttpProxy {
-                    proxy_listen,
-                    dst_filters,
-                } => {
-                    let proxy_listen_addr = proxy_listen.host.as_deref().unwrap_or("0.0.0.0");
-                    let proxy_listen_port = proxy_listen.port;
-
-                    match &add_ingress.encap_in_http {
+                IngressMode::Mapping(_) => Ok(()),
+                IngressMode::HttpProxy(http_proxy_args) => {
+                    match &add_ingress.common.encap_in_http {
                         Some(_encap_in_http) => Ok(()),
                         None => {
-                            self::ingress::http_proxy::l4::run(
-                                id,
-                                proxy_listen_addr,
-                                proxy_listen_port,
-                                dst_filters,
-                                add_ingress.no_ra,
-                                &add_ingress.attest,
-                                &add_ingress.verify,
-                            )
-                            .instrument(tracing::info_span!("ingress", id))
-                            .await
+                            self::ingress::http_proxy::l4::run(http_proxy_args, &add_ingress.common)
+                                .instrument(tracing::info_span!("ingress", id))
+                                .await
                         }
                     }
                 }
-                IngressMode::Netfilter { dst: _ } => todo!(),
+                IngressMode::Netfilter(_) => todo!(),
             }
         });
     }

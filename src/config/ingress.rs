@@ -1,28 +1,28 @@
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
-use super::{attest::AttestArgs, verify::VerifyArgs, Endpoint};
+use super::{ra::RaArgs, Endpoint};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct AddIngressArgs {
     #[serde(flatten)]
     pub ingress_mode: IngressMode,
 
+    #[serde(flatten)]
+    pub common: CommonArgs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CommonArgs {
     #[serde(default = "Option::default")]
     pub encap_in_http: Option<EncapInHttp>,
 
     #[serde(default = "bool::default")]
     pub web_page_inject: bool,
 
-    #[serde(default = "bool::default")]
-    pub no_ra: bool,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attest: Option<AttestArgs>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify: Option<VerifyArgs>,
+    #[serde(flatten)]
+    pub ra_args: RaArgs,
 }
 
 #[serde_as]
@@ -30,20 +30,38 @@ pub struct AddIngressArgs {
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
     #[serde(rename = "mapping")]
-    Mapping { r#in: Endpoint, out: Endpoint },
+    Mapping(MappingArgs),
 
     #[serde(rename = "http_proxy")]
-    HttpProxy {
-        proxy_listen: Endpoint,
-        #[serde_as(as = "OneOrMany<_, PreferMany>")]
-        #[serde(default = "Vec::new")]
-        // In TNG version <= 1.0.1, this field is named as `dst_filter`
-        #[serde(alias = "dst_filter")]
-        dst_filters: Vec<EndpointFilter>,
-    },
+    HttpProxy(HttpProxyArgs),
 
     #[serde(rename = "netfilter")]
-    Netfilter { dst: Endpoint },
+    Netfilter(NetfilterArgs),
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MappingArgs {
+    #[serde(rename = "in")]
+    pub r#in: Endpoint,
+    pub out: Endpoint,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HttpProxyArgs {
+    pub proxy_listen: Endpoint,
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    // In TNG version <= 1.0.1, this field is named as `dst_filter`
+    #[serde(alias = "dst_filter")]
+    pub dst_filters: Vec<EndpointFilter>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NetfilterArgs {
+    pub dst: Endpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

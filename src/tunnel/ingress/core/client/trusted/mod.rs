@@ -1,75 +1,48 @@
-mod pool;
+mod cert_resolver;
+mod security;
+mod transport;
 mod verifier;
+mod wrapping;
 
-use anyhow::{bail, Context as _, Result};
-use http::{Request, StatusCode, Version};
+use anyhow::Result;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use tracing::Instrument;
+use transport::TransportLayerCreator;
 
-use crate::tunnel::ingress::core::TngEndpoint;
+use crate::{config::ingress::CommonArgs, tunnel::ingress::core::TngEndpoint};
 
-use self::pool::ClientPool;
+use self::security::SecurityLayer;
 
 use super::stream_manager::StreamManager;
 
 pub struct TrustedStreamManager {
-    pool: ClientPool,
+    security_layer: SecurityLayer,
 }
 
 impl TrustedStreamManager {
-    pub fn new() -> Self {
-        Self {
-            pool: Default::default(),
-        }
+    pub fn new(common_args: &CommonArgs) -> Result<Self> {
+        let connector_creator = TransportLayerCreator::new(common_args.encap_in_http.clone());
+
+        Ok(Self {
+            security_layer: SecurityLayer::new(connector_creator, &common_args.ra_args)?,
+        })
     }
 }
 
 impl StreamManager for TrustedStreamManager {
     type StreamType = TokioIo<Upgraded>;
 
-    async fn new_stream(&self, endpoint: &TngEndpoint) -> Result<Self::StreamType> {
-        let client = self.pool.get_client(endpoint).await?;
+    async fn new_stream(&self, dst: &TngEndpoint) -> Result<Self::StreamType> {
+        let client = self.security_layer.get_client(dst).await?;
 
-        let fut = async {
-            let req = Request::connect("https://tng.internal/")
-                .version(Version::HTTP_2)
-                .body(axum::body::Body::empty())
-                .unwrap();
-
-            tracing::debug!("Send HTTP/2 CONNECT request via rats-tls session");
-            let mut resp = client
-                .hyper
-                .request(req)
-                .await
-                .context("Failed to send HTTP/2 CONNECT request")?;
-
-            if resp.status() != StatusCode::OK {
-                bail!(
-                    "Failed to send HTTP/2 CONNECT request, bad status '{}', got: {:?}",
-                    resp.status(),
-                    resp
-                );
-            }
-            let upgraded = hyper::upgrade::on(&mut resp).await.with_context(|| {
-                format!(
-                    "Failed to establish HTTP/2 CONNECT tunnel with '{}'",
-                    endpoint
-                )
-            })?;
-
-            tracing::debug!("Trusted tunnel is enstablished");
-
-            Ok(upgraded)
-        };
-
-        let upgraded = fut
+        let stream = wrapping::create_stream_from_hyper(&client)
             .instrument(tracing::info_span!(
                 "trust_tunnel",
                 rats_tls_session_id = client.id
             ))
             .await?;
 
-        Ok(TokioIo::new(upgraded))
+        Ok(stream)
     }
 }
