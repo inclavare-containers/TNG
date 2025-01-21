@@ -8,6 +8,7 @@ use anyhow::Result;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
+use tracing::Instrument;
 
 use crate::{config::ingress::EncapInHttp, tunnel::ingress::core::TngEndpoint};
 
@@ -58,15 +59,16 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
     }
 
     fn call(&mut self, _: Req) -> Self::Future {
-        tracing::debug!("Establish the underlying tcp connection for rats-tls");
-
         let endpoint_owned = self.dst.to_owned();
         let fut = async move {
+            tracing::debug!("Establish the underlying tcp connection for rats-tls");
+
             TcpStream::connect((endpoint_owned.host(), endpoint_owned.port()))
                 .await
                 .map(|s| TokioIo::new(s))
                 .map_err(|e| e.into())
-        };
+        }
+        .instrument(tracing::info_span!("transport", r#type = "tcp"));
 
         Box::pin(fut)
     }
@@ -83,6 +85,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
     fn call(&mut self, _: Req) -> Self::Future {
         tracing::debug!("Establish the underlying HTTP connection for rats-tls");
+        //         .instrument(tracing::info_span!("transport", r#type = "tcp"));
         todo!()
     }
 }

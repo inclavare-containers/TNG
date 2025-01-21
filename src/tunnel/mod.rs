@@ -1,4 +1,5 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
+use ingress::http_proxy::serve::HttpProxyIngress;
 use log::{info, warn};
 use tracing::Instrument;
 
@@ -18,14 +19,10 @@ pub async fn run_native_part(
             match &add_ingress.ingress_mode {
                 IngressMode::Mapping(_) => Ok(()),
                 IngressMode::HttpProxy(http_proxy_args) => {
-                    match &add_ingress.common.encap_in_http {
-                        Some(_encap_in_http) => Ok(()),
-                        None => {
-                            self::ingress::http_proxy::l4::run(http_proxy_args, &add_ingress.common)
-                                .instrument(tracing::info_span!("ingress", id))
-                                .await
-                        }
-                    }
+                    HttpProxyIngress::new(http_proxy_args, &add_ingress.common)?
+                        .serve()
+                        .instrument(tracing::info_span!("ingress", id))
+                        .await
                 }
                 IngressMode::Netfilter(_) => todo!(),
             }

@@ -34,11 +34,15 @@ impl StreamManager for TrustedStreamManager {
     type StreamType = TokioIo<Upgraded>;
 
     async fn new_stream(&self, dst: &TngEndpoint) -> Result<Self::StreamType> {
-        let client = self.security_layer.get_client(dst).await?;
+        let client = self
+            .security_layer
+            .get_client(dst)
+            .instrument(tracing::info_span!("security", %dst))
+            .await?;
 
         let stream = wrapping::create_stream_from_hyper(&client)
             .instrument(tracing::info_span!(
-                "trust_tunnel",
+                "wrapping",
                 rats_tls_session_id = client.id
             ))
             .await?;
