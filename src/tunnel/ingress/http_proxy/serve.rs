@@ -303,13 +303,14 @@ impl HttpProxyIngress {
         let svc = TowerToHyperService::new(svc);
 
         loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            let peer_addr = stream.peer_addr().unwrap();
-            let io = TokioIo::new(stream);
+            let (downstream, _) = listener.accept().await.unwrap();
+            let peer_addr = downstream.peer_addr().unwrap();
             let svc = svc.clone();
             tokio::task::spawn({
                 let fut = async {
                     tracing::debug!("Start serving connection from client");
+
+                    let io = TokioIo::new(downstream);
 
                     if let Err(e) =
                         hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ingress::http_proxy::serve::HttpProxyIngress;
+use ingress::{http_proxy::serve::HttpProxyIngress, mapping::MappingIngress};
 use log::{info, warn};
 use tracing::Instrument;
 
@@ -17,7 +17,12 @@ pub async fn run_native_part(
         let add_ingress = add_ingress.clone();
         tokio::task::spawn(async move {
             match &add_ingress.ingress_mode {
-                IngressMode::Mapping(_) => Ok(()),
+                IngressMode::Mapping(mapping_args) => {
+                    MappingIngress::new(mapping_args, &add_ingress.common)?
+                        .serve()
+                        .instrument(tracing::info_span!("ingress", id))
+                        .await
+                }
                 IngressMode::HttpProxy(http_proxy_args) => {
                     HttpProxyIngress::new(http_proxy_args, &add_ingress.common)?
                         .serve()

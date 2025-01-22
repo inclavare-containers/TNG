@@ -33,43 +33,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
         }
 
         match &add_ingress.ingress_mode {
-            IngressMode::Mapping(MappingArgs { r#in, out }) => {
-                let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
-                let in_port = r#in.port;
-
-                let out_addr = out
-                    .host
-                    .as_deref()
-                    .context("'host' of 'out' field must be set")?;
-                let out_port = out.port;
-
-                let mut yamls = match &add_ingress.common.encap_in_http {
-                    Some(encap_in_http) => self::envoy::confgen::ingress::mapping::l7::gen(
-                        id,
-                        in_addr,
-                        in_port,
-                        out_addr,
-                        out_port,
-                        add_ingress.common.web_page_inject,
-                        encap_in_http,
-                        add_ingress.common.ra_args.no_ra,
-                        &add_ingress.common.ra_args.attest,
-                        &add_ingress.common.ra_args.verify,
-                    )?,
-                    None => self::envoy::confgen::ingress::mapping::l4::gen(
-                        id,
-                        in_addr,
-                        in_port,
-                        out_addr,
-                        out_port,
-                        add_ingress.common.ra_args.no_ra,
-                        &add_ingress.common.ra_args.attest,
-                        &add_ingress.common.ra_args.verify,
-                    )?,
-                };
-                listeners.append(&mut yamls.0);
-                clusters.append(&mut yamls.1);
-            }
+            IngressMode::Mapping(_) => { /* do nothing */ }
             IngressMode::HttpProxy(_) => { /* do nothing */ }
             IngressMode::Netfilter(NetfilterArgs { dst: _ }) => todo!(),
         }
