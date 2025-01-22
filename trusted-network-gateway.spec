@@ -1,9 +1,9 @@
 %global debug_package %{nil}
 
-Name: tng
+Name: trusted-network-gateway
 Version: 1.0.3
-Release: 1%{?dist}
-Summary: TEE Network Gateway
+Release: 2%{?dist}
+Summary: Trusted Network Gateway
 Group: Applications/System
 License: ASL 2.0
 URL: www.alibaba.com
@@ -89,5 +89,8 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 
 
 %changelog
+* Wed Jan 22 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.3-2
+- Rename package name from tng to trusted-network-gateway.
+
 * Tue Dec 17 2024 Kun Lai <laikun@linux.alibaba.com> - 1.0.3-1
 - Initial package release.
