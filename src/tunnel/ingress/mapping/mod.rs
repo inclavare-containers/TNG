@@ -64,14 +64,20 @@ impl MappingIngress {
                     match trusted_stream_manager.new_stream(&dst).await {
                         Ok(upstream) => {
                             if let Err(e) = utils::forward_stream(upstream, downstream).await {
+                                let error = format!("{e:#}");
                                 tracing::error!(
-                                    "Failed during forwarding to upstream {dst} via trusted tunnel: {e}"
+                                    %dst,
+                                    error,
+                                    "Failed during forwarding to upstream via trusted tunnel"
                                 );
                             }
                         }
                         Err(e) => {
+                            let error = format!("{e:#}");
                             tracing::error!(
-                                "Failed to connect to upstream {dst} via trusted tunnel: {e}"
+                                %dst,
+                                error,
+                                "Failed to connect to upstream via trusted tunnel"
                             );
                         }
                     }

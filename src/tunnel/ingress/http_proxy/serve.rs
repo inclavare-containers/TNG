@@ -27,6 +27,11 @@ use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::ingress::utils::endpoint_matcher::RegexEndpointMatcher;
 use crate::tunnel::ingress::utils::forward_stream;
 
+fn error_response(code: StatusCode, msg: String) -> Response {
+    tracing::error!(?code, ?msg, "responding errors to client");
+    (code, msg).into_response()
+}
+
 struct RequestHelper {
     req: Request<Body>,
 }
@@ -149,11 +154,10 @@ impl RequestHelper {
                 match hyper::client::conn::http1::handshake(TokioIo::new(s1)).await {
                     Ok(v) => v,
                     Err(e) => {
-                        return (
+                        return error_response(
                             StatusCode::BAD_REQUEST,
-                            format!("Failed during http handshake with upstream: {e}"),
+                            format!("Failed during http handshake with upstream: {e:#}"),
                         )
-                            .into_response()
                     }
                 };
 
@@ -173,14 +177,13 @@ impl RequestHelper {
             *self.req.uri_mut() = match http::Uri::from_parts(parts) {
                 Ok(v) => v,
                 Err(e) => {
-                    return (
+                    return error_response(
                         StatusCode::BAD_REQUEST,
                         format!(
-                            "Failed convert uri {} for forwarding http request to upstream: {e}",
+                            "Failed convert uri {} for forwarding http request to upstream: {e:#}",
                             self.req.uri()
                         ),
                     )
-                        .into_response()
                 }
             };
 
@@ -192,11 +195,10 @@ impl RequestHelper {
             {
                 Ok(resp) => resp,
                 Err(e) => {
-                    return (
+                    return error_response(
                         StatusCode::BAD_REQUEST,
-                        format!("Failed to forawrd http request to upstream: {e}"),
+                        format!("Failed to forawrd http request to upstream: {e:#}"),
                     )
-                        .into_response()
                 }
             }
         };
@@ -217,7 +219,7 @@ impl StreamRouter {
         let helper = RequestHelper::from_request(req);
         let dst = match helper.get_dst() {
             Ok(dst) => dst,
-            Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+            Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
         };
 
         // Check if need to send via tng tunnel, and get stream to the upstream
@@ -230,11 +232,10 @@ impl StreamRouter {
             match self.unprotected_stream_manager.new_stream(&dst).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    return (
+                    return error_response(
                         StatusCode::BAD_REQUEST,
-                        format!("Failed to connect to upstream {dst} via unprotected tcp: {e}"),
+                        format!("Failed to connect to upstream {dst} via unprotected tcp: {e:#}"),
                     )
-                        .into_response()
                 }
             }
         } else {
@@ -242,11 +243,10 @@ impl StreamRouter {
             match self.trusted_stream_manager.new_stream(&dst).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    return (
+                    return error_response(
                         StatusCode::BAD_REQUEST,
-                        format!("Failed to connect to upstream {dst} via trusted tunnel: {e}"),
+                        format!("Failed to connect to upstream {dst} via trusted tunnel: {e:#}"),
                     )
-                        .into_response()
                 }
             }
         };
