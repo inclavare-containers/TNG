@@ -122,39 +122,46 @@ async fn launch_tcp_client(
     let host = host.to_owned();
     Ok(tokio::spawn(async move {
         let _drop_guard = token.drop_guard();
-        info!("Connecting to TCP server at {}:{}", host, port);
 
-        let mut stream = match http_proxy {
-            Some(http_proxy) => {
-                let mut stream =
-                    TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
+        for i in 1..6 {
+            // repeat 5 times
+            info!(
+                "TCP client test repeat {i}, connecting to TCP server at {}:{}",
+                host, port
+            );
+
+            let mut stream = match http_proxy {
+                Some(http_proxy) => {
+                    let mut stream =
+                        TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
+                            .await
+                            .context("Failed to connect to http proxy server")?;
+                    http_connect_tokio(&mut stream, &host, port)
                         .await
-                        .context("Failed to connect to http proxy server")?;
-                http_connect_tokio(&mut stream, &host, port)
+                        .context("Failed to connect to app server via http proxy server")?;
+                    stream
+                }
+                None => TcpStream::connect(format!("{}:{}", host, port))
                     .await
-                    .context("Failed to connect to app server via http proxy server")?;
-                stream
+                    .context("Failed to connect to app server")?,
+            };
+            info!("Connected to the server");
+
+            let message = TCP_PAYLOAD.as_bytes();
+            stream.write_all(message).await?;
+            stream.shutdown().await?;
+
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await?;
+
+            if response != message {
+                bail!(
+                    "The response body should be `{TCP_PAYLOAD}`, but got `{}`",
+                    String::from_utf8_lossy(&response)
+                )
+            } else {
+                info!("Success! The response matchs expected value.");
             }
-            None => TcpStream::connect(format!("{}:{}", host, port))
-                .await
-                .context("Failed to connect to app server")?,
-        };
-        info!("Connected to the server");
-
-        let message = TCP_PAYLOAD.as_bytes();
-        stream.write_all(message).await?;
-        stream.shutdown().await?;
-
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).await?;
-
-        if response != message {
-            bail!(
-                "The response body should be `{TCP_PAYLOAD}`, but got `{}`",
-                String::from_utf8_lossy(&response)
-            )
-        } else {
-            info!("Success! The response matchs expected value.");
         }
 
         info!("The TCP client task normally exited.");
@@ -228,44 +235,47 @@ pub async fn launch_http_client(
     Ok(tokio::spawn(async move {
         let _drop_guard = token.drop_guard();
 
-        info!("Send http request to {host}:{port}");
-        let resp = RetryPolicy::fixed(Duration::from_secs(1))
-            .with_max_retries(5)
-            .retry(|| async {
-                let mut builder = reqwest::Client::builder();
+        for i in 1..6 {
+            // repeat 5 times
+            info!("HTTP client test repeat {i}, sending http request to {host}:{port}");
+            let resp = RetryPolicy::fixed(Duration::from_secs(1))
+                .with_max_retries(5)
+                .retry(|| async {
+                    let mut builder = reqwest::Client::builder();
 
-                if let Some(http_proxy) = &http_proxy {
-                    let proxy = reqwest::Proxy::http(format!(
-                        "http://{}:{}",
-                        http_proxy.host, http_proxy.port
-                    ))?;
-                    builder = builder.proxy(proxy);
-                }
+                    if let Some(http_proxy) = &http_proxy {
+                        let proxy = reqwest::Proxy::http(format!(
+                            "http://{}:{}",
+                            http_proxy.host, http_proxy.port
+                        ))?;
+                        builder = builder.proxy(proxy);
+                    }
 
-                let client = builder.build()?;
-                client
-                    .get(format!("http:///{host}:{port}{path_and_query}"))
-                    .header(HOST, &host_header)
-                    .send()
-                    .await
-            })
-            .await?;
+                    let client = builder.build()?;
+                    client
+                        .get(format!("http:///{host}:{port}{path_and_query}"))
+                        .header(HOST, &host_header)
+                        .send()
+                        .await
+                })
+                .await?;
 
-        let status = resp.status();
-        let resp_info = format!("{resp:?}");
-        let text = resp.text().await?;
+            let status = resp.status();
+            let resp_info = format!("{resp:?}");
+            let text = resp.text().await?;
 
-        if status != StatusCode::OK {
-            bail!(
+            if status != StatusCode::OK {
+                bail!(
                 "The respose status should be {}, bot got {status}.\n\tBody text: {text}\n\tResponse: {resp_info}",
                 StatusCode::OK
             )
-        }
+            }
 
-        if text != HTTP_RESPONSE_BODY {
-            bail!("The response body should be `{HTTP_RESPONSE_BODY}`, but got `{text}`.\n\tResponse: {resp_info}")
-        } else {
-            info!("Success! The response matchs expected value.");
+            if text != HTTP_RESPONSE_BODY {
+                bail!("The response body should be `{HTTP_RESPONSE_BODY}`, but got `{text}`.\n\tResponse: {resp_info}")
+            } else {
+                info!("Success! The response matchs expected value.");
+            }
         }
 
         info!("The HTTP client task normally exit now");
