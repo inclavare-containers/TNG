@@ -1,11 +1,14 @@
 use anyhow::Result;
+use egress::mapping::MappingEgress;
 use ingress::{http_proxy::serve::HttpProxyIngress, mapping::MappingIngress};
 use log::{info, warn};
 use tracing::Instrument;
 
-use crate::config::{ingress::IngressMode, TngConfig};
+use crate::config::{egress::EgressMode, ingress::IngressMode, TngConfig};
 
+mod egress;
 mod ingress;
+mod utils;
 
 pub async fn run_native_part(
     mut stop_rx: tokio::sync::watch::Receiver<()>,
@@ -30,6 +33,21 @@ pub async fn run_native_part(
                         .await
                 }
                 IngressMode::Netfilter(_) => todo!(),
+            }
+        });
+    }
+
+    for (id, add_egress) in tng_config.add_egress.iter().enumerate() {
+        let add_egress = add_egress.clone();
+        tokio::task::spawn(async move {
+            match &add_egress.egress_mode {
+                EgressMode::Mapping(mapping_args) => {
+                    MappingEgress::new(mapping_args, &add_egress.common)?
+                        .serve()
+                        .instrument(tracing::info_span!("egress", id))
+                        .await
+                }
+                EgressMode::Netfilter(_) => todo!(),
             }
         });
     }

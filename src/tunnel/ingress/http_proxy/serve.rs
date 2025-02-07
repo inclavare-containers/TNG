@@ -19,16 +19,16 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::config::ingress::{CommonArgs, HttpProxyArgs};
-use crate::tunnel::ingress::core::client::stream_manager::StreamManager as _;
-use crate::tunnel::ingress::core::client::trusted::TrustedStreamManager;
-use crate::tunnel::ingress::core::client::unprotected::UnprotectedStreamManager;
+use crate::config::ingress::{CommonArgs, EndpointFilter, IngressHttpProxyArgs};
+use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
+use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStreamManager;
+use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
-use crate::tunnel::ingress::utils::endpoint_matcher::RegexEndpointMatcher;
-use crate::tunnel::ingress::utils::forward_stream;
+use crate::tunnel::utils::endpoint_matcher::RegexEndpointMatcher;
+use crate::tunnel::utils::forward_stream;
 
 fn error_response(code: StatusCode, msg: String) -> Response {
-    tracing::error!(?code, ?msg, "responding errors to client");
+    tracing::error!(?code, ?msg, "responding errors to downstream");
     (code, msg).into_response()
 }
 
@@ -126,7 +126,7 @@ impl RequestHelper {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed during http connect upgrade: {e}");
+                        tracing::warn!("Failed during http connect upgrade: {e:#}");
                     }
                 }
             }.instrument(span));
@@ -258,11 +258,12 @@ impl StreamRouter {
 pub struct HttpProxyIngress {
     listen_addr: String,
     listen_port: u16,
-    stream_router: Arc<StreamRouter>,
+    dst_filters: Vec<EndpointFilter>,
+    common_args: CommonArgs,
 }
 
 impl HttpProxyIngress {
-    pub fn new(http_proxy_args: &HttpProxyArgs, common_args: &CommonArgs) -> Result<Self> {
+    pub fn new(http_proxy_args: &IngressHttpProxyArgs, common_args: &CommonArgs) -> Result<Self> {
         let listen_addr = http_proxy_args
             .proxy_listen
             .host
@@ -273,22 +274,23 @@ impl HttpProxyIngress {
         Ok(Self {
             listen_addr: listen_addr.to_owned(),
             listen_port,
-            stream_router: Arc::new(StreamRouter {
-                trusted_stream_manager: TrustedStreamManager::new(common_args)?,
-                unprotected_stream_manager: UnprotectedStreamManager::new(),
-                endpoint_matcher: RegexEndpointMatcher::new(&http_proxy_args.dst_filters)?,
-            }),
+            dst_filters: http_proxy_args.dst_filters.clone(),
+            common_args: common_args.clone(),
         })
     }
 
     pub async fn serve(&self) -> Result<()> {
-        let ingress_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!("Add TCP listener on {}", ingress_addr);
+        let stream_router = Arc::new(StreamRouter {
+            trusted_stream_manager: TrustedStreamManager::new(&self.common_args).await?,
+            unprotected_stream_manager: UnprotectedStreamManager::new(),
+            endpoint_matcher: RegexEndpointMatcher::new(&self.dst_filters)?,
+        });
 
-        let listener = TcpListener::bind(ingress_addr).await.unwrap();
+        let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
+        tracing::debug!("Add TCP listener on {}", listen_addr);
+
+        let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
-
-        let stream_router = self.stream_router.clone();
 
         let svc = ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())

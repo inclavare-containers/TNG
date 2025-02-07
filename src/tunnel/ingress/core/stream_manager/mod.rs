@@ -1,3 +1,6 @@
+pub mod trusted;
+pub mod unprotected;
+
 use crate::tunnel::ingress::core::TngEndpoint;
 use anyhow::Result;
 

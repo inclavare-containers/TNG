@@ -35,6 +35,8 @@ mod tests {
     use ingress::{EncapInHttp, IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgs, VerifyArgs};
 
+    use crate::config::egress::EgressMappingArgs;
+
     use super::*;
 
     #[test]
@@ -42,7 +44,7 @@ mod tests {
         let config = TngConfig {
             admin_bind: None,
             add_ingress: vec![AddIngressArgs {
-                ingress_mode: IngressMode::Mapping(ingress::MappingArgs {
+                ingress_mode: IngressMode::Mapping(ingress::IngressMappingArgs {
                     r#in: Endpoint {
                         host: None,
                         port: 10001,
@@ -71,7 +73,7 @@ mod tests {
                 }
             }],
             add_egress: vec![AddEgressArgs {
-                egress_mode: EgressMode::Mapping {
+                egress_mode: EgressMode::Mapping (EgressMappingArgs{
                     r#in: Endpoint {
                         host: Some("127.0.0.1".to_owned()),
                         port: 20001,
@@ -80,7 +82,7 @@ mod tests {
                         host: Some("127.0.0.1".to_owned()),
                         port: 30001,
                     },
-                },
+                }),
                 common:egress::CommonArgs{
                     decap_from_http: Some(DecapFromHttp {
                         allow_non_tng_traffic_regexes: None,

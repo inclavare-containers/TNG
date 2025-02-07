@@ -20,10 +20,12 @@ pub async fn run_test(
     tng_client_config: &str,
 ) -> Result<()> {
     INIT.get_or_init(|| async {
+        // Initialize log tracing
         tracing_subscriber::registry()
+            // .with(console_subscriber::spawn()) // Initialize tokio console
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "debug".into()),
+                    .unwrap_or_else(|_| "debug,tokio=trace,runtime=trace".into()),
             )
             .with(tracing_subscriber::fmt::layer())
             .init();

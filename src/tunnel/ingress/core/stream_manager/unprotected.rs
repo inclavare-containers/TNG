@@ -3,7 +3,7 @@ use tokio::net::TcpStream;
 
 use crate::tunnel::ingress::core::TngEndpoint;
 
-use super::stream_manager::StreamManager;
+use super::StreamManager;
 
 pub struct UnprotectedStreamManager {}
 

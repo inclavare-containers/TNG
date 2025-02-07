@@ -47,6 +47,7 @@ shadow-rs = "=0.20.1"
 again = "0.1.2"
 async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 axum = "0.7.7"
+console-subscriber = "0.4.1"
 futures = "0.3.31"
 http = "1.1.0"
 reqwest = {version = "0.12.9", default-features = false, features = ["json"]}

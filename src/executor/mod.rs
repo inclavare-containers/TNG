@@ -1,11 +1,11 @@
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Result};
 use envoy::EnvoyConfig;
 use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, warn};
 
 use crate::config::{
-    egress::EgressMode,
-    ingress::{HttpProxyArgs, IngressMode, MappingArgs, NetfilterArgs},
+    egress::{EgressMode, EgressNetfilterArgs},
+    ingress::{IngressMode, IngressNetfilterArgs},
     TngConfig,
 };
 
@@ -35,7 +35,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
         match &add_ingress.ingress_mode {
             IngressMode::Mapping(_) => { /* do nothing */ }
             IngressMode::HttpProxy(_) => { /* do nothing */ }
-            IngressMode::Netfilter(NetfilterArgs { dst: _ }) => todo!(),
+            IngressMode::Netfilter(IngressNetfilterArgs { dst: _ }) => todo!(),
         }
     }
 
@@ -52,48 +52,15 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
         }
 
         match &add_egress.egress_mode {
-            EgressMode::Mapping { r#in, out } => {
-                let in_addr = r#in.host.as_deref().unwrap_or("0.0.0.0");
-                let in_port = r#in.port;
-
-                let out_addr = out
-                    .host
-                    .as_deref()
-                    .context("'host' of 'out' field must be set")?;
-                let out_port = out.port;
-
-                let mut yamls = match &add_egress.common.decap_from_http {
-                    Some(decap_from_http) => self::envoy::confgen::egress::mapping::l7::gen(
-                        id,
-                        in_addr,
-                        in_port,
-                        out_addr,
-                        out_port,
-                        decap_from_http,
-                        add_egress.common.ra_args.no_ra,
-                        &add_egress.common.ra_args.attest,
-                        &add_egress.common.ra_args.verify,
-                    )?,
-                    None => self::envoy::confgen::egress::mapping::l4::gen(
-                        id,
-                        in_addr,
-                        in_port,
-                        out_addr,
-                        out_port,
-                        add_egress.common.ra_args.no_ra,
-                        &add_egress.common.ra_args.attest,
-                        &add_egress.common.ra_args.verify,
-                    )?,
-                };
-                listeners.append(&mut yamls.0);
-                clusters.append(&mut yamls.1);
+            EgressMode::Mapping(_) => {
+                // Do nothing
             }
-            EgressMode::Netfilter {
+            EgressMode::Netfilter(EgressNetfilterArgs {
                 capture_dst,
                 capture_local_traffic,
                 listen_port,
                 so_mark,
-            } => {
+            }) => {
                 let listen_port =
                     listen_port.unwrap_or(NETFILTER_LISTEN_PORT_BEGIN_DEFAULT + (id as u16));
                 let so_mark = so_mark.unwrap_or(NETFILTER_SO_MARK_DEFAULT);

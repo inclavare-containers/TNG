@@ -22,23 +22,34 @@ pub struct CommonArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct EgressMappingArgs {
+    pub r#in: Endpoint,
+    pub out: Endpoint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EgressNetfilterArgs {
+    pub capture_dst: Endpoint,
+
+    #[serde(default = "bool::default")]
+    pub capture_local_traffic: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub so_mark: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub enum EgressMode {
     #[serde(rename = "mapping")]
-    Mapping { r#in: Endpoint, out: Endpoint },
+    Mapping(EgressMappingArgs),
 
     #[serde(rename = "netfilter")]
-    Netfilter {
-        capture_dst: Endpoint,
-
-        #[serde(default = "bool::default")]
-        capture_local_traffic: bool,
-
-        #[serde(skip_serializing_if = "Option::is_none")]
-        listen_port: Option<u16>,
-
-        #[serde(skip_serializing_if = "Option::is_none")]
-        so_mark: Option<u32>,
-    },
+    Netfilter(EgressNetfilterArgs),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,3 +1,6 @@
+mod cert_resolver;
+mod cert_verifier;
+
 use std::{
     collections::HashMap,
     sync::{
@@ -7,6 +10,8 @@ use std::{
 };
 
 use anyhow::{bail, Result};
+use cert_resolver::CoCoClientCertResolver;
+use cert_verifier::{coco::CoCoServerCertVerifier, dummy::DummyServerCertVerifier};
 use hyper_rustls::HttpsConnector;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use tokio::sync::RwLock;
@@ -15,14 +20,10 @@ use tracing::warn;
 
 use crate::{
     config::ra::RaArgs,
-    tunnel::ingress::core::{client::trusted::verifier::dummy::DummyCertVerifier, TngEndpoint},
+    tunnel::{ingress::core::TngEndpoint, utils::cert_manager::CertManager},
 };
 
-use super::{
-    cert_resolver::CoCoClientCertResolver,
-    transport::{TransportLayerConnector, TransportLayerCreator},
-    verifier::coco::CoCoCertVerifier,
-};
+use super::transport::{TransportLayerConnector, TransportLayerCreator};
 
 type PoolKey = TngEndpoint;
 
@@ -42,8 +43,8 @@ pub struct SecurityLayer {
 }
 
 impl SecurityLayer {
-    pub fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
-        // TODO: handle web_page_inject、no_ra、attest、verify
+    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
+        // TODO: handle web_page_inject
 
         // Prepare TLS config
         let mut tls_client_config;
@@ -66,15 +67,16 @@ impl SecurityLayer {
 
             tls_client_config
                 .dangerous()
-                .set_certificate_verifier(Arc::new(DummyCertVerifier::new()?));
+                .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
         } else if ra_args.attest != None || ra_args.verify != None {
             let config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(RootCertStore::empty());
-            // TODO: use with_client_cert_resolver() to provide client cert
             if let Some(attest_args) = &ra_args.attest {
-                tls_client_config = config.with_client_cert_resolver(Arc::new(
-                    CoCoClientCertResolver::new(attest_args.clone()),
-                ));
+                let cert_manager =
+                    Arc::new(CertManager::create_and_launch(attest_args.clone()).await?);
+
+                tls_client_config = config
+                    .with_client_cert_resolver(Arc::new(CoCoClientCertResolver::new(cert_manager)));
             } else {
                 tls_client_config = config.with_no_client_auth();
             }
@@ -82,16 +84,16 @@ impl SecurityLayer {
             if let Some(verify_args) = &ra_args.verify {
                 tls_client_config
                     .dangerous()
-                    .set_certificate_verifier(Arc::new(CoCoCertVerifier::new(
+                    .set_certificate_verifier(Arc::new(CoCoServerCertVerifier::new(
                         verify_args.clone(),
                     )?));
             } else {
                 tls_client_config
                     .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyCertVerifier::new()?));
+                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
             }
         } else {
-            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
+            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_ingress'");
         }
 
         Ok(Self {

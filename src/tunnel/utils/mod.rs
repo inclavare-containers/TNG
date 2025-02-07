@@ -1,3 +1,4 @@
+pub mod cert_manager;
 pub mod endpoint_matcher;
 
 use anyhow::{Context, Result};

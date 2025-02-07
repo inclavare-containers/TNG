@@ -14,12 +14,12 @@ use tokio_rustls::rustls::RootCertStore;
 use crate::{config::ra::VerifyArgs, executor::envoy::confgen::ENVOY_DUMMY_CERT};
 
 #[derive(Debug)]
-pub struct CoCoCertVerifier {
+pub struct CoCoServerCertVerifier {
     verify: VerifyArgs,
     inner: Arc<WebPkiServerVerifier>,
 }
 
-impl CoCoCertVerifier {
+impl CoCoServerCertVerifier {
     pub fn new(verify: VerifyArgs) -> Result<Self> {
         let mut cert = ENVOY_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
@@ -35,7 +35,7 @@ impl CoCoCertVerifier {
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for CoCoCertVerifier {
+impl rustls::client::danger::ServerCertVerifier for CoCoServerCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,

@@ -30,18 +30,18 @@ pub struct CommonArgs {
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
     #[serde(rename = "mapping")]
-    Mapping(MappingArgs),
+    Mapping(IngressMappingArgs),
 
     #[serde(rename = "http_proxy")]
-    HttpProxy(HttpProxyArgs),
+    HttpProxy(IngressHttpProxyArgs),
 
     #[serde(rename = "netfilter")]
-    Netfilter(NetfilterArgs),
+    Netfilter(IngressNetfilterArgs),
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MappingArgs {
+pub struct IngressMappingArgs {
     #[serde(rename = "in")]
     pub r#in: Endpoint,
     pub out: Endpoint,
@@ -49,7 +49,7 @@ pub struct MappingArgs {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct HttpProxyArgs {
+pub struct IngressHttpProxyArgs {
     pub proxy_listen: Endpoint,
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
@@ -60,7 +60,7 @@ pub struct HttpProxyArgs {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct NetfilterArgs {
+pub struct IngressNetfilterArgs {
     pub dst: Endpoint,
 }
 

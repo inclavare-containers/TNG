@@ -1,31 +1,28 @@
-mod cert_resolver;
-mod security;
-mod transport;
-mod verifier;
-mod wrapping;
-
 use anyhow::Result;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use tracing::Instrument;
-use transport::TransportLayerCreator;
 
-use crate::{config::ingress::CommonArgs, tunnel::ingress::core::TngEndpoint};
+use crate::{
+    config::ingress::CommonArgs,
+    tunnel::ingress::core::{
+        protocol::{security::SecurityLayer, transport::TransportLayerCreator, wrapping},
+        TngEndpoint,
+    },
+};
 
-use self::security::SecurityLayer;
-
-use super::stream_manager::StreamManager;
+use super::StreamManager;
 
 pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
 }
 
 impl TrustedStreamManager {
-    pub fn new(common_args: &CommonArgs) -> Result<Self> {
+    pub async fn new(common_args: &CommonArgs) -> Result<Self> {
         let connector_creator = TransportLayerCreator::new(common_args.encap_in_http.clone());
 
         Ok(Self {
-            security_layer: SecurityLayer::new(connector_creator, &common_args.ra_args)?,
+            security_layer: SecurityLayer::new(connector_creator, &common_args.ra_args).await?,
         })
     }
 }

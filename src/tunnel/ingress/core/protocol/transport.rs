@@ -116,32 +116,37 @@ impl HttpTransportLayer {
         let (local, remote) = tokio::io::duplex(1024);
         let (mut read, mut write) = tokio::io::split(remote);
 
-        tokio::spawn(async move {
-            let mut buffer = BytesMut::with_capacity(4096);
-            loop {
-                if read.read_buf(&mut buffer).await? == 0 {
-                    break;
-                };
-                let other = buffer.split().freeze();
-                send_stream.send_data(other, false)?;
-            }
-            Ok::<(), anyhow::Error>(())
-        });
-
-        tokio::spawn(async move {
-            loop {
-                match recv_stream.next().await {
-                    Some(bs) => {
-                        write.write_all(&bs?).await?;
-                    }
-                    None => break,
+        tokio::spawn(
+            async move {
+                let mut buffer = BytesMut::with_capacity(4096);
+                loop {
+                    if read.read_buf(&mut buffer).await? == 0 {
+                        break;
+                    };
+                    let other = buffer.split().freeze();
+                    send_stream.send_data(other, false)?;
                 }
+                Ok::<(), anyhow::Error>(())
             }
+            .in_current_span(),
+        );
 
-            Ok::<(), anyhow::Error>(())
-        });
+        tokio::spawn(
+            async move {
+                loop {
+                    match recv_stream.next().await {
+                        Some(bs) => {
+                            write.write_all(&bs?).await?;
+                        }
+                        None => break,
+                    }
+                }
 
-        // 返回 TokioIo 包装的 local_send 和 local_recv
+                Ok::<(), anyhow::Error>(())
+            }
+            .in_current_span(),
+        );
+
         return Ok(TokioIo::new(TransportLayerStream::Http(local)));
     }
 }

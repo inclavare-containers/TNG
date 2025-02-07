@@ -4,23 +4,22 @@ use anyhow::{Context, Result};
 use tokio::net::TcpListener;
 use tracing::Instrument;
 
-use crate::config::{ingress::CommonArgs, ingress::MappingArgs};
-use crate::tunnel::ingress::core::client::stream_manager::StreamManager;
+use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
+use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
+use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
-use crate::tunnel::ingress::utils;
-
-use super::core::client::trusted::TrustedStreamManager;
+use crate::tunnel::utils;
 
 pub struct MappingIngress {
     listen_addr: String,
     listen_port: u16,
     upstream_addr: String,
     upstream_port: u16,
-    trusted_stream_manager: Arc<TrustedStreamManager>,
+    common_args: CommonArgs,
 }
 
 impl MappingIngress {
-    pub fn new(mapping_args: &MappingArgs, common_args: &CommonArgs) -> Result<Self> {
+    pub fn new(mapping_args: &IngressMappingArgs, common_args: &CommonArgs) -> Result<Self> {
         Ok(Self {
             listen_addr: mapping_args
                 .r#in
@@ -37,15 +36,17 @@ impl MappingIngress {
                 .context("'host' of 'out' field must be set")?
                 .to_owned(),
             upstream_port: mapping_args.out.port,
-            trusted_stream_manager: Arc::new(TrustedStreamManager::new(common_args)?),
+            common_args: common_args.clone(),
         })
     }
 
     pub async fn serve(&self) -> Result<()> {
-        let ingress_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!("Add TCP listener on {}", ingress_addr);
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&self.common_args).await?);
 
-        let listener = TcpListener::bind(ingress_addr).await.unwrap();
+        let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
+        tracing::debug!("Add TCP listener on {}", listen_addr);
+
+        let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
         loop {
@@ -53,7 +54,7 @@ impl MappingIngress {
             let peer_addr = downstream.peer_addr().unwrap();
             let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
 
-            let trusted_stream_manager = self.trusted_stream_manager.clone();
+            let trusted_stream_manager = trusted_stream_manager.clone();
 
             tokio::task::spawn({
                 let fut = async move {
