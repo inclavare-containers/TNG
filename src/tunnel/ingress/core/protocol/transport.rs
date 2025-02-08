@@ -5,16 +5,17 @@ use std::{
 };
 
 use anyhow::{bail, Context as _, Result};
-use bytes::BytesMut;
-use futures::StreamExt;
 use http::{Request, Uri};
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::DuplexStream;
 use tokio::net::TcpStream;
 use tracing::Instrument;
 
-use crate::{config::ingress::EncapInHttp, tunnel::ingress::core::TngEndpoint};
+use crate::{
+    config::ingress::EncapInHttp,
+    tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
+};
 
 pub struct TransportLayerCreator {
     encap_in_http: Option<EncapInHttp>,
@@ -103,7 +104,7 @@ impl HttpTransportLayer {
             .header("tng", "{}")
             .body(())?;
 
-        let (response, mut send_stream) = sender.send_request(req, false)?;
+        let (response, send_stream) = sender.send_request(req, false)?;
 
         let response = response.await?;
 
@@ -111,41 +112,9 @@ impl HttpTransportLayer {
             bail!("unexpected status code: {}", response.status());
         }
 
-        let mut recv_stream = response.into_body();
+        let recv_stream = response.into_body();
 
-        let (local, remote) = tokio::io::duplex(1024);
-        let (mut read, mut write) = tokio::io::split(remote);
-
-        tokio::spawn(
-            async move {
-                let mut buffer = BytesMut::with_capacity(4096);
-                loop {
-                    if read.read_buf(&mut buffer).await? == 0 {
-                        break;
-                    };
-                    let other = buffer.split().freeze();
-                    send_stream.send_data(other, false)?;
-                }
-                Ok::<(), anyhow::Error>(())
-            }
-            .in_current_span(),
-        );
-
-        tokio::spawn(
-            async move {
-                loop {
-                    match recv_stream.next().await {
-                        Some(bs) => {
-                            write.write_all(&bs?).await?;
-                        }
-                        None => break,
-                    }
-                }
-
-                Ok::<(), anyhow::Error>(())
-            }
-            .in_current_span(),
-        );
+        let local = H2Stream::work_on(send_stream, recv_stream).await?;
 
         return Ok(TokioIo::new(TransportLayerStream::Http(local)));
     }

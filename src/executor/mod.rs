@@ -20,7 +20,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
     let mut clusters = vec![];
 
     let mut iptables_actions = vec![];
-    for (id, add_ingress) in config.add_ingress.iter().enumerate() {
+    for (_id, add_ingress) in config.add_ingress.iter().enumerate() {
         if add_ingress.common.ra_args.attest == None
             && add_ingress.common.ra_args.verify == None
             && add_ingress.common.ra_args.no_ra == false

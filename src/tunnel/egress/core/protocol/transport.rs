@@ -1,18 +1,13 @@
 use std::pin::Pin;
 
-use crate::config::egress::DecapFromHttp;
+use crate::{config::egress::DecapFromHttp, tunnel::utils::h2_stream::H2Stream};
 
 use anyhow::{Context as _, Result};
-use bytes::BytesMut;
-use futures::{Stream, StreamExt as _};
+use futures::Stream;
 use http::{HeaderValue, Response, StatusCode};
 use pin_project::pin_project;
 use std::task::{Context, Poll};
-use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream},
-    net::TcpStream,
-};
-use tracing::Instrument;
+use tokio::{io::DuplexStream, net::TcpStream};
 
 pub struct TransportLayerDecoder {
     decap_from_http: Option<DecapFromHttp>,
@@ -49,11 +44,11 @@ impl TransportLayerDecoder {
                             let (request, mut send_response) =
                                 request.context("Failed to accept request")?;
 
-                            let (parts, mut recv_stream) = request.into_parts();
+                            let (parts, recv_stream) = request.into_parts();
                             tracing::debug!("Accepted request: {:?}", parts);
 
                             // Send a response back to the client
-                            let mut send_stream = send_response.send_response(
+                            let send_stream = send_response.send_response(
                                 Response::builder()
                                     .status(StatusCode::OK)
                                     .header(http::header::SERVER, HeaderValue::from_static("tng"))
@@ -61,59 +56,7 @@ impl TransportLayerDecoder {
                                 false,
                             )?;
 
-                            let (local, remote) = tokio::io::duplex(1024);
-                            let (mut read, mut write) = tokio::io::split(remote);
-
-                            tokio::spawn(
-                                async move {
-                                    if let Err(e) = async {
-                                        let mut buffer = BytesMut::with_capacity(4096);
-                                        loop {
-                                            if read.read_buf(&mut buffer).await? == 0 {
-                                                break;
-                                            };
-                                            let other = buffer.split().freeze();
-                                            tracing::debug!("send {} bytes to remote", other.len());
-                                            send_stream.send_data(other, false)?;
-                                        }
-                                        Ok::<(), anyhow::Error>(())
-                                    }
-                                    .await
-                                    {
-                                        tracing::error!("Failed to send data to remote: {:#}", e);
-                                    }
-                                }
-                                .in_current_span(),
-                            );
-
-                            tokio::spawn(
-                                async move {
-                                    if let Err(e) = async {
-                                        loop {
-                                            match recv_stream.next().await {
-                                                Some(bs) => {
-                                                    let bs = bs?;
-                                                    tracing::debug!(
-                                                        "receive {} bytes from remote",
-                                                        bs.len()
-                                                    );
-                                                    write.write_all(&bs).await?;
-                                                }
-                                                None => break,
-                                            }
-                                        }
-                                        Ok::<(), anyhow::Error>(())
-                                    }
-                                    .await
-                                    {
-                                        tracing::error!(
-                                            "Failed to receive data from remote: {:#}",
-                                            e
-                                        );
-                                    }
-                                }
-                                .in_current_span(),
-                            );
+                            let local = H2Stream::work_on(send_stream, recv_stream).await?;
 
                             Ok(TransportLayerStream::Http(local))
                         }
