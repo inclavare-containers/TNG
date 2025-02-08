@@ -29,9 +29,14 @@ fn main() -> Result<()> {
         .init();
 
     let cmd = Args::parse();
-    info!("Welcome to TNG!");
-    info!(
-        "TNG version: v{}  commit: {}  buildtime: {}",
+
+    tracing::info!(
+        r#"
+  _______   ________
+ /_  __/ | / / ____/
+  / / /  |/ / / __  
+ / / / /|  / /_/ /  Welcome to the Trusted Network Gateway!
+/_/ /_/ |_/\____/   version: v{}  commit: {}  buildtime: {}"#,
         build::PKG_VERSION,
         build::COMMIT_HASH,
         build::BUILD_TIME
