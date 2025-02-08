@@ -3,7 +3,6 @@ use std::{fs::File, io::BufReader};
 use anyhow::{bail, Result};
 use clap::Parser as _;
 use cli::Args;
-use log::{debug, info};
 use shadow_rs::shadow;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -51,14 +50,14 @@ fn main() -> Result<()> {
                 }
                 (None, Some(s)) => serde_json::from_str(&s)?,
                 (Some(path), None) => {
-                    info!("Loading config from: {path:?}");
+                    tracing::info!("Loading config from: {path:?}");
                     let file = File::open(path)?;
                     let reader = BufReader::new(file);
                     serde_json::from_reader(reader)? // TODO: 显示详细的错误，并在具体的json字符串位置上标出，看下serde有没有自带这个功能
                 }
             };
 
-            debug!("TNG config: {config:#?}");
+            tracing::debug!("TNG config: {config:#?}");
 
             let mut instance = TngBuilder::new(config).launch()?;
 
@@ -66,7 +65,7 @@ fn main() -> Result<()> {
 
             // Stop when we got ctrl-c
             ctrlc::set_handler(move || {
-                info!("Received Ctrl+C, prepare for exiting now");
+                tracing::info!("Received Ctrl+C, prepare for exiting now");
                 stopper.stop().unwrap();
             })
             .expect("Error setting Ctrl-C handler");

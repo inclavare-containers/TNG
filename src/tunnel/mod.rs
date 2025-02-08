@@ -3,7 +3,6 @@ use std::{future::Future, pin::Pin};
 use anyhow::Result;
 use egress::{mapping::MappingEgress, netfilter::NetfilterEgress};
 use ingress::{http_proxy::serve::HttpProxyIngress, mapping::MappingIngress};
-use log::{info, warn};
 use tracing::Instrument;
 
 use crate::{
@@ -25,7 +24,7 @@ impl TngRuntime {
         stop_rx: tokio::sync::watch::Receiver<()>,
         tng_config: TngConfig,
     ) -> Result<(Self, IpTablesActions)> {
-        info!("TNG native part running now");
+        tracing::info!("TNG native part running now");
 
         let mut iptables_actions = vec![];
         let mut tasks: Vec<Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>> = vec![];
@@ -95,10 +94,10 @@ impl TngRuntime {
         }
 
         if let Err(e) = self.stop_rx.changed().await {
-            warn!("The stop signal sender is dropped unexpectedly: {e:#}");
+            tracing::warn!("The stop signal sender is dropped unexpectedly: {e:#}");
         };
 
-        info!("TNG native part exiting now");
+        tracing::info!("TNG native part exiting now");
 
         Ok(())
     }

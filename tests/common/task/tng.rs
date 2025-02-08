@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::info;
 use tng::TngBuilder;
 use tokio::{runtime::Builder, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -23,7 +22,7 @@ pub async fn launch_tng(
             std::thread::spawn(move || {
                 let rt = Builder::new_current_thread().enable_all().build().unwrap();
                 rt.block_on(async move { token.cancelled().await });
-                info!("{task_name}: stopping the tng instance now");
+                tracing::info!("{task_name}: stopping the tng instance now");
                 stopper
                     .stop()
                     .with_context(|| {
@@ -36,7 +35,7 @@ pub async fn launch_tng(
         instance.wait()?;
         instance.clean_up()?;
 
-        info!("The {task_name} task normally exit now");
+        tracing::info!("The {task_name} task normally exit now");
         Ok(())
     });
 

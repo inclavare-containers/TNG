@@ -8,7 +8,6 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
-use log::debug;
 
 use crate::config::Endpoint;
 
@@ -59,7 +58,7 @@ impl IpTablesExecutor {
 
         match output {
             Ok(output) => {
-                debug!(
+                tracing::debug!(
                     "iptable executor: script:\n{cmd:?}\nstdout:\n{}\nstderr:\n{}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)

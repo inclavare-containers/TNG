@@ -6,7 +6,6 @@ use async_http_proxy::http_connect_tokio;
 use axum::{body::Body, extract::Request, routing::get, Router};
 use axum_extra::extract::Host;
 use http::StatusCode;
-use log::info;
 use reqwest::header::HOST;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -81,7 +80,7 @@ pub struct HttpProxy {
 async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHandle<Result<()>>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).await?;
-    info!("TCP server listening on 127.0.0.1:{port}");
+    tracing::info!("TCP server listening on 127.0.0.1:{port}");
 
     Ok(tokio::spawn(async move {
         loop {
@@ -89,7 +88,7 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
                 _ = token.cancelled() => break,
                 result = listener.accept() => {
                     let (mut stream, addr) = result?;
-                    info!("Accepted connection from {}", addr);
+                    tracing::info!("Accepted connection from {}", addr);
 
                     let mut buffer = [0; 512];
                     while let Ok(size) = stream.read(&mut buffer).await {
@@ -104,7 +103,7 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
                 }
             }
         }
-        info!("The TCP server task normally exited.");
+        tracing::info!("The TCP server task normally exited.");
         Ok(())
     }))
 }
@@ -121,9 +120,10 @@ async fn launch_tcp_client(
 
         for i in 1..6 {
             // repeat 5 times
-            info!(
+            tracing::info!(
                 "TCP client test repeat {i}, connecting to TCP server at {}:{}",
-                host, port
+                host,
+                port
             );
 
             let mut stream = match http_proxy {
@@ -141,7 +141,7 @@ async fn launch_tcp_client(
                     .await
                     .context("Failed to connect to app server")?,
             };
-            info!("Connected to the server");
+            tracing::info!("Connected to the server");
 
             let message = TCP_PAYLOAD.as_bytes();
             stream.write_all(message).await?;
@@ -156,11 +156,11 @@ async fn launch_tcp_client(
                     String::from_utf8_lossy(&response)
                 )
             } else {
-                info!("Success! The response matchs expected value.");
+                tracing::info!("Success! The response matchs expected value.");
             }
         }
 
-        info!("The TCP client task normally exited.");
+        tracing::info!("The TCP client task normally exited.");
         Ok(())
     }))
 }
@@ -176,7 +176,7 @@ pub async fn launch_http_server(
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).await?;
-    info!("Listening on 127.0.0.1:{port} and waiting for connection from client");
+    tracing::info!("Listening on 127.0.0.1:{port} and waiting for connection from client");
 
     Ok(tokio::spawn(async move {
         let app = Router::new().route(
@@ -210,7 +210,7 @@ pub async fn launch_http_server(
             }
         }
 
-        info!("The HTTP server task normally exit now");
+        tracing::info!("The HTTP server task normally exit now");
         Ok(())
     }))
 }
@@ -233,7 +233,7 @@ pub async fn launch_http_client(
 
         for i in 1..6 {
             // repeat 5 times
-            info!("HTTP client test repeat {i}, sending http request to {host}:{port}");
+            tracing::info!("HTTP client test repeat {i}, sending http request to {host}:{port}");
             let resp = RetryPolicy::fixed(Duration::from_secs(1))
                 .with_max_retries(5)
                 .retry(|| async {
@@ -270,11 +270,11 @@ pub async fn launch_http_client(
             if text != HTTP_RESPONSE_BODY {
                 bail!("The response body should be `{HTTP_RESPONSE_BODY}`, but got `{text}`.\n\tResponse: {resp_info}")
             } else {
-                info!("Success! The response matchs expected value.");
+                tracing::info!("Success! The response matchs expected value.");
             }
         }
 
-        info!("The HTTP client task normally exit now");
+        tracing::info!("The HTTP client task normally exit now");
         Ok(())
     }))
 }

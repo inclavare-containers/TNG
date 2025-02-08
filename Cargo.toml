@@ -18,7 +18,6 @@ hyper = {version = "1", features = ["full"]}
 hyper-rustls = {version = "0.27.5", features = ["http2"]}
 hyper-util = {version = "0.1.10", features = ["service"]}
 itertools = "0.14.0"
-log = "0.4.25"
 nix = {version = "0.29.0", features = ["process", "signal"]}
 pin-project = "1"
 rand = "0.9.0"

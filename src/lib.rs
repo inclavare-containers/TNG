@@ -3,7 +3,6 @@ use tunnel::TngRuntime;
 
 use anyhow::{bail, Context as _, Result};
 use config::TngConfig;
-use log::{info, warn};
 
 pub mod config;
 mod executor;
@@ -20,7 +19,7 @@ impl TngBuilder {
 
     pub fn launch(self) -> Result<TngInstance> {
         // Start native part
-        info!("Starting native part");
+        tracing::info!("Starting native part");
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -34,12 +33,12 @@ impl TngBuilder {
         // Setup Iptables
         let iptables_executor = IpTablesExecutor::new_from_actions(iptables_actions)?;
         if let Some(iptables_executor) = &iptables_executor {
-            info!("Setting up iptables rule");
+            tracing::info!("Setting up iptables rule");
             if let Err(e) = iptables_executor.setup() {
                 let msg = format!("Failed setting up iptables rule: {e}");
                 tracing::error!("{msg}");
                 if let Err(e) = iptables_executor.clean_up() {
-                    warn!("Failed cleaning up iptables rule: {e:#}");
+                    tracing::warn!("Failed cleaning up iptables rule: {e:#}");
                 };
                 bail!("{msg}");
             }
@@ -77,9 +76,9 @@ impl TngInstance {
 
     pub fn clean_up(&mut self) -> Result<()> {
         if let Some(iptables_executor) = &self.iptables_executor {
-            info!("Cleaning up iptables rule (if needed)");
+            tracing::info!("Cleaning up iptables rule (if needed)");
             if let Err(e) = iptables_executor.clean_up() {
-                warn!("Failed cleaning up iptables rule: {e:#}");
+                tracing::warn!("Failed cleaning up iptables rule: {e:#}");
             };
         }
 
