@@ -3,12 +3,8 @@ use std::{net::SocketAddr, time::Duration};
 use again::RetryPolicy;
 use anyhow::{bail, Context as _, Result};
 use async_http_proxy::http_connect_tokio;
-use axum::{
-    body::Body,
-    extract::{Host, Request},
-    routing::get,
-    Router,
-};
+use axum::{body::Body, extract::Request, routing::get, Router};
+use axum_extra::extract::Host;
 use http::StatusCode;
 use log::info;
 use reqwest::header::HOST;
@@ -184,7 +180,7 @@ pub async fn launch_http_server(
 
     Ok(tokio::spawn(async move {
         let app = Router::new().route(
-            "/*path",
+            "/{*path}",
             get(|Host(hostname): Host, request: Request<Body>| async move {
                 (|| -> Result<_> {
                     if hostname != expected_host_header {

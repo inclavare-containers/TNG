@@ -20,6 +20,11 @@ pub async fn run_test(
     tng_client_config: &str,
 ) -> Result<()> {
     INIT.get_or_init(|| async {
+        // Initialize rustls crypto provider
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
+
         // Initialize log tracing
         tracing_subscriber::registry()
             // .with(console_subscriber::spawn()) // Initialize tokio console
