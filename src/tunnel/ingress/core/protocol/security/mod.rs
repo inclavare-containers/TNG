@@ -15,8 +15,9 @@ use cert_verifier::{coco::CoCoServerCertVerifier, dummy::DummyServerCertVerifier
 use hyper_rustls::HttpsConnector;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use tokio::sync::RwLock;
+use tokio_graceful::ShutdownGuard;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tracing::warn;
+use tracing::{warn, Span};
 
 use crate::{
     config::ra::RaArgs,
@@ -43,7 +44,11 @@ pub struct SecurityLayer {
 }
 
 impl SecurityLayer {
-    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
+    pub async fn new(
+        connector_creator: TransportLayerCreator,
+        ra_args: &RaArgs,
+        shutdown_guard: ShutdownGuard,
+    ) -> Result<Self> {
         // TODO: handle web_page_inject
 
         // Prepare TLS config
@@ -72,8 +77,9 @@ impl SecurityLayer {
             let config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(RootCertStore::empty());
             if let Some(attest_args) = &ra_args.attest {
-                let cert_manager =
-                    Arc::new(CertManager::create_and_launch(attest_args.clone()).await?);
+                let cert_manager = Arc::new(
+                    CertManager::create_and_launch(attest_args.clone(), shutdown_guard).await?,
+                );
 
                 tls_client_config = config
                     .with_client_cert_resolver(Arc::new(CoCoClientCertResolver::new(cert_manager)));
@@ -113,7 +119,8 @@ impl SecurityLayer {
 
         let client = match client {
             Some(c) => {
-                tracing::debug!(%dst, rats_tls_session_id=c.id, "Reuse existing rats-tls session");
+                Span::current().record("session_id", c.id);
+                tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
                 c
             }
             None => {
@@ -122,12 +129,17 @@ impl SecurityLayer {
                 // Check if client has been created by other "task"
                 match write.get(dst) {
                     Some(c) => {
-                        tracing::debug!(%dst, rats_tls_session_id=c.id, "Reuse existing rats-tls session");
+                        Span::current().record("session_id", c.id);
+                        tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
                         c.clone()
                     }
                     None => {
                         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                        tracing::debug!(%dst, rats_tls_session_id=id, "Creating new rats-tls client");
+                        Span::current().record("session_id", id);
+                        tracing::debug!(
+                            session_id = id,
+                            "No rats-tls session found, create a new one"
+                        );
 
                         let transport_layer_connector = self.connector_creator.create(&dst);
 

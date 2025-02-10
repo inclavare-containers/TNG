@@ -1,7 +1,9 @@
-use executor::iptables::IpTablesExecutor;
+use executor::iptables::IPTablesGuard;
+use scopeguard::defer;
+use tokio_util::sync::CancellationToken;
 use tunnel::TngRuntime;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use config::TngConfig;
 
 pub mod config;
@@ -13,92 +15,48 @@ pub struct TngBuilder {
 }
 
 impl TngBuilder {
-    pub fn new(config: TngConfig) -> Self {
+    pub fn from_config(config: TngConfig) -> Self {
         Self { config }
     }
 
-    pub fn launch(self) -> Result<TngInstance> {
+    pub async fn serve_forever(self) -> Result<()> {
+        self.serve_with_cancel(CancellationToken::new()).await
+    }
+
+    pub async fn serve_with_cancel(self, task_exit: CancellationToken) -> Result<()> {
         // Start native part
-        tracing::info!("Starting native part");
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("Failed to init tokio runtime for tng native part")?;
+        tracing::info!("Starting all components now");
 
-        let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
-
-        let (runtime, iptables_actions) = TngRuntime::launch_from_config(stop_rx, self.config)
+        let (runtime, iptables_actions) = TngRuntime::launch_from_config(self.config)
             .context("Failed to launch envoy executor")?;
 
         // Setup Iptables
-        let iptables_executor = IpTablesExecutor::new_from_actions(iptables_actions)?;
-        if let Some(iptables_executor) = &iptables_executor {
-            tracing::info!("Setting up iptables rule");
-            if let Err(e) = iptables_executor.setup() {
-                let msg = format!("Failed setting up iptables rule: {e}");
-                tracing::error!("{msg}");
-                if let Err(e) = iptables_executor.clean_up() {
-                    tracing::warn!("Failed cleaning up iptables rule: {e:#}");
-                };
-                bail!("{msg}");
-            }
+        let _iptables_guard = IPTablesGuard::setup_from_actions(iptables_actions)?;
+
+        let for_cancel_safity = task_exit.clone();
+        defer! {
+            // Cancel-Safity: exit tng in case of the future of this function is dropped
+            for_cancel_safity.cancel();
         }
 
-        rt.spawn(async { runtime.serve().await });
+        let shutdown = {
+            let task_exit = task_exit.clone();
+            tokio_graceful::Shutdown::builder()
+                .with_signal(async move {
+                    tokio::select! {
+                        _ = task_exit.cancelled() => {}
+                        _ = tokio_graceful::default_signal() => {}
+                    }
+                })
+                .with_overwrite_fn(tokio::signal::ctrl_c)
+                .build()
+        };
 
-        Ok(TngInstance {
-            iptables_executor,
-            rt,
-            stop_tx,
-        })
-    }
-}
+        shutdown.spawn_task_fn(|shutdown_guard| runtime.serve(shutdown_guard, task_exit));
 
-pub struct TngInstance {
-    iptables_executor: Option<IpTablesExecutor>,
-    rt: tokio::runtime::Runtime,
-    stop_tx: tokio::sync::watch::Sender<()>,
-}
+        shutdown.shutdown().await;
 
-impl TngInstance {
-    pub fn stopper(&mut self) -> TngInstanceStopper {
-        TngInstanceStopper {
-            rt_handle: self.rt.handle().clone(),
-            stop_tx: self.stop_tx.clone(),
-        }
-    }
-
-    pub fn wait(&mut self) -> Result<()> {
-        // TODO: optimize this
-        // self.rt.shutdown_timeout(Duration::from_millis(1000));
-        Ok(())
-    }
-
-    pub fn clean_up(&mut self) -> Result<()> {
-        if let Some(iptables_executor) = &self.iptables_executor {
-            tracing::info!("Cleaning up iptables rule (if needed)");
-            if let Err(e) = iptables_executor.clean_up() {
-                tracing::warn!("Failed cleaning up iptables rule: {e:#}");
-            };
-        }
-
-        Ok(())
-    }
-}
-
-pub struct TngInstanceStopper {
-    rt_handle: tokio::runtime::Handle,
-    stop_tx: tokio::sync::watch::Sender<()>,
-}
-
-impl TngInstanceStopper {
-    pub fn stop(&self) -> Result<()> {
-        let stop_tx = self.stop_tx.clone();
-        self.rt_handle.spawn(async move {
-            if let Err(e) = stop_tx.send(()) {
-                panic!("Failed to send STOP to TNG native part: {e:#}");
-            }
-        });
+        tracing::debug!("All components shutdown complete");
 
         Ok(())
     }

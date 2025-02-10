@@ -2,12 +2,13 @@ use std::pin::Pin;
 
 use crate::{config::egress::DecapFromHttp, tunnel::utils::h2_stream::H2Stream};
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use futures::Stream;
 use http::{HeaderValue, Response, StatusCode};
 use pin_project::pin_project;
 use std::task::{Context, Poll};
 use tokio::{io::DuplexStream, net::TcpStream};
+use tracing::Instrument;
 
 pub struct TransportLayerDecoder {
     decap_from_http: Option<DecapFromHttp>,
@@ -23,57 +24,72 @@ impl TransportLayerDecoder {
     pub async fn decode(
         &self,
         in_stream: TcpStream,
-    ) -> Result<impl Stream<Item = Result<TransportLayerStream>>> {
-        let state = match &self.decap_from_http {
-            Some(decap_from_http) => {
-                let connection = h2::server::handshake(in_stream).await?;
-                DecodeStreamState::Http(connection, decap_from_http.clone())
-            }
-            None => DecodeStreamState::Tcp(in_stream),
-        };
-
-        let next_stream = futures::stream::unfold(Some(state), |state| async move {
-            match state {
-                Some(DecodeStreamState::Tcp(tcp_stream)) => {
-                    Some((Ok(TransportLayerStream::Tcp(tcp_stream)), None))
+    ) -> Result<impl Stream<Item = Result<TransportLayerStream>> + '_> {
+        async {
+            let state = match &self.decap_from_http {
+                Some(decap_from_http) => {
+                    let connection = h2::server::handshake(in_stream).await?;
+                    DecodeStreamState::Http(connection, decap_from_http.clone())
                 }
-                Some(DecodeStreamState::Http(mut connection, decap_from_http)) => {
-                    // Accept all inbound HTTP/2 streams sent over the connection.
-                    if let Some(request) = connection.accept().await {
-                        let result = async {
-                            let (request, mut send_response) =
-                                request.context("Failed to accept request")?;
+                None => DecodeStreamState::Tcp(in_stream),
+            };
 
-                            let (parts, recv_stream) = request.into_parts();
-                            tracing::debug!("Accepted request: {:?}", parts);
-
-                            // Send a response back to the client
-                            let send_stream = send_response.send_response(
-                                Response::builder()
-                                    .status(StatusCode::OK)
-                                    .header(http::header::SERVER, HeaderValue::from_static("tng"))
-                                    .body(())?,
-                                false,
-                            )?;
-
-                            let local = H2Stream::work_on(send_stream, recv_stream).await?;
-
-                            Ok(TransportLayerStream::Http(local))
+            let next_stream = futures::stream::unfold(Some(state), |state| {
+                async move {
+                    match state {
+                        Some(DecodeStreamState::Tcp(tcp_stream)) => {
+                            Some((Ok(TransportLayerStream::Tcp(tcp_stream)), None))
                         }
-                        .await;
+                        Some(DecodeStreamState::Http(mut connection, decap_from_http)) => {
+                            // Accept all inbound HTTP/2 streams sent over the connection.
+                            if let Some(request) = connection.accept().await {
+                                let result = async {
+                                    let (request, mut send_response) =
+                                        request.context("Failed to accept request")?;
 
-                        let next_state = Some(DecodeStreamState::Http(connection, decap_from_http));
+                                    let (parts, recv_stream) = request.into_parts();
+                                    tracing::trace!("Accepted http request: {:?}", parts);
+                                    
+                                    if ! parts.headers.contains_key("tng"){
+                                        bail!("TNG protocol error: invalid request")
+                                    }
 
-                        Some((result, next_state))
-                    } else {
-                        None
+                                    // Send a response back to the client
+                                    let send_stream = send_response.send_response(
+                                        Response::builder()
+                                            .status(StatusCode::OK)
+                                            .header(
+                                                http::header::SERVER,
+                                                HeaderValue::from_static("tng"),
+                                            )
+                                            .body(())?,
+                                        false,
+                                    )?;
+
+                                    tracing::debug!("New h2 stream established with downstream");
+                                    let local = H2Stream::work_on(send_stream, recv_stream).await?;
+
+                                    Ok(TransportLayerStream::Http(local))
+                                }
+                                .await;
+
+                                let next_state =
+                                    Some(DecodeStreamState::Http(connection, decap_from_http));
+
+                                Some((result, next_state))
+                            } else {
+                                None
+                            }
+                        }
+                        None => return None,
                     }
-                }
-                None => return None,
-            }
-        });
+                }.instrument(tracing::info_span!("transport", type={if self.decap_from_http.is_some() {"h2"} else {"tcp"}}))
+            });
 
-        Ok(Box::pin(next_stream))
+            Ok(Box::pin(next_stream))
+        }
+        .instrument(tracing::info_span!("transport", type={if self.decap_from_http.is_some() {"h2"} else {"tcp"}}))
+        .await
     }
 }
 

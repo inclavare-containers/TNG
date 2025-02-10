@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use rustls::ServerConfig;
+use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
@@ -21,7 +22,7 @@ pub struct SecurityLayer {
 }
 
 impl SecurityLayer {
-    pub async fn new(ra_args: &RaArgs) -> Result<Self> {
+    pub async fn new(ra_args: &RaArgs, shutdown_guard: ShutdownGuard) -> Result<Self> {
         // Prepare TLS config
         let mut tls_server_config;
 
@@ -59,8 +60,9 @@ impl SecurityLayer {
 
             // Prepare server cert resolver
             if let Some(attest_args) = &ra_args.attest {
-                let cert_manager =
-                    Arc::new(CertManager::create_and_launch(attest_args.clone()).await?);
+                let cert_manager = Arc::new(
+                    CertManager::create_and_launch(attest_args.clone(), shutdown_guard).await?,
+                );
 
                 tls_server_config =
                     builder.with_cert_resolver(Arc::new(CoCoServerCertResolver::new(cert_manager)));
@@ -88,11 +90,14 @@ impl SecurityLayer {
         stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
     ) -> Result<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin> {
         let tls_acceptor = TlsAcceptor::from(self.tls_server_config.clone());
-
-        let tls_stream = tls_acceptor
-            .accept(stream)
-            .instrument(tracing::info_span!("security"))
-            .await?;
+        let tls_stream = async move {
+            tls_acceptor.accept(stream).await.map(|v| {
+                tracing::debug!("New rats-tls session established");
+                v
+            })
+        }
+        .instrument(tracing::info_span!("security"))
+        .await?;
 
         Ok(tls_stream)
     }

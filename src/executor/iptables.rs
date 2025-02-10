@@ -22,36 +22,33 @@ pub enum IpTablesAction {
 
 pub type IpTablesActions = Vec<IpTablesAction>;
 
-pub struct IpTablesExecutor {
-    iptables_invoke_script: String,
+pub struct IPTablesGuard {
     iptables_revoke_script: String,
     _unix_listener: UnixListener,
 }
 
-impl IpTablesExecutor {
-    pub fn new_from_actions(actions: IpTablesActions) -> Result<Option<Self>> {
+impl IPTablesGuard {
+    pub fn setup_from_actions(actions: IpTablesActions) -> Result<Option<Self>> {
         if actions.len() == 0 {
             return Ok(None);
         }
 
-        let (iptables_invoke_script, iptables_revoke_script) =
-            IpTablesExecutor::gen_script(&actions)?;
+        tracing::info!("Setting up iptables rule");
 
         // Check if there is annother TNG instance running in same network namespace.
         let unix_listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Running more than 1 TNG instances concurrently in same network namespace which need iptables rules is not supported in current TNG version")?;
 
+        let (iptables_invoke_script, iptables_revoke_script) = IPTablesGuard::gen_script(&actions)?;
+
+        Self::execute_script(&iptables_invoke_script)?;
+
         Ok(Some(Self {
-            iptables_invoke_script,
             iptables_revoke_script,
             _unix_listener: unix_listener,
         }))
     }
 
-    pub fn setup(&self) -> Result<()> {
-        self.execute_script(&self.iptables_invoke_script)
-    }
-
-    pub fn execute_script(&self, script: &str) -> Result<()> {
+    fn execute_script(script: &str) -> Result<()> {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(&format!("set -e ; true ; {}", script));
         let output = cmd.output();
@@ -76,10 +73,6 @@ impl IpTablesExecutor {
             }
         }
         Ok(())
-    }
-
-    pub fn clean_up(&self) -> Result<()> {
-        self.execute_script(&self.iptables_revoke_script)
     }
 
     ///
@@ -174,5 +167,13 @@ impl IpTablesExecutor {
         revoke_script += clean_up_iptables_script;
 
         Ok((invoke_script, revoke_script))
+    }
+}
+
+impl Drop for IPTablesGuard {
+    fn drop(&mut self) {
+        if let Err(e) = Self::execute_script(&self.iptables_revoke_script) {
+            tracing::error!("Failed to revoke iptables rules: {e:#}");
+        }
     }
 }

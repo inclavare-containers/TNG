@@ -82,7 +82,7 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("TCP server listening on 127.0.0.1:{port}");
 
-    Ok(tokio::spawn(async move {
+    Ok(tokio::task::spawn(async move {
         loop {
             tokio::select! {
                 _ = token.cancelled() => break,
@@ -115,7 +115,7 @@ async fn launch_tcp_client(
     http_proxy: Option<HttpProxy>,
 ) -> Result<JoinHandle<Result<()>>> {
     let host = host.to_owned();
-    Ok(tokio::spawn(async move {
+    Ok(tokio::task::spawn(async move {
         let _drop_guard = token.drop_guard();
 
         for i in 1..6 {
@@ -178,7 +178,7 @@ pub async fn launch_http_server(
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("Listening on 127.0.0.1:{port} and waiting for connection from client");
 
-    Ok(tokio::spawn(async move {
+    Ok(tokio::task::spawn(async move {
         let app = Router::new().route(
             "/{*path}",
             get(|Host(hostname): Host, request: Request<Body>| async move {
@@ -228,7 +228,7 @@ pub async fn launch_http_client(
     let path_and_query = path_and_query.to_owned();
     let http_proxy = http_proxy.map(|t| t.to_owned());
 
-    Ok(tokio::spawn(async move {
+    Ok(tokio::task::spawn(async move {
         let _drop_guard = token.drop_guard();
 
         for i in 1..6 {

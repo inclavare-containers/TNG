@@ -6,7 +6,7 @@ use rats_cert::{
 };
 use rustls::pki_types::pem::{PemObject, SectionKind};
 use std::sync::{Arc, Mutex};
-use tokio::task;
+use tokio_graceful::ShutdownGuard;
 
 use crate::config::ra::AttestArgs;
 
@@ -20,7 +20,10 @@ pub struct CertManager {
 
 impl CertManager {
     // TODO: make CertManager a singleton for each AttestArgs
-    pub async fn create_and_launch(attest_args: AttestArgs) -> Result<Self> {
+    pub async fn create_and_launch(
+        attest_args: AttestArgs,
+        shutdown_guard: ShutdownGuard,
+    ) -> Result<Self> {
         // Fetch the cert first time
         let certed_key = {
             let attest_args = attest_args.clone();
@@ -35,16 +38,28 @@ impl CertManager {
         // TODO: terminate the task when CertManager is dropped
         {
             let latest_cert = latest_cert.clone();
-            task::spawn(async move {
+            shutdown_guard.spawn_task_fn(|shutdown_guard| async move {
                 loop {
                     let attest_args = attest_args.clone();
                     let latest_cert = latest_cert.clone();
-                    tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
-                        let certed_key = Self::update_cert_blocking(attest_args)?;
-                        *latest_cert.lock().unwrap() = certed_key;
-                        Ok(())
-                    })
-                    .await??;
+                    let join_handle =
+                        tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
+                            let certed_key: Arc<rustls::sign::CertifiedKey> =
+                                Self::update_cert_blocking(attest_args)?;
+                            *latest_cert.lock().unwrap() = certed_key;
+                            Ok(())
+                        });
+
+                    let abort_handle = join_handle.abort_handle();
+                    tokio::select! {
+                        _ = shutdown_guard.cancelled() => {
+                            abort_handle.abort();
+                            break;
+                        }
+                        result = join_handle => {
+                            result??;
+                        }
+                    }
 
                     // Update every hour
                     tokio::time::sleep(tokio::time::Duration::from_secs(

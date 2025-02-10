@@ -5,6 +5,7 @@ version = "1.0.4"
 
 [dependencies]
 anyhow = "1.0.95"
+async-trait = "0.1.86"
 auto_enums = {version = "0.8", features = ["tokio1"]}
 axum = "0.8.1"
 bytes = "1.10.0"
@@ -25,6 +26,7 @@ rats-cert = {path = "./deps/rats-rs/rats-cert", default-features = false, featur
 regex = "1.11.1"
 rustls = "0.23.22"
 rustls-pemfile = "2.2.0"
+scopeguard = "1.2.0"
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0.138"
 serde_with = {version = "3.12.0", features = ["json"]}
@@ -32,7 +34,9 @@ shadow-rs = "=0.20.1"
 socket2 = "0.5.8"
 tempfile = "3.16.0"
 tokio = {version = "1.43.0", features = ["rt-multi-thread", "sync"]}
+tokio-graceful = "0.2.2"
 tokio-rustls = "0.26.1"
+tokio-util = "0.7.13"
 tower = {version = "0.5", features = ["make", "util"]}
 tower-http = {version = "0.6.2", features = ["trace", "set-header"]}
 tracing = "0.1"
@@ -49,4 +53,3 @@ async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 axum-extra = "0.10.0"
 console-subscriber = "0.4.1"
 reqwest = {version = "0.12.12", default-features = false, features = ["json"]}
-tokio-util = "0.7.13"

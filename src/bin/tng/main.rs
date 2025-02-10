@@ -13,7 +13,9 @@ mod cli;
 
 shadow!(build);
 
-fn main() -> Result<()> {
+#[tokio::main]
+
+async fn main() -> Result<()> {
     // Initialize rustls crypto provider
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -22,7 +24,8 @@ fn main() -> Result<()> {
     // Initialize log tracing
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "none,tng=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -59,19 +62,9 @@ fn main() -> Result<()> {
 
             tracing::debug!("TNG config: {config:#?}");
 
-            let mut instance = TngBuilder::new(config).launch()?;
+            TngBuilder::from_config(config).serve_forever().await?;
 
-            let stopper = instance.stopper();
-
-            // Stop when we got ctrl-c
-            ctrlc::set_handler(move || {
-                tracing::info!("Received Ctrl+C, prepare for exiting now");
-                stopper.stop().unwrap();
-            })
-            .expect("Error setting Ctrl-C handler");
-
-            instance.wait()?;
-            instance.clean_up()?;
+            tracing::info!("Gracefully exit now");
         }
     }
 

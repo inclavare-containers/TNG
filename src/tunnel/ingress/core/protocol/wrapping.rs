@@ -11,7 +11,7 @@ pub async fn create_stream_from_hyper(client: &RatsTlsClient) -> Result<TokioIo<
         .body(axum::body::Body::empty())
         .unwrap();
 
-    tracing::debug!("Send HTTP/2 CONNECT request via rats-tls session");
+    tracing::debug!("Establish the wrapping layer");
     let mut resp = client
         .hyper
         .request(req)
@@ -29,7 +29,7 @@ pub async fn create_stream_from_hyper(client: &RatsTlsClient) -> Result<TokioIo<
         .await
         .with_context(|| format!("Failed to establish HTTP/2 CONNECT tunnel"))?;
 
-    tracing::debug!("Trusted tunnel is enstablished");
+    tracing::debug!("Trusted tunnel established, now transporting application data stream.");
 
     Ok(TokioIo::new(upgraded))
 }

@@ -54,7 +54,7 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
     fn call(&mut self, _: Req) -> Self::Future {
         let endpoint_owned = self.dst.to_owned();
         let fut = async move {
-            tracing::debug!("Establish the underlying tcp connection for rats-tls");
+            tracing::debug!("Establish the underlying tcp connection with upstream");
 
             let tcp_stream = TcpStream::connect((endpoint_owned.host(), endpoint_owned.port()))
                 .await
@@ -62,7 +62,7 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
 
             Ok(TokioIo::new(TransportLayerStream::Tcp(tcp_stream)))
         }
-        .instrument(tracing::info_span!("transport", r#type = "tcp"));
+        .instrument(tracing::info_span!("transport", type = "tcp"));
 
         Box::pin(fut)
     }
@@ -76,6 +76,7 @@ pub struct HttpTransportLayer {
 
 impl HttpTransportLayer {
     async fn create_internal(dst: TngEndpoint) -> Result<TokioIo<TransportLayerStream>> {
+        // TODO: reuse the same tcp stream for all the h2 streams
         let tcp_stream = TcpStream::connect((dst.host(), dst.port())).await?;
 
         let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
@@ -130,9 +131,13 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
     }
 
     fn call(&mut self, _: Req) -> Self::Future {
-        tracing::debug!("Establish the underlying HTTP connection for rats-tls");
-        let fut = Self::create_internal(self.dst.to_owned())
-            .instrument(tracing::info_span!("transport", r#type = "tcp"));
+        let endpoint_owned = self.dst.to_owned();
+
+        let fut = async {
+            tracing::debug!("Establish the underlying h2 stream with upstream");
+            Self::create_internal(endpoint_owned).await
+        }
+        .instrument(tracing::info_span!("transport", type = "h2"));
 
         Box::pin(fut)
     }

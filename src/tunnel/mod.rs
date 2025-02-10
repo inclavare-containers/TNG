@@ -1,9 +1,10 @@
-use std::{future::Future, pin::Pin};
-
 use anyhow::Result;
+use async_trait::async_trait;
 use egress::{mapping::MappingEgress, netfilter::NetfilterEgress};
-use ingress::{http_proxy::serve::HttpProxyIngress, mapping::MappingIngress};
-use tracing::Instrument;
+use ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
+use tokio_graceful::ShutdownGuard;
+use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span};
 
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
@@ -14,41 +15,32 @@ mod egress;
 mod ingress;
 mod utils;
 
+#[async_trait]
+pub(self) trait RegistedService {
+    async fn serve(&self, shutdown_guard: ShutdownGuard) -> Result<()>;
+}
+
 pub struct TngRuntime {
-    tasks: Vec<Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>>,
-    stop_rx: tokio::sync::watch::Receiver<()>,
+    services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
 }
 
 impl TngRuntime {
-    pub fn launch_from_config(
-        stop_rx: tokio::sync::watch::Receiver<()>,
-        tng_config: TngConfig,
-    ) -> Result<(Self, IpTablesActions)> {
-        tracing::info!("TNG native part running now");
-
+    pub fn launch_from_config(tng_config: TngConfig) -> Result<(Self, IpTablesActions)> {
         let mut iptables_actions = vec![];
-        let mut tasks: Vec<Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>> = vec![];
+        let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
 
         for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
             let add_ingress = add_ingress.clone();
             match &add_ingress.ingress_mode {
                 IngressMode::Mapping(mapping_args) => {
-                    let ingress = MappingIngress::new(mapping_args, &add_ingress.common)?;
-                    tasks.push(Box::pin(async move {
-                        ingress
-                            .serve()
-                            .instrument(tracing::info_span!("ingress", id))
-                            .await
-                    }));
+                    services.push((
+                        Box::new(MappingIngress::new(mapping_args, &add_ingress.common)?),
+                        tracing::info_span!("ingress", id),
+                    ));
                 }
                 IngressMode::HttpProxy(http_proxy_args) => {
                     let ingress = HttpProxyIngress::new(http_proxy_args, &add_ingress.common)?;
-                    tasks.push(Box::pin(async move {
-                        ingress
-                            .serve()
-                            .instrument(tracing::info_span!("ingress", id))
-                            .await
-                    }));
+                    services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
                 }
                 IngressMode::Netfilter(_) => todo!(),
             }
@@ -59,12 +51,7 @@ impl TngRuntime {
             match &add_egress.egress_mode {
                 EgressMode::Mapping(mapping_args) => {
                     let egress = MappingEgress::new(mapping_args, &add_egress.common)?;
-                    tasks.push(Box::pin(async move {
-                        egress
-                            .serve()
-                            .instrument(tracing::info_span!("egress", id))
-                            .await
-                    }));
+                    services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
                     let egress = NetfilterEgress::new(
@@ -73,31 +60,37 @@ impl TngRuntime {
                         id,
                         &mut iptables_actions,
                     )?;
-                    tasks.push(Box::pin(async move {
-                        egress
-                            .serve()
-                            .instrument(tracing::info_span!("egress", id))
-                            .await
-                    }));
+                    services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
             }
         }
 
-        Ok((Self { tasks, stop_rx }, iptables_actions))
+        Ok((Self { services }, iptables_actions))
     }
 
-    pub async fn serve(mut self) -> Result<()> {
+    pub async fn serve(
+        mut self,
+        shutdown_guard: ShutdownGuard,
+        task_exit: CancellationToken,
+    ) -> Result<()> {
         // TODO: deperecate admin_bind and warn user
+        tracing::info!("TNG native part running now");
 
-        for task in self.tasks.drain(..) {
-            tokio::task::spawn(task);
+        for (service, span) in self.services.drain(..) {
+            let task_exit = task_exit.clone();
+            shutdown_guard.spawn_task_fn(|shutdown_guard| {
+                async move {
+                    if let Err(e) = service.serve(shutdown_guard).await {
+                        let error = format!("{e:#}");
+                        tracing::error!(%error, "failed to serve, canceling and exitng new");
+                        task_exit.cancel();
+                    }
+                }
+                .instrument(span)
+            });
         }
 
-        if let Err(e) = self.stop_rx.changed().await {
-            tracing::warn!("The stop signal sender is dropped unexpectedly: {e:#}");
-        };
-
-        tracing::info!("TNG native part exiting now");
+        shutdown_guard.cancelled().await;
 
         Ok(())
     }

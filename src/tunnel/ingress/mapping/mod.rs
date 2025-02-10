@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use tokio::net::TcpListener;
+use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
-use crate::tunnel::utils;
+use crate::tunnel::{utils, RegistedService};
 
 pub struct MappingIngress {
     listen_addr: String,
@@ -39,9 +41,13 @@ impl MappingIngress {
             common_args: common_args.clone(),
         })
     }
+}
 
-    pub async fn serve(&self) -> Result<()> {
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&self.common_args).await?);
+#[async_trait]
+impl RegistedService for MappingIngress {
+    async fn serve(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        let trusted_stream_manager =
+            Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
 
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
@@ -50,21 +56,29 @@ impl MappingIngress {
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
         loop {
-            let (downstream, _) = listener.accept().await.unwrap();
+            let (downstream, _) = tokio::select! {
+                res = listener.accept() => res.unwrap(),
+                _ = shutdown_guard.cancelled() => {
+                    tracing::debug!("Shutdown signal received, stop accepting new connections");
+                    break;
+                }
+            };
             let peer_addr = downstream.peer_addr().unwrap();
             let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
 
             let trusted_stream_manager = trusted_stream_manager.clone();
 
-            tokio::task::spawn({
+            shutdown_guard.spawn_task({
                 let fut = async move {
                     tracing::debug!("Start serving connection from client");
 
                     // Forward via trusted tunnel
-
                     match trusted_stream_manager.new_stream(&dst).await {
                         Ok(upstream) => {
-                            if let Err(e) = utils::forward_stream(upstream, downstream).await {
+                            if let Err(e) = utils::forward_stream(upstream, downstream)
+                                .in_current_span()
+                                .await
+                            {
                                 let error = format!("{e:#}");
                                 tracing::error!(
                                     %dst,
@@ -87,5 +101,7 @@ impl MappingIngress {
                 fut.instrument(tracing::info_span!("serve", client=?peer_addr))
             });
         }
+
+        Ok(())
     }
 }

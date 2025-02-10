@@ -16,7 +16,7 @@ impl H2Stream {
         let (local, remote) = tokio::io::duplex(1024);
         let (mut read, mut write) = tokio::io::split(remote);
 
-        tokio::spawn(
+        tokio::task::spawn(
             async move {
                 if let Err(e) = async {
                     let mut buffer = BytesMut::with_capacity(4096);
@@ -25,27 +25,27 @@ impl H2Stream {
                             break;
                         };
                         let other = buffer.split().freeze();
-                        tracing::debug!("send {} bytes to remote", other.len());
+                        tracing::trace!("send {} bytes to h2 stream", other.len());
                         send_stream.send_data(other, false)?;
                     }
                     Ok::<(), anyhow::Error>(())
                 }
                 .await
                 {
-                    tracing::error!("Failed to send data to remote: {:#}", e);
+                    tracing::error!("Failed to send data to h2 stream: {:#}", e);
                 }
             }
             .in_current_span(),
         );
 
-        tokio::spawn(
+        tokio::task::spawn(
             async move {
                 if let Err(e) = async {
                     loop {
                         match recv_stream.next().await {
                             Some(bs) => {
                                 let bs = bs?;
-                                tracing::debug!("receive {} bytes from remote", bs.len());
+                                tracing::trace!("receive {} bytes from h2 stream", bs.len());
                                 write.write_all(&bs).await?;
                             }
                             None => break,
@@ -55,7 +55,7 @@ impl H2Stream {
                 }
                 .await
                 {
-                    tracing::error!("Failed to receive data from remote: {:#}", e);
+                    tracing::error!("Failed to receive data from h2 stream: {:#}", e);
                 }
             }
             .in_current_span(),
