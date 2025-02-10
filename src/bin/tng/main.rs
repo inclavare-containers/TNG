@@ -13,7 +13,15 @@ mod cli;
 
 shadow!(build);
 
-fn main() -> Result<()> {
+#[tokio::main]
+
+async fn main() -> Result<()> {
+    // Initialize rustls crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
+    // Initialize env_logger
     let env = env_logger::Env::default()
         .filter_or("TNG_LOG_LEVEL", "debug")
         .write_style_or("TNG_LOG_STYLE", "always"); // enable color
@@ -46,19 +54,9 @@ fn main() -> Result<()> {
 
             debug!("TNG config: {config:#?}");
 
-            let mut instance = TngBuilder::new(config).launch()?;
+            TngBuilder::from_config(config).serve_forever().await?;
 
-            let stopper = instance.stopper();
-
-            // Stop when we got ctrl-c
-            ctrlc::set_handler(move || {
-                info!("Received Ctrl+C, prepare for exiting now");
-                stopper.stop().unwrap();
-            })
-            .expect("Error setting Ctrl-C handler");
-
-            instance.wait()?;
-            instance.clean_up()?;
+            info!("Gracefully exit now");
         }
     }
 

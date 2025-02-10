@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Number;
 use strum::IntoEnumIterator;
 use tokio::select;
-use tokio_util::sync::CancellationToken;
+use tokio_graceful::ShutdownGuard;
 
 use crate::observability::{
     exporter::falcon::FalconExporter,
@@ -21,9 +21,9 @@ pub struct MetricCollector {
 
     step: u64,
 
-    server_metric_parser: Box<dyn MetricParser<ServerMetric> + Send>,
+    server_metric_parser: Box<dyn MetricParser<ServerMetric> + Send + Sync>,
 
-    xgress_metric_parsers: IndexMap<XgressId, Box<dyn MetricParser<XgressMetric> + Send>>,
+    xgress_metric_parsers: IndexMap<XgressId, Box<dyn MetricParser<XgressMetric> + Send + Sync>>,
 
     metric_exporter: Option<FalconExporter>,
 }
@@ -41,19 +41,6 @@ impl<F: Fn(&EnvoyStats, T) -> Result<MetricValue>, T> MetricParser<T> for F {
 }
 
 const ENVOY_STATS_SERVER_LIVE: &str = "server.live";
-
-pub struct MetricCollectorHandle(CancellationToken, Option<std::thread::JoinHandle<()>>);
-
-impl Drop for MetricCollectorHandle {
-    fn drop(&mut self) {
-        self.0.cancel();
-        if let Some(join_handle) = self.1.take() {
-            if let Err(e) = join_handle.join() {
-                error!("Failed to join metric collector thread: {e:?}");
-            }
-        }
-    }
-}
 
 impl MetricCollector {
     pub fn new(envoy_admin_endpoint: (String /* host */, u16 /* port */), step: u64) -> Self {
@@ -82,7 +69,7 @@ impl MetricCollector {
     pub fn register_xgress_metric_parser(
         &mut self,
         xgress_id: XgressId,
-        parser: impl MetricParser<XgressMetric> + Send + 'static,
+        parser: impl MetricParser<XgressMetric> + Send + Sync + 'static,
     ) {
         self.xgress_metric_parsers
             .insert(xgress_id, Box::new(parser));
@@ -92,29 +79,18 @@ impl MetricCollector {
         self.metric_exporter = Some(metric_exporter)
     }
 
-    pub fn launch(self) -> MetricCollectorHandle {
-        let token = CancellationToken::new();
-        let token_clone = token.clone();
-        let join_handle = std::thread::spawn(|| {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_io()
-                .enable_time()
-                .build()
-                .unwrap();
+    pub async fn serve(self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        info!("Metric collector launch");
 
-            rt.block_on(async move {
-                info!("Metric collector launch");
+        // TODO: restart if the collector is failed
+        select! {
+            _ = shutdown_guard.cancelled() => {}
+            () = self.collect_and_report() => {},
+        }
 
-                select! {
-                    () = self.collect_and_report() => {},
-                    _ = token_clone.cancelled() => {}
-                }
+        info!("Metric collector exit now");
 
-                info!("Metric collector exit now")
-            });
-        });
-
-        MetricCollectorHandle(token, Some(join_handle))
+        Ok(())
     }
 
     async fn collect_and_report(&self) {
