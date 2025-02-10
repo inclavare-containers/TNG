@@ -31,7 +31,7 @@ pin-project = "1"
 rand = "0.9.0"
 rats-cert = {path = "./deps/rats-rs/rats-cert", default-features = false, features = ["coco", "crypto-rustcrypto"]}
 regex = "1.11.1"
-reqwest = {version = "0.12.12", default-features = false, features = ["json", "h2", "rustls-tls-native-roots"]}
+reqwest = {version = "0.12.12", default-features = false, features = ["json", "h2", "rustls-tls-webpki-roots"]}
 rustls = {version = "0.23.22", default-features = false, features = ["logging", "std", "tls12", "ring"]}
 rustls-pemfile = "2.2.0"
 scopeguard = "1.2.0"
