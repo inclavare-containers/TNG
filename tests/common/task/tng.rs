@@ -1,9 +1,7 @@
-use std::time::Duration;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::info;
 use tng::TngBuilder;
-use tokio::{runtime::Builder, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub async fn launch_tng(
@@ -14,34 +12,26 @@ pub async fn launch_tng(
     let config_json = config_json.to_owned();
 
     let task_name = task_name.to_owned();
-    let join_handle = tokio::task::spawn_blocking(move || -> Result<()> {
+    let join_handle = tokio::task::spawn(async move {
         let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
-        let mut instance = TngBuilder::new(config).launch()?;
+
+        let tng_token = CancellationToken::new();
+
         {
-            let task_name = task_name.to_owned();
-            let stopper = instance.stopper();
-            std::thread::spawn(move || {
-                let rt = Builder::new_current_thread().enable_all().build().unwrap();
-                rt.block_on(async move { token.cancelled().await });
-                info!("{task_name}: stopping the tng instance now");
-                stopper
-                    .stop()
-                    .with_context(|| {
-                        format!("Failed to call stop() on tng instance in {task_name}")
-                    })
-                    .unwrap();
+            let tng_token = tng_token.clone();
+            tokio::task::spawn(async move {
+                token.cancelled().await;
+                tng_token.cancel();
             });
         }
 
-        instance.wait()?;
-        instance.clean_up()?;
+        TngBuilder::from_config(config)
+            .serve_with_cancel(tng_token)
+            .await?;
 
         info!("The {task_name} task normally exit now");
         Ok(())
     });
-
-    // TODO: better way to checking readiness of envoy
-    tokio::time::sleep(Duration::from_secs(3)).await;
 
     return Ok(join_handle);
 }
