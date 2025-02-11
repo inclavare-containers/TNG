@@ -8,7 +8,6 @@ use anyhow::{bail, Context as _, Result};
 use http::{Request, Uri};
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
-use tokio::io::DuplexStream;
 use tokio::net::TcpStream;
 use tracing::Instrument;
 
@@ -115,9 +114,10 @@ impl HttpTransportLayer {
 
         let recv_stream = response.into_body();
 
-        let local = H2Stream::work_on(send_stream, recv_stream).await?;
-
-        return Ok(TokioIo::new(TransportLayerStream::Http(local)));
+        return Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
+            send_stream,
+            recv_stream,
+        ))));
     }
 }
 
@@ -181,7 +181,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
     Tcp(#[pin] TcpStream),
-    Http(#[pin] DuplexStream),
+    Http(#[pin] H2Stream),
 }
 
 impl hyper_util::client::legacy::connect::Connection for TransportLayerStream {

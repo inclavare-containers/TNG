@@ -7,7 +7,7 @@ use futures::Stream;
 use http::{HeaderValue, Response, StatusCode};
 use pin_project::pin_project;
 use std::task::{Context, Poll};
-use tokio::{io::DuplexStream, net::TcpStream};
+use tokio::net::TcpStream;
 use tracing::Instrument;
 
 pub struct TransportLayerDecoder {
@@ -67,9 +67,8 @@ impl TransportLayerDecoder {
                                     )?;
 
                                     tracing::debug!("New h2 stream established with downstream");
-                                    let local = H2Stream::work_on(send_stream, recv_stream).await?;
 
-                                    Ok(TransportLayerStream::Http(local))
+                                    Ok(TransportLayerStream::Http(H2Stream::new(send_stream, recv_stream)))
                                 }
                                 .await;
 
@@ -104,7 +103,7 @@ enum DecodeStreamState {
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
     Tcp(#[pin] TcpStream),
-    Http(#[pin] DuplexStream),
+    Http(#[pin] H2Stream),
 }
 
 impl tokio::io::AsyncWrite for TransportLayerStream {

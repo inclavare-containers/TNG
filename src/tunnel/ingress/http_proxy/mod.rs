@@ -344,7 +344,7 @@ impl RegistedService for HttpProxyIngress {
                             .serve_connection_with_upgrades(io, svc)
                             .await
                     {
-                        tracing::warn!("Failed to serve connection: {e:#}");
+                        tracing::error!("Failed to serve connection: {e:?}");
                     }
                 };
 
