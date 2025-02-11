@@ -9,6 +9,7 @@ use http::{Request, Uri};
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use tokio::net::TcpStream;
+use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
 use crate::{
@@ -18,11 +19,15 @@ use crate::{
 
 pub struct TransportLayerCreator {
     encap_in_http: Option<EncapInHttp>,
+    shutdown_guard: ShutdownGuard,
 }
 
 impl TransportLayerCreator {
-    pub fn new(encap_in_http: Option<EncapInHttp>) -> Self {
-        Self { encap_in_http }
+    pub fn new(encap_in_http: Option<EncapInHttp>, shutdown_guard: ShutdownGuard) -> Self {
+        Self {
+            encap_in_http,
+            shutdown_guard,
+        }
     }
 
     pub fn create(&self, dst: &TngEndpoint) -> TransportLayerConnector {
@@ -30,6 +35,7 @@ impl TransportLayerCreator {
             Some(encap_in_http) => TransportLayerConnector::Http(HttpTransportLayer {
                 dst: dst.clone(),
                 _encap_in_http: encap_in_http.clone(),
+                shutdown_guard: self.shutdown_guard.clone(),
             }),
             None => TransportLayerConnector::Tcp(TcpTransportLayer { dst: dst.clone() }),
         }
@@ -71,20 +77,24 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
 pub struct HttpTransportLayer {
     dst: TngEndpoint,
     _encap_in_http: EncapInHttp,
+    shutdown_guard: ShutdownGuard,
 }
 
 impl HttpTransportLayer {
-    async fn create_internal(dst: TngEndpoint) -> Result<TokioIo<TransportLayerStream>> {
+    async fn create_internal(
+        dst: TngEndpoint,
+        shutdown_guard: ShutdownGuard,
+    ) -> Result<TokioIo<TransportLayerStream>> {
         // TODO: reuse the same tcp stream for all the h2 streams
         let tcp_stream = TcpStream::connect((dst.host(), dst.port())).await?;
 
         let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
         {
             let span = tracing::info_span!("http2_conn");
-            tokio::task::spawn(
+            shutdown_guard.spawn_task(
                 async move {
                     if let Err(e) = conn.await {
-                        tracing::warn!(?e, "The HTTP/1 connection is broken");
+                        tracing::warn!(?e, "The H2 connection is broken");
                     }
                 }
                 .instrument(span),
@@ -132,10 +142,11 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
     fn call(&mut self, _: Req) -> Self::Future {
         let endpoint_owned = self.dst.to_owned();
+        let shutdown_guard = self.shutdown_guard.to_owned();
 
         let fut = async {
             tracing::debug!("Establish the underlying h2 stream with upstream");
-            Self::create_internal(endpoint_owned).await
+            Self::create_internal(endpoint_owned, shutdown_guard).await
         }
         .instrument(tracing::info_span!("transport", type = "h2"));
 
