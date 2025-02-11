@@ -21,10 +21,17 @@ impl H2Stream {
     }
 }
 
+impl Drop for H2Stream {
+    fn drop(&mut self) {
+        self.send_stream.send_reset(h2::Reason::CANCEL);
+        tracing::trace!("H2Stream drop now");
+    }
+}
+
 impl AsyncWrite for H2Stream {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
         let len = buf.len();
@@ -35,11 +42,10 @@ impl AsyncWrite for H2Stream {
             .send_data(Bytes::copy_from_slice(buf), false)
         {
             Ok(()) => Poll::Ready(Ok(len)),
-            Err(e) => Poll::Ready(Err(if e.is_io() {
-                e.into_io().unwrap()
-            } else {
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-            })),
+            Err(e) => Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("H2Stream send error: {e:#}"),
+            ))),
         }
     }
 
@@ -56,11 +62,10 @@ impl AsyncWrite for H2Stream {
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         match self.get_mut().send_stream.send_data(Bytes::new(), true) {
             Ok(()) => Poll::Ready(Ok(())),
-            Err(e) => Poll::Ready(Err(if e.is_io() {
-                e.into_io().unwrap()
-            } else {
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-            })),
+            Err(e) => Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("H2Stream shutdown error: {e:#}"),
+            ))),
         }
     }
 }
@@ -86,6 +91,11 @@ impl AsyncRead for H2Stream {
             return Poll::Ready(Ok(()));
         }
 
+        // Check if the stream is end.
+        if this.recv_stream.is_end_stream() {
+            return Poll::Ready(Ok(()));
+        }
+
         // Poll next bytes from h2 stream.
         match this.recv_stream.next().poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
@@ -102,11 +112,10 @@ impl AsyncRead for H2Stream {
                         }
                         Poll::Ready(Ok(()))
                     }
-                    Err(e) => Poll::Ready(Err(if e.is_io() {
-                        e.into_io().unwrap()
-                    } else {
-                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                    })),
+                    Err(e) => Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("H2Stream receive error: {e:#}"),
+                    ))),
                 },
                 None => Poll::Ready(Ok(())),
             },

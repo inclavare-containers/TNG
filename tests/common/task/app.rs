@@ -191,6 +191,7 @@ pub async fn launch_http_server(
                         bail!("Got path and query `{path_and_query:?}`, but `{expected_path_and_query}` is expected");
                     }
 
+                    tracing::info!("Got request from client, now sending response to client");
                     Ok((StatusCode::OK, HTTP_RESPONSE_BODY.to_owned()))
                 })()
                 .unwrap_or_else(|e| {

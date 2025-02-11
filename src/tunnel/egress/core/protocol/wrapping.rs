@@ -57,7 +57,7 @@ impl WrappingLayer {
             .instrument(span)
             .await
         {
-            tracing::warn!("Failed to serve connection: {err:#}");
+            tracing::warn!("Failed to serve connection: {err:?}");
         }
         Ok(())
     }
