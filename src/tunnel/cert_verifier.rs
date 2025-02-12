@@ -32,20 +32,23 @@ impl CoCoCommonCertVerifier {
         end_entity: &rustls::pki_types::CertificateDer<'_>,
     ) -> std::result::Result<(), rustls::Error> {
         let attestation_result = self.attestation_result.clone();
-        let res = CertVerifier::new(VerifyPolicy::Coco {
-            verify_mode: CocoVerifyMode::Evidence {
-                as_addr: self.verify.as_addr.to_owned(),
-                as_is_grpc: self.verify.as_is_grpc,
-            },
-            policy_ids: self.verify.policy_ids.to_owned(),
-            trusted_certs_paths: None,
-            claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
-                *attestation_result.blocking_lock() = Some(AttestationResult::from_claims(claims));
-                // We do not check the claims here, just leave it to be checked by attestation service.
-                VerifyPolicyOutput::Passed
-            })),
-        })
-        .verify_pem(&end_entity);
+        let res = tokio::task::block_in_place(move || {
+            CertVerifier::new(VerifyPolicy::Coco {
+                verify_mode: CocoVerifyMode::Evidence {
+                    as_addr: self.verify.as_addr.to_owned(),
+                    as_is_grpc: self.verify.as_is_grpc,
+                },
+                policy_ids: self.verify.policy_ids.to_owned(),
+                trusted_certs_paths: None,
+                claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
+                    *attestation_result.blocking_lock() =
+                        Some(AttestationResult::from_claims(claims));
+                    // We do not check the claims here, just leave it to be checked by attestation service.
+                    VerifyPolicyOutput::Passed
+                })),
+            })
+            .verify_der(&end_entity)
+        });
 
         match res {
             Ok(VerifyPolicyOutput::Passed) => {
