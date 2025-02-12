@@ -5,14 +5,18 @@ help:
 .PHONE: install-test-deps
 install-test-deps:
 	if ! which attestation-agent ; then \
-		git clone https://github.com/confidential-containers/guest-components -b 8e6a45dbb6f9c06b66476d4a32a38ba5410f6bc8 ; \
+		cd /tmp/ ; \
+		git clone https://github.com/confidential-containers/guest-components ; \
 		cd guest-components/attestation-agent ; \
+		git checkout 8e6a45dbb6f9c06b66476d4a32a38ba5410f6bc8 ; \
 		make ATTESTER=tdx-attester && make install ATTESTER=tdx-attester ; \
 	fi
 
 	if ! which restful-as ; then \
-		git clone https://github.com/confidential-containers/trustee -b 8af3ee5ef5401ccc5506a0954ce600c405c351f9 ; \
+		cd /tmp/ ; \
+		git clone https://github.com/confidential-containers/trustee ; \
 		cd trustee/attestation-service ; \
+		git checkout 8af3ee5ef5401ccc5506a0954ce600c405c351f9 ; \
 		make && make install ; \
 	fi
 
