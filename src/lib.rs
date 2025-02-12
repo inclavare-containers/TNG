@@ -15,7 +15,11 @@ pub struct TngBuilder {
 }
 
 impl TngBuilder {
-    pub fn from_config(config: TngConfig) -> Self {
+    pub fn from_config(mut config: TngConfig) -> Self {
+        if config.admin_bind.is_some() {
+            tracing::warn!("The field `admin_bind` in configuration is ignored, since envoy admin interface is deprecated");
+            config.admin_bind = None;
+        }
         Self { config }
     }
 

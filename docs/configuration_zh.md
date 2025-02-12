@@ -4,7 +4,7 @@
 
 - **`add_ingress`** (array [Ingress])：在`add_ingress`数组中添加tng隧道的入口端点（ingress），根据client侧用户场景，可以选择对应的流量入站方式。
 - **`add_egress`** (array [Egress])：在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
-- **`admin_bind`** (AdminBind)：Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
+- **`admin_bind`** (AdminBind)：(⚠️已废弃) Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
 
 
 ## Ingress
@@ -125,6 +125,7 @@
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。
 
+## EgressMode
 
 ### mapping：端口映射方式
 在该场景中，tng监听一个本地tcp端口（`in.host`, `in.port`），将所有tcp请求解密后发送到指定tcp端点（`out.host`, `out.port`）。用户的server程序需要改变其tcp监听端口监听在（`in.host`, `in.port`）上。
@@ -159,7 +160,6 @@
   ]
 }
 ```
-## EgressMode
 
 ### netfilter：端口劫持方式
 在该场景中，用户的server程序已监听在本机某一端口，且因业务原因不便变更端口号或为tng server新增开放端口。为了让tng server能够解密发往server程序端口（`capture_dst.host`, `capture_dst.port`）上的TCP流量，需要结合内核netfilter提供的能力，将流量重定向到tng server监听的`listen_port`上。tng server在解密完流量后，将TCP流量按照原先的目标（`capture_dst.host`, `capture_dst.port`）发出。
@@ -356,6 +356,9 @@
 ```
 
 ### Envoy Admin Interface
+
+> [!WARNING]
+> 由于我们放弃了与envoy的集成，该选项已被弃用。配置该选项将不会有任何效果。
 
 可使用`admin_bind`选项开启envoy实例的[Admin Interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin)能力。
 

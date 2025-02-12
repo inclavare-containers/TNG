@@ -4,7 +4,7 @@
 
 - **`add_ingress`** (array [Ingress]): Add ingress endpoints of the tng tunnel in the `add_ingress` array. Depending on the client-side user scenario, you can choose the appropriate inbound traffic method.
 - **`add_egress`** (array [Egress]): Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on the server-side user scenario, you can choose the appropriate outbound traffic method.
-- **`admin_bind`** (AdminBind): Configuration for the Admin Interface of the Envoy instance. If this option is not specified, the Admin Interface feature will not be enabled.
+- **`admin_bind`** (AdminBind): (⚠️ deprecated)Configuration for the Admin Interface of the Envoy instance. If this option is not specified, the Admin Interface feature will not be enabled.
 
 ## Ingress
 
@@ -122,6 +122,8 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
 
+## EgressMode
+
 ### mapping: Port Mapping Mode
 
 In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and decrypts all TCP requests before sending them to a specified TCP endpoint (`out.host`, `out.port`). The user's server program needs to change its TCP listening port to listen on (`in.host`, `in.port`).
@@ -158,8 +160,6 @@ Example:
   ]
 }
 ```
-
-## EgressMode
 
 ### netfilter: Port Hijacking Mode
 
@@ -363,6 +363,10 @@ Example:
 ```
 
 ### Envoy Admin Interface
+
+
+> [!WARNING]
+> Due to the removal of Envoy, this option has been deprecated. Configuring this option will have no effect.
 
 The `admin_bind` option can be used to enable the [Admin Interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin) capability of the Envoy instance.
 

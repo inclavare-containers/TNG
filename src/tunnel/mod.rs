@@ -78,8 +78,6 @@ impl TngRuntime {
         task_exit: CancellationToken,
         ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
-        // TODO: deperecate admin_bind and warn user
-
         let service_count = self.services.len();
 
         tracing::info!("Starting all {service_count} services");
