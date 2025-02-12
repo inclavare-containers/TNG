@@ -31,7 +31,7 @@ impl WrappingLayer {
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
-    ) -> Result<()> {
+    ) -> () {
         let span = tracing::info_span!("wrapping");
         let svc = {
             let span = span.clone();
@@ -68,7 +68,6 @@ impl WrappingLayer {
         {
             tracing::error!("Failed to serve connection: {err:?}");
         }
-        Ok(())
     }
 
     async fn terminate_http_connect_svc(

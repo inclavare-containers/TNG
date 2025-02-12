@@ -100,7 +100,8 @@ impl RegistedService for MappingEgress {
 
                                     let upstream =
                                         TcpStream::connect((upstream_addr.as_str(), upstream_port))
-                                            .await?;
+                                            .await
+                                            .context("Failed to connect to upstream")?;
 
                                     utils::forward_stream(upstream, TokioIo::new(stream)).await
                                 };

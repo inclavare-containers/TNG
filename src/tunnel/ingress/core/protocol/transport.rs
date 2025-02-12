@@ -30,14 +30,18 @@ impl TransportLayerCreator {
         }
     }
 
-    pub fn create(&self, dst: &TngEndpoint) -> TransportLayerConnector {
+    pub fn create(&self, dst: &TngEndpoint, parent_span: Span) -> TransportLayerConnector {
         match &self.encap_in_http {
             Some(encap_in_http) => TransportLayerConnector::Http(HttpTransportLayer {
                 dst: dst.clone(),
                 _encap_in_http: encap_in_http.clone(),
                 shutdown_guard: self.shutdown_guard.clone(),
+                span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
             }),
-            None => TransportLayerConnector::Tcp(TcpTransportLayer { dst: dst.clone() }),
+            None => TransportLayerConnector::Tcp(TcpTransportLayer {
+                dst: dst.clone(),
+                span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
+            }),
         }
     }
 }
@@ -45,6 +49,7 @@ impl TransportLayerCreator {
 #[derive(Debug, Clone)]
 pub struct TcpTransportLayer {
     dst: TngEndpoint,
+    span: Span,
 }
 
 impl<Req> tower::Service<Req> for TcpTransportLayer {
@@ -67,7 +72,7 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
 
             Ok(TokioIo::new(TransportLayerStream::Tcp(tcp_stream)))
         }
-        .instrument(tracing::info_span!("transport", type = "tcp"));
+        .instrument(self.span.clone());
 
         Box::pin(fut)
     }
@@ -78,6 +83,7 @@ pub struct HttpTransportLayer {
     dst: TngEndpoint,
     _encap_in_http: EncapInHttp,
     shutdown_guard: ShutdownGuard,
+    span: Span,
 }
 
 impl HttpTransportLayer {
@@ -90,14 +96,13 @@ impl HttpTransportLayer {
 
         let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
         {
-            let span = tracing::info_span!("http2_conn");
             shutdown_guard.spawn_task(
                 async move {
                     if let Err(e) = conn.await {
                         tracing::error!(?e, "The H2 connection is broken");
                     }
                 }
-                .instrument(span),
+                .instrument(Span::current()),
             );
         }
 
@@ -149,7 +154,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
             tracing::debug!("Establish the underlying h2 stream with upstream");
             Self::create_internal(endpoint_owned, shutdown_guard).await
         }
-        .instrument(tracing::info_span!("transport", type = "h2"));
+        .instrument(self.span.clone());
 
         Box::pin(fut)
     }

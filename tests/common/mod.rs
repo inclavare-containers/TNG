@@ -29,8 +29,14 @@ pub async fn run_test(
         tracing_subscriber::registry()
             // .with(console_subscriber::spawn()) // Initialize tokio console
             .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "debug,tokio=trace,runtime=trace".into()),
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    format!(
+                        "none,tng=debug,{}=debug",
+                        std::module_path!().split("::").next().unwrap()
+                    )
+                    .into()
+                }),
+                // .unwrap_or_else(|_| "none,tng=debug,tokio=trace,runtime=trace".into()),
             )
             .with(tracing_subscriber::fmt::layer())
             .init();

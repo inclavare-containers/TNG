@@ -110,6 +110,7 @@ impl SecurityLayer {
 
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
         let tls_stream = async move {
+            tracing::trace!("Start to estabilish rats-tls session");
             tls_acceptor.accept(stream).await.map(|v| {
                 tracing::debug!("New rats-tls session established");
                 v

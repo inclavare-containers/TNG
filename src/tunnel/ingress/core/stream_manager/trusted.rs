@@ -7,11 +7,11 @@ use tracing::Instrument;
 use crate::{
     config::ingress::CommonArgs,
     tunnel::{
+        attestation_result::AttestationResult,
         ingress::core::{
             protocol::{security::SecurityLayer, transport::TransportLayerCreator, wrapping},
             TngEndpoint,
         },
-        attestation_result::AttestationResult,
     },
 };
 
@@ -40,15 +40,11 @@ impl TrustedStreamManager {
 impl StreamManager for TrustedStreamManager {
     type StreamType = TokioIo<Upgraded>;
 
-    async fn new_stream(&self, dst: &TngEndpoint) -> Result<(Self::StreamType, Option<AttestationResult>)> {
-        let client = self
-            .security_layer
-            .get_client(dst)
-            .instrument(tracing::info_span!(
-                "security",
-                session_id = tracing::field::Empty
-            ))
-            .await?;
+    async fn new_stream(
+        &self,
+        dst: &TngEndpoint,
+    ) -> Result<(Self::StreamType, Option<AttestationResult>)> {
+        let client = self.security_layer.get_client(dst).await?;
 
         wrapping::create_stream_from_hyper(&client)
             .instrument(tracing::info_span!("wrapping"))

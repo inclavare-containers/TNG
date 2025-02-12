@@ -60,8 +60,16 @@ impl StreamManager for TrustedStreamManager {
                     let span = Span::current();
                     shutdown_guard.spawn_task_fn(|shutdown_guard| {
                         async move {
-                            let (tls_stream, attestation_result) =
-                                security_layer.from_stream(stream).await?;
+                            let (tls_stream, attestation_result) = match security_layer
+                                .from_stream(stream)
+                                .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    tracing::error!(%e, "Failed to enstablish security session");
+                                    return;
+                                }
+                            };
 
                             WrappingLayer::unwrap_stream(
                                 tls_stream,

@@ -25,7 +25,11 @@ impl TransportLayerDecoder {
         &self,
         in_stream: TcpStream,
     ) -> Result<impl Stream<Item = Result<TransportLayerStream>> + '_> {
+        let span = tracing::info_span!("transport", type={if self.decap_from_http.is_some() {"h2"} else {"tcp"}});
         async {
+            let span = span.clone();
+
+            tracing::debug!("Decode the underlying connection from downstream");
             let state = match &self.decap_from_http {
                 Some(decap_from_http) => {
                     let connection = h2::server::handshake(in_stream).await?;
@@ -34,10 +38,11 @@ impl TransportLayerDecoder {
                 None => DecodeStreamState::Tcp(in_stream),
             };
 
-            let next_stream = futures::stream::unfold(Some(state), |state| {
+            let next_stream = futures::stream::unfold(Some(state), move |state| {
                 async move {
                     match state {
                         Some(DecodeStreamState::Tcp(tcp_stream)) => {
+                            tracing::debug!("New tcp stream established with downstream");
                             Some((Ok(TransportLayerStream::Tcp(tcp_stream)), None))
                         }
                         Some(DecodeStreamState::Http(mut connection, decap_from_http)) => {
@@ -49,8 +54,8 @@ impl TransportLayerDecoder {
 
                                     let (parts, recv_stream) = request.into_parts();
                                     tracing::trace!("Accepted http request: {:?}", parts);
-                                    
-                                    if ! parts.headers.contains_key("tng"){
+
+                                    if !parts.headers.contains_key("tng") {
                                         bail!("TNG protocol error: invalid request")
                                     }
 
@@ -68,9 +73,14 @@ impl TransportLayerDecoder {
 
                                     tracing::debug!("New h2 stream established with downstream");
 
-                                    Ok(TransportLayerStream::Http(H2Stream::new(send_stream, recv_stream, Span::current())))
+                                    Ok(TransportLayerStream::Http(H2Stream::new(
+                                        send_stream,
+                                        recv_stream,
+                                        Span::current(),
+                                    )))
                                 }
-                                .await;
+                                .await
+                                .context("Error in transport layer");
 
                                 let next_state =
                                     Some(DecodeStreamState::Http(connection, decap_from_http));
@@ -82,12 +92,13 @@ impl TransportLayerDecoder {
                         }
                         None => return None,
                     }
-                }.instrument(tracing::info_span!("transport", type={if self.decap_from_http.is_some() {"h2"} else {"tcp"}}))
+                }
+                .instrument(span.clone())
             });
 
             Ok(Box::pin(next_stream))
         }
-        .instrument(tracing::info_span!("transport", type={if self.decap_from_http.is_some() {"h2"} else {"tcp"}}))
+        .instrument(span.clone())
         .await
     }
 }

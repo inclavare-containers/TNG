@@ -21,7 +21,7 @@ use pin_project::pin_project;
 use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tracing::Span;
+use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
@@ -70,6 +70,19 @@ impl SecurityLayer {
     }
 
     pub async fn get_client(&self, dst: &TngEndpoint) -> Result<RatsTlsClient> {
+        self.get_client_with_span(dst, Span::current())
+            .instrument(tracing::info_span!(
+                "security",
+                session_id = tracing::field::Empty
+            ))
+            .await
+    }
+
+    async fn get_client_with_span(
+        &self,
+        dst: &TngEndpoint,
+        parent_span: Span,
+    ) -> Result<RatsTlsClient> {
         // Try to get the client from pool
         let client = {
             let read = self.pool.read().await;
@@ -101,7 +114,7 @@ impl SecurityLayer {
                         );
 
                         // Prepare the security connector
-                        let connector = self.security_connector_creator.create(&dst);
+                        let connector = self.security_connector_creator.create(&dst, parent_span);
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
@@ -154,13 +167,14 @@ impl SecurityConnectorCreator {
         })
     }
 
-    pub fn create(&self, dst: &TngEndpoint) -> SecurityConnector {
-        let transport_layer_connector = self.connector_creator.create(&dst);
+    pub fn create(&self, dst: &TngEndpoint, parent_span: Span) -> SecurityConnector {
+        let transport_layer_connector = self.connector_creator.create(&dst, parent_span);
 
         SecurityConnector {
             ra_args: self.ra_args.clone(),
             shutdown_guard: self.shutdown_guard.clone(),
             transport_layer_connector,
+            span: Span::current(),
         }
     }
 }
@@ -170,6 +184,7 @@ pub struct SecurityConnector {
     ra_args: RaArgs,
     shutdown_guard: ShutdownGuard,
     transport_layer_connector: TransportLayerConnector,
+    span: Span,
 }
 
 impl SecurityConnector {
@@ -244,35 +259,38 @@ impl tower::Service<Uri> for SecurityConnector {
         let ra_args = self.ra_args.clone();
         let shutdown_guard = self.shutdown_guard.clone();
         let transport_layer_connector = self.transport_layer_connector.clone();
-        Box::pin(async {
-            let (tls_client_config, verifier) =
-                Self::create_config(ra_args, shutdown_guard).await?;
+        Box::pin(
+            async {
+                let (tls_client_config, verifier) =
+                    Self::create_config(ra_args, shutdown_guard).await?;
 
-            let mut https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config(tls_client_config)
-                .https_only() // TODO: support returning notification message on non rats-tls request with https_or_http()
-                .enable_http2()
-                .wrap_connector(transport_layer_connector);
+                let mut https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_tls_config(tls_client_config)
+                    .https_only() // TODO: support returning notification message on non rats-tls request with https_or_http()
+                    .enable_http2()
+                    .wrap_connector(transport_layer_connector);
 
-            let res = https_connector
-                .call(_uri)
-                .await
-                .map_err(|e| anyhow::Error::from_boxed(e))?;
+                let res = https_connector
+                    .call(_uri)
+                    .await
+                    .map_err(|e| anyhow::Error::from_boxed(e))?;
 
-            let attestation_result = match verifier {
-                Some(verifier) => Some(
-                    verifier
-                        .get_attestation_result()
-                        .await
-                        .context("No attestation result found")?,
-                ),
-                None => None,
-            };
-            Ok(SecurityConnection::wrap_with_attestation_result(
-                res,
-                attestation_result,
-            ))
-        })
+                let attestation_result = match verifier {
+                    Some(verifier) => Some(
+                        verifier
+                            .get_attestation_result()
+                            .await
+                            .context("No attestation result found")?,
+                    ),
+                    None => None,
+                };
+                Ok(SecurityConnection::wrap_with_attestation_result(
+                    res,
+                    attestation_result,
+                ))
+            }
+            .instrument(self.span.clone()),
+        )
     }
 }
 
