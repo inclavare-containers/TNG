@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
@@ -127,6 +127,7 @@ impl HttpTransportLayer {
         return Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
             send_stream,
             recv_stream,
+            Span::current(),
         ))));
     }
 }

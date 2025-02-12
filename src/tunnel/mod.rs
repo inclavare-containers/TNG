@@ -11,6 +11,9 @@ use crate::{
     executor::iptables::IpTablesActions,
 };
 
+pub(self) mod access_log;
+pub(self) mod attestation_result;
+pub(self) mod cert_verifier;
 mod egress;
 mod ingress;
 mod utils;

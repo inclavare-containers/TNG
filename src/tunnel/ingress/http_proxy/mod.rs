@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -22,6 +23,7 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, EndpointFilter, IngressHttpProxyArgs};
+use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
@@ -218,7 +220,12 @@ struct StreamRouter {
 
 impl StreamRouter {
     #[auto_enum]
-    async fn route(&self, req: Request<Incoming>, shutdown_guard: ShutdownGuard) -> Response {
+    async fn route(
+        &self,
+        req: Request<Incoming>,
+        peer_addr: SocketAddr,
+        shutdown_guard: ShutdownGuard,
+    ) -> Response {
         let helper = RequestHelper::from_request(req);
         let dst = match helper.get_dst() {
             Ok(dst) => dst,
@@ -229,11 +236,15 @@ impl StreamRouter {
         let via_tunnel = self.endpoint_matcher.matches(&dst);
         tracing::debug!(%dst, via_tunnel, "Acquire connection to upstream");
 
+        let attestation_result;
         #[auto_enum(tokio1::AsyncRead, tokio1::AsyncWrite)]
         let upstream = if !via_tunnel {
             // Forward via unprotected tcp
             match self.unprotected_stream_manager.new_stream(&dst).await {
-                Ok(stream) => stream,
+                Ok((stream, att)) => {
+                    attestation_result = att;
+                    stream
+                }
                 Err(e) => {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -244,7 +255,10 @@ impl StreamRouter {
         } else {
             // Forward via trusted tunnel
             match self.trusted_stream_manager.new_stream(&dst).await {
-                Ok(stream) => stream,
+                Ok((stream, att)) => {
+                    attestation_result = att;
+                    stream
+                }
                 Err(e) => {
                     return error_response(
                         StatusCode::BAD_REQUEST,
@@ -253,6 +267,15 @@ impl StreamRouter {
                 }
             }
         };
+
+        // Print access log
+        let access_log = AccessLog {
+            downstream: peer_addr,
+            upstream: dst,
+            to_trusted_tunnel: via_tunnel,
+            peer_attested: attestation_result,
+        };
+        tracing::info!(?access_log);
 
         helper
             .forward_to_upstream_in_background(upstream, shutdown_guard)
@@ -304,24 +327,6 @@ impl RegistedService for HttpProxyIngress {
         let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
 
-        let svc = {
-            let shutdown_guard = shutdown_guard.clone();
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(SetResponseHeaderLayer::overriding(
-                    http::header::SERVER,
-                    HeaderValue::from_static("tng"),
-                ))
-                .service(tower::service_fn(move |req| {
-                    let stream_router = stream_router.clone();
-                    let shutdown_guard = shutdown_guard.clone();
-                    async move {
-                        Result::<_, String>::Ok(stream_router.route(req, shutdown_guard).await)
-                    }
-                }))
-        };
-        let svc = TowerToHyperService::new(svc);
-
         loop {
             let (downstream, _) = tokio::select! {
                 res = listener.accept() => res.unwrap(),
@@ -332,10 +337,31 @@ impl RegistedService for HttpProxyIngress {
             };
 
             let peer_addr = downstream.peer_addr().unwrap();
-            let svc = svc.clone();
-            shutdown_guard.spawn_task({
-                let fut = async {
-                    tracing::debug!("Start serving connection from client");
+            let stream_router = stream_router.clone();
+            let span = tracing::info_span!("serve", client=?peer_addr);
+
+            shutdown_guard.spawn_task_fn(move |shutdown_guard| {
+                let fut = async move {
+                    tracing::debug!("Start serving new connection from client");
+
+                    let svc = {
+                        ServiceBuilder::new()
+                            .layer(TraceLayer::new_for_http())
+                            .layer(SetResponseHeaderLayer::overriding(
+                                http::header::SERVER,
+                                HeaderValue::from_static("tng"),
+                            ))
+                            .service(tower::service_fn(move |req| {
+                                let stream_router = stream_router.clone();
+                                let shutdown_guard = shutdown_guard.clone();
+                                async move {
+                                    Result::<_, String>::Ok(
+                                        stream_router.route(req, peer_addr, shutdown_guard).await,
+                                    )
+                                }
+                            }))
+                    };
+                    let svc = TowerToHyperService::new(svc);
 
                     let io = TokioIo::new(downstream);
 
@@ -348,7 +374,7 @@ impl RegistedService for HttpProxyIngress {
                     }
                 };
 
-                fut.instrument(tracing::info_span!("serve", client=?peer_addr))
+                fut.instrument(span)
             });
         }
 

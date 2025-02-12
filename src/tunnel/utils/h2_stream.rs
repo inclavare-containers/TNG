@@ -4,19 +4,22 @@ use bytes::Bytes;
 use futures::{FutureExt, StreamExt as _};
 use h2::{RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tracing::Span;
 
 pub struct H2Stream {
     send_stream: SendStream<bytes::Bytes>,
     recv_stream: RecvStream,
     recv_remain: Option<Bytes>,
+    span: Span,
 }
 
 impl H2Stream {
-    pub fn new(send_stream: SendStream<Bytes>, recv_stream: RecvStream) -> Self {
+    pub fn new(send_stream: SendStream<Bytes>, recv_stream: RecvStream, span: Span) -> Self {
         Self {
             send_stream,
             recv_stream,
             recv_remain: None,
+            span,
         }
     }
 }
@@ -34,6 +37,9 @@ impl AsyncWrite for H2Stream {
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
+        let span = self.span.clone();
+        let _guard = span.enter();
+
         let len = buf.len();
         tracing::trace!("send {len} bytes to h2 stream");
         match self
@@ -60,6 +66,9 @@ impl AsyncWrite for H2Stream {
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
+        let span = self.span.clone();
+        let _guard = span.enter();
+
         match self.get_mut().send_stream.send_data(Bytes::new(), true) {
             Ok(()) => Poll::Ready(Ok(())),
             Err(e) => Poll::Ready(Err(std::io::Error::new(
@@ -76,6 +85,9 @@ impl AsyncRead for H2Stream {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        let span = self.span.clone();
+        let _guard = span.enter();
+
         let this = self.get_mut();
 
         // Use remain bytes first.

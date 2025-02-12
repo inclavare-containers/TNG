@@ -15,6 +15,7 @@ use crate::{
     config::egress::{CommonArgs, EgressNetfilterArgs},
     executor::iptables::IpTablesAction,
     tunnel::{
+        access_log::AccessLog,
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
         utils, RegistedService,
     },
@@ -91,13 +92,22 @@ impl RegistedService for NetfilterEgress {
             let span = tracing::info_span!("serve", client=?peer_addr);
             shutdown_guard.spawn_task_fn(move |shutdown_guard| {
                 async move {
-                    tracing::debug!("Start serving connection from client");
+                    tracing::debug!("Start serving new connection from client");
 
                     let (sender, mut receiver) = mpsc::unbounded_channel();
 
                     shutdown_guard.spawn_task(
                         async move {
-                            while let Some(stream) = receiver.recv().await {
+                            while let Some((stream, attestation_result)) = receiver.recv().await {
+                                // Print access log
+                                let access_log = AccessLog {
+                                    downstream: peer_addr,
+                                    upstream: orig_dst,
+                                    to_trusted_tunnel: true, // TODO: handle allow_non_tng_traffic
+                                    peer_attested: attestation_result,
+                                };
+                                tracing::info!(?access_log);
+
                                 let fut = async {
                                     let upstream = TcpStream::connect(orig_dst).await?;
 

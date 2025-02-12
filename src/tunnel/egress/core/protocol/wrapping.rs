@@ -14,6 +14,8 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
+use crate::tunnel::attestation_result::AttestationResult;
+
 use super::super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 
 fn error_response(code: StatusCode, msg: String) -> Response {
@@ -26,6 +28,7 @@ pub struct WrappingLayer {}
 impl WrappingLayer {
     pub async fn unwrap_stream(
         tls_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+        attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
     ) -> Result<()> {
@@ -41,11 +44,17 @@ impl WrappingLayer {
                 .service(tower::service_fn(move |req| {
                     let channel = channel.clone();
                     let shutdown_guard = shutdown_guard.clone();
+                    let attestation_result = attestation_result.clone();
                     let span = span.clone();
                     async move {
-                        Self::terminate_http_connect_svc(req, channel, shutdown_guard)
-                            .instrument(span)
-                            .await
+                        Self::terminate_http_connect_svc(
+                            req,
+                            attestation_result,
+                            channel,
+                            shutdown_guard,
+                        )
+                        .instrument(span)
+                        .await
                     }
                 }))
         };
@@ -64,6 +73,7 @@ impl WrappingLayer {
 
     async fn terminate_http_connect_svc(
         req: Request<Incoming>,
+        attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
     ) -> Result<Response> {
@@ -76,9 +86,9 @@ impl WrappingLayer {
                 async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
-                            tracing::debug!("Trusted tunnel established, now transporting application data stream.");
+                            tracing::debug!("Trusted tunnel established");
 
-                            if let Err(e) = channel.send(upgraded) {
+                            if let Err(e) = channel.send((upgraded, attestation_result)) {
                                 tracing::warn!("Failed to send stream via channel: {e:#}");
                             }
                         }

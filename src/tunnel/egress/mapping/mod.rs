@@ -13,7 +13,9 @@ use tracing::Instrument;
 use crate::{
     config::egress::{CommonArgs, EgressMappingArgs},
     tunnel::{
+        access_log::AccessLog,
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
+        ingress::core::TngEndpoint,
         utils, RegistedService,
     },
 };
@@ -78,14 +80,23 @@ impl RegistedService for MappingEgress {
             let span = tracing::info_span!("serve", client=?peer_addr);
             shutdown_guard.spawn_task_fn(move |shutdown_guard| {
                 async move {
-                    tracing::debug!("Start serving connection from client");
+                    tracing::debug!("Start serving new connection from client");
 
                     let (sender, mut receiver) = mpsc::unbounded_channel();
 
                     shutdown_guard.spawn_task(
                         async move {
-                            while let Some(stream) = receiver.recv().await {
+                            while let Some((stream, attestation_result)) = receiver.recv().await {
                                 let fut = async {
+                                    // Print access log
+                                    let access_log = AccessLog {
+                                        downstream: peer_addr,
+                                        upstream: TngEndpoint::new(&upstream_addr, upstream_port),
+                                        to_trusted_tunnel: true, // TODO: handle allow_non_tng_traffic
+                                        peer_attested: attestation_result,
+                                    };
+                                    tracing::info!(?access_log);
+
                                     let upstream =
                                         TcpStream::connect((upstream_addr.as_str(), upstream_port))
                                             .await?;

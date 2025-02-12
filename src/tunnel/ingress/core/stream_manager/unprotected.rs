@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use tokio::net::TcpStream;
 
-use crate::tunnel::ingress::core::TngEndpoint;
+use crate::tunnel::{attestation_result::AttestationResult, ingress::core::TngEndpoint};
 
 use super::StreamManager;
 
@@ -19,13 +19,16 @@ impl StreamManager for UnprotectedStreamManager {
     async fn new_stream(
         &self,
         endpoint: &TngEndpoint,
-    ) -> Result<<Self as StreamManager>::StreamType> {
+    ) -> Result<(
+        <Self as StreamManager>::StreamType,
+        Option<AttestationResult>,
+    )> {
         let upstream = TcpStream::connect((endpoint.host(), endpoint.port()))
             .await
             .with_context(|| {
                 format!("Failed to establish TCP connection with upstream '{endpoint}'")
             })?;
 
-        Ok(upstream)
+        Ok((upstream, None))
     }
 }

@@ -7,6 +7,7 @@ use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
+use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
@@ -70,11 +71,20 @@ impl RegistedService for MappingIngress {
 
             shutdown_guard.spawn_task({
                 let fut = async move {
-                    tracing::debug!("Start serving connection from client");
+                    tracing::trace!("Start serving new connection from client");
 
                     // Forward via trusted tunnel
                     match trusted_stream_manager.new_stream(&dst).await {
-                        Ok(upstream) => {
+                        Ok((upstream, attestation_result)) => {
+                            // Print access log
+                            let access_log = AccessLog {
+                                downstream: downstream.peer_addr().unwrap(),
+                                upstream: dst.clone(),
+                                to_trusted_tunnel: true,
+                                peer_attested: attestation_result,
+                            };
+                            tracing::info!(?access_log);
+
                             if let Err(e) = utils::forward_stream(upstream, downstream)
                                 .in_current_span()
                                 .await

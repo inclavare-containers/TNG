@@ -8,7 +8,7 @@ use http::{HeaderValue, Response, StatusCode};
 use pin_project::pin_project;
 use std::task::{Context, Poll};
 use tokio::net::TcpStream;
-use tracing::Instrument;
+use tracing::{Instrument, Span};
 
 pub struct TransportLayerDecoder {
     decap_from_http: Option<DecapFromHttp>,
@@ -68,7 +68,7 @@ impl TransportLayerDecoder {
 
                                     tracing::debug!("New h2 stream established with downstream");
 
-                                    Ok(TransportLayerStream::Http(H2Stream::new(send_stream, recv_stream)))
+                                    Ok(TransportLayerStream::Http(H2Stream::new(send_stream, recv_stream, Span::current())))
                                 }
                                 .await;
 

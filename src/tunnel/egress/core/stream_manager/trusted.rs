@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use crate::{
     config::egress::CommonArgs,
-    tunnel::egress::core::protocol::{
-        security::SecurityLayer, transport::TransportLayerDecoder, wrapping::WrappingLayer,
+    tunnel::{
+        attestation_result::AttestationResult,
+        egress::core::protocol::{
+            security::SecurityLayer, transport::TransportLayerDecoder, wrapping::WrappingLayer,
+        },
     },
 };
 use anyhow::Result;
@@ -32,7 +35,7 @@ impl TrustedStreamManager {
 }
 
 impl StreamManager for TrustedStreamManager {
-    type Sender = mpsc::UnboundedSender<Upgraded>;
+    type Sender = mpsc::UnboundedSender<(Upgraded, Option<AttestationResult>)>;
     async fn consume_stream(
         &self,
         in_stream: TcpStream,
@@ -57,9 +60,16 @@ impl StreamManager for TrustedStreamManager {
                     let span = Span::current();
                     shutdown_guard.spawn_task_fn(|shutdown_guard| {
                         async move {
-                            let tls_stream = security_layer.from_stream(stream).await?;
+                            let (tls_stream, attestation_result) =
+                                security_layer.from_stream(stream).await?;
 
-                            WrappingLayer::unwrap_stream(tls_stream, channel, shutdown_guard).await
+                            WrappingLayer::unwrap_stream(
+                                tls_stream,
+                                attestation_result,
+                                channel,
+                                shutdown_guard,
+                            )
+                            .await
                         }
                         .instrument(span)
                     });
