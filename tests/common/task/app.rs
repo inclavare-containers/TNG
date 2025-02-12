@@ -93,7 +93,7 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
                     let mut buffer = [0; 512];
                     while let Ok(size) = stream.read(&mut buffer).await {
                         if size == 0 {
-                            return Ok(());
+                            break;
                         }
                         stream
                             .write_all(&buffer[0..size])

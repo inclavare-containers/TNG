@@ -20,12 +20,17 @@ impl TngBuilder {
     }
 
     pub async fn serve_forever(self) -> Result<()> {
-        self.serve_with_cancel(CancellationToken::new()).await
+        self.serve_with_cancel(CancellationToken::new(), tokio::sync::oneshot::channel().0)
+            .await
     }
 
-    pub async fn serve_with_cancel(self, task_exit: CancellationToken) -> Result<()> {
+    pub async fn serve_with_cancel(
+        self,
+        task_exit: CancellationToken,
+        ready: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<()> {
         // Start native part
-        tracing::info!("Starting all components now");
+        tracing::info!("Starting all service now");
 
         let (runtime, iptables_actions) = TngRuntime::launch_from_config(self.config)
             .context("Failed to launch envoy executor")?;
@@ -52,11 +57,11 @@ impl TngBuilder {
                 .build()
         };
 
-        shutdown.spawn_task_fn(|shutdown_guard| runtime.serve(shutdown_guard, task_exit));
+        shutdown.spawn_task_fn(|shutdown_guard| runtime.serve(shutdown_guard, task_exit, ready));
 
         shutdown.shutdown().await;
 
-        tracing::debug!("All components shutdown complete");
+        tracing::debug!("All service shutdown complete");
 
         Ok(())
     }

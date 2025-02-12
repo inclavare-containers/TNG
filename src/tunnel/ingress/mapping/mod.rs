@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
@@ -46,7 +47,7 @@ impl MappingIngress {
 
 #[async_trait]
 impl RegistedService for MappingIngress {
-    async fn serve(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
         let trusted_stream_manager =
             Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
 
@@ -55,6 +56,7 @@ impl RegistedService for MappingIngress {
 
         let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
+        ready.send(()).await?;
 
         loop {
             let (downstream, _) = tokio::select! {

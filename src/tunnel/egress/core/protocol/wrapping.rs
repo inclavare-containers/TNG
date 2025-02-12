@@ -66,7 +66,7 @@ impl WrappingLayer {
             .instrument(span)
             .await
         {
-            tracing::warn!("Failed to serve connection: {err:?}");
+            tracing::error!("Failed to serve connection: {err:?}");
         }
         Ok(())
     }
@@ -89,11 +89,11 @@ impl WrappingLayer {
                             tracing::debug!("Trusted tunnel established");
 
                             if let Err(e) = channel.send((upgraded, attestation_result)) {
-                                tracing::warn!("Failed to send stream via channel: {e:#}");
+                                tracing::error!("Failed to send stream via channel: {e:#}");
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed during http connect upgrade: {e:#}");
+                            tracing::error!("Failed during http connect upgrade: {e:#}");
                         }
                     };
                 }

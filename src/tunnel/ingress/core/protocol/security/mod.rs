@@ -21,7 +21,7 @@ use pin_project::pin_project;
 use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tracing::{warn, Span};
+use tracing::Span;
 
 use crate::{
     config::ra::RaArgs,
@@ -140,7 +140,7 @@ impl SecurityConnectorCreator {
                 bail!("The 'no_ra: true' flag should not be used with 'attest' field");
             }
 
-            warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
+            tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
         } else if ra_args.attest != None || ra_args.verify != None {
             // Nothing
         } else {

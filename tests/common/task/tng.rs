@@ -11,6 +11,8 @@ pub async fn launch_tng(
     let config_json = config_json.to_owned();
 
     let task_name = task_name.to_owned();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+
     let join_handle = tokio::task::spawn(async move {
         let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
 
@@ -25,12 +27,14 @@ pub async fn launch_tng(
         }
 
         TngBuilder::from_config(config)
-            .serve_with_cancel(tng_token)
+            .serve_with_cancel(tng_token, sender)
             .await?;
 
         tracing::info!("The {task_name} task normally exit now");
         Ok(())
     });
+
+    receiver.await?;
 
     return Ok(join_handle);
 }

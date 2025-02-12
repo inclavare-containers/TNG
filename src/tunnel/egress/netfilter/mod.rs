@@ -6,7 +6,7 @@ use hyper_util::rt::TokioIo;
 use socket2::SockRef;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::mpsc::{self, Sender},
 };
 use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
@@ -59,7 +59,7 @@ impl NetfilterEgress {
 
 #[async_trait]
 impl RegistedService for NetfilterEgress {
-    async fn serve(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
         let trusted_stream_manager =
             Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
 
@@ -68,6 +68,7 @@ impl RegistedService for NetfilterEgress {
 
         let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
+        ready.send(()).await?;
 
         let so_mark = self.so_mark;
 

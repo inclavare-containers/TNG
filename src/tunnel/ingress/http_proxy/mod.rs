@@ -17,6 +17,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -117,21 +118,21 @@ impl RequestHelper {
         let stream = if self.req.method() == Method::CONNECT {
             tracing::debug!(
                 proxy_type = "http-connect",
-                "Preparing stream with downstream"
+                "Setting up stream from http-proxy downstream"
             );
 
             shutdown_guard.spawn_task(async move {
                 match hyper::upgrade::on(self.req).await {
                     Ok(upgraded) => {
-                        tracing::debug!("Stream with downstream is ready and keeping forwarding to upstream now");
+                        tracing::debug!("Stream from downstream is ready, keeping forwarding to upstream now");
 
                         if let Err(e) = utils::forward_stream( upstream, TokioIo::new(upgraded)).await
                         {
-                            tracing::warn!("{e:#}");
+                            tracing::error!("{e:#}");
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed during http connect upgrade: {e:#}");
+                        tracing::error!("Failed during http connect upgrade: {e:#}");
                     }
                 }
             }.instrument(span));
@@ -139,7 +140,7 @@ impl RequestHelper {
         } else {
             tracing::debug!(
                 proxy_type = "http-reverse-proxy",
-                "Preparing stream with downstream"
+                "Setting up stream from http-proxy downstream"
             );
 
             // TODO: optimize this mem copy
@@ -148,7 +149,7 @@ impl RequestHelper {
             shutdown_guard.spawn_task(
                 async move {
                     if let Err(e) = utils::forward_stream(upstream, s2).await {
-                        tracing::warn!("{e:#}");
+                        tracing::error!("{e:#}");
                     }
                 }
                 .instrument(span),
@@ -170,7 +171,7 @@ impl RequestHelper {
             shutdown_guard.spawn_task(
                 async move {
                     if let Err(e) = conn.await {
-                        tracing::warn!(?e, "The HTTP connection with upstream is broken");
+                        tracing::error!(?e, "The HTTP connection with upstream is broken");
                     }
                 }
                 .instrument(span),
@@ -310,7 +311,7 @@ impl HttpProxyIngress {
 
 #[async_trait]
 impl RegistedService for HttpProxyIngress {
-    async fn serve(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
         let stream_router = Arc::new(StreamRouter {
             trusted_stream_manager: TrustedStreamManager::new(
                 &self.common_args,
@@ -326,6 +327,7 @@ impl RegistedService for HttpProxyIngress {
 
         let listener = TcpListener::bind(listen_addr).await.unwrap();
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
+        ready.send(()).await?;
 
         loop {
             let (downstream, _) = tokio::select! {

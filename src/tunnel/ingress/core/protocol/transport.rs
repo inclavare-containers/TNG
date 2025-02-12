@@ -94,7 +94,7 @@ impl HttpTransportLayer {
             shutdown_guard.spawn_task(
                 async move {
                     if let Err(e) = conn.await {
-                        tracing::warn!(?e, "The H2 connection is broken");
+                        tracing::error!(?e, "The H2 connection is broken");
                     }
                 }
                 .instrument(span),
