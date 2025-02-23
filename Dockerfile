@@ -89,6 +89,8 @@ CMD ["envoy-static", "-c", "/etc/envoy.yaml", "-l", "off", "--component-log-leve
 #
 FROM registry.openanolis.cn/openanolis/anolisos:8 as tng-builder
 
+RUN yum install -y cargo
+
 WORKDIR /root/tng/
 COPY --from=code-pull /code/rust-toolchain.toml .
 
