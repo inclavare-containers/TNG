@@ -34,7 +34,6 @@ BuildRequires: clang
 BuildRequires: jq
 BuildRequires: cargo
 BuildRequires: rust
-BuildRequires: chrpath
 
 ExclusiveArch: x86_64
 
@@ -52,31 +51,19 @@ cp %{SOURCE1} ~/.cargo/config
 
 %build
 ln -s `realpath %{_builddir}/%{name}-%{version}/vendor` ~/vendor
-# Build rats-rs
-pushd src/deps/rats-rs
-cmake -Hc-api -Bbuild -DCOCO_ONLY=ON
-make -Cbuild install DESTDIR=%{_builddir}/%{name}-%{version}/install/rats-rs/
-popd
 # Build tng
 pushd src/
 cargo install --locked --path . --root %{_builddir}/%{name}-%{version}/install/tng/
 strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
-# Patch tng-envoy
-chrpath --replace '$ORIGIN' %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static
 # Remove vendor
 rm -f ~/vendor
 
 
 %install
-# Install rats-rs
-mkdir -p %{buildroot}/usr/lib64/tng/
-install -p -m 644 %{_builddir}/%{name}-%{version}/install/rats-rs/usr/local/lib/rats-rs/librats_rs.so %{buildroot}/usr/lib64/tng/
 # Install tng
 mkdir -p %{buildroot}/usr/bin/
 install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroot}/usr/bin/tng
-# Install tng-envoy
-install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-static %{buildroot}/usr/lib64/tng/envoy-static
 
 
 %define __requires_exclude librats_rs.so
@@ -84,9 +71,6 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 %files
 %license src/LICENSE
 /usr/bin/tng
-/usr/lib64/tng/envoy-static
-/usr/lib64/tng/librats_rs.so
-
 
 %changelog
 * Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4

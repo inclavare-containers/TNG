@@ -27,16 +27,12 @@ run-test:
 	./scripts/run-test.sh
 
 VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
-# COMMIT_ID 	:= $(shell git describe --match=NeVeRmAtCh --abbrev=99 --tags --always)
-# Reuse the pre-built tng-envoy binary
-COMMIT_ID 	:= bf2fdc042b63c2b030ca5995684f563c36e53eb4
 
 .PHONE: create-tarball
 create-tarball:
 	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/ && mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/
 
 	cargo vendor --manifest-path ./Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/
-	cargo vendor --manifest-path deps/rats-rs/Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/
 	# remove unused files
 	find /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/src/ ! -name 'lib.rs' -type f -exec rm -f {} +
 	find /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/winapi*/src/ ! -name 'lib.rs' -type f -exec rm -f {} +
@@ -46,10 +42,6 @@ create-tarball:
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/lib/*.lib
 
 	rsync -a --exclude target --exclude deps/rats-rs/build --exclude .git/modules/deps/tng-envoy ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
-	docker rm -f tng-envoy-copy-bin && docker run -d --rm --name tng-envoy-copy-bin ghcr.io/inclavare-containers/tng:${COMMIT_ID} sleep 1000
-	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/overlay/usr/local/bin/
-	docker cp tng-envoy-copy-bin:/usr/local/bin/envoy-static /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/overlay/usr/local/bin/envoy-static
-	docker rm -f tng-envoy-copy-bin
 
 	tar -czf /tmp/trusted-network-gateway-${VERSION}.tar.gz -C /tmp/trusted-network-gateway-tarball/ trusted-network-gateway-${VERSION}
 
