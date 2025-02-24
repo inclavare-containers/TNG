@@ -3375,7 +3375,7 @@ dependencies = [
 
 [[package]]
 name = "tng"
-version = "1.0.4"
+version = "2.0.0"
 dependencies = [
  "again",
  "anyhow",

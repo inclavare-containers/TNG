@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 1.0.4
+Version: 2.0.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -73,7 +73,10 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroo
 /usr/bin/tng
 
 %changelog
-* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4
+* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.0.0-1
+- Rewrite all in rust
+
+* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4-1
 - Nothing but some adjust on build script
 
 * Wed Jan 22 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.3-2
