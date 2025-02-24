@@ -1,0 +1,50 @@
+name: Zigbuild Specify Target
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        required: true
+        type: string
+        description: compile target
+  workflow_call:
+    inputs:
+      target:
+        required: true
+        type: string
+        description: compile target
+
+jobs:
+  build:
+    runs-on: ${{ contains( inputs.target, 'linux' ) && 'ubuntu-latest' || ( contains( inputs.target, 'apple' ) && 'macos-latest' || ( contains( inputs.target, 'windows' ) && 'windows-latest' || 'ubuntu-latest' ) ) }}
+    env:
+      build-tool: ${{ contains( inputs.target, 'windows-msvc' ) && 'build' || 'zigbuild' }}
+      executable: ./target/${{inputs.target}}/release/*.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: install target
+        run: rustup target add ${{ inputs.target }}
+      - uses: goto-bus-stop/setup-zig@v2
+        if: ${{ env.build-tool == 'zigbuild' }}
+      - name: Install cargo-zigbuild
+        if: ${{ env.build-tool == 'zigbuild' }}
+        run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild
+      - name: cargo compile
+        run: cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
+      - name: show target
+        run: ls -R ./target
+      - name: Get product path
+        if: ${{ runner.os != 'Windows' }}
+        run: echo "executable=$(find . -maxdepth 4 -type f -exec file {} \; | grep 'executable' | grep 'target' | grep -o '^[^:]*')" >> "$GITHUB_ENV"
+      - name: Upload product as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executable
+          path: |
+            ${{ env.executable }}

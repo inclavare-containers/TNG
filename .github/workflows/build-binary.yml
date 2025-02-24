@@ -1,0 +1,62 @@
+name: Build Binary Executable
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*.*.*"
+  pull_request:
+
+jobs:
+  build-all:
+    strategy:
+      matrix:
+        target:
+          - "aarch64-apple-darwin"
+          - "x86_64-apple-darwin"
+          - "x86_64-unknown-linux-gnu"
+          - "aarch64-unknown-linux-gnu"
+          # - "x86_64-pc-windows-msvc"
+    name: Build For ${{ matrix.target }}
+    uses: ./.github/workflows/zigbuild.yml
+    with:
+      target: ${{ matrix.target }}
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: build-all
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: product
+          pattern: name-*
+          merge-multiple: false
+      - name: compress
+        run: |
+          cd product
+          for dir in */; do
+              dirname="${dir%/}"
+              if [[ $dirname == *"windows"* ]]; then
+                  echo "package $dirname to $dirname.zip"
+                  zip -r "$dirname.zip" "$dirname"
+              else
+                  echo "package $dirname to $dirname.tar.gz"
+                  tar -czf "$dirname.tar.gz" "$dirname"
+              fi
+          done
+      - name: List Directory
+        run: ls -R product
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          fail_on_unmatched_files: true
+          prerelease: false
+          files: |
+            ./product/*.zip
+            ./product/*.tar.gz
