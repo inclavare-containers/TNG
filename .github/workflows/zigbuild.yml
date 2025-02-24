@@ -36,7 +36,8 @@ jobs:
         if: ${{ env.build-tool == 'zigbuild' }}
         run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild
       - name: cargo compile
-        run: cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
+        run: |
+          ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/"' || ''  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
       - name: show target
         run: ls -R ./target
       - name: Get product path
