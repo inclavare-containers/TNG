@@ -1,6 +1,3 @@
 [submodule "deps/rats-rs"]
 	path = deps/rats-rs
 	url = ../rats-rs
-[submodule "deps/tng-envoy"]
-	path = deps/tng-envoy
-	url = ../tng-envoy
