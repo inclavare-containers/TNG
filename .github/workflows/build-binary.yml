@@ -33,30 +33,29 @@ jobs:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: product
-          pattern: name-*
+          path: artifacts
           merge-multiple: false
       - name: compress
         run: |
-          cd product
+          cd artifacts
           for dir in */; do
               dirname="${dir%/}"
               if [[ $dirname == *"windows"* ]]; then
-                  echo "package $dirname to $dirname.zip"
-                  zip -r "$dirname.zip" "$dirname"
+                  (cd ${dirname} && zip -r - tng.exe) > tng-${{ github.ref_name }}.${dirname}.zip
               else
-                  echo "package $dirname to $dirname.tar.gz"
-                  tar -czf "$dirname.tar.gz" "$dirname"
+                  tar czvf tng-${{ github.ref_name }}.${dirname}.tar.gz -C ${dirname} tng
               fi
           done
       - name: List Directory
-        run: ls -R product
+        run: ls -R artifacts
       - name: Upload Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           fail_on_unmatched_files: true
           prerelease: false
+          # files: |
+          #   ./artifacts/*.zip
+          #   ./artifacts/*.tar.gz
           files: |
-            ./product/*.zip
-            ./product/*.tar.gz
+            ./artifacts/*.tar.gz

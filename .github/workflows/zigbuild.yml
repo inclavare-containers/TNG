@@ -38,14 +38,13 @@ jobs:
       - name: cargo compile
         run: |
           ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/"' || ''  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
-      - name: show target
-        run: ls -R ./target
-      - name: Get product path
+      - name: Get binary path
         if: ${{ runner.os != 'Windows' }}
         run: echo "executable=$(find . -maxdepth 4 -type f -exec file {} \; | grep 'executable' | grep 'target' | grep -o '^[^:]*')" >> "$GITHUB_ENV"
-      - name: Upload product as an artifact
+
+      - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: executable
-          path: |
-            ${{ env.executable }}
+          name: ${{ inputs.target }}
+          path: target/${{ inputs.target }}/release/tng
+          if-no-files-found: error
