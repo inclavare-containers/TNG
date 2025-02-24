@@ -59,7 +59,7 @@ make -Cbuild install DESTDIR=%{_builddir}/%{name}-%{version}/install/rats-rs/
 popd
 # Build tng
 pushd src/
-cargo install --path . --root %{_builddir}/%{name}-%{version}/install/tng/
+cargo install --locked --path . --root %{_builddir}/%{name}-%{version}/install/tng/
 strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
 # Patch tng-envoy
