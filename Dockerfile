@@ -96,7 +96,7 @@ COPY --from=code-pull /code/rust-toolchain.toml .
 
 COPY --from=code-pull /code/. .
 
-RUN cargo install --path .
+RUN cargo install --locked --path . --root /usr/local/cargo/
 
 RUN strip /usr/local/cargo/bin/tng
 
