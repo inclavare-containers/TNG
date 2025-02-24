@@ -1,8 +1,8 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 1.0.3
-Release: 2%{?dist}
+Version: 1.0.4
+Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
 License: ASL 2.0
@@ -89,6 +89,9 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 
 
 %changelog
+* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4
+- Nothing but some adjust on build script
+
 * Wed Jan 22 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.3-2
 - Rename package name from tng to trusted-network-gateway.
 
