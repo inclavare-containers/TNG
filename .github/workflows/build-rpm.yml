@@ -1,0 +1,44 @@
+name: Build RPM Package
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*.*.*"
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest-16-cores
+    strategy:
+      fail-fast: false
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'true'
+
+    - uses: dtolnay/rust-toolchain@1.75.0
+
+    - name: Build RPM package
+      run: |
+        make create-tarball
+        make rpm-build-in-docker
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rpm-packages
+        path: |
+          ~/rpmbuild/SRPMS/*.src.rpm
+          ~/rpmbuild/RPMS/*/*.rpm
+
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          ~/rpmbuild/SRPMS/*.src.rpm
+          ~/rpmbuild/RPMS/*/*.rpm
