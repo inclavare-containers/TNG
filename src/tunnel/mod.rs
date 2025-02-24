@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use egress::{mapping::MappingEgress, netfilter::NetfilterEgress};
+use egress::mapping::MappingEgress;
 use ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
@@ -46,7 +46,13 @@ impl TngRuntime {
                     let ingress = HttpProxyIngress::new(http_proxy_args, &add_ingress.common)?;
                     services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
                 }
-                IngressMode::Netfilter(_) => todo!(),
+                IngressMode::Netfilter(_) => {
+                    if !cfg!(target_os = "linux") {
+                        anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                    }
+
+                    todo!()
+                }
             }
         }
 
@@ -58,13 +64,21 @@ impl TngRuntime {
                     services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
-                    let egress = NetfilterEgress::new(
-                        netfilter_args,
-                        &add_egress.common,
-                        id,
-                        &mut iptables_actions,
-                    )?;
-                    services.push((Box::new(egress), tracing::info_span!("egress", id)));
+                    if !cfg!(target_os = "linux") {
+                        anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        use egress::netfilter::NetfilterEgress;
+                        let egress = NetfilterEgress::new(
+                            netfilter_args,
+                            &add_egress.common,
+                            id,
+                            &mut iptables_actions,
+                        )?;
+                        services.push((Box::new(egress), tracing::info_span!("egress", id)));
+                    }
                 }
             }
         }

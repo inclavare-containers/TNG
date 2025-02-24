@@ -1,4 +1,3 @@
-use executor::iptables::IPTablesGuard;
 use scopeguard::defer;
 use tokio_util::sync::CancellationToken;
 use tunnel::TngRuntime;
@@ -40,7 +39,11 @@ impl TngBuilder {
             .context("Failed to launch envoy executor")?;
 
         // Setup Iptables
-        let _iptables_guard = IPTablesGuard::setup_from_actions(iptables_actions)?;
+        #[cfg(not(target_os = "linux"))]
+        drop(iptables_actions);
+        #[cfg(target_os = "linux")]
+        let _iptables_guard =
+            executor::iptables::IPTablesGuard::setup_from_actions(iptables_actions)?;
 
         let for_cancel_safity = task_exit.clone();
         defer! {
