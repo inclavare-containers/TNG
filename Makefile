@@ -23,8 +23,9 @@ run-test:
 	./scripts/run-test.sh
 
 VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
-COMMIT_ID 	:= $(shell git describe --match=NeVeRmAtCh --abbrev=99 --tags --always)
-# COMMIT_ID 	:= bf2fdc042b63c2b030ca5995684f563c36e53eb4
+# COMMIT_ID 	:= $(shell git describe --match=NeVeRmAtCh --abbrev=99 --tags --always)
+# Reuse the pre-built tng-envoy binary
+COMMIT_ID 	:= bf2fdc042b63c2b030ca5995684f563c36e53eb4
 
 .PHONE: create-tarball
 create-tarball:
