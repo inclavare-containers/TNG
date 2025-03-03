@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 1.0.4
+Version: 1.0.5
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -89,6 +89,10 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 
 
 %changelog
+* Mon Mar 3 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.5
+- Extend aa timeout to 2 minutes
+- Add trusted_certs_paths to verify field in config file
+
 * Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4
 - Nothing but some adjust on build script
 
