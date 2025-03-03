@@ -222,6 +222,7 @@
 - **`as_addr`** (string)：指定要连接到的Attestation Service (AS) 的URL。支持连接到以gRPC协议和Restful HTTP两种协议类型的Attestation Service。默认将其解析为Restful HTTP的URL，可通过`as_is_grpc`选项控制。
 - **`as_is_grpc`** (boolean, 可选，默认为false)：若设置为`true`，这将`as_addr`解释为gRPC URL。
 - **`policy_ids`** (array of strings)：指定要使用的policy ID列表。
+- **`trusted_certs_paths`** (array of strings, 可选，默认为空)：指定用于验证AS token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
 示例：连接到Restful HTTP类型的AS服务
 
@@ -242,6 +243,20 @@
         "as_is_grpc": true,
         "policy_ids": [
           "default"
+        ]
+      }
+```
+
+示例：指定验证AS token的根证书路径
+
+```json
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ],
+        "trusted_certs_paths": [
+          "/tmp/as-ca.pem"
         ]
       }
 ```

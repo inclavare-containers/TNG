@@ -226,6 +226,8 @@ Parameters required to configure the TNG endpoint as a remote attestation Verifi
 - **`as_addr`** (string): Specifies the URL of the Attestation Service (AS) to connect to. Supports connecting to the Attestation Service with both gRPC protocol and Restful HTTP protocol. By default, it is parsed as a Restful HTTP URL, which can be controlled by the `as_is_grpc` option.
 - **`as_is_grpc`** (boolean, optional, default is false): If set to `true`, interprets `as_addr` as a gRPC URL.
 - **`policy_ids`** (array of strings): Specifies the list of policy IDs to use.
+- **`trusted_certs_paths`** (array of strings, optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the AS token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
+
 
 Example: Connecting to a Restful HTTP type AS service
 
@@ -246,6 +248,20 @@ Example: Connecting to a gRPC type AS service
         "as_is_grpc": true,
         "policy_ids": [
           "default"
+        ]
+      }
+```
+
+Example: Specifying Root Certificate Paths for AS Token Verification
+
+```json
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ],
+        "trusted_certs_paths": [
+          "/tmp/as-ca.pem"
         ]
       }
 ```
