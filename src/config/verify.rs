@@ -9,4 +9,7 @@ pub struct VerifyArgs {
     pub as_is_grpc: bool,
 
     pub policy_ids: Vec<String>,
+
+    #[serde(default = "Default::default")]
+    pub trusted_certs_paths: Vec<String>,
 }

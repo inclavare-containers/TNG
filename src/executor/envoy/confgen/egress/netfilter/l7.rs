@@ -298,6 +298,7 @@ pub fn gen(
                     policy_ids:
 {}
                     trusted_certs_paths:
+{}
 
           require_client_certificate: true
 "#,
@@ -308,7 +309,13 @@ pub fn gen(
                     .iter()
                     .map(|s| format!("                    - {s}"))
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n"),
+                verify
+                    .trusted_certs_paths
+                    .iter()
+                    .map(|s| format!("                    - {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
             );
         }
 

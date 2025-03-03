@@ -67,6 +67,7 @@ mod tests {
                     as_addr: "http://127.0.0.1:8080/".to_owned(),
                     as_is_grpc: false,
                     policy_ids: vec!["default".to_owned()],
+                    trusted_certs_paths: vec!["/tmp/as.pem".to_owned()],
                 }),
             }],
             add_egress: vec![AddEgressArgs {

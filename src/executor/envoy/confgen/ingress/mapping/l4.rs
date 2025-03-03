@@ -154,11 +154,18 @@ pub fn gen(
                   policy_ids:
 {}
                   trusted_certs_paths:
+{}
 "#,
                     verify.as_addr,
                     verify.as_is_grpc,
                     verify
                         .policy_ids
+                        .iter()
+                        .map(|s| format!("                  - {s}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    verify
+                        .trusted_certs_paths
                         .iter()
                         .map(|s| format!("                  - {s}"))
                         .collect::<Vec<_>>()
