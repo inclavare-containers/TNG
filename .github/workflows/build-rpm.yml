@@ -20,6 +20,19 @@ jobs:
       with:
         submodules: 'true'
 
+    - name: Check pre-release
+      run: |
+        tag="${GITHUB_REF#refs/*/}"
+        echo "tag=tag"
+        if [[ ${tag} == *alpha* || ${tag} == *beta* ]]
+        then
+            prerelease=true
+        else
+            prerelease=false
+        fi
+        echo "prerelease=$prerelease"
+        echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
+
     - uses: dtolnay/rust-toolchain@1.75.0
 
     - name: Build RPM package
@@ -34,6 +47,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: rpm-packages
+        if-no-files-found: error
         path: |
           ./rpmbuild/SRPMS/*.src.rpm
           ./rpmbuild/RPMS/*/*.rpm
@@ -43,6 +57,8 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         fail_on_unmatched_files: true
+        prerelease: ${{ env.PRE_RELEASE }}
         files: |
+          /tmp/trusted-network-gateway-*.tar.gz
           ./rpmbuild/SRPMS/*.src.rpm
           ./rpmbuild/RPMS/*/*.rpm
