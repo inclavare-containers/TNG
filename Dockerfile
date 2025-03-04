@@ -71,9 +71,9 @@ RUN chmod 0777 bazel-bin/source/exe/envoy-static && \
     strip bazel-bin/source/exe/envoy-static
 
 
-FROM registry.openanolis.cn/openanolis/anolisos:8 as tng-envoy-release
+FROM ubuntu:20.04 as tng-envoy-release
 
-RUN yum install -y openssl
+RUN apt-get update && apt-get install -y libssl1.1
 
 # copy envoy-static
 COPY --from=tng-envoy-builder /home/newuser/envoy/bazel-bin/source/exe/envoy-static /usr/local/bin/envoy-static
@@ -103,7 +103,7 @@ RUN strip /usr/local/cargo/bin/tng
 
 FROM tng-envoy-release as tng-release
 
-RUN yum install -y curl iptables && yum clean all
+RUN apt-get update && apt-get install -y curl iptables && rm -rf /var/lib/apt/lists/* && update-alternatives --set iptables /usr/sbin/iptables-nft
 
 COPY --from=tng-builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
