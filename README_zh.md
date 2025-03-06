@@ -31,80 +31,83 @@ docker run -it --rm --network host ghcr.io/inclavare-containers/tng:latest tng l
 
 ## 构建
 
-### 使用 Docker 镜像构建并运行
+TNG有两种常见的运行形态，您可以以容器形式部署和运行TNG，或者，也可以通过构建rpm包来部署TNG。
+
+如果你希望修改后编译TNG，请参考[开发人员文档](docs/developer_zh.md)。
+
+### 构建并以容器镜像形式部署TNG
 
 推荐使用 Docker 来构建 TNG。以下是步骤：
 
 1. 拉取代码
 
-2. 拉取依赖项
-
 ```sh
+git clone git@github.com:inclavare-containers/tng.git --branch <编译的版本tag名>
 cd tng
 git submodule update --init
 ```
 
-3. 使用 Docker 构建
+2. 使用 Docker 构建
+
+这将从源码完全重新编译tng及其依赖项
 
 ```sh
 docker build -t tng:latest --target tng-release -f Dockerfile .
 ```
 
-现在我们已经得到了 `tng:latest` 的 Docker 镜像。
+现在我们已经得到了 `tng:latest` 的 Docker 镜像，您可以直接部署运行该镜像。
 
-4. 运行 tng
+3. 以容器形式运行 tng
 
 ```sh
 docker run -it --rm --network host tng:latest tng launch --config-content='<your config json string>'
 ```
 
 
-### 创建 TNG tar包
+### 构建并以RPM包形式部署TNG
 
-1. 首先按照上面的步骤构建 `tng:latest` Docker 镜像。
+该步骤介绍如何从源码构建rpm包，并安装rpm包。这仅适用于使用yum作为包管理的发行版。
 
-2. 然后运行脚本来打包压缩包
-
-```sh
-./pack-sdk.sh
-```
-
-生成的压缩包名称为 `tng-<version>.tar.gz`。
-
-3. 在新环境中安装压缩包
+1. 拉取代码
 
 ```sh
-tar -xvf tng-*.tar.gz -C /
+git clone git@github.com:inclavare-containers/tng.git --branch <编译的版本tag名>
+cd tng
+git submodule update --init
 ```
 
-要运行 TNG 二进制文件，还需要安装一些依赖项。对于 Ubuntu 20.04：
+2. 请先[安装rust工具链](https://rustup.rs/)，以及docker（或podman）。
 
-```
-apt-get install -y libssl1.1 iptables
-```
-
-4. 更新 iptables
-
-如果你使用的是较新的内核，可能需要切换到 `iptables-nft`，因为 `iptables-legacy` 可能无法工作。
+3. 创建rpm构建所需的源码tar包
 
 ```sh
-update-alternatives --set iptables /usr/sbin/iptables-nft
+make create-tarball
 ```
 
-5. 运行 TNG
+4. 构建rpm包
+
+您可以选择在全新的Anolis8发行版docker容器中构建rpm包，该rpm包同时适用于[Anolis8](https://openanolis.cn/anolisos)发行版和[ALinux3](https://help.aliyun.com/zh/alinux/product-overview/alibaba-cloud-linux-overview)发行版
 
 ```sh
-/opt/tng-0.1.0/bin/tng launch --config-content='<your config json string>'
+make rpm-build-in-docker
 ```
 
-
-6. 卸载
-
-只需删除目录即可
+或者，您也可以直接在当前发行版环境中构建rpm包：
 
 ```sh
-rm -rf /opt/tng-*
+make rpm-build
 ```
+
+产物将存放在`~/rpmbuild/RPMS/x86_64/`目录中
+
+5. 安装rpm包
+
+```sh
+rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
+```
+
+现在，你可以直接使用`tng`命令来启动一个TNG实例。
+
 
 ## 示例
 
