@@ -1,6 +1,6 @@
 # TNG
 [![Testing](/../../actions/workflows/docker-build.yml/badge.svg)](/../../actions/workflows/docker-build.yml)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [中文文档](README_zh.md)
 
 ## What is TNG?
 
@@ -31,78 +31,89 @@ Check the [reference document](docs/configuration.md) for the configuration.
 
 ## Build
 
-### Build and run with the docker image
+TNG has two common deployment forms: you can deploy and run TNG as a container, or you can build and deploy TNG as an RPM package. If you need to modify and compile TNG, please refer to the [developer documentation](docs/developer.md).
 
-It is recommend to build TNG with docker. Here are the steps.
+### Build and run as a container image
 
-1. Pull the code
+It is recommended to build TNG using Docker. Here are the steps:
 
-2. Pull the dependencies
+1. Clone the code
 
 ```sh
+git clone git@github.com:inclavare-containers/tng.git --branch <tag-name>
 cd tng
 git submodule update --init
 ```
 
-3. Build with docker
+2. Build with Docker
+
+This will completely recompile TNG and its dependencies from the source code. Since TNG depends on [envoy](https://github.com/inclavare-containers/tng-envoy), this process may take about 2 hours.
 
 ```sh
 docker build -t tng:latest --target tng-release -f Dockerfile .
 ```
 
-Now we have got the docker image `tng:latest`.
+Now we have got the Docker image `tng:latest`, which you can directly deploy and run.
 
-4. Run tng
+3. Run TNG as a container
 
 ```sh
 docker run -it --rm --network host tng:latest tng launch --config-content='<your config json string>'
 ```
 
+### Build and run as an RPM package
 
-### Create a TNG tarball
+This section describes how to build an RPM package from the source code and install it. This is only applicable to distributions that use yum as the package manager.
 
-1. First you should build `tng:latest` docker image with the steps above.
-
-2. Then run the script to package a tarball
-
-```sh
-./pack-sdk.sh
-```
-
-The tarball will be generated with name `tng-<version>.tar.gz`
-
-3. To install the tarball in a new environment
+1. Clone the code
 
 ```sh
-tar -xvf tng-*.tar.gz -C /
+git clone git@github.com:inclavare-containers/tng.git --branch <tag-name>
+cd tng
+git submodule update --init
 ```
 
-To run the tng binary, you also need to install some dependencies. For ubuntu20.04:
+2. Install the Rust toolchain and Docker (or Podman)
 
-```
-apt-get install -y libssl1.1 iptables
-```
+3. Create the source tarball required for RPM building
 
-4. Update iptables
-
-You may need to switch to `iptanles-nft` if you are using a newer kernel on which `iptables-legacy` may not work.
+> To speed up your build process, this step pulls the pre-built envoy binary from `ghcr.io/inclavare-containers/tng` and places it into the envoy directory.
 
 ```sh
-update-alternatives --set iptables /usr/sbin/iptables-nft
+make create-tarball
 ```
 
-5. Run tng
+4. Build the RPM package
+
+You can choose to build the RPM package in a fresh Anolis8 Docker container, which is compatible with both [Anolis8](https://openanolis.cn/anolisos) and [ALinux3](https://help.aliyun.com/zh/alinux/product-overview/alibaba-cloud-linux-overview) distributions.
 
 ```sh
-/opt/tng-0.1.0/bin/tng launch --config-content='<your config json string>'
+make rpm-build-in-docker
 ```
 
-
-6. To uninstall it, just remove the dir
+Or, you can build the RPM package directly in your current distribution environment:
 
 ```sh
-rm -rf /opt/tng-*
+make rpm-build
 ```
+
+The build artifacts will be located in the `~/rpmbuild/RPMS/x86_64/` directory.
+
+5. Install the RPM package
+
+First, uninstall the old version of TNG:
+
+```sh
+yum remove trusted-network-gateway -y
+```
+
+Then, install the new version:
+
+```sh
+yum install -y <path-to-rpm-package-on-target-environment>
+```
+
+Now, you can directly use the `tng` command to start a TNG instance.
 
 ## Example
 
