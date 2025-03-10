@@ -143,6 +143,15 @@ async fn launch_tcp_client(
 
         let message = TCP_PAYLOAD.as_bytes();
         stream.write_all(message).await?;
+
+        if http_proxy.is_some() {
+            /* It's a quirk of envoy that half closing connection is not supported.
+             * So we have to wait for a second and shutdown the write half.
+             * See https://github.com/envoyproxy/envoy/issues/2066#issuecomment-1219857601
+             */
+            stream.flush().await?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
         stream.shutdown().await?;
 
         let mut response = Vec::new();
