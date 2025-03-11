@@ -1,10 +1,14 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::{
     config::{attest::AttestArgs, verify::VerifyArgs},
     executor::envoy::confgen::{
         ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
         ENVOY_LISTENER_SOCKET_OPTIONS,
+    },
+    observability::{
+        collector::envoy::{EnvoyStats, MetricCollector},
+        metric::XgressId,
     },
 };
 
@@ -15,7 +19,75 @@ pub fn gen(
     no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
+    metric_collector: &mut MetricCollector,
 ) -> Result<(Vec<String>, Vec<String>)> {
+    metric_collector.register_xgress_metric_parser(
+        XgressId::Egress { id: id },
+        move |envoy_stats: &EnvoyStats, metric_name| {
+            let value = match metric_name {
+                crate::observability::metric::XgressMetric::TxBytesTotal => {
+                    let stat_name =
+                        format!("cluster.tng_egress{id}_upstream.upstream_cx_rx_bytes_total");
+                    envoy_stats
+                        .get(&stat_name)
+                        .with_context(|| format!("No field {stat_name} in envoy stats"))?
+                        .to_owned()
+                }
+                crate::observability::metric::XgressMetric::RxBytesTotal => {
+                    let stat_name =
+                        format!("cluster.tng_egress{id}_upstream.upstream_cx_tx_bytes_total");
+                    envoy_stats
+                        .get(&stat_name)
+                        .with_context(|| format!("No field {stat_name} in envoy stats"))?
+                        .to_owned()
+                }
+                crate::observability::metric::XgressMetric::CxActive => {
+                    let stat_name = format!("cluster.tng_egress{id}_upstream.upstream_cx_active");
+                    envoy_stats
+                        .get(&stat_name)
+                        .with_context(|| format!("No field {stat_name} in envoy stats"))?
+                        .to_owned()
+                }
+                crate::observability::metric::XgressMetric::CxTotal => {
+                    let stat_name = format!("cluster.tng_egress{id}_upstream.upstream_cx_total");
+                    envoy_stats
+                        .get(&stat_name)
+                        .with_context(|| format!("No field {stat_name} in envoy stats"))?
+                        .to_owned()
+                }
+                crate::observability::metric::XgressMetric::CxFailed => {
+                    let connect_fail = {
+                        let stat_name =
+                            format!("cluster.tng_egress{id}_upstream.upstream_cx_connect_fail");
+                        let v = envoy_stats
+                            .get(&stat_name)
+                            .with_context(|| format!("No field {stat_name} in envoy stats"))?;
+
+                        v.as_u64().with_context(|| {
+                            format!("Value of {stat_name} should be integer but got {v}")
+                        })?
+                    };
+
+                    let non_health_upstream = {
+                        let stat_name =
+                            format!("cluster.tng_egress{id}_upstream.upstream_cx_none_healthy");
+                        let v = envoy_stats
+                            .get(&stat_name)
+                            .with_context(|| format!("No field {stat_name} in envoy stats"))?;
+
+                        v.as_u64().with_context(|| {
+                            format!("Value of {stat_name} should be integer but got {v}")
+                        })?
+                    };
+
+                    (connect_fail + non_health_upstream).into()
+                }
+            };
+
+            Ok(value)
+        },
+    );
+
     let mut listeners = vec![];
     let mut clusters = vec![];
 

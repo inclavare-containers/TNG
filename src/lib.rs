@@ -1,4 +1,5 @@
 use executor::{envoy::EnvoyExecutor, iptables::IpTablesExecutor};
+use observability::collector::envoy::MetricCollectorHandle;
 use std::process::ExitStatus;
 
 use anyhow::{bail, Context as _, Result};
@@ -12,6 +13,7 @@ use nix::{
 
 pub mod config;
 mod executor;
+mod observability;
 
 pub struct TngBuilder {
     config: TngConfig,
@@ -23,9 +25,9 @@ impl TngBuilder {
     }
 
     pub fn launch(self) -> Result<TngInstance> {
-        let (envoy_config, iptables_actions) = executor::handle_config(self.config)?;
+        let blueprint = executor::handle_config(self.config)?;
 
-        let iptables_executor = IpTablesExecutor::new_from_actions(iptables_actions)?;
+        let iptables_executor = IpTablesExecutor::new_from_actions(&blueprint.iptables_actions)?;
 
         // Setup Iptables
         if let Some(iptables_executor) = &iptables_executor {
@@ -41,10 +43,11 @@ impl TngBuilder {
         }
 
         // Start Envoy
-        let envoy_executor = EnvoyExecutor::launch(&envoy_config)?;
+        let envoy_executor = EnvoyExecutor::launch(&blueprint.envoy_config)?;
 
         Ok(TngInstance {
             envoy_executor,
+            _metric_collector_handle: blueprint.metric_collector.launch(),
             iptables_executor,
         })
     }
@@ -52,6 +55,7 @@ impl TngBuilder {
 
 pub struct TngInstance {
     envoy_executor: EnvoyExecutor,
+    _metric_collector_handle: MetricCollectorHandle,
     iptables_executor: Option<IpTablesExecutor>,
 }
 

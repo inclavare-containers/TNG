@@ -4,19 +4,30 @@ name = "tng"
 version = "1.0.5"
 
 [dependencies]
+again = "0.1.2"
 anyhow = "1.0.81"
 clap = {version = "4.5.4", features = ["derive"]}
+const_format = "0.2.34"
 ctrlc = {version = "3.4.4", features = ["termination"]}
 env_logger = {version = "0.11.2", features = ["auto-color", "humantime", "regex"]}
+futures = "0.3.31"
+get-port = "4.0.0"
+indexmap = {version = "2.8.0", features = ["serde"]}
 itertools = "0.13.0"
 log = "0.4.20"
 nix = {version = "0.29.0", features = ["process", "signal"]}
 rand = "0.8.5"
+reqwest = {version = "0.12.12", default-features = false, features = ["json", "h2", "rustls-tls-native-roots"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0.89"
+serde_variant = "0.1.3"
 serde_with = {version = "3.11.0", features = ["json"]}
 shadow-rs = "=0.20.1"
+strum = "0.27.1"
+strum_macros = "0.27.1"
 tempfile = "3.10.1"
+tokio = {version = "1.41.1", features = ["full"]}
+tokio-util = "0.7.12"
 which = "6.0.3"
 
 [build-dependencies]
@@ -26,8 +37,4 @@ shadow-rs = "=0.20.1"
 again = "0.1.2"
 async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 axum = "0.7.7"
-futures = "0.3.31"
 http = "1.1.0"
-reqwest = {version = "0.12.9", default-features = false, features = ["json"]}
-tokio = {version = "1.41.1", features = ["full"]}
-tokio-util = "0.7.12"

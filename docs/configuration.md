@@ -28,36 +28,36 @@ In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and enc
 #### Field Descriptions
 
 - **`r#in`** (Endpoint):
-  - **`host`** (string, optional, default is `0.0.0.0`): The host address to listen on.
-  - **`port`** (integer): The port number to listen on.
+    - **`host`** (string, optional, default is `0.0.0.0`): The host address to listen on.
+    - **`port`** (integer): The port number to listen on.
 - **`out`** (Endpoint):
-  - **`host`** (string): The target host address.
-  - **`port`** (integer): The target port number.
+    - **`host`** (string): The target host address.
+    - **`port`** (integer): The target port number.
 
 Example:
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "0.0.0.0",
-          "port": 10001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 20001
+    "add_ingress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
         }
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -68,39 +68,39 @@ In this scenario, tng listens on a local HTTP proxy port. User containers can ro
 #### Field Descriptions
 
 - **`proxy_listen`** (Endpoint): Specifies the listening address (`host`) and port (`port`) values for the `http_proxy` protocol exposed by tng.
-  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-  - **`port`** (integer): The port number to listen on.
+    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+    - **`port`** (integer): The port number to listen on.
 - **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
-  - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
-  - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
+    - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
+    - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
 - (Deprecated) **`dst_filter`** (EndpointFilter): Used in TNG version 1.0.1 and earlier as a required parameter, now replaced by `dst_filters`. This is retained for compatibility with older configurations.
 
 Example:
 
 ```json
 {
-  "add_ingress": [
-    {
-      "http_proxy": {
-        "proxy_listen": {
-          "host": "0.0.0.0",
-          "port": 41000
-        },
-        "dst_filters": [
-          {
-            "domain": "*.pai-eas.aliyuncs.com",
-            "port": 80
-          }
-        ]
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    "add_ingress": [
+        {
+            "http_proxy": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 41000
+                },
+                "dst_filters": [
+                    {
+                        "domain": "*.pai-eas.aliyuncs.com",
+                        "port": 80
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
 }
 ```
 
@@ -129,33 +129,33 @@ In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and dec
 #### Field Descriptions
 
 - **`in`** (Endpoint): Specifies the local TCP port that tng listens on.
-  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-  - **`port`** (integer): The port number to listen on.
+    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+    - **`port`** (integer): The port number to listen on.
 - **`out`** (Endpoint): Specifies the target endpoint where decrypted TCP requests are sent.
-  - **`host`** (string): The target address.
-  - **`port`** (integer): The target port number.
+    - **`host`** (string): The target address.
+    - **`port`** (integer): The target port number.
 
 Example:
 
 ```json
 {
-  "add_egress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "127.0.0.1",
-          "port": 20001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 30001
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
         }
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -168,8 +168,8 @@ In this scenario, the user's server program is already listening on a certain po
 #### Field Descriptions
 
 - **`capture_dst`** (Endpoint): Specifies the target endpoint that needs to be captured by the tng server.
-  - **`host`** (string, optional, defaults to matching all local IP addresses on all ports): The target address. If not specified, it defaults to matching all local IP addresses on all ports on the machine (see the iptables option `-m addrtype --dst-type LOCAL`: [iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)).
-  - **`port`** (integer): The target port number.
+    - **`host`** (string, optional, defaults to matching all local IP addresses on all ports): The target address. If not specified, it defaults to matching all local IP addresses on all ports on the machine (see the iptables option `-m addrtype --dst-type LOCAL`: [iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)).
+    - **`port`** (integer): The target port number.
 - **`capture_local_traffic`** (boolean, optional, default is `false`): If set to `false`, requests with a source IP that is the local machine's IP will be ignored during capture and not redirected to `listen_port`. If set to `true`, requests with a source IP that is the local machine's IP will also be captured.
 - **`listen_port`** (integer, optional, default starts incrementing from port 40000): The port number on which the tng server listens to receive traffic redirected by netfilter.
 - **`so_mark`** (integer, optional, default value is 565): The SO_MARK value of the socket corresponding to the TCP request carrying the plaintext traffic after decryption by the tng server, used to prevent the decrypted traffic from being redirected to the tng server again by netfilter.
@@ -178,22 +178,22 @@ Example:
 
 ```json
 {
-  "add_egress": [
-    {
-      "netfilter": {
-        "capture_dst": {
-          "host": "127.0.0.1",
-          "port": 30001
-        },
-        "capture_local_traffic": false,
-        "listen_port": 40000,
-        "so_mark": 565
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                },
+                "capture_local_traffic": false,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
 }
 ```
 
@@ -210,9 +210,9 @@ Parameters required to configure the TNG endpoint as a remote attestation Attest
 Example:
 
 ```json
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
 ```
 
 ## Verifier
@@ -232,38 +232,38 @@ Parameters required to configure the TNG endpoint as a remote attestation Verifi
 Example: Connecting to a Restful HTTP type AS service
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
 ```
 
 Example: Connecting to a gRPC type AS service
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:5000/",
-        "as_is_grpc": true,
-        "policy_ids": [
-          "default"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:5000/",
+                "as_is_grpc": true,
+                "policy_ids": [
+                    "default"
+                ]
+            }
 ```
 
 Example: Specifying Root Certificate Paths for AS Token Verification
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ],
-        "trusted_certs_paths": [
-          "/tmp/as-ca.pem"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ],
+                "trusted_certs_paths": [
+                    "/tmp/as-ca.pem"
+                ]
+            }
 ```
 
 ## Attester and Verifier Combinations and Bidirectional Remote Attestation
@@ -301,8 +301,8 @@ The disguising capability can be enabled by specifying the `encap_in_http` field
 
 - **`path_rewrites`** (array [PathRewrite], optional, default is an empty array): This field specifies a list of parameters for traffic path rewriting using regular expressions. All rewrites will be performed in the order they appear in the path_rewrites list, and only one item in the list will be matched. If the HTTP request does not match any valid member of the path_rewrites list, the path of the disguised HTTP traffic will default to `/`.
 
-  - **`match_regex`** (string): A regular expression used to match the path of the protected business HTTP request inside.
-  - **`substitution`** (string): When the path matches the match_regex, the path of the disguised HTTP traffic will be rewritten to this substitution. It supports using `\digit` to reference the groups matched by the regular expression.
+    - **`match_regex`** (string): A regular expression used to match the path of the protected business HTTP request inside.
+    - **`substitution`** (string): When the path matches the match_regex, the path of the disguised HTTP traffic will be rewritten to this substitution. It supports using `\digit` to reference the groups matched by the regular expression.
 
 Example:
 
@@ -310,34 +310,34 @@ In this example, we add a PathRewrite rule indicating that for all user HTTP req
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "0.0.0.0",
-          "port": 10001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 20001
+    "add_ingress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
+            },
+            "encap_in_http": {
+                "path_rewrites": [
+                    {
+                        "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
+                        "substitution": "/foo/bar/\\1"
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
         }
-      },
-      "encap_in_http": {
-        "path_rewrites": [
-          {
-            "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
-            "substitution": "/foo/bar/\\1"
-          }
-        ]
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -355,26 +355,26 @@ Example:
 
 ```json
 {
-  "add_egress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "127.0.0.1",
-          "port": 20001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 30001
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
+            },
+            "decap_from_http": {
+                "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
         }
-      },
-      "decap_from_http": {
-        "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -388,8 +388,8 @@ The `admin_bind` option can be used to enable the [Admin Interface](https://www.
 #### Field Descriptions
 
 - **`admin_bind`** (Endpoint, optional, default is empty): This field specifies the listening address and port for the Envoy admin interface. It includes the following sub-fields:
-  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-  - **`port`** (integer): The port number to listen on, required.
+    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+    - **`port`** (integer): The port number to listen on, required.
 
 Example:
 
@@ -397,10 +397,56 @@ In this example, the `admin_bind` field specifies that the Envoy admin interface
 
 ```json
 {
-  "admin_bind": {
-    "host": "0.0.0.0",
-    "port": 9901
-  }
+    "admin_bind": {
+        "host": "0.0.0.0",
+        "port": 9901
+    }
 }
 ```
 
+### Observability
+
+Observability refers to the monitoring of system runtime status to help operations personnel understand the system's operating conditions and take appropriate measures. The concept of observability includes three levels: Log, Metric, and Tracing. TNG currently includes support for Metrics.
+
+In TNG, we provide the following Metrics:
+
+|Scope| Name | Type | Labels| Description |
+| --- | --- | --- | --- | --- |
+| instance | `live` | Gauge | None | Indicates whether the server is alive. |
+| ingress/egress | `tx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | The total number of bytes sent. |
+| ingress/egress | `rx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | The total number of bytes received. |
+| ingress/egress | `cx_active` | Gauge | `type={ingress\|egress},id={id}` | The number of active connections. |
+| ingress/egress | `cx_total` | Counter | `type={ingress\|egress},id={id}` | The total number of connections handled. |
+| ingress/egress | `cx_failed` | Counter | `type={ingress\|egress},id={id}` | The total number of failed connections. |
+
+
+Currently, TNG only supports exporting Metrics to open-falcon, and other types of Metrics export methods (such as Prometheus, etc.) are under development.
+
+You can enable Metrics support by specifying the metrics field.
+
+#### Field Description
+- **`metrics`** (Metrics, optional, default is empty)：This field specifies the configuration of Metrics. It includes the following subfields:
+    - **`exporters`** (array [Exporter], optional, default is an empty array)：This field specifies the list of Metrics exporters. It includes the following subfields:
+        - **`type`** (string)：This field specifies the type of Metrics exporter, currently only supports `falcon`.
+        - **`server_url`** (string)：This field specifies the open-falcon server address.
+        - **`endpoint`** (string)：This field specifies the endpoint value bound to each metric.
+        - **`tags`** (map [string], optional, default is empty)：This field specifies additional tags for each metric, these tags will be sent to the open-falcon server together with the tags generated by TNG.
+        - **`step`** (integer, optional, default is 60)：This field specifies the step value of each metric, the unit is seconds.
+Example:
+
+```json
+{
+    "metric": {
+        "exporters": [{
+            "type": "falcon",
+            "server_url": "http://127.0.0.1:1988",
+            "endpoint": "master-node",
+            "tags": {
+                "namespace": "ns1",
+                "app": "tng"
+            },
+            "step": 60
+        }]
+    }
+}
+```
