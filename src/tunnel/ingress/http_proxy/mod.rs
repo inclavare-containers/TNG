@@ -24,17 +24,36 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, EndpointFilter, IngressHttpProxyArgs};
+use crate::observability::metric::stream::StreamWithCounter;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
+use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::{utils, RegistedService};
 
-fn error_response(code: StatusCode, msg: String) -> Response {
-    tracing::error!(?code, ?msg, "responding errors to downstream");
-    (code, msg).into_response()
+pub enum RouteResult {
+    // At least in this time, we got no error, and this request should be handled in background.
+    HandleInBackgroud,
+    // There is an error during routing and we failed. No background task is remained.
+    InternalError(/*code*/ StatusCode, /* msg */ String),
+    // We got a response to send to the client from upstream. No background task is remained.
+    UpstreamResponse(Response),
+}
+
+impl Into<Response> for RouteResult {
+    fn into(self) -> Response {
+        match self {
+            RouteResult::HandleInBackgroud => Response::new(Body::empty()).into_response(),
+            RouteResult::InternalError(code, msg) => {
+                tracing::error!(?code, ?msg, "responding errors to downstream");
+                (code, msg).into_response()
+            }
+            RouteResult::UpstreamResponse(response) => response,
+        }
+    }
 }
 
 struct RequestHelper {
@@ -112,31 +131,54 @@ impl RequestHelper {
             + Send
             + 'static,
         shutdown_guard: ShutdownGuard,
-    ) -> Response {
+        metrics: ServiceMetrics,
+    ) -> RouteResult {
         let span = tracing::info_span!("forward");
 
-        let stream = if self.req.method() == Method::CONNECT {
+        if self.req.method() == Method::CONNECT {
             tracing::debug!(
                 proxy_type = "http-connect",
                 "Setting up stream from http-proxy downstream"
             );
 
-            shutdown_guard.spawn_task(async move {
-                match hyper::upgrade::on(self.req).await {
-                    Ok(upgraded) => {
-                        tracing::debug!("Stream from downstream is ready, keeping forwarding to upstream now");
+            // Spawn a background task to handle the upgraded stream.
+            let task = shutdown_guard.spawn_task(
+                async move {
+                    let fut = async {
+                        let upgraded = hyper::upgrade::on(self.req)
+                            .await
+                            .context("Failed during http connect upgrade")?;
+                        tracing::debug!(
+                            "Stream from downstream is ready, keeping forwarding to upstream now"
+                        );
 
-                        if let Err(e) = utils::forward_stream( upstream, TokioIo::new(upgraded)).await
-                        {
-                            tracing::error!("{e:#}");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed during http connect upgrade: {e:#}");
+                        let downstream = StreamWithCounter {
+                            inner: TokioIo::new(upgraded),
+                            tx_bytes_total: metrics.tx_bytes_total,
+                            rx_bytes_total: metrics.rx_bytes_total,
+                        };
+
+                        utils::forward_stream(upstream, downstream).await
+                    };
+
+                    if let Err(e) = fut.await {
+                        tracing::error!(error=?e, "Failed handling http connect request");
                     }
                 }
-            }.instrument(span));
-            Response::new(Body::empty()).into_response()
+                .instrument(span),
+            );
+
+            // Spawn a task to trace the connection status.
+            shutdown_guard.spawn_task({
+                async move {
+                    if !matches!(task.await, Ok(())) {
+                        metrics.cx_failed.add(1);
+                    }
+                    metrics.cx_active.add(-1);
+                }
+            });
+
+            RouteResult::HandleInBackgroud
         } else {
             tracing::debug!(
                 proxy_type = "http-reverse-proxy",
@@ -148,7 +190,13 @@ impl RequestHelper {
 
             shutdown_guard.spawn_task(
                 async move {
-                    if let Err(e) = utils::forward_stream(upstream, s2).await {
+                    let downstream = StreamWithCounter {
+                        inner: s2,
+                        tx_bytes_total: metrics.tx_bytes_total,
+                        rx_bytes_total: metrics.rx_bytes_total,
+                    };
+
+                    if let Err(e) = utils::forward_stream(upstream, downstream).await {
                         tracing::error!("{e:#}");
                     }
                 }
@@ -160,7 +208,7 @@ impl RequestHelper {
                 match hyper::client::conn::http1::handshake(TokioIo::new(s1)).await {
                     Ok(v) => v,
                     Err(e) => {
-                        return error_response(
+                        return RouteResult::InternalError(
                             StatusCode::BAD_REQUEST,
                             format!("Failed during http handshake with upstream: {e:#}"),
                         )
@@ -183,7 +231,7 @@ impl RequestHelper {
             *self.req.uri_mut() = match http::Uri::from_parts(parts) {
                 Ok(v) => v,
                 Err(e) => {
-                    return error_response(
+                    return RouteResult::InternalError(
                         StatusCode::BAD_REQUEST,
                         format!(
                             "Failed convert uri {} for forwarding http request to upstream: {e:#}",
@@ -199,17 +247,13 @@ impl RequestHelper {
                 .await
                 .map(|res| res.into_response())
             {
-                Ok(resp) => resp,
-                Err(e) => {
-                    return error_response(
-                        StatusCode::BAD_REQUEST,
-                        format!("Failed to forawrd http request to upstream: {e:#}"),
-                    )
-                }
+                Ok(resp) => RouteResult::UpstreamResponse(resp),
+                Err(e) => RouteResult::InternalError(
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to forawrd http request to upstream: {e:#}"),
+                ),
             }
-        };
-
-        stream
+        }
     }
 }
 
@@ -226,11 +270,12 @@ impl StreamRouter {
         req: Request<Incoming>,
         peer_addr: SocketAddr,
         shutdown_guard: ShutdownGuard,
-    ) -> Response {
+        metrics: ServiceMetrics,
+    ) -> RouteResult {
         let helper = RequestHelper::from_request(req);
         let dst = match helper.get_dst() {
             Ok(dst) => dst,
-            Err(e) => return error_response(StatusCode::BAD_REQUEST, format!("{e:#}")),
+            Err(e) => return RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}")),
         };
 
         // Check if need to send via tng tunnel, and get stream to the upstream
@@ -247,7 +292,7 @@ impl StreamRouter {
                     stream
                 }
                 Err(e) => {
-                    return error_response(
+                    return RouteResult::InternalError(
                         StatusCode::BAD_REQUEST,
                         format!("Failed to connect to upstream {dst} via unprotected tcp: {e:#}"),
                     )
@@ -261,7 +306,7 @@ impl StreamRouter {
                     stream
                 }
                 Err(e) => {
-                    return error_response(
+                    return RouteResult::InternalError(
                         StatusCode::BAD_REQUEST,
                         format!("Failed to connect to upstream {dst} via trusted tunnel: {e:#}"),
                     )
@@ -279,7 +324,7 @@ impl StreamRouter {
         tracing::info!(?access_log);
 
         helper
-            .forward_to_upstream_in_background(upstream, shutdown_guard)
+            .forward_to_upstream_in_background(upstream, shutdown_guard, metrics)
             .await
     }
 }
@@ -289,22 +334,39 @@ pub struct HttpProxyIngress {
     listen_port: u16,
     dst_filters: Vec<EndpointFilter>,
     common_args: CommonArgs,
+    metrics: ServiceMetrics,
 }
 
 impl HttpProxyIngress {
-    pub fn new(http_proxy_args: &IngressHttpProxyArgs, common_args: &CommonArgs) -> Result<Self> {
+    pub fn new(
+        id: usize,
+        http_proxy_args: &IngressHttpProxyArgs,
+        common_args: &CommonArgs,
+    ) -> Result<Self> {
         let listen_addr = http_proxy_args
             .proxy_listen
             .host
             .as_deref()
-            .unwrap_or("0.0.0.0");
+            .unwrap_or("0.0.0.0")
+            .to_owned();
         let listen_port = http_proxy_args.proxy_listen.port;
 
+        // ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}
+        let metrics = ServiceMetrics::new([
+            ("ingress_type".to_owned(), "http_proxy".to_owned()),
+            ("ingress_id".to_owned(), id.to_string()),
+            (
+                "ingress_proxy_listen".to_owned(),
+                format!("{}:{}", listen_addr, listen_port),
+            ),
+        ]);
+
         Ok(Self {
-            listen_addr: listen_addr.to_owned(),
+            listen_addr,
             listen_port,
             dst_filters: http_proxy_args.dst_filters.clone(),
             common_args: common_args.clone(),
+            metrics,
         })
     }
 }
@@ -340,6 +402,8 @@ impl RegistedService for HttpProxyIngress {
 
             let peer_addr = downstream.peer_addr().unwrap();
             let stream_router = stream_router.clone();
+            let metrics = self.metrics.clone();
+
             let span = tracing::info_span!("serve", client=?peer_addr);
 
             shutdown_guard.spawn_task_fn(move |shutdown_guard| {
@@ -356,10 +420,26 @@ impl RegistedService for HttpProxyIngress {
                             .service(tower::service_fn(move |req| {
                                 let stream_router = stream_router.clone();
                                 let shutdown_guard = shutdown_guard.clone();
+                                let metrics = metrics.clone();
+
                                 async move {
-                                    Result::<_, String>::Ok(
-                                        stream_router.route(req, peer_addr, shutdown_guard).await,
-                                    )
+                                    metrics.cx_total.add(1);
+                                    metrics.cx_active.add(1);
+
+                                    let route_result = stream_router
+                                        .route(req, peer_addr, shutdown_guard, metrics.clone())
+                                        .await;
+
+                                    if matches!(route_result, RouteResult::InternalError(..))
+                                        || matches!(route_result, RouteResult::UpstreamResponse(..))
+                                    {
+                                        if matches!(route_result, RouteResult::InternalError(..)) {
+                                            metrics.cx_failed.add(1);
+                                        }
+                                        metrics.cx_active.add(-1);
+                                    }
+
+                                    Result::<_, String>::Ok(route_result.into())
                                 }
                             }))
                     };

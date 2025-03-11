@@ -8,10 +8,12 @@ use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
+use crate::observability::metric::stream::StreamWithCounter;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
+use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::{utils, RegistedService};
 
 pub struct MappingIngress {
@@ -20,27 +22,52 @@ pub struct MappingIngress {
     upstream_addr: String,
     upstream_port: u16,
     common_args: CommonArgs,
+    metrics: ServiceMetrics,
 }
 
 impl MappingIngress {
-    pub fn new(mapping_args: &IngressMappingArgs, common_args: &CommonArgs) -> Result<Self> {
-        Ok(Self {
-            listen_addr: mapping_args
-                .r#in
-                .host
-                .as_deref()
-                .unwrap_or("0.0.0.0")
-                .to_owned(),
-            listen_port: mapping_args.r#in.port,
+    pub fn new(
+        id: usize,
+        mapping_args: &IngressMappingArgs,
+        common_args: &CommonArgs,
+    ) -> Result<Self> {
+        let listen_addr = mapping_args
+            .r#in
+            .host
+            .as_deref()
+            .unwrap_or("0.0.0.0")
+            .to_owned();
+        let listen_port = mapping_args.r#in.port;
 
-            upstream_addr: mapping_args
-                .out
-                .host
-                .as_deref()
-                .context("'host' of 'out' field must be set")?
-                .to_owned(),
-            upstream_port: mapping_args.out.port,
+        let upstream_addr = mapping_args
+            .out
+            .host
+            .as_deref()
+            .context("'host' of 'out' field must be set")?
+            .to_owned();
+        let upstream_port = mapping_args.out.port;
+
+        // ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}
+        let metrics = ServiceMetrics::new([
+            ("ingress_type".to_owned(), "mapping".to_owned()),
+            ("ingress_id".to_owned(), id.to_string()),
+            (
+                "ingress_in".to_owned(),
+                format!("{}:{}", listen_addr, listen_port),
+            ),
+            (
+                "ingress_out".to_owned(),
+                format!("{}:{}", upstream_addr, upstream_port),
+            ),
+        ]);
+
+        Ok(Self {
+            listen_addr,
+            listen_port,
+            upstream_addr,
+            upstream_port,
             common_args: common_args.clone(),
+            metrics,
         })
     }
 }
@@ -71,7 +98,11 @@ impl RegistedService for MappingIngress {
 
             let trusted_stream_manager = trusted_stream_manager.clone();
 
-            shutdown_guard.spawn_task({
+            self.metrics.cx_total.add(1);
+            let task = shutdown_guard.spawn_task({
+                let tx_bytes_total = self.metrics.tx_bytes_total.clone();
+                let rx_bytes_total = self.metrics.rx_bytes_total.clone();
+
                 let fut = async move {
                     tracing::trace!("Start serving new connection from client");
 
@@ -87,6 +118,11 @@ impl RegistedService for MappingIngress {
                             };
                             tracing::info!(?access_log);
 
+                            let downstream = StreamWithCounter {
+                                inner: downstream,
+                                tx_bytes_total,
+                                rx_bytes_total,
+                            };
                             if let Err(e) = utils::forward_stream(upstream, downstream)
                                 .in_current_span()
                                 .await
@@ -111,6 +147,19 @@ impl RegistedService for MappingIngress {
                 };
 
                 fut.instrument(tracing::info_span!("serve", client=?peer_addr))
+            });
+
+            // Spawn a task to trace the connection status.
+            shutdown_guard.spawn_task({
+                let cx_active = self.metrics.cx_active.clone();
+                let cx_failed = self.metrics.cx_failed.clone();
+                async move {
+                    cx_active.add(1);
+                    if !matches!(task.await, Ok(())) {
+                        cx_failed.add(1);
+                    }
+                    cx_active.add(-1);
+                }
             });
         }
 

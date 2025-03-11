@@ -7,6 +7,7 @@ use config::TngConfig;
 
 pub mod config;
 mod executor;
+mod observability;
 pub mod tunnel;
 
 pub struct TngBuilder {
@@ -35,15 +36,8 @@ impl TngBuilder {
         // Start native part
         tracing::info!("Starting all service now");
 
-        let (runtime, iptables_actions) = TngRuntime::launch_from_config(self.config)
+        let runtime = TngRuntime::launch_from_config(self.config)
             .context("Failed to launch envoy executor")?;
-
-        // Setup Iptables
-        #[cfg(not(target_os = "linux"))]
-        drop(iptables_actions);
-        #[cfg(target_os = "linux")]
-        let _iptables_guard =
-            executor::iptables::IPTablesGuard::setup_from_actions(iptables_actions)?;
 
         let for_cancel_safity = task_exit.clone();
         defer! {

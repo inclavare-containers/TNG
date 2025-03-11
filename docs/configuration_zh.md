@@ -29,36 +29,36 @@
 #### 字段说明
 
 - **`r#in`** (Endpoint)：
-  - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的主机地址。
-  - **`port`** (integer)：监听的端口号。
+    - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的主机地址。
+    - **`port`** (integer)：监听的端口号。
 - **`out`** (Endpoint)：
-  - **`host`** (string)：目标主机地址。
-  - **`port`** (integer)：目标端口号。
+    - **`host`** (string)：目标主机地址。
+    - **`port`** (integer)：目标端口号。
 
 示例：
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "0.0.0.0",
-          "port": 10001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 20001
+    "add_ingress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
         }
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -70,12 +70,12 @@
 #### 字段说明
 
 - **`proxy_listen`** (Endpoint)：指定tng暴露的`http_proxy`协议监听端口的监听地址(`host`)和端口(`port`)值
-  - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
-  - **`port`** (integer)：监听的端口号。
+    - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+    - **`port`** (integer)：监听的端口号。
 - **`dst_filters`** (array [EndpointFilter], 可选，默认为空数组)：该项指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出）。当未指定该字段或者指定为空数组时，所有流量都会进入tng隧道。
-  - **`domain`** (string, 可选，默认为`*`)：匹配的目标域名。该字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
-  - **`domain_regex`** (string, 可选，默认为`.*`)：匹配的目标域名的正则表达式，该字段支持完整的正则表达式语法。`domain_regex`字段和`domain`只能同时指定其中之一。
-  - **`port`** (integer, 可选，默认为`80`)：匹配的目标端口。如不指定则默认为80端口
+    - **`domain`** (string, 可选，默认为`*`)：匹配的目标域名。该字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+    - **`domain_regex`** (string, 可选，默认为`.*`)：匹配的目标域名的正则表达式，该字段支持完整的正则表达式语法。`domain_regex`字段和`domain`只能同时指定其中之一。
+    - **`port`** (integer, 可选，默认为`80`)：匹配的目标端口。如不指定则默认为80端口
 - （已废弃）**`dst_filter`** (EndpointFilter)：在1.0.1及以前版本的TNG中使用，为必选参数，现已被`dst_filters`替代，保留此项是为了兼容旧版中的配置
 
 
@@ -83,28 +83,28 @@
 
 ```json
 {
-  "add_ingress": [
-    {
-      "http_proxy": {
-        "proxy_listen": {
-          "host": "0.0.0.0",
-          "port": 41000
-        },
-        "dst_filters": [
-          {
-            "domain": "*.pai-eas.aliyuncs.com",
-            "port": 80
-          }
-        ]
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    "add_ingress": [
+        {
+            "http_proxy": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 41000
+                },
+                "dst_filters": [
+                    {
+                        "domain": "*.pai-eas.aliyuncs.com",
+                        "port": 80
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
 }
 ```
 
@@ -133,32 +133,32 @@
 
 #### 字段说明
 - **`in`** (Endpoint)：指定tng监听的本地tcp端口。
-  - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
-  - **`port`** (integer)：监听的端口号。
+    - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+    - **`port`** (integer)：监听的端口号。
 - **`out`** (Endpoint)：指定解密后的tcp请求发送的目标端点。
-  - **`host`** (string)：目标地址。
-  - **`port`** (integer)：目标端口号。
+    - **`host`** (string)：目标地址。
+    - **`port`** (integer)：目标端口号。
 
 示例：
 ```json
 {
-  "add_egress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "127.0.0.1",
-          "port": 20001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 30001
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
         }
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -167,8 +167,8 @@
 
 #### 字段说明
 - **`capture_dst`** (Endpoint)：指定需要被tng server捕获的目标端点。
-  - **`host`** (string, 可选，默认匹配本机上所有端口的本地ip地址)：目标地址。若不填，则默认匹配本机上所有端口的本地ip地址（见iptables的 `-m addrtype --dst-type LOCAL` 选项：[iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)）。
-  - **`port`** (integer)：目标端口号。
+    - **`host`** (string, 可选，默认匹配本机上所有端口的本地ip地址)：目标地址。若不填，则默认匹配本机上所有端口的本地ip地址（见iptables的 `-m addrtype --dst-type LOCAL` 选项：[iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)）。
+    - **`port`** (integer)：目标端口号。
 - **`capture_local_traffic`** (boolean, 可选，默认为`false`)：若值为`false`则在捕获时会忽略源ip为本机ip的请求，不会将它们重定向到`listen_port`。若值为`true`，则会连带捕获源ip为本机ip的请求。
 - **`listen_port`** (integer, 可选，默认从40000端口开始递增取值)：tng server监听的端口号，用于接收由netfilter重定向的流量。
 - **`so_mark`** (integer, 可选，默认值为565)：tng server解密后，承载明文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量再次被netfilter转发到tng server。
@@ -177,22 +177,22 @@
 
 ```json
 {
-  "add_egress": [
-    {
-      "netfilter": {
-        "capture_dst": {
-          "host": "127.0.0.1",
-          "port": 30001
-        },
-        "capture_local_traffic": false,
-        "listen_port": 40000,
-        "so_mark": 565
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                },
+                "capture_local_traffic": false,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
 }
 ```
 
@@ -208,9 +208,9 @@
 示例：
 
 ```json
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
 ```
 
 ## Verifier
@@ -228,38 +228,38 @@
 示例：连接到Restful HTTP类型的AS服务
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
 ```
 
 示例：连接到gRPC类型的AS服务
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:5000/",
-        "as_is_grpc": true,
-        "policy_ids": [
-          "default"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:5000/",
+                "as_is_grpc": true,
+                "policy_ids": [
+                    "default"
+                ]
+            }
 ```
 
 示例：指定验证AS token的根证书路径
 
 ```json
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ],
-        "trusted_certs_paths": [
-          "/tmp/as-ca.pem"
-        ]
-      }
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ],
+                "trusted_certs_paths": [
+                    "/tmp/as-ca.pem"
+                ]
+            }
 ```
 
 ## Attester和Verifier的组合与双向远程证明
@@ -295,8 +295,8 @@
 
 #### 字段说明
 - **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，着将默认设置伪装后http流量的path为`/`。
-  - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式。
-  - **`substitution`** (string)：当path匹配上match_regex时，伪装后http流量的path将被重写为substitution。支持使用`\数字`的方式来引用正则匹配到的group。
+    - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式。
+    - **`substitution`** (string)：当path匹配上match_regex时，伪装后http流量的path将被重写为substitution。支持使用`\数字`的方式来引用正则匹配到的group。
 
 示例：
 
@@ -304,34 +304,34 @@
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "0.0.0.0",
-          "port": 10001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 20001
+    "add_ingress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
+            },
+            "encap_in_http": {
+                "path_rewrites": [
+                    {
+                        "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
+                        "substitution": "/foo/bar/\\1"
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
         }
-      },
-      "encap_in_http": {
-        "path_rewrites": [
-          {
-            "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
-            "substitution": "/foo/bar/\\1"
-          }
-        ]
-      },
-      "verify": {
-        "as_addr": "http://127.0.0.1:8080/",
-        "policy_ids": [
-          "default"
-        ]
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -348,26 +348,26 @@
 
 ```json
 {
-  "add_egress": [
-    {
-      "mapping": {
-        "in": {
-          "host": "127.0.0.1",
-          "port": 20001
-        },
-        "out": {
-          "host": "127.0.0.1",
-          "port": 30001
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
+            },
+            "decap_from_http": {
+                "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
         }
-      },
-      "decap_from_http": {
-        "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
-      },
-      "attest": {
-        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-      }
-    }
-  ]
+    ]
 }
 ```
 
@@ -383,8 +383,8 @@
 
 #### 字段说明
 - **`admin_bind`** (Endpoint, 可选，默认为空)：该字段指定了envoy admin interface的监听地址和端口。包含以下子字段：
-  - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
-  - **`port`** (integer)：监听的端口号，必填。
+    - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+    - **`port`** (integer)：监听的端口号，必填。
 
 示例：
 
@@ -392,10 +392,103 @@
 
 ```json
 {
-  "admin_bind": {
-    "host": "0.0.0.0",
-    "port": 9901
-  }
+    "admin_bind": {
+        "host": "0.0.0.0",
+        "port": 9901
+    }
 }
 ```
 
+### 可观测性（Observability）
+
+可观测性是指对系统运行状态的监控，以帮助运维人员了解系统的运行情况，并采取适当的措施。可观测性的概念包含Log、Metric、Tracing三个层面。TNG目前包含了对Metric的支持。
+
+在TNG中，我们提供如下Metrics：
+
+<table>
+    <tr>
+        <th>范围</th>
+        <th>名称</th>
+        <th>类型</th>
+        <th>标签</th>
+        <th>描述</th>
+    </tr>
+    <tr>
+        <td>实例</td>
+        <td><code>live</code></td>
+        <td>Gauge</td>
+        <td>无</td>
+        <td>值为<code>1</code>表示TNG实例存活且健康</td>
+    </tr>
+    <tr>
+        <td rowspan="6">ingress/egress</td>
+        <td><code>tx_bytes_total</code></td>
+        <td>Counter</td>
+        <td rowspan="6"><a href="#metric_labels">见下表</a></td>
+        <td>发送的总字节数</td>
+    </tr>
+    <tr>
+        <td><code>rx_bytes_total</code></td>
+        <td>Counter</td>
+        <td>接收的总字节数</td>
+    </tr>
+    <tr>
+        <td><code>cx_active</code></td>
+        <td>Gauge</td>
+        <td>目前活跃连接数</td>
+    </tr>
+    <tr>
+        <td><code>cx_total</code></td>
+        <td>Counter</td>
+        <td>从实例启动到目前为止处理的总连接数</td>
+    </tr>
+    <tr>
+        <td><code>cx_failed</code></td>
+        <td>Counter</td>
+        <td>从实例启动到目前为止失败的总连接数</td>
+    </tr>
+</table>
+
+
+<span id = "metric_labels">ingress/egress的导出标签</span>如下：
+
+| 范围 | 类型 | 标签 | 
+| --- | --- | --- |
+| ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| ingress | `http_proxy` | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
+| egress | `mapping` | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
+
+目前，TNG仅支持向open-falcon导出Metrics，其他类型的Metrics导出方式（如Prometheus等）正在开发中。
+
+您可以通过指定`metrics`字段来开启对Metrics的支持。
+
+
+#### 字段说明
+
+- **`metrics`** (Metrics, 可选，默认为空)：该字段指定了Metrics的配置。包含以下子字段：
+    - **`exporters`** (array [Exporter], 可选，默认为空数组)：该字段指定了Metrics的导出器列表。包含以下子字段：
+        - **`type`** (string)：该字段指定了Metrics的导出器类型，目前仅支持`falcon`。
+        - **`server_url`** (string)：该字段指定了open-falcon服务端地址。
+        - **`endpoint`** (string)：该字段指定了每条metric绑定的endpoint值。
+        - **`tags`** (map [string], 可选，默认为空)：该字段指定了每条metric的额外附加标签，这些标签将和TNG产生的metric的标签一起被发送给open-falcon服务端。
+        - **`step`** (integer, 可选，默认为60)：该字段指定了每条metric的间隔时间step值，单位为秒。
+
+
+示例：
+```json
+{
+    "metric": {
+        "exporters": [{
+            "type": "falcon",
+            "server_url": "http://127.0.0.1:1988",
+            "endpoint": "master-node",
+            "tags": {
+                "namespace": "ns1",
+                "app": "tng"
+            },
+            "step": 60
+        }]
+    }
+}
+```

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use egress::mapping::MappingEgress;
 use ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
@@ -8,8 +8,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span};
 
 use crate::{
-    config::{egress::EgressMode, ingress::IngressMode, TngConfig},
-    executor::iptables::IpTablesActions,
+    config::{egress::EgressMode, ingress::IngressMode, metric::ExportorType, TngConfig},
+    executor::iptables::IpTablesAction,
+    observability::exporter::falcon::FalconExporter,
 };
 
 pub(self) mod access_log;
@@ -17,6 +18,7 @@ pub(self) mod attestation_result;
 pub(self) mod cert_verifier;
 mod egress;
 mod ingress;
+pub(self) mod service_metrics;
 mod utils;
 
 #[async_trait]
@@ -26,10 +28,38 @@ pub(self) trait RegistedService {
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
+    iptables_actions: Vec<IpTablesAction>,
 }
 
 impl TngRuntime {
-    pub fn launch_from_config(tng_config: TngConfig) -> Result<(Self, IpTablesActions)> {
+    fn setup_metric_exporter(tng_config: &TngConfig) -> Result<()> {
+        // Initialize OpenTelemetry
+
+        let exporter = if let Some(c) = &tng_config.metric {
+            if c.exporters.len() > 1 {
+                bail!("Only one exporter is supported for now")
+            }
+            match c.exporters.iter().next() {
+                Some(ExportorType::Falcon(tng_config)) => {
+                    Some(FalconExporter::new(tng_config.clone())?)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(exporter) = exporter {
+            let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter)
+                .build();
+            opentelemetry::global::set_meter_provider(meter_provider.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn launch_from_config(tng_config: TngConfig) -> Result<Self> {
         let mut iptables_actions = vec![];
         let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
 
@@ -38,12 +68,12 @@ impl TngRuntime {
             match &add_ingress.ingress_mode {
                 IngressMode::Mapping(mapping_args) => {
                     services.push((
-                        Box::new(MappingIngress::new(mapping_args, &add_ingress.common)?),
+                        Box::new(MappingIngress::new(id, mapping_args, &add_ingress.common)?),
                         tracing::info_span!("ingress", id),
                     ));
                 }
                 IngressMode::HttpProxy(http_proxy_args) => {
-                    let ingress = HttpProxyIngress::new(http_proxy_args, &add_ingress.common)?;
+                    let ingress = HttpProxyIngress::new(id, http_proxy_args, &add_ingress.common)?;
                     services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
                 }
                 IngressMode::Netfilter(_) => {
@@ -60,7 +90,7 @@ impl TngRuntime {
             let add_egress = add_egress.clone();
             match &add_egress.egress_mode {
                 EgressMode::Mapping(mapping_args) => {
-                    let egress = MappingEgress::new(mapping_args, &add_egress.common)?;
+                    let egress = MappingEgress::new(id, mapping_args, &add_egress.common)?;
                     services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
@@ -72,9 +102,9 @@ impl TngRuntime {
                     {
                         use egress::netfilter::NetfilterEgress;
                         let egress = NetfilterEgress::new(
+                            id,
                             netfilter_args,
                             &add_egress.common,
-                            id,
                             &mut iptables_actions,
                         )?;
                         services.push((Box::new(egress), tracing::info_span!("egress", id)));
@@ -83,7 +113,12 @@ impl TngRuntime {
             }
         }
 
-        Ok((Self { services }, iptables_actions))
+        Self::setup_metric_exporter(&tng_config)?;
+
+        Ok(Self {
+            services,
+            iptables_actions,
+        })
     }
 
     pub async fn serve(
@@ -92,8 +127,15 @@ impl TngRuntime {
         task_exit: CancellationToken,
         ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
-        let service_count = self.services.len();
+        // Setup iptables
+        #[cfg(not(target_os = "linux"))]
+        drop(iptables_actions);
+        #[cfg(target_os = "linux")]
+        let _iptables_guard =
+            crate::executor::iptables::IPTablesGuard::setup_from_actions(self.iptables_actions)?;
 
+        // Setup all services
+        let service_count = self.services.len();
         tracing::info!("Starting all {service_count} services");
 
         let (sender, mut receiver) = tokio::sync::mpsc::channel(service_count);
@@ -119,9 +161,17 @@ impl TngRuntime {
             }
         };
 
+        let meter = opentelemetry::global::meter("tng");
+        let live = meter
+            .u64_gauge("live")
+            .with_description("Indicates the server is alive or not")
+            .build();
+        live.record(0, &[]);
+
         tokio::select! {
             _ = check_services_ready => {
                 tracing::info!("All of the services are ready");
+                live.record(1, &[]);
 
                 let _ = ready.send(());// Ignore any error occuring during send
                 shutdown_guard.cancelled().await;

@@ -12,10 +12,12 @@ use tracing::Instrument;
 
 use crate::{
     config::egress::{CommonArgs, EgressMappingArgs},
+    observability::metric::stream::StreamWithCounter,
     tunnel::{
         access_log::AccessLog,
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
         ingress::core::TngEndpoint,
+        service_metrics::ServiceMetrics,
         utils, RegistedService,
     },
 };
@@ -26,10 +28,45 @@ pub struct MappingEgress {
     upstream_addr: String,
     upstream_port: u16,
     common_args: CommonArgs,
+    metrics: ServiceMetrics,
 }
 
 impl MappingEgress {
-    pub fn new(mapping_args: &EgressMappingArgs, common_args: &CommonArgs) -> Result<Self> {
+    pub fn new(
+        id: usize,
+        mapping_args: &EgressMappingArgs,
+        common_args: &CommonArgs,
+    ) -> Result<Self> {
+        let listen_addr = mapping_args
+            .r#in
+            .host
+            .as_deref()
+            .unwrap_or("0.0.0.0")
+            .to_owned();
+        let listen_port = mapping_args.r#in.port;
+
+        let upstream_addr = mapping_args
+            .out
+            .host
+            .as_deref()
+            .context("'host' of 'out' field must be set")?
+            .to_owned();
+        let upstream_port = mapping_args.out.port;
+
+        // egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}
+        let metrics = ServiceMetrics::new([
+            ("egress_type".to_owned(), "mapping".to_owned()),
+            ("egress_id".to_owned(), id.to_string()),
+            (
+                "egress_in".to_owned(),
+                format!("{}:{}", listen_addr, listen_port),
+            ),
+            (
+                "egress_out".to_owned(),
+                format!("{}:{}", upstream_addr, upstream_port),
+            ),
+        ]);
+
         Ok(Self {
             listen_addr: mapping_args
                 .r#in
@@ -47,6 +84,7 @@ impl MappingEgress {
                 .to_owned(),
             upstream_port: mapping_args.out.port,
             common_args: common_args.clone(),
+            metrics,
         })
     }
 }
@@ -78,6 +116,12 @@ impl RegistedService for MappingEgress {
 
             let trusted_stream_manager = trusted_stream_manager.clone();
 
+            let cx_total = self.metrics.cx_total.clone();
+            let cx_active = self.metrics.cx_active.clone();
+            let cx_failed = self.metrics.cx_failed.clone();
+            let tx_bytes_total = self.metrics.tx_bytes_total.clone();
+            let rx_bytes_total = self.metrics.rx_bytes_total.clone();
+
             let span = tracing::info_span!("serve", client=?peer_addr);
             shutdown_guard.spawn_task_fn(move |shutdown_guard| {
                 async move {
@@ -85,34 +129,71 @@ impl RegistedService for MappingEgress {
 
                     let (sender, mut receiver) = mpsc::unbounded_channel();
 
-                    shutdown_guard.spawn_task(
+                    shutdown_guard.spawn_task_fn(move |shutdown_guard| {
                         async move {
-                            while let Some((stream, attestation_result)) = receiver.recv().await {
-                                let fut = async {
-                                    // Print access log
-                                    let access_log = AccessLog {
-                                        downstream: peer_addr,
-                                        upstream: TngEndpoint::new(&upstream_addr, upstream_port),
-                                        to_trusted_tunnel: true, // TODO: handle allow_non_tng_traffic
-                                        peer_attested: attestation_result,
-                                    };
-                                    tracing::info!(?access_log);
+                            while let Some((downstream, attestation_result)) = receiver.recv().await
+                            {
+                                cx_total.add(1);
 
-                                    let upstream =
-                                        TcpStream::connect((upstream_addr.as_str(), upstream_port))
+                                let tx_bytes_total = tx_bytes_total.clone();
+                                let rx_bytes_total = rx_bytes_total.clone();
+
+                                // Spawn a task to handle the connection
+                                let task = shutdown_guard.spawn_task({
+                                    let upstream_addr = upstream_addr.clone();
+
+                                    async move {
+                                        let fut = async {
+                                            // Print access log
+                                            let access_log = AccessLog {
+                                                downstream: peer_addr,
+                                                upstream: TngEndpoint::new(
+                                                    &upstream_addr,
+                                                    upstream_port,
+                                                ),
+                                                to_trusted_tunnel: true, // TODO: handle allow_non_tng_traffic
+                                                peer_attested: attestation_result,
+                                            };
+                                            tracing::info!(?access_log);
+
+                                            let upstream = TcpStream::connect((
+                                                upstream_addr.as_str(),
+                                                upstream_port,
+                                            ))
                                             .await
                                             .context("Failed to connect to upstream")?;
 
-                                    utils::forward_stream(upstream, TokioIo::new(stream)).await
-                                };
+                                            let downstream = StreamWithCounter {
+                                                inner: TokioIo::new(downstream),
+                                                tx_bytes_total,
+                                                rx_bytes_total,
+                                            };
+                                            utils::forward_stream(upstream, downstream).await
+                                        };
 
-                                if let Err(e) = fut.await {
-                                    tracing::error!(error=?e, "Failed to forward stream");
-                                }
+                                        if let Err(e) = fut.await {
+                                            tracing::error!(error=?e, "Failed to forward stream");
+                                        }
+                                    }
+                                    .in_current_span()
+                                });
+
+                                // Spawn a task to trace the connection status.
+                                shutdown_guard.spawn_task({
+                                    let cx_active = cx_active.clone();
+                                    let cx_failed = cx_failed.clone();
+                                    async move {
+                                        cx_active.add(1);
+                                        if !matches!(task.await, Ok(())) {
+                                            cx_failed.add(1);
+                                        }
+                                        cx_active.add(-1);
+                                    }
+                                });
                             }
                         }
-                        .in_current_span(),
-                    );
+                        .in_current_span()
+                    });
 
                     // Consume streams come from downstream
                     match trusted_stream_manager
