@@ -30,13 +30,13 @@ pub struct IpTablesExecutor {
 }
 
 impl IpTablesExecutor {
-    pub fn new_from_actions(actions: IpTablesActions) -> Result<Option<Self>> {
+    pub fn new_from_actions(actions: &IpTablesActions) -> Result<Option<Self>> {
         if actions.len() == 0 {
             return Ok(None);
         }
 
         let (iptables_invoke_script, iptables_revoke_script) =
-            IpTablesExecutor::gen_script(&actions)?;
+            IpTablesExecutor::gen_script(actions)?;
 
         // Check if there is annother TNG instance running in same network namespace.
         let unix_listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Running more than 1 TNG instances concurrently in same network namespace which need iptables rules is not supported in current TNG version")?;

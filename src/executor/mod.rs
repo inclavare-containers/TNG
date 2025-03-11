@@ -1,9 +1,16 @@
 use anyhow::{bail, Context as _, Result};
 use envoy::EnvoyConfig;
+use get_port::{tcp::TcpPort, Ops};
 use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, warn};
 
-use crate::config::{egress::EgressMode, ingress::IngressMode, TngConfig};
+use crate::{
+    config::{egress::EgressMode, ingress::IngressMode, metric::ExportorType, TngConfig},
+    observability::{
+        collector::envoy::{MetricCollector, METRIC_COLLECTOR_STEP_DEFAULT},
+        exporter::falcon::FalconExporter,
+    },
+};
 
 pub mod envoy;
 pub mod iptables;
@@ -11,7 +18,72 @@ pub mod iptables;
 const NETFILTER_LISTEN_PORT_BEGIN_DEFAULT: u16 = 40000;
 const NETFILTER_SO_MARK_DEFAULT: u32 = 565;
 
-pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)> {
+pub struct Blueprint {
+    pub envoy_config: EnvoyConfig,
+    pub metric_collector: MetricCollector,
+    pub iptables_actions: IpTablesActions,
+}
+
+pub fn handle_config(config: TngConfig) -> Result<Blueprint> {
+    // Prepare envoy admin interface config
+    let envoy_admin_endpoint = match config.admin_bind {
+        Some(admin_bind) => (
+            admin_bind.host.as_deref().unwrap_or("0.0.0.0").to_owned(),
+            admin_bind.port,
+        ),
+        None => (
+            "127.0.0.1".to_owned(),
+            TcpPort::any("127.0.0.1").context("No available port")?,
+        ),
+    };
+
+    debug!(
+        "Envoy admin interface will be enabled at {}:{}",
+        envoy_admin_endpoint.0, envoy_admin_endpoint.1
+    );
+
+    let admin_config = format!(
+        r#"
+admin:
+  address:
+    socket_address:
+      address: {}
+      port_value: {}
+"#,
+        envoy_admin_endpoint.0, envoy_admin_endpoint.1
+    );
+
+    let (step, exporter) = if let Some(c) = config.metric {
+        if c.exporters.len() > 1 {
+            bail!("Only one exporter is supported for now")
+        }
+        match c.exporters.iter().next() {
+            Some(ExportorType::Falcon(config)) => {
+                (config.step, Some(FalconExporter::new(config.clone())?))
+            }
+            None => (METRIC_COLLECTOR_STEP_DEFAULT, None),
+        }
+    } else {
+        (METRIC_COLLECTOR_STEP_DEFAULT, None)
+    };
+
+    let mut metric_collector = MetricCollector::new(
+        (
+            if envoy_admin_endpoint.0 == "0.0.0.0" {
+                "127.0.0.1".to_owned()
+            } else {
+                envoy_admin_endpoint.0
+            },
+            envoy_admin_endpoint.1,
+        ),
+        step,
+    );
+
+    if let Some(exporter) = exporter {
+        metric_collector.register_metric_exporter(exporter);
+    };
+
+    // Prepare envoy listeners and clusters config
     let mut listeners = vec![];
     let mut clusters = vec![];
 
@@ -48,6 +120,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_ingress.no_ra,
                         &add_ingress.attest,
                         &add_ingress.verify,
+                        &mut metric_collector,
                     )?,
                     None => self::envoy::confgen::ingress::mapping::l4::gen(
                         id,
@@ -58,6 +131,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_ingress.no_ra,
                         &add_ingress.attest,
                         &add_ingress.verify,
+                        &mut metric_collector,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
@@ -81,6 +155,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_ingress.no_ra,
                         &add_ingress.attest,
                         &add_ingress.verify,
+                        &mut metric_collector,
                     )?,
                     None => self::envoy::confgen::ingress::http_proxy::l4::gen(
                         id,
@@ -90,6 +165,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_ingress.no_ra,
                         &add_ingress.attest,
                         &add_ingress.verify,
+                        &mut metric_collector,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
@@ -130,6 +206,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_egress.no_ra,
                         &add_egress.attest,
                         &add_egress.verify,
+                        &mut metric_collector,
                     )?,
                     None => self::envoy::confgen::egress::mapping::l4::gen(
                         id,
@@ -140,6 +217,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_egress.no_ra,
                         &add_egress.attest,
                         &add_egress.verify,
+                        &mut metric_collector,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
@@ -171,6 +249,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_egress.no_ra,
                         &add_egress.attest,
                         &add_egress.verify,
+                        &mut metric_collector,
                     )?,
                     None => self::envoy::confgen::egress::netfilter::l4::gen(
                         id,
@@ -179,6 +258,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
                         add_egress.no_ra,
                         &add_egress.attest,
                         &add_egress.verify,
+                        &mut metric_collector,
                     )?,
                 };
                 listeners.append(&mut yamls.0);
@@ -186,6 +266,7 @@ pub fn handle_config(config: TngConfig) -> Result<(EnvoyConfig, IpTablesActions)
             }
         }
     }
+
     let config = format!(
         r#"
 bootstrap_extensions:
@@ -200,27 +281,13 @@ static_resources:
 
   clusters:{}
 "#,
-        if let Some(admin_bind) = config.admin_bind {
-            let host = admin_bind.host.as_deref().unwrap_or("0.0.0.0");
-            let port = admin_bind.port;
-
-            debug!("Admin interface is enabled for envoy: http://{host}:{port}");
-
-            format!(
-                r#"
-admin:
-  address:
-    socket_address:
-      address: {}
-      port_value: {}
-            "#,
-                host, port
-            )
-        } else {
-            "".to_owned()
-        },
+        admin_config,
         listeners.join("\n"),
         clusters.join("\n")
     );
-    Ok((EnvoyConfig(config), iptables_actions))
+    Ok(Blueprint {
+        envoy_config: EnvoyConfig(config),
+        metric_collector,
+        iptables_actions,
+    })
 }

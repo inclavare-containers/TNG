@@ -6,6 +6,7 @@ use crate::{
         ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY, ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT,
         ENVOY_L7_RESPONSE_BODY_DENIED, ENVOY_LISTENER_SOCKET_OPTIONS,
     },
+    observability::collector::envoy::MetricCollector,
 };
 
 pub fn gen(
@@ -18,6 +19,7 @@ pub fn gen(
     no_ra: bool,
     attest: &Option<AttestArgs>,
     verify: &Option<VerifyArgs>,
+    _metric_collector: &mut MetricCollector,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let mut listeners = vec![];
     let mut clusters = vec![];
