@@ -1,5 +1,6 @@
 use executor::{envoy::EnvoyExecutor, iptables::IPTablesGuard};
 use scopeguard::defer;
+use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use anyhow::{Context as _, Result};
@@ -20,10 +21,15 @@ impl TngBuilder {
     }
 
     pub async fn serve_forever(self) -> Result<()> {
-        self.serve_with_cancel(CancellationToken::new()).await
+        self.serve_with_cancel(CancellationToken::new(), tokio::sync::oneshot::channel().0)
+            .await
     }
 
-    pub async fn serve_with_cancel(self, task_exit: CancellationToken) -> Result<()> {
+    pub async fn serve_with_cancel(
+        self,
+        task_exit: CancellationToken,
+        ready: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<()> {
         // Handle tng config
         let blueprint = executor::handle_config(self.config)?;
 
@@ -49,9 +55,20 @@ impl TngBuilder {
                 .build()
         };
 
+        let (admin_instance_ready_send, admin_instance_ready_recv) =
+            tokio::sync::oneshot::channel();
+
         let metric_collector = blueprint.metric_collector;
         shutdown.spawn_task_fn(|shutdown_guard| async move {
-            // TODO: wait until the envoy process is ready
+            select! {
+                _ = shutdown_guard.cancelled() => {/* exit here */}
+                res = admin_instance_ready_recv =>{
+                    if res.is_err() {
+                        return Ok(())// if we got error when waiting for envoy process ready, then exit
+                    }
+                }
+            };
+
             // Starting Metric Collector
             metric_collector
                 .serve(shutdown_guard)
@@ -59,9 +76,12 @@ impl TngBuilder {
                 .context("Failed to launch metric collector")
         });
 
+        let envoy_executor =
+            EnvoyExecutor::new(blueprint.envoy_config, blueprint.envoy_admin_endpoint);
         shutdown.spawn_task_fn(move |shutdown_guard| async move {
             // Starting Envoy process
-            EnvoyExecutor::serve(&blueprint.envoy_config, shutdown_guard, task_exit)
+            envoy_executor
+                .serve(shutdown_guard, task_exit, admin_instance_ready_send, ready)
                 .await
                 .context("Failed to launch envoy executor")
         });

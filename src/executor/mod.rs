@@ -21,6 +21,7 @@ const NETFILTER_SO_MARK_DEFAULT: u32 = 565;
 pub struct Blueprint {
     pub envoy_config: EnvoyConfig,
     pub metric_collector: MetricCollector,
+    pub envoy_admin_endpoint: (String /* host */, u16 /* port */),
     pub iptables_actions: IpTablesActions,
 }
 
@@ -67,17 +68,16 @@ admin:
         (METRIC_COLLECTOR_STEP_DEFAULT, None)
     };
 
-    let mut metric_collector = MetricCollector::new(
-        (
-            if envoy_admin_endpoint.0 == "0.0.0.0" {
-                "127.0.0.1".to_owned()
-            } else {
-                envoy_admin_endpoint.0
-            },
-            envoy_admin_endpoint.1,
-        ),
-        step,
+    let envoy_admin_endpoint = (
+        if envoy_admin_endpoint.0 == "0.0.0.0" {
+            "127.0.0.1".to_owned()
+        } else {
+            envoy_admin_endpoint.0
+        },
+        envoy_admin_endpoint.1,
     );
+
+    let mut metric_collector = MetricCollector::new(envoy_admin_endpoint.clone(), step);
 
     if let Some(exporter) = exporter {
         metric_collector.register_metric_exporter(exporter);
@@ -288,6 +288,7 @@ static_resources:
     Ok(Blueprint {
         envoy_config: EnvoyConfig(config),
         metric_collector,
+        envoy_admin_endpoint,
         iptables_actions,
     })
 }
