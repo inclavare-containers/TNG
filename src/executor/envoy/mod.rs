@@ -1,9 +1,12 @@
+use std::net::Ipv4Addr;
 use std::path::Path;
+use std::str::FromStr;
 
 use anyhow::{Context as _, Result};
 use log::{debug, error, info};
 use rand::Rng as _;
 use tokio::io::AsyncWriteExt as _;
+use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio_graceful::ShutdownGuard;
 use tokio_util::sync::CancellationToken;
@@ -15,13 +18,25 @@ const ENVOY_EXE_PATH_DEFAULT: &str = "/usr/lib64/tng/envoy-static";
 
 pub struct EnvoyConfig(pub String);
 
-pub struct EnvoyExecutor {}
+pub struct EnvoyExecutor {
+    envoy_config: EnvoyConfig,
+    envoy_admin_endpoint: (String, u16),
+}
 
 impl EnvoyExecutor {
+    pub fn new(envoy_config: EnvoyConfig, envoy_admin_endpoint: (String, u16)) -> Self {
+        Self {
+            envoy_config,
+            envoy_admin_endpoint,
+        }
+    }
+
     pub async fn serve(
-        envoy_config: &EnvoyConfig,
+        self,
         shutdown_guard: ShutdownGuard,
         task_exit: CancellationToken,
+        admin_interface_ready: tokio::sync::oneshot::Sender<()>,
+        all_ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
         info!("Launching Envoy now");
         // Write config to temp file
@@ -35,7 +50,7 @@ impl EnvoyExecutor {
         let mut temp_file = tokio::fs::File::from_std(temp_file);
 
         temp_file
-            .write_all(envoy_config.0.as_bytes())
+            .write_all(self.envoy_config.0.as_bytes())
             .await
             .context("Failed to write Envoy config to file")?;
 
@@ -74,10 +89,39 @@ impl EnvoyExecutor {
         let pid = child.id().context("Failed to get Envoy PID")?;
         info!("Envoy started with PID: {}", pid);
 
+        shutdown_guard.spawn_task_fn(|shutdown_guard| async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_guard.cancelled() => { /* exit here */}
+                    status = self.pull_admin_interface_status() => {
+                        // wait for envoy admin interface to be ready
+                        if status{
+                            info!("Envoy instance is running");
+                            let _ = admin_interface_ready.send(());
+                            break
+                        }
+                    }
+                }
+            }
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_guard.cancelled() => { /* exit here */}
+                    status = self.pull_ready_status() => {
+                        // wait for envoy instance to be ready for incoming connections
+                        if status{
+                            info!("Envoy instance is ready for incoming connections");
+                            let _ = all_ready.send(());
+                            break
+                        }
+                    }
+                }
+            }
+        });
+
         tokio::select! {
-            // TODO: check for the envoy is ready
             exit_status = child.wait() => {
-                // the envoy process was existed, so we notify the caller
+                // the envoy process was exited, so we notify the caller
                 task_exit.cancel();
 
                 let exit_status = exit_status.context("Failed to wait for Envoy process")?;
@@ -99,5 +143,50 @@ impl EnvoyExecutor {
         };
 
         Ok(())
+    }
+
+    async fn pull_admin_interface_status(&self) -> bool {
+        let res = async {
+            // Check if admin interface port is open
+            Ok::<_, anyhow::Error>(
+                TcpStream::connect((
+                    Ipv4Addr::from_str(&self.envoy_admin_endpoint.0)?,
+                    self.envoy_admin_endpoint.1,
+                ))
+                .await
+                .is_ok(),
+            )
+        }
+        .await;
+
+        match res {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to pull Envoy admin interface status: {e}");
+                false
+            }
+        }
+    }
+
+    async fn pull_ready_status(&self) -> bool {
+        let res = async {
+            let url = format!(
+                "http://{}:{}/ready",
+                self.envoy_admin_endpoint.0, self.envoy_admin_endpoint.1
+            );
+
+            let client = reqwest::Client::new();
+            let response = client.get(&url).send().await?;
+            Ok::<_, anyhow::Error>(response.status() == reqwest::StatusCode::OK)
+        }
+        .await;
+
+        match res {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to pull Envoy ready status: {e}");
+                false
+            }
+        }
     }
 }
