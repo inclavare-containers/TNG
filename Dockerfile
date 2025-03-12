@@ -25,7 +25,7 @@ RUN yum install -y make git vim gcc \
         clang jq cargo rust
 
 # install "just"
-RUN cargo install just
+RUN cargo install just@1.39.0
 
 ENV PATH="$PATH:/root/.cargo/bin"
 
