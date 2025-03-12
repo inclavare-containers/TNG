@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::{Context as _, Result};
 use const_format::formatcp;
+use futures::future::FusedFuture;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use log::{error, info};
@@ -79,13 +82,47 @@ impl MetricCollector {
         self.metric_exporter = Some(metric_exporter)
     }
 
-    pub async fn serve(self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        info!("Metric collector launch");
+    pub fn has_metric_exporter(&self) -> bool {
+        self.metric_exporter.is_some()
+    }
 
-        // TODO: restart if the collector is failed
-        select! {
-            _ = shutdown_guard.cancelled() => {}
-            () = self.collect_and_report() => {},
+    pub async fn serve(self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        if !self.has_metric_exporter() {
+            info!("No metric exporter registered, metric disabled");
+            return Ok(());
+        }
+
+        info!("Metric collector starting");
+
+        let this = Arc::new(self);
+
+        loop {
+            let this = this.clone();
+            let res = shutdown_guard
+                .spawn_task_fn(|shutdown_guard| async move {
+                    select! {
+                        _ = shutdown_guard.cancelled() => {}
+                        () = this.collect_and_report() => {},
+                    }
+                })
+                .await;
+
+            let is_cancelled =
+                futures::future::maybe_done(shutdown_guard.cancelled()).is_terminated();
+            if is_cancelled {
+                // The tng instance is shutting down now
+                break;
+            }
+
+            if let Err(e) = res {
+                info!("Metric collector exited unexpectedly with error: {e:#}");
+            } else {
+                info!("Metric collector exited unexpectedly with no error");
+            }
+
+            // Sleep for a while to avoid too many restart
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            info!("Metric collector restarting")
         }
 
         info!("Metric collector exit now");
@@ -104,7 +141,6 @@ impl MetricCollector {
 
             loop {
                 let envoy_stats = async {
-                    // TODO: capture error in loop
                     let response = client.get(&url).send().await?;
                     let text = response.text().await?;
 
@@ -236,6 +272,14 @@ impl From<EnvoyStatsJson> for EnvoyStats {
 #[cfg(test)]
 mod tests {
 
+    use anyhow::bail;
+    use axum::{routing::get, Router};
+    use get_port::{tcp::TcpPort, Ops};
+    use http::StatusCode;
+    use tokio::net::TcpListener;
+
+    use crate::observability::exporter::falcon::FalconConfig;
+
     use super::*;
 
     #[test]
@@ -247,6 +291,77 @@ mod tests {
 
         let envoy_stats: EnvoyStats = envoy_stats_json.into();
         assert!(envoy_stats.len() > 0);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_collector_panic_restart() -> Result<()> {
+        env_logger::Builder::from_env(
+            env_logger::Env::default()
+                .filter_or("TNG_LOG_LEVEL", "debug")
+                .write_style_or("TNG_LOG_STYLE", "always"),
+        )
+        .is_test(true)
+        .init();
+
+        let localhost = "127.0.0.1";
+        let port = TcpPort::any(localhost).unwrap();
+
+        // Fake envoy admin interface
+        let listener = TcpListener::bind((localhost, port)).await.unwrap();
+        tokio::spawn(async move {
+            async fn handler() -> Result<(StatusCode, std::string::String), ()> {
+                Ok((
+                    StatusCode::OK,
+                    include_str!("./test_data/envoy_stats.json").to_owned(),
+                ))
+            }
+            let app = Router::new().route("/{*path}", get(handler));
+            let server = axum::serve(listener, app);
+            server.await
+        });
+
+        // Create metric collector
+        let envoy_admin_endpoint = (localhost.to_string(), port);
+        let mut metric_collector = MetricCollector::new(envoy_admin_endpoint.clone(), 60);
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        metric_collector.register_xgress_metric_parser(
+            XgressId::Ingress { id: 0 },
+            move |_: &_, _| {
+                tx.send(()).unwrap();
+                panic!("ignore this panic, which is expected")
+            },
+        );
+        metric_collector.register_metric_exporter(
+            FalconExporter::new(FalconConfig {
+                server_url: "http://0.0.0.0:0".to_owned(),
+                endpoint: "master-node".to_owned(),
+                tags: [].into(),
+                step: 60,
+            })
+            .unwrap(),
+        );
+
+        let shutdown = tokio_graceful::Shutdown::default();
+        shutdown.spawn_task_fn(|shutdown_guard| async {
+            metric_collector.serve(shutdown_guard).await.unwrap();
+        });
+
+        for _ in 0..2 {
+            select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                    bail!("The test is time out")
+                }
+                res = rx.recv() => {
+                    if res != Some(()){
+                        bail!("the xgress_metric_parser not triggered as expected")
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
