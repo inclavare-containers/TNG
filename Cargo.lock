@@ -794,12 +794,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "get-port"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "888123007db34fbff15b5a347d46364dfbad531d6cb43de52cc0b62558f570e2"
-
-[[package]]
 name = "getrandom"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1504,6 +1498,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "portpicker"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be97d76faf1bfab666e1375477b23fde79eccf0276e9b63b92a39d676a889ba9"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -2243,12 +2246,12 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "futures",
- "get-port",
  "http",
  "indexmap 2.8.0",
  "itertools",
  "log",
  "nix 0.29.0",
+ "portpicker",
  "rand 0.8.5",
  "reqwest",
  "rustls",

@@ -266,7 +266,6 @@ mod tests {
 
     use anyhow::bail;
     use axum::{routing::get, Router};
-    use get_port::{tcp::TcpPort, Ops};
     use http::StatusCode;
     use tokio::net::TcpListener;
 
@@ -290,7 +289,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_collector_panic_restart() -> Result<()> {
         let localhost = "127.0.0.1";
-        let port = TcpPort::any(localhost).unwrap();
+        let port = portpicker::pick_unused_port().unwrap();
 
         // Fake envoy admin interface
         let listener = TcpListener::bind((localhost, port)).await.unwrap();
