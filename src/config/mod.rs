@@ -1,10 +1,12 @@
 use egress::AddEgressArgs;
 use ingress::AddIngressArgs;
+use metric::MetricArgs;
 use serde::{Deserialize, Serialize};
 
 pub mod attest;
 pub mod egress;
 pub mod ingress;
+pub mod metric;
 pub mod verify;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,6 +15,9 @@ pub struct TngConfig {
     /// The [address]:port where the envoy admin interface to bind on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_bind: Option<Endpoint>,
+
+    #[serde(default = "Option::default")]
+    pub metric: Option<MetricArgs>,
 
     #[serde(default)]
     pub add_ingress: Vec<AddIngressArgs>,
@@ -43,6 +48,7 @@ mod tests {
     fn test_serialize_deserialize() -> Result<()> {
         let config = TngConfig {
             admin_bind: None,
+            metric: None,
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping {
                     r#in: Endpoint {
