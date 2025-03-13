@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
 
     // Initialize env_logger
     let env = env_logger::Env::default()
-        .filter_or("TNG_LOG_LEVEL", "debug")
+        .filter_or("TNG_LOG_LEVEL", "none,tng=debug")
         .write_style_or("TNG_LOG_STYLE", "always"); // enable color
     env_logger::Builder::from_env(env).init();
 
