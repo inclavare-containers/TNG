@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use const_format::formatcp;
-use futures::future::FusedFuture;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use log::{error, info};
@@ -96,33 +95,33 @@ impl MetricCollector {
 
         let this = Arc::new(self);
 
-        loop {
-            let this = this.clone();
-            let res = shutdown_guard
-                .spawn_task_fn(|shutdown_guard| async move {
-                    select! {
-                        _ = shutdown_guard.cancelled() => {}
-                        () = this.collect_and_report() => {},
-                    }
-                })
-                .await;
+        let fut = async {
+            loop {
+                let this = this.clone();
+                let res = shutdown_guard
+                    .spawn_task_fn(|shutdown_guard| async move {
+                        select! {
+                            _ = shutdown_guard.cancelled() => { return /* exit here */}
+                            () = this.collect_and_report() => {},
+                        }
+                    })
+                    .await;
 
-            let is_cancelled =
-                futures::future::maybe_done(shutdown_guard.cancelled()).is_terminated();
-            if is_cancelled {
-                // The tng instance is shutting down now
-                break;
+                if let Err(e) = res {
+                    info!("Metric collector exited unexpectedly with error: {e:#}");
+                } else {
+                    info!("Metric collector exited unexpectedly with no error");
+                }
+
+                // Sleep for a while to avoid restart too frequently
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                info!("Metric collector restarting")
             }
+        };
 
-            if let Err(e) = res {
-                info!("Metric collector exited unexpectedly with error: {e:#}");
-            } else {
-                info!("Metric collector exited unexpectedly with no error");
-            }
-
-            // Sleep for a while to avoid too many restart
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            info!("Metric collector restarting")
+        select! {
+            _ = shutdown_guard.cancelled() => {}
+            () = fut => {},
         }
 
         info!("Metric collector exit now");
@@ -297,14 +296,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_collector_panic_restart() -> Result<()> {
-        env_logger::Builder::from_env(
-            env_logger::Env::default()
-                .filter_or("TNG_LOG_LEVEL", "debug")
-                .write_style_or("TNG_LOG_STYLE", "always"),
-        )
-        .is_test(true)
-        .init();
-
         let localhost = "127.0.0.1";
         let port = TcpPort::any(localhost).unwrap();
 

@@ -92,7 +92,7 @@ impl EnvoyExecutor {
         shutdown_guard.spawn_task_fn(|shutdown_guard| async move {
             loop {
                 tokio::select! {
-                    _ = shutdown_guard.cancelled() => { /* exit here */}
+                    _ = shutdown_guard.cancelled() => { break /* exit here */ }
                     status = self.pull_admin_interface_status() => {
                         // wait for envoy admin interface to be ready
                         if status{
@@ -102,11 +102,13 @@ impl EnvoyExecutor {
                         }
                     }
                 }
+                // Sleep for a while to avoid query too frequently
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
 
             loop {
                 tokio::select! {
-                    _ = shutdown_guard.cancelled() => { /* exit here */}
+                    _ = shutdown_guard.cancelled() => { break /* exit here */ }
                     status = self.pull_ready_status() => {
                         // wait for envoy instance to be ready for incoming connections
                         if status{
@@ -116,6 +118,8 @@ impl EnvoyExecutor {
                         }
                     }
                 }
+                // Sleep for a while to avoid query too frequently
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });
 
