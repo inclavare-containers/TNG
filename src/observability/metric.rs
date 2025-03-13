@@ -39,12 +39,29 @@ pub enum ValueType {
     Gauge,
 }
 
-pub trait Metric {
+pub trait Metric: Send + Sync {
     fn value_type(&self) -> ValueType;
 
     fn labels(&self) -> IndexMap<String, String>;
 
     fn name(&self) -> String;
+}
+
+impl<T> Metric for &T
+where
+    T: Metric + Send + Sync + ?Sized,
+{
+    fn value_type(&self) -> ValueType {
+        (*self).value_type()
+    }
+
+    fn labels(&self) -> IndexMap<String, String> {
+        (*self).labels()
+    }
+
+    fn name(&self) -> String {
+        (*self).name()
+    }
 }
 
 impl Metric for (XgressId, XgressMetric) {

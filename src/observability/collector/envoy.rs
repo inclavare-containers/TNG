@@ -159,69 +159,62 @@ impl MetricCollector {
                 match envoy_stats {
                     Ok(envoy_stats) => {
                         // Export server metric
-                        let futures1 = ServerMetric::iter().map(|metric| {
-                            let envoy_stats = &envoy_stats;
-                            async move {
-                                let metric_value = self
-                                    .server_metric_parser
-                                    .parse(&envoy_stats, metric)
-                                    .with_context(|| {
-                                        format!("failed to get metric value for {}", metric.name())
-                                    })?;
-
-                                metric_exporter
-                                    .push(metric, metric_value)
-                                    .await
-                                    .with_context(|| {
-                                        format!("Failed to push metric value for {}", metric.name())
-                                    })?;
-
-                                Ok::<_, anyhow::Error>(())
-                            }
+                        let iter1 = ServerMetric::iter().map(|metric| {
+                            let metric_value = self
+                                .server_metric_parser
+                                .parse(&envoy_stats, metric)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to get metric value for {}, skip now",
+                                        metric.name()
+                                    )
+                                })?;
+                            Ok::<_, anyhow::Error>((
+                                Box::new(metric) as Box<dyn Metric>,
+                                metric_value,
+                            ))
                         });
 
-                        let futures2 = self
+                        let iter2 = self
                             .xgress_metric_parsers
                             .iter()
                             .cartesian_product(XgressMetric::iter())
                             .map(|((xgress_id, parser), xgress_metric)| {
-                                let envoy_stats = &envoy_stats;
-                                async move {
-                                    let metric = (*xgress_id, xgress_metric);
-                                    let metric_value = parser
-                                        .parse(&envoy_stats, xgress_metric)
-                                        .with_context(|| {
-                                            format!(
-                                                "failed to get metric value for {}",
-                                                metric.name()
-                                            )
-                                        })?;
+                                let metric = (*xgress_id, xgress_metric);
+                                let metric_value = parser
+                                    .parse(&envoy_stats, xgress_metric)
+                                    .with_context(|| {
+                                        format!(
+                                            "failed to get metric value for {}, skip now",
+                                            metric.name()
+                                        )
+                                    })?;
 
-                                    metric_exporter
-                                        .push(metric, metric_value)
-                                        .await
-                                        .with_context(|| {
-                                            format!(
-                                                "Failed to push metric value for {}",
-                                                metric.name()
-                                            )
-                                        })?;
-
-                                    Ok::<_, anyhow::Error>(())
-                                }
+                                Ok::<_, anyhow::Error>((
+                                    Box::new(metric) as Box<dyn Metric>,
+                                    metric_value,
+                                ))
                             });
 
-                        let (res1, res2) = futures::future::join(
-                            futures::future::join_all(futures1),
-                            futures::future::join_all(futures2),
-                        )
-                        .await;
+                        let mertic_and_values: Vec<_> = iter1
+                            .chain(iter2)
+                            .map_while(|r| match r {
+                                Err(e) => {
+                                    error!("{e:#}");
+                                    None
+                                }
+                                Ok(v) => Some(v),
+                            })
+                            .collect();
 
-                        res1.into_iter().chain(res2).for_each(|res| {
-                            if let Err(e) = res {
-                                error!("{e:#}")
-                            }
-                        });
+                        let res = metric_exporter
+                            .push(&mertic_and_values)
+                            .await
+                            .with_context(|| format!("Failed to push metric value"));
+
+                        if let Err(e) = res {
+                            error!("{e:#}")
+                        }
                     }
                     Err(e) => {
                         error!("{e:#}")

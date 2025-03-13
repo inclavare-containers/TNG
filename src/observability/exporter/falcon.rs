@@ -93,8 +93,11 @@ impl FalconExporter {
         })
     }
 
-    pub async fn push(&self, metric: impl Metric, value: MetricValue) -> Result<()> {
-        let falcon_metric = self.construct_metric(metric, value)?;
+    pub async fn push(&self, metric_and_values: &[(Box<dyn Metric>, MetricValue)]) -> Result<()> {
+        let falcon_metrics = metric_and_values
+            .into_iter()
+            .map(|(metric, value)| self.construct_metric(metric.as_ref(), value.clone()))
+            .collect::<Result<Vec<_>>>()?;
 
         RetryPolicy::fixed(Duration::from_secs(1))
             .with_max_retries(MAX_PUSH_RETRY - 1)
@@ -102,7 +105,7 @@ impl FalconExporter {
                 let res = self
                     .client
                     .post(format!("{}/v1/push", self.falcon_config.server_url))
-                    .json(&falcon_metric)
+                    .json(&falcon_metrics)
                     .send()
                     .await?;
                 if let Err(e) = res.error_for_status_ref() {
