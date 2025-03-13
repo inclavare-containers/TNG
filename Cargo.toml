@@ -15,7 +15,6 @@ const_format = "0.2.34"
 ctrlc = {version = "3.4.5", features = ["termination"]}
 either = "1.15.0"
 futures = "0.3.31"
-get-port = "4.0.0"
 h2 = {version = "0.4.7", features = ["stream"]}
 http = "1.2.0"
 http-body-util = "0.1.2"
@@ -28,6 +27,7 @@ nix = {version = "0.29.0", features = ["process", "signal"]}
 opentelemetry = "0.29.1"
 opentelemetry_sdk = "0.29.0"
 pin-project = "1"
+portpicker = "0.1.1"
 rand = "0.9.0"
 rats-cert = {path = "./deps/rats-rs/rats-cert", default-features = false, features = ["coco", "crypto-rustcrypto"]}
 regex = "1.11.1"

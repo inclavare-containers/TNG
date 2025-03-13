@@ -72,7 +72,6 @@ impl TngBuilder {
 mod tests {
 
     use axum::{routing::get, Router};
-    use get_port::{tcp::TcpPort, Ops};
     use http::StatusCode;
     use serde_json::json;
     use tokio::{net::TcpListener, select};
@@ -93,7 +92,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_cancel() -> Result<()> {
-        let port = TcpPort::any("127.0.0.1").unwrap();
+        let port = portpicker::pick_unused_port().unwrap();
 
         launch_fake_falcon_server(port).await;
 
@@ -158,7 +157,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_envoy_error() -> Result<()> {
-        let port = TcpPort::any("127.0.0.1").unwrap();
+        let port = portpicker::pick_unused_port().unwrap();
 
         launch_fake_falcon_server(port).await;
 
