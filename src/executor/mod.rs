@@ -1,6 +1,5 @@
 use anyhow::{bail, Context as _, Result};
 use envoy::EnvoyConfig;
-use get_port::{tcp::TcpPort, Ops};
 use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, warn};
 
@@ -34,7 +33,7 @@ pub fn handle_config(config: TngConfig) -> Result<Blueprint> {
         ),
         None => (
             "127.0.0.1".to_owned(),
-            TcpPort::any("127.0.0.1").context("No available port")?,
+            portpicker::pick_unused_port().context("No available port")?,
         ),
     };
 
