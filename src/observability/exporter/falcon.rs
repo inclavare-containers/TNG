@@ -1,13 +1,12 @@
-use std::{
-    collections::HashMap,
-    sync::atomic,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::time::{Duration, UNIX_EPOCH};
 
 use again::RetryPolicy;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+
+use super::{MetricExporter, SimpleMetric, ValueType};
 
 #[derive(Debug, Serialize, PartialEq)]
 struct FalconMetric {
@@ -33,6 +32,15 @@ enum FalconCounterType {
     Counter,
     #[serde(rename = "GAUGE")]
     Gauge,
+}
+
+impl From<ValueType> for FalconCounterType {
+    fn from(value_type: ValueType) -> Self {
+        match value_type {
+            ValueType::Counter => Self::Counter,
+            ValueType::Gauge => Self::Gauge,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -63,14 +71,19 @@ impl Serialize for FalconTags {
 pub struct FalconConfig {
     pub server_url: String,
     pub endpoint: String,
+    #[serde(default)]
     pub tags: IndexMap<String, String>,
+    #[serde(default = "falcon_config_default_step")]
     pub step: u64,
+}
+
+fn falcon_config_default_step() -> u64 {
+    60
 }
 
 pub struct FalconExporter {
     falcon_config: FalconConfig,
     client: reqwest::Client,
-    is_shutdown: atomic::AtomicBool,
 }
 
 const APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
@@ -84,16 +97,42 @@ impl FalconExporter {
             client: reqwest::ClientBuilder::new()
                 .user_agent(APP_USER_AGENT)
                 .build()?,
-            is_shutdown: atomic::AtomicBool::new(false),
         })
     }
 
-    pub async fn push_to_server(
-        &self,
-        metrics: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
-    ) -> Result<()> {
-        let falcon_metrics = self.construct_metrics(metrics)?;
+    fn construct_metric(&self, metric: &SimpleMetric) -> Result<FalconMetric> {
+        Ok(FalconMetric {
+            endpoint: self.falcon_config.endpoint.clone(),
+            metric: metric.name.to_owned(),
+            value: metric.value.clone(),
+            step: self.falcon_config.step,
+            counter_type: metric.value_type.into(),
+            tags: {
+                let mut tags = self.falcon_config.tags.clone();
+                tags.extend(metric.attributes.clone());
+                tags.into()
+            },
+            timestamp: metric
+                .time
+                .duration_since(UNIX_EPOCH)
+                .context("System time is before unix epoch")?
+                .as_secs(),
+        })
+    }
+}
 
+#[async_trait]
+impl MetricExporter for FalconExporter {
+    async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
+        let falcon_metrics = metrics
+            .into_iter()
+            .map(|metric| self.construct_metric(metric))
+            .collect::<Result<Vec<_>>>()?;
+
+        tracing::trace!(
+            "Pushing metrics to falcon: {}",
+            serde_json::to_string(&falcon_metrics).unwrap_or_else(|e| format!("error: {e:#}"))
+        );
         RetryPolicy::fixed(Duration::from_secs(1))
             .with_max_retries(MAX_PUSH_RETRY - 1)
             .retry(|| async {
@@ -118,218 +157,256 @@ impl FalconExporter {
 
         Ok(())
     }
-
-    fn construct_metrics(
-        &self,
-        metrics: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
-    ) -> Result<Vec<FalconMetric>> {
-        let mut falcon_metrics = vec![];
-
-        let mut attrs = HashMap::new();
-
-        if let Some(schema_url) = metrics.resource.schema_url() {
-            attrs.insert("otel.resource.schema_url".to_owned(), schema_url.to_owned());
-        }
-
-        metrics.resource.iter().for_each(|(k, v)| {
-            attrs.insert(k.to_string(), v.to_string());
-        });
-
-        for scope_metrics in &metrics.scope_metrics {
-            let mut attrs = attrs.clone();
-
-            attrs.insert(
-                "otel.scope.name".to_owned(),
-                scope_metrics.scope.name().to_owned(),
-            );
-
-            if let Some(version) = scope_metrics.scope.version() {
-                attrs.insert("otel.scope.version".to_owned(), version.to_owned());
-            }
-
-            if let Some(schema_url) = scope_metrics.scope.schema_url() {
-                attrs.insert("otel.scope.schema_url".to_owned(), schema_url.to_owned());
-            }
-            scope_metrics.scope.attributes().for_each(
-                |opentelemetry::KeyValue { key, value, .. }| {
-                    attrs.insert(key.to_string(), value.to_string());
-                },
-            );
-
-            for metric in &scope_metrics.metrics {
-                let value_and_time = {
-                    let data = metric.data.as_any();
-                    if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<u64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_u128(data_point.value as u128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                sum.time,
-                                FalconCounterType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<i64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_i128(data_point.value as i128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                sum.time,
-                                FalconCounterType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<f64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_f64(data_point.value as f64)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                sum.time,
-                                FalconCounterType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<u64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_u128(data_point.value as u128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                gauge.time,
-                                FalconCounterType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<i64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_i128(data_point.value as i128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                gauge.time,
-                                FalconCounterType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<f64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_f64(data_point.value as f64)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                gauge.time,
-                                FalconCounterType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else {
-                        bail!("Unsupported data type");
-                    }
-                };
-
-                if let Some((value, time, counter_type, attributes)) = value_and_time {
-                    let mut attrs = attrs.clone();
-
-                    attributes
-                        .iter()
-                        .for_each(|opentelemetry::KeyValue { key, value, .. }| {
-                            attrs.insert(key.to_string(), value.to_string());
-                        });
-
-                    falcon_metrics.push(FalconMetric {
-                        endpoint: self.falcon_config.endpoint.clone(),
-                        metric: metric.name.to_string(),
-                        value,
-                        step: self.falcon_config.step,
-                        counter_type,
-                        tags: {
-                            let mut tags = self.falcon_config.tags.clone();
-                            tags.extend(attrs);
-                            tags.into()
-                        },
-                        timestamp: time
-                            .duration_since(UNIX_EPOCH)
-                            .context("System time is before unix epoch")?
-                            .as_secs(),
-                    });
-                }
-            }
-        }
-
-        Ok(falcon_metrics)
-    }
 }
 
-impl opentelemetry_sdk::metrics::exporter::PushMetricExporter for FalconExporter {
-    async fn export(
-        &self,
-        metrics: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
-    ) -> opentelemetry_sdk::error::OTelSdkResult {
-        if self.is_shutdown.load(atomic::Ordering::SeqCst) {
-            Err(opentelemetry_sdk::error::OTelSdkError::AlreadyShutdown)
-        } else {
-            self.push_to_server(metrics).await.map_err(|e| {
-                opentelemetry_sdk::error::OTelSdkError::InternalFailure(format!("{e:#}"))
-            })
+#[cfg(test)]
+mod tests {
+
+    use std::time::SystemTime;
+
+    use crate::{config::TngConfig, TngBuilder};
+    use axum::{extract::State, routing::post, Json, Router};
+    use http::StatusCode;
+    use scopeguard::defer;
+    use serde_json::json;
+    use tokio::{net::TcpListener, select};
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[test]
+    fn test_deserialize() -> Result<()> {
+        let json_value = json!(
+            {
+                "endpoint": "c3-op-mon-falcon01.bj",
+                "metric": "qps",
+                "timestamp": 1551264402,
+                "step": 60,
+                "value": 1,
+                "counterType": "GAUGE",
+                "tags": "idc=lg,loc=beijing,pdl=falcon"
+            }
+        );
+
+        let metric_value = FalconMetric {
+            endpoint: "c3-op-mon-falcon01.bj".to_owned(),
+            metric: "qps".to_owned(),
+            value: 1.into(),
+            step: 60,
+            counter_type: FalconCounterType::Gauge,
+            tags: [
+                ("idc".to_owned(), "lg".to_owned()),
+                ("loc".to_owned(), "beijing".to_owned()),
+                ("pdl".to_owned(), "falcon".to_owned()),
+            ]
+            .into(),
+            timestamp: 1551264402,
+        };
+
+        let serialized = serde_json::to_value(metric_value)?;
+
+        assert_eq!(json_value, serialized);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_construct_metric_body() -> Result<()> {
+        let timestamp = 1741678004;
+
+        let falcon_config = FalconConfig {
+            server_url: "http://127.0.0.1:1988".to_owned(),
+            endpoint: "master-node".to_owned(),
+            tags: [
+                ("namespace".to_owned(), "ns1".to_owned()),
+                ("app".to_owned(), "tng".to_owned()),
+            ]
+            .into(),
+            step: 60,
+        };
+
+        // Setup an exporter
+        let exporter = FalconExporter::new(falcon_config)?;
+
+        // Construct a server metric
+        let mut falcon_metric = exporter.construct_metric(&SimpleMetric {
+            name: "live".to_owned(),
+            value: 1.into(),
+            value_type: ValueType::Gauge,
+            attributes: Default::default(),
+            time: SystemTime::now(),
+        })?;
+        assert!(falcon_metric.timestamp > 0);
+        falcon_metric.timestamp = timestamp; // Let's ignore the timestamp difference
+
+        assert_eq!(
+            serde_json::to_value(falcon_metric)?,
+            json!(
+                {
+                    "endpoint": "master-node",
+                    "metric": "live",
+                    "timestamp": timestamp,
+                    "step": 60,
+                    "value": 1,
+                    "counterType": "GAUGE",
+                    "tags": "namespace=ns1,app=tng"
+                }
+            )
+        );
+
+        // Construct a xgress metric
+        let mut falcon_metric = exporter.construct_metric(&SimpleMetric {
+            name: "rx_bytes_total".to_owned(),
+            value: 256.into(),
+            value_type: ValueType::Counter,
+            attributes: [("ingress_id".to_string(), "10".to_string())].into(),
+            time: SystemTime::now(),
+        })?;
+        assert!(falcon_metric.timestamp > 0);
+        falcon_metric.timestamp = timestamp; // Let's ignore the timestamp difference
+
+        assert_eq!(
+            serde_json::to_value(falcon_metric)?,
+            json!(
+                {
+                    "endpoint": "master-node",
+                    "metric": "rx_bytes_total",
+                    "timestamp": timestamp,
+                    "step": 60,
+                    "value": 256,
+                    "counterType": "COUNTER",
+                    "tags": "namespace=ns1,app=tng,ingress_id=10"
+                }
+            )
+        );
+
+        // Construct a xgress metric
+        let mut falcon_metric = exporter.construct_metric(&SimpleMetric {
+            name: "cx_active".to_owned(),
+            value: 20.into(),
+            value_type: ValueType::Counter,
+            attributes: [("ingress_id".to_string(), "5".to_string())].into(),
+            time: SystemTime::now(),
+        })?;
+
+        assert!(falcon_metric.timestamp > 0);
+        falcon_metric.timestamp = timestamp; // Let's ignore the timestamp difference
+
+        assert_eq!(
+            serde_json::to_value(falcon_metric)?,
+            json!(
+                {
+                    "endpoint": "master-node",
+                    "metric": "cx_active",
+                    "timestamp": timestamp,
+                    "step": 60,
+                    "value": 20,
+                    "counterType": "GAUGE",
+                    "tags": "namespace=ns1,app=tng,ingress_id=5"
+                }
+            )
+        );
+
+        Ok(())
+    }
+    pub async fn launch_fake_falcon_server(port: u16) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move {
+            async fn handler(
+                State(tx): State<tokio::sync::mpsc::UnboundedSender<()>>,
+                Json(payload): Json<serde_json::Value>,
+            ) -> Result<(StatusCode, std::string::String), ()> {
+                assert!(payload.is_array());
+                payload.as_array().unwrap().iter().for_each(|item| {
+                    assert!(item.is_object());
+                    let item = item.as_object().unwrap();
+                    assert!(item.contains_key("counterType"))
+                });
+
+                let _ = tx.send(());
+
+                Ok((StatusCode::OK, "".into()))
+            }
+            let app = Router::new()
+                .route("/{*path}", post(handler))
+                .with_state(tx);
+            let server = axum::serve(listener, app);
+            server.await
+        });
+
+        rx
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_exporter() -> Result<()> {
+        let port = portpicker::pick_unused_port().unwrap();
+
+        let mut rx = launch_fake_falcon_server(port).await;
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "metric": {
+                    "exporters": [{
+                        "type": "falcon",
+                        "server_url": format!("http://127.0.0.1:{port}"),
+                        "endpoint": "master-node",
+                        "tags": {
+                            "namespace": "ns1",
+                            "app": "tng-client"
+                        },
+                        "step": 1
+                    }]
+                },
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": 10001
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": 30001
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+
+        let cancel_token = CancellationToken::new();
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let cancel_token_clone = cancel_token.clone();
+        let join_handle = tokio::task::spawn(async move {
+            TngBuilder::from_config(config)
+                .serve_with_cancel(cancel_token_clone, ready_sender)
+                .await
+        });
+
+        ready_receiver.await?;
+        // tng is ready now, wait a while for exporter to send data
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        cancel_token.cancel();
+
+        // At least get metrics two times
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert_eq!(rx.try_recv(), Ok(()));
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            _ = join_handle => {}
         }
-    }
 
-    fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
-        // exporter holds no state, nothing to flush
         Ok(())
-    }
-
-    fn shutdown(&self) -> opentelemetry_sdk::error::OTelSdkResult {
-        self.is_shutdown.store(true, atomic::Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
-        opentelemetry_sdk::metrics::Temporality::Cumulative
     }
 }

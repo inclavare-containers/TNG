@@ -8,9 +8,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span};
 
 use crate::{
-    config::{egress::EgressMode, ingress::IngressMode, metric::ExportorType, TngConfig},
+    config::{egress::EgressMode, ingress::IngressMode, TngConfig},
     executor::iptables::IpTablesAction,
-    observability::exporter::falcon::FalconExporter,
+    observability::exporter::OpenTelemetryMetricExporterAdapter,
 };
 
 pub(self) mod access_log;
@@ -40,8 +40,10 @@ impl TngRuntime {
                 bail!("Only one exporter is supported for now")
             }
             match c.exporters.iter().next() {
-                Some(ExportorType::Falcon(tng_config)) => {
-                    Some(FalconExporter::new(tng_config.clone())?)
+                Some(exporter_type) => {
+                    let (_step, exporter) = exporter_type.instantiate()?;
+                    // TODO: Use the step to config opentelemetry
+                    Some(exporter)
                 }
                 None => None,
             }
@@ -51,7 +53,7 @@ impl TngRuntime {
 
         if let Some(exporter) = exporter {
             let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                .with_periodic_exporter(exporter)
+                .with_periodic_exporter(OpenTelemetryMetricExporterAdapter::new(exporter))
                 .build();
             opentelemetry::global::set_meter_provider(meter_provider.clone());
         }

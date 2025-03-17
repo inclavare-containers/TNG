@@ -13,6 +13,7 @@ bytes = "1.10.0"
 clap = {version = "4.5.28", features = ["derive"]}
 const_format = "0.2.34"
 ctrlc = {version = "3.4.5", features = ["termination"]}
+derivative = "2.2.0"
 either = "1.15.0"
 futures = "0.3.31"
 h2 = {version = "0.4.7", features = ["stream"]}
@@ -62,4 +63,5 @@ shadow-rs = {version = "1.0.0", default-features = false, features = ["tzdb", "b
 async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 axum-extra = "0.10.0"
 console-subscriber = "0.4.1"
+ctor = "=0.4.1"
 opentelemetry-stdout = "0.29.0"

@@ -71,43 +71,33 @@ impl TngBuilder {
 #[cfg(test)]
 mod tests {
 
-    use axum::{routing::get, Router};
-    use http::StatusCode;
     use serde_json::json;
-    use tokio::{net::TcpListener, select};
+    use tokio::select;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     use super::*;
 
-    pub async fn launch_fake_falcon_server(port: u16) {
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
-        tokio::spawn(async move {
-            async fn handler() -> Result<(StatusCode, std::string::String), ()> {
-                Ok((StatusCode::OK, "".into()))
-            }
-            let app = Router::new().route("/{*path}", get(handler));
-            let server = axum::serve(listener, app);
-            server.await
-        });
+    #[cfg(test)]
+    #[ctor::ctor]
+    fn init() {
+        // Initialize log tracing
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "none,tng=info".into()),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_cancel() -> Result<()> {
-        let port = portpicker::pick_unused_port().unwrap();
-
-        launch_fake_falcon_server(port).await;
-
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "metric": {
                     "exporters": [{
-                        "type": "falcon",
-                        "server_url": format!("http://127.0.0.1:{port}"),
-                        "endpoint": "master-node",
-                        "tags": {
-                            "namespace": "ns1",
-                            "app": "tng-client"
-                        },
-                        "step": 60
+                        "type": "stdout",
+                        "step": 1
                     }]
                 },
                 "add_ingress": [
@@ -157,22 +147,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_envoy_error() -> Result<()> {
-        let port = portpicker::pick_unused_port().unwrap();
-
-        launch_fake_falcon_server(port).await;
-
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "metric": {
                     "exporters": [{
-                        "type": "falcon",
-                        "server_url": format!("http://127.0.0.1:{port}"),
-                        "endpoint": "master-node",
-                        "tags": {
-                            "namespace": "ns1",
-                            "app": "tng-client"
-                        },
-                        "step": 60
+                        "type": "stdout",
+                        "step": 1
                     }]
                 },
                 "add_ingress": [
