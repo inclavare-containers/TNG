@@ -4,11 +4,8 @@ use iptables::{IpTablesAction, IpTablesActions};
 use log::{debug, warn};
 
 use crate::{
-    config::{egress::EgressMode, ingress::IngressMode, metric::ExportorType, TngConfig},
-    observability::{
-        collector::envoy::{MetricCollector, METRIC_COLLECTOR_STEP_DEFAULT},
-        exporter::falcon::FalconExporter,
-    },
+    config::{egress::EgressMode, ingress::IngressMode, TngConfig},
+    observability::collector::envoy::{MetricCollector, METRIC_COLLECTOR_STEP_DEFAULT},
 };
 
 pub mod envoy;
@@ -58,8 +55,9 @@ admin:
             bail!("Only one exporter is supported for now")
         }
         match c.exporters.iter().next() {
-            Some(ExportorType::Falcon(config)) => {
-                (config.step, Some(FalconExporter::new(config.clone())?))
+            Some(exporter_type) => {
+                let (step, exporter) = exporter_type.instantiate()?;
+                (step, Some(exporter))
             }
             None => (METRIC_COLLECTOR_STEP_DEFAULT, None),
         }

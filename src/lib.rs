@@ -97,43 +97,27 @@ impl TngBuilder {
 #[cfg(test)]
 mod tests {
 
-    use axum::{routing::get, Router};
-    use http::StatusCode;
+    #[cfg(test)]
+    #[ctor::ctor]
+    fn init() {
+        let env = env_logger::Env::default()
+            .filter_or("TNG_LOG_LEVEL", "none,tng=trace")
+            .write_style_or("TNG_LOG_STYLE", "always"); // enable color
+        env_logger::Builder::from_env(env).init();
+    }
+
     use serde_json::json;
-    use tokio::net::TcpListener;
 
     use super::*;
 
-    pub async fn launch_fake_falcon_server(port: u16) {
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
-        tokio::spawn(async move {
-            async fn handler() -> Result<(StatusCode, std::string::String), ()> {
-                Ok((StatusCode::OK, "".into()))
-            }
-            let app = Router::new().route("/{*path}", get(handler));
-            let server = axum::serve(listener, app);
-            server.await
-        });
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_cancel() -> Result<()> {
-        let port = portpicker::pick_unused_port().unwrap();
-
-        launch_fake_falcon_server(port).await;
-
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "metric": {
                     "exporters": [{
-                        "type": "falcon",
-                        "server_url": format!("http://127.0.0.1:{port}"),
-                        "endpoint": "master-node",
-                        "tags": {
-                            "namespace": "ns1",
-                            "app": "tng-client"
-                        },
-                        "step": 60
+                        "type": "stdout",
+                        "step": 1
                     }]
                 },
                 "add_ingress": [
@@ -183,22 +167,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_exit_on_envoy_error() -> Result<()> {
-        let port = portpicker::pick_unused_port().unwrap();
-
-        launch_fake_falcon_server(port).await;
-
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "metric": {
                     "exporters": [{
-                        "type": "falcon",
-                        "server_url": format!("http://127.0.0.1:{port}"),
-                        "endpoint": "master-node",
-                        "tags": {
-                            "namespace": "ns1",
-                            "app": "tng-client"
-                        },
-                        "step": 60
+                        "type": "stdout",
+                        "step": 1
                     }]
                 },
                 "add_ingress": [

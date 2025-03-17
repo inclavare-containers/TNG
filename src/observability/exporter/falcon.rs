@@ -2,10 +2,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use again::RetryPolicy;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use indexmap::IndexMap;
+use log::trace;
 use serde::{Deserialize, Serialize};
 
 use crate::observability::metric::{Metric, MetricValue, ValueType};
+
+use super::MetricExporter;
 
 #[derive(Debug, Serialize, PartialEq)]
 struct FalconMetric {
@@ -70,8 +74,14 @@ impl Serialize for FalconTags {
 pub struct FalconConfig {
     pub server_url: String,
     pub endpoint: String,
+    #[serde(default)]
     pub tags: IndexMap<String, String>,
+    #[serde(default = "falcon_config_default_step")]
     pub step: u64,
+}
+
+fn falcon_config_default_step() -> u64 {
+    60
 }
 
 pub struct FalconExporter {
@@ -93,16 +103,35 @@ impl FalconExporter {
         })
     }
 
-    pub async fn push<'a>(
-        &self,
-        metric_and_values: &[(Box<dyn Metric + 'a>, MetricValue)],
-    ) -> Result<()> {
+    fn construct_metric(&self, metric: impl Metric, value: MetricValue) -> Result<FalconMetric> {
+        Ok(FalconMetric {
+            endpoint: self.falcon_config.endpoint.clone(),
+            metric: metric.name(),
+            value,
+            step: self.falcon_config.step,
+            counter_type: metric.value_type().into(),
+            tags: {
+                let mut tags = self.falcon_config.tags.clone();
+                tags.extend(metric.labels());
+                tags.into()
+            },
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("System time is before unix epoch")?
+                .as_secs(),
+        })
+    }
+}
+
+#[async_trait]
+impl MetricExporter for FalconExporter {
+    async fn push(&self, metric_and_values: &[(Box<dyn Metric + '_>, MetricValue)]) -> Result<()> {
         let falcon_metrics = metric_and_values
             .into_iter()
             .map(|(metric, value)| self.construct_metric(metric.as_ref(), value.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        log::trace!(
+        trace!(
             "Pushing metrics to falcon: {}",
             serde_json::to_string(&falcon_metrics).unwrap_or_else(|e| format!("error: {e:#}"))
         );
@@ -130,33 +159,22 @@ impl FalconExporter {
 
         Ok(())
     }
-
-    fn construct_metric(&self, metric: impl Metric, value: MetricValue) -> Result<FalconMetric> {
-        Ok(FalconMetric {
-            endpoint: self.falcon_config.endpoint.clone(),
-            metric: metric.name(),
-            value,
-            step: self.falcon_config.step,
-            counter_type: metric.value_type().into(),
-            tags: {
-                let mut tags = self.falcon_config.tags.clone();
-                tags.extend(metric.labels());
-                tags.into()
-            },
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .context("System time is before unix epoch")?
-                .as_secs(),
-        })
-    }
 }
 
 #[cfg(test)]
 mod tests {
 
+    use crate::{
+        config::TngConfig,
+        observability::metric::{ServerMetric, XgressId, XgressIdKind, XgressMetric},
+        TngBuilder,
+    };
+    use axum::{extract::State, routing::post, Json, Router};
+    use http::StatusCode;
+    use scopeguard::defer;
     use serde_json::json;
-
-    use crate::observability::metric::{ServerMetric, XgressId, XgressIdKind, XgressMetric};
+    use tokio::{net::TcpListener, select};
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
 
@@ -291,6 +309,107 @@ mod tests {
                 }
             )
         );
+
+        Ok(())
+    }
+
+    pub async fn launch_fake_falcon_server(port: u16) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move {
+            async fn handler(
+                State(tx): State<tokio::sync::mpsc::UnboundedSender<()>>,
+                Json(payload): Json<serde_json::Value>,
+            ) -> Result<(StatusCode, std::string::String), ()> {
+                assert!(payload.is_array());
+                payload.as_array().unwrap().iter().for_each(|item| {
+                    assert!(item.is_object());
+                    let item = item.as_object().unwrap();
+                    assert!(item.contains_key("counterType"))
+                });
+
+                let _ = tx.send(());
+
+                Ok((StatusCode::OK, "".into()))
+            }
+            let app = Router::new()
+                .route("/{*path}", post(handler))
+                .with_state(tx);
+            let server = axum::serve(listener, app);
+            server.await
+        });
+
+        rx
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_exporter() -> Result<()> {
+        let port = portpicker::pick_unused_port().unwrap();
+
+        let mut rx = launch_fake_falcon_server(port).await;
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "metric": {
+                    "exporters": [{
+                        "type": "falcon",
+                        "server_url": format!("http://127.0.0.1:{port}"),
+                        "endpoint": "master-node",
+                        "tags": {
+                            "namespace": "ns1",
+                            "app": "tng-client"
+                        },
+                        "step": 1
+                    }]
+                },
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": 10001
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": 30001
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+
+        let cancel_token = CancellationToken::new();
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let cancel_token_clone = cancel_token.clone();
+        let join_handle = tokio::task::spawn(async move {
+            TngBuilder::from_config(config)
+                .serve_with_cancel(cancel_token_clone, ready_sender)
+                .await
+        });
+
+        ready_receiver.await?;
+        // tng is ready now, wait a while for exporter to send data
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        cancel_token.cancel();
+
+        // At least get metrics two times
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert_eq!(rx.try_recv(), Ok(()));
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            _ = join_handle => {}
+        }
 
         Ok(())
     }

@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
-use crate::observability::exporter::falcon::FalconConfig;
+use crate::observability::exporter::{
+    falcon::FalconConfig, stdout::StdoutExporter, MetricExporter,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -9,11 +15,54 @@ pub struct MetricArgs {
     pub exporters: Vec<ExportorType>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Derivative)]
+#[derivative(Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum ExportorType {
+    #[serde(rename = "stdout")]
+    Stdout {
+        #[serde(default = "stdout_config_default_step")]
+        step: u64,
+    },
+
     #[serde(rename = "falcon")]
     Falcon(FalconConfig),
+
+    #[cfg(test)]
+    #[serde(skip)]
+    #[serde(rename = "mock")]
+    Mock {
+        step: u64,
+
+        #[derivative(Debug = "ignore")]
+        #[derivative(PartialEq = "ignore")]
+        exporter: std::sync::Arc<dyn MetricExporter + Send + Sync + 'static>,
+    },
+}
+
+fn stdout_config_default_step() -> u64 {
+    60
+}
+
+impl ExportorType {
+    pub fn instantiate(
+        &self,
+    ) -> Result<(
+        u64, /* step */
+        Arc<dyn MetricExporter + Send + Sync + 'static>,
+    )> {
+        match self {
+            ExportorType::Stdout { step } => Ok((*step, Arc::new(StdoutExporter {}))),
+            ExportorType::Falcon(falcon_config) => {
+                let falcon_exporter = crate::observability::exporter::falcon::FalconExporter::new(
+                    falcon_config.clone(),
+                )?;
+                Ok((falcon_config.step, Arc::new(falcon_exporter)))
+            }
+            #[cfg(test)]
+            ExportorType::Mock { step, exporter } => Ok((*step, exporter.clone())),
+        }
+    }
 }
 
 #[cfg(test)]

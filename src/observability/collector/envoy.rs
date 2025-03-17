@@ -12,7 +12,7 @@ use tokio::select;
 use tokio_graceful::ShutdownGuard;
 
 use crate::observability::{
-    exporter::falcon::FalconExporter,
+    exporter::MetricExporter,
     metric::{Metric, MetricValue, ServerMetric, XgressId, XgressMetric},
 };
 
@@ -27,7 +27,7 @@ pub struct MetricCollector {
 
     xgress_metric_parsers: IndexMap<XgressId, Box<dyn MetricParser<XgressMetric> + Send + Sync>>,
 
-    metric_exporter: Option<FalconExporter>,
+    metric_exporter: Option<Arc<dyn MetricExporter + Send + Sync>>,
 }
 
 pub type EnvoyStats = IndexMap<String, Number>;
@@ -77,7 +77,10 @@ impl MetricCollector {
             .insert(xgress_id, Box::new(parser));
     }
 
-    pub fn register_metric_exporter(&mut self, metric_exporter: FalconExporter) {
+    pub fn register_metric_exporter(
+        &mut self,
+        metric_exporter: Arc<dyn MetricExporter + Send + Sync>,
+    ) {
         self.metric_exporter = Some(metric_exporter)
     }
 
@@ -269,7 +272,10 @@ mod tests {
     use http::StatusCode;
     use tokio::net::TcpListener;
 
-    use crate::observability::{exporter::falcon::FalconConfig, metric::XgressIdKind};
+    use crate::observability::{
+        exporter::falcon::{FalconConfig, FalconExporter},
+        metric::XgressIdKind,
+    };
 
     use super::*;
 
@@ -321,7 +327,7 @@ mod tests {
                 panic!("ignore this panic, which is expected")
             },
         );
-        metric_collector.register_metric_exporter(
+        metric_collector.register_metric_exporter(Arc::new(
             FalconExporter::new(FalconConfig {
                 server_url: "http://0.0.0.0:0".to_owned(),
                 endpoint: "master-node".to_owned(),
@@ -329,7 +335,7 @@ mod tests {
                 step: 60,
             })
             .unwrap(),
-        );
+        ));
 
         let shutdown = tokio_graceful::Shutdown::default();
         shutdown.spawn_task_fn(|shutdown_guard| async {
