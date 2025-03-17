@@ -93,12 +93,19 @@ impl FalconExporter {
         })
     }
 
-    pub async fn push(&self, metric_and_values: &[(Box<dyn Metric>, MetricValue)]) -> Result<()> {
+    pub async fn push<'a>(
+        &self,
+        metric_and_values: &[(Box<dyn Metric + 'a>, MetricValue)],
+    ) -> Result<()> {
         let falcon_metrics = metric_and_values
             .into_iter()
             .map(|(metric, value)| self.construct_metric(metric.as_ref(), value.clone()))
             .collect::<Result<Vec<_>>>()?;
 
+        log::trace!(
+            "Pushing metrics to falcon: {}",
+            serde_json::to_string(&falcon_metrics).unwrap_or_else(|e| format!("error: {e:#}"))
+        );
         RetryPolicy::fixed(Duration::from_secs(1))
             .with_max_retries(MAX_PUSH_RETRY - 1)
             .retry(|| async {
@@ -149,7 +156,7 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::observability::metric::{ServerMetric, XgressId, XgressMetric};
+    use crate::observability::metric::{ServerMetric, XgressId, XgressIdKind, XgressMetric};
 
     use super::*;
 
@@ -229,7 +236,13 @@ mod tests {
 
         // Construct a xgress metric
         let mut falcon_metric = exporter.construct_metric(
-            (XgressId::Ingress { id: 10 }, XgressMetric::RxBytesTotal),
+            (
+                XgressId {
+                    kind: XgressIdKind::Ingress { id: 10 },
+                    meta_data: [("ingress_id".to_string(), "10".to_string())].into(),
+                },
+                XgressMetric::RxBytesTotal,
+            ),
             256.into(),
         )?;
         assert!(falcon_metric.timestamp > 0);
@@ -245,14 +258,20 @@ mod tests {
                     "step": 60,
                     "value": 256,
                     "counterType": "COUNTER",
-                    "tags": "namespace=ns1,app=tng,type=ingress,id=10"
+                    "tags": "namespace=ns1,app=tng,ingress_id=10"
                 }
             )
         );
 
         // Construct a xgress metric
         let mut falcon_metric = exporter.construct_metric(
-            (XgressId::Ingress { id: 5 }, XgressMetric::CxActive),
+            (
+                XgressId {
+                    kind: XgressIdKind::Ingress { id: 5 },
+                    meta_data: [("ingress_id".to_string(), "5".to_string())].into(),
+                },
+                XgressMetric::CxActive,
+            ),
             20.into(),
         )?;
         assert!(falcon_metric.timestamp > 0);
@@ -268,7 +287,7 @@ mod tests {
                     "step": 60,
                     "value": 20,
                     "counterType": "GAUGE",
-                    "tags": "namespace=ns1,app=tng,type=ingress,id=5"
+                    "tags": "namespace=ns1,app=tng,ingress_id=5"
                 }
             )
         );

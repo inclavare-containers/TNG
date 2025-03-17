@@ -1,3 +1,4 @@
+use derivative::Derivative;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
@@ -25,12 +26,27 @@ pub enum XgressMetric {
     CxFailed, // Counter
 }
 
+#[derive(Eq, Debug, Serialize, Deserialize, Derivative)]
+#[derivative(Hash, PartialEq)]
+pub struct XgressId {
+    pub kind: XgressIdKind,
+    #[derivative(Hash = "ignore")]
+    #[derivative(PartialEq = "ignore")]
+    pub meta_data: IndexMap<String, String>,
+}
+
 #[derive(Eq, Hash, PartialEq, Debug, Clone, Copy, Serialize, Deserialize, EnumIter)]
-pub enum XgressId {
+pub enum XgressIdKind {
     #[serde(rename = "ingress")]
     Ingress { id: usize },
     #[serde(rename = "egress")]
     Egress { id: usize },
+}
+
+impl AsRef<XgressId> for XgressId {
+    fn as_ref(&self) -> &Self {
+        self
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
@@ -64,7 +80,7 @@ where
     }
 }
 
-impl Metric for (XgressId, XgressMetric) {
+impl<T: AsRef<XgressId> + std::marker::Sync + std::marker::Send> Metric for (T, XgressMetric) {
     fn value_type(&self) -> ValueType {
         let (_xgress_id, xgress_metric) = self;
         match xgress_metric {
@@ -78,23 +94,7 @@ impl Metric for (XgressId, XgressMetric) {
 
     fn labels(&self) -> IndexMap<String, String> {
         let (xgress_id, _xgress_metric) = self;
-        [
-            (
-                "type".to_owned(),
-                serde_variant::to_variant_name(&xgress_id)
-                    .unwrap_or("unknown")
-                    .to_owned(),
-            ),
-            (
-                "id".to_owned(),
-                match xgress_id {
-                    XgressId::Ingress { id } => id,
-                    XgressId::Egress { id } => id,
-                }
-                .to_string(),
-            ),
-        ]
-        .into()
+        xgress_id.as_ref().meta_data.clone()
     }
 
     fn name(&self) -> String {

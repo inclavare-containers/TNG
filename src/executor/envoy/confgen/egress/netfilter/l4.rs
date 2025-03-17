@@ -8,7 +8,7 @@ use crate::{
     },
     observability::{
         collector::envoy::{EnvoyStats, MetricCollector},
-        metric::XgressId,
+        metric::{XgressId, XgressIdKind},
     },
 };
 
@@ -22,7 +22,15 @@ pub fn gen(
     metric_collector: &mut MetricCollector,
 ) -> Result<(Vec<String>, Vec<String>)> {
     metric_collector.register_xgress_metric_parser(
-        XgressId::Egress { id: id },
+        XgressId {
+            kind: XgressIdKind::Egress { id: id },
+            meta_data: [
+                ("egress_type".to_string(), "netfilter".to_string()),
+                ("egress_id".to_string(), id.to_string()),
+                ("egress_port".to_string(), listen_port.to_string()),
+            ]
+            .into(),
+        },
         move |envoy_stats: &EnvoyStats, metric_name| {
             let value = match metric_name {
                 crate::observability::metric::XgressMetric::TxBytesTotal => {

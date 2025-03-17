@@ -401,14 +401,58 @@
 
 在TNG中，我们提供如下Metrics：
 
-| 范围 | 名称 | 类型 | 标签| 描述 |
-| --- | --- | --- | --- | --- |
-| 实例 | `live` | Gauge | None | 表示TNG实例是否存活 |
-| ingress/egress | `tx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | 发送的总字节数 |
-| ingress/egress | `rx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | 接收的总字节数 |
-| ingress/egress | `cx_active` | Gauge | `type={ingress\|egress},id={id}` | 目前活跃连接数 |
-| ingress/egress | `cx_total` | Counter | `type={ingress\|egress},id={id}` | 从实例启动到目前为止处理的总连接数 |
-| ingress/egress | `cx_failed` | Counter | `type={ingress\|egress},id={id}` | 从实例启动到目前为止失败的总连接数 |
+<table>
+    <tr>
+        <th>范围</th>
+        <th>名称</th>
+        <th>类型</th>
+        <th>标签</th>
+        <th>描述</th>
+    </tr>
+    <tr>
+        <td>实例</td>
+        <td><code>live</code></td>
+        <td>Gauge</td>
+        <td>无</td>
+        <td>值为<code>1</code>表示TNG实例存活且健康</td>
+    </tr>
+    <tr>
+        <td rowspan="6">ingress/egress</td>
+        <td><code>tx_bytes_total</code></td>
+        <td>Counter</td>
+        <td rowspan="6"><a href="#metric_labels">见下表</a></td>
+        <td>发送的总字节数</td>
+    </tr>
+    <tr>
+        <td><code>rx_bytes_total</code></td>
+        <td>Counter</td>
+        <td>接收的总字节数</td>
+    </tr>
+    <tr>
+        <td><code>cx_active</code></td>
+        <td>Gauge</td>
+        <td>目前活跃连接数</td>
+    </tr>
+    <tr>
+        <td><code>cx_total</code></td>
+        <td>Counter</td>
+        <td>从实例启动到目前为止处理的总连接数</td>
+    </tr>
+    <tr>
+        <td><code>cx_failed</code></td>
+        <td>Counter</td>
+        <td>从实例启动到目前为止失败的总连接数</td>
+    </tr>
+</table>
+
+
+<span id = "metric_labels">ingress/egress的导出标签</span>如下：
+
+| 范围 | 类型 | 标签 | 
+| --- | --- | --- |
+| ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
+
 
 目前，TNG仅支持向open-falcon导出Metrics，其他类型的Metrics导出方式（如Prometheus等）正在开发中。
 

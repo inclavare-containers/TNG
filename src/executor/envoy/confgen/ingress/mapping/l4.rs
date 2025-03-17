@@ -5,7 +5,7 @@ use crate::{
     executor::envoy::confgen::ENVOY_LISTENER_SOCKET_OPTIONS,
     observability::{
         collector::envoy::{EnvoyStats, MetricCollector},
-        metric::XgressId,
+        metric::{XgressId, XgressIdKind},
     },
 };
 
@@ -21,7 +21,16 @@ pub fn gen(
     metric_collector: &mut MetricCollector,
 ) -> Result<(Vec<String>, Vec<String>)> {
     metric_collector.register_xgress_metric_parser(
-        XgressId::Ingress { id: id },
+        XgressId {
+            kind: XgressIdKind::Ingress { id: id },
+            meta_data: [
+                ("ingress_type".to_string(), "mapping".to_string()),
+                ("ingress_id".to_string(), id.to_string()),
+                ("ingress_in".to_string(), format!("{in_addr}:{in_port}")),
+                ("ingress_out".to_string(), format!("{out_addr}:{out_port}")),
+            ]
+            .into(),
+        },
         move |envoy_stats: &EnvoyStats, metric_name| {
             let value = match metric_name {
                 crate::observability::metric::XgressMetric::TxBytesTotal => {

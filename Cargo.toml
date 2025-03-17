@@ -13,6 +13,7 @@ bytes = "1.10.0"
 clap = {version = "4.5.28", features = ["derive"]}
 const_format = "0.2.34"
 ctrlc = {version = "3.4.4", features = ["termination"]}
+derivative = "2.2.0"
 env_logger = {version = "0.11.2", features = ["auto-color", "humantime", "regex"]}
 futures = "0.3.31"
 indexmap = {version = "2.8.0", features = ["serde"]}

@@ -180,7 +180,7 @@ impl MetricCollector {
                             .iter()
                             .cartesian_product(XgressMetric::iter())
                             .map(|((xgress_id, parser), xgress_metric)| {
-                                let metric = (*xgress_id, xgress_metric);
+                                let metric = (xgress_id, xgress_metric);
                                 let metric_value = parser
                                     .parse(&envoy_stats, xgress_metric)
                                     .with_context(|| {
@@ -269,7 +269,7 @@ mod tests {
     use http::StatusCode;
     use tokio::net::TcpListener;
 
-    use crate::observability::exporter::falcon::FalconConfig;
+    use crate::observability::{exporter::falcon::FalconConfig, metric::XgressIdKind};
 
     use super::*;
 
@@ -312,7 +312,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         metric_collector.register_xgress_metric_parser(
-            XgressId::Ingress { id: 0 },
+            XgressId {
+                kind: XgressIdKind::Ingress { id: 0 },
+                meta_data: Default::default(),
+            },
             move |_: &_, _| {
                 tx.send(()).unwrap();
                 panic!("ignore this panic, which is expected")

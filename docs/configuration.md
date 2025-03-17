@@ -410,15 +410,56 @@ Observability refers to the monitoring of system runtime status to help operatio
 
 In TNG, we provide the following Metrics:
 
-|Scope| Name | Type | Labels| Description |
-| --- | --- | --- | --- | --- |
-| instance | `live` | Gauge | None | Indicates whether the server is alive. |
-| ingress/egress | `tx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | The total number of bytes sent. |
-| ingress/egress | `rx_bytes_total` | Counter | `type={ingress\|egress},id={id}` | The total number of bytes received. |
-| ingress/egress | `cx_active` | Gauge | `type={ingress\|egress},id={id}` | The number of active connections. |
-| ingress/egress | `cx_total` | Counter | `type={ingress\|egress},id={id}` | The total number of connections handled. |
-| ingress/egress | `cx_failed` | Counter | `type={ingress\|egress},id={id}` | The total number of failed connections. |
+<table>
+    <tr>
+        <th>Scope</th>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Labels</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>Instance</td>
+        <td><code>live</code></td>
+        <td>Gauge</td>
+        <td>None</td>
+        <td><code>1</code> to indicates the server is alive, or <code>0</code> otherwise</td>
+    </tr>
+    <tr>
+        <td rowspan="6">ingress/egress</td>
+        <td><code>tx_bytes_total</code></td>
+        <td>Counter</td>
+        <td rowspan="6"><a href="#metric_labels">See below table</a></td>
+        <td>The total number of bytes sent</td>
+    </tr>
+    <tr>
+        <td><code>rx_bytes_total</code></td>
+        <td>Counter</td>
+        <td>The total number of bytes received</td>
+    </tr>
+    <tr>
+        <td><code>cx_active</code></td>
+        <td>Gauge</td>
+        <td>The number of active connections</td>
+    </tr>
+    <tr>
+        <td><code>cx_total</code></td>
+        <td>Counter</td>
+        <td>Total number of connections handled since the instance started</td>
+    </tr>
+    <tr>
+        <td><code>cx_failed</code></td>
+        <td>Counter</td>
+        <td>Total number of failed connections since the instance started</td>
+    </tr>
+</table>
 
+<span id="metric_labels">Export labels for ingress/egress</span> are as follows:
+
+| Scope | Type | Labels | 
+| --- | --- | --- |
+| ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
 
 Currently, TNG only supports exporting Metrics to open-falcon, and other types of Metrics export methods (such as Prometheus, etc.) are under development.
 
