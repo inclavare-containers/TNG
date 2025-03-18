@@ -1,5 +1,6 @@
 # TNG
-[![Testing](/../../actions/workflows/docker-build.yml/badge.svg)](/../../actions/workflows/docker-build.yml)
+[![Docker](/../../actions/workflows/build-docker.yml/badge.svg)](/../../actions/workflows/build-docker.yml)
+[![RPM](/../../actions/workflows/build-rpm.yml/badge.svg)](/../../actions/workflows/build-rpm.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## What is TNG?
