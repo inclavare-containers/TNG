@@ -25,7 +25,7 @@ run-test:
 VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 # COMMIT_ID 	:= $(shell git describe --match=NeVeRmAtCh --abbrev=99 --tags --always)
 # Reuse the pre-built tng-envoy binary
-COMMIT_ID 	:= de78fa12c5d23048389c10719be8bfe67b92babf
+COMMIT_ID 	:= 8c9fe64a7e6e7b829578ec7ae929b539dc1c505c
 
 .PHONE: create-tarball
 create-tarball:
@@ -42,7 +42,7 @@ create-tarball:
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/lib/*.lib
 
 	rsync -a --exclude target --exclude deps/rats-rs/build --exclude .git/modules/deps/tng-envoy ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
-	docker rm -f tng-envoy-copy-bin && docker run -d --rm --name tng-envoy-copy-bin ghcr.io/inclavare-containers/tng:${COMMIT_ID} sleep 1000
+	docker rm -f tng-envoy-copy-bin && docker run -d --rm --name tng-envoy-copy-bin ghcr.io/inclavare-containers/tng:sha-${COMMIT_ID} sleep 1000
 	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/overlay/usr/local/bin/
 	docker cp tng-envoy-copy-bin:/usr/local/bin/envoy-static /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/overlay/usr/local/bin/envoy-static
 	docker rm -f tng-envoy-copy-bin

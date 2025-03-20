@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 1.0.5
+Version: 1.0.6
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -89,6 +89,12 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/overlay/usr/local/bin/envoy-st
 
 
 %changelog
+* Thu Mar 20 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.6
+- Add control interface with RESTful API for checking status of tng instances
+- Add metric exporter (open-falcon, stdout) for metrics reporting
+- Update rats-rs to handle "jwk" field in JWT header, so that tng can be used with CoCo Trustee
+- Some improvements on artifacts building and testing workflow
+
 * Mon Mar 3 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.5
 - Extend aa timeout to 2 minutes
 - Add trusted_certs_paths to verify field in config file
