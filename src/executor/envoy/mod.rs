@@ -1,17 +1,16 @@
-use std::net::Ipv4Addr;
 use std::path::Path;
-use std::str::FromStr;
 
+use admin_interface::EnvoyAdminInterface;
 use anyhow::{Context as _, Result};
 use log::{debug, error, info};
 use rand::Rng as _;
 use tokio::io::AsyncWriteExt as _;
-use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio_graceful::ShutdownGuard;
 use tokio_util::sync::CancellationToken;
 use which::which;
 
+pub mod admin_interface;
 pub mod confgen;
 
 const ENVOY_EXE_PATH_DEFAULT: &str = "/usr/lib64/tng/envoy-static";
@@ -20,14 +19,14 @@ pub struct EnvoyConfig(pub String);
 
 pub struct EnvoyExecutor {
     envoy_config: EnvoyConfig,
-    envoy_admin_endpoint: (String, u16),
+    envoy_admin_interface: EnvoyAdminInterface,
 }
 
 impl EnvoyExecutor {
-    pub fn new(envoy_config: EnvoyConfig, envoy_admin_endpoint: (String, u16)) -> Self {
+    pub fn new(envoy_config: EnvoyConfig, envoy_admin_interface: EnvoyAdminInterface) -> Self {
         Self {
             envoy_config,
-            envoy_admin_endpoint,
+            envoy_admin_interface,
         }
     }
 
@@ -93,7 +92,7 @@ impl EnvoyExecutor {
             loop {
                 tokio::select! {
                     _ = shutdown_guard.cancelled() => { break /* exit here */ }
-                    status = self.pull_admin_interface_status() => {
+                    status = self.envoy_admin_interface.pull_admin_interface_status() => {
                         // wait for envoy admin interface to be ready
                         if status{
                             info!("Envoy instance is running");
@@ -109,7 +108,7 @@ impl EnvoyExecutor {
             loop {
                 tokio::select! {
                     _ = shutdown_guard.cancelled() => { break /* exit here */ }
-                    status = self.pull_ready_status() => {
+                    status = self.envoy_admin_interface.pull_ready_status() => {
                         // wait for envoy instance to be ready for incoming connections
                         if status{
                             info!("Envoy instance is ready for incoming connections");
@@ -147,50 +146,5 @@ impl EnvoyExecutor {
         };
 
         Ok(())
-    }
-
-    async fn pull_admin_interface_status(&self) -> bool {
-        let res = async {
-            // Check if admin interface port is open
-            Ok::<_, anyhow::Error>(
-                TcpStream::connect((
-                    Ipv4Addr::from_str(&self.envoy_admin_endpoint.0)?,
-                    self.envoy_admin_endpoint.1,
-                ))
-                .await
-                .is_ok(),
-            )
-        }
-        .await;
-
-        match res {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to pull Envoy admin interface status: {e}");
-                false
-            }
-        }
-    }
-
-    async fn pull_ready_status(&self) -> bool {
-        let res = async {
-            let url = format!(
-                "http://{}:{}/ready",
-                self.envoy_admin_endpoint.0, self.envoy_admin_endpoint.1
-            );
-
-            let client = reqwest::Client::new();
-            let response = client.get(&url).send().await?;
-            Ok::<_, anyhow::Error>(response.status() == reqwest::StatusCode::OK)
-        }
-        .await;
-
-        match res {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to pull Envoy ready status: {e}");
-                false
-            }
-        }
     }
 }

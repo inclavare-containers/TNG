@@ -16,6 +16,7 @@ ctrlc = {version = "3.4.4", features = ["termination"]}
 derivative = "2.2.0"
 env_logger = {version = "0.11.2", features = ["auto-color", "humantime", "regex"]}
 futures = "0.3.31"
+http = "1.1.0"
 indexmap = {version = "2.8.0", features = ["serde"]}
 itertools = "0.13.0"
 log = "0.4.20"
@@ -50,4 +51,3 @@ async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 axum-extra = "0.10.0"
 console-subscriber = "0.4.1"
 ctor = "=0.4.1"
-http = "1.1.0"

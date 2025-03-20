@@ -1,4 +1,8 @@
-use executor::{envoy::EnvoyExecutor, iptables::IPTablesGuard};
+use control_interface::ControlInterface;
+use executor::{
+    envoy::{admin_interface::EnvoyAdminInterface, EnvoyExecutor},
+    iptables::IPTablesGuard,
+};
 use scopeguard::defer;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -8,6 +12,7 @@ use config::TngConfig;
 use log::info;
 
 pub mod config;
+mod control_interface;
 mod executor;
 mod observability;
 
@@ -31,7 +36,7 @@ impl TngBuilder {
         ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
         // Handle tng config
-        let blueprint = executor::handle_config(self.config)?;
+        let blueprint = executor::handle_config(&self.config)?;
 
         // Setup Iptables
         let _iptables_guard = IPTablesGuard::setup_from_actions(blueprint.iptables_actions)?;
@@ -42,6 +47,7 @@ impl TngBuilder {
             for_cancel_safity.cancel();
         }
 
+        // Prepare for graceful shutdown
         let shutdown = {
             let task_exit = task_exit.clone();
             tokio_graceful::Shutdown::builder()
@@ -55,9 +61,11 @@ impl TngBuilder {
                 .build()
         };
 
+        // Channel to receive envoy process ready signal
         let (admin_instance_ready_send, admin_instance_ready_recv) =
             tokio::sync::oneshot::channel();
 
+        // Launch Metric Collector
         let metric_collector = blueprint.metric_collector;
         shutdown.spawn_task_fn(|shutdown_guard| async move {
             select! {
@@ -76,8 +84,20 @@ impl TngBuilder {
                 .context("Failed to launch metric collector")
         });
 
-        let envoy_executor =
-            EnvoyExecutor::new(blueprint.envoy_config, blueprint.envoy_admin_endpoint);
+        let envoy_admin_interface = EnvoyAdminInterface::new(blueprint.envoy_admin_endpoint);
+
+        // Launch Control Interface
+        if let Some(control_interface) = self.config.control_interface {
+            ControlInterface::launch(
+                control_interface,
+                envoy_admin_interface.clone(),
+                shutdown.guard(),
+            )
+            .await
+            .context("Failed to launch control interface")?
+        }
+
+        let envoy_executor = EnvoyExecutor::new(blueprint.envoy_config, envoy_admin_interface);
         shutdown.spawn_task_fn(move |shutdown_guard| async move {
             // Starting Envoy process
             envoy_executor

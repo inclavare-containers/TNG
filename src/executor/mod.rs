@@ -21,9 +21,9 @@ pub struct Blueprint {
     pub iptables_actions: IpTablesActions,
 }
 
-pub fn handle_config(config: TngConfig) -> Result<Blueprint> {
+pub fn handle_config(config: &TngConfig) -> Result<Blueprint> {
     // Prepare envoy admin interface config
-    let envoy_admin_endpoint = match config.admin_bind {
+    let envoy_admin_endpoint = match &config.admin_bind {
         Some(admin_bind) => (
             admin_bind.host.as_deref().unwrap_or("0.0.0.0").to_owned(),
             admin_bind.port,
@@ -50,7 +50,7 @@ admin:
         envoy_admin_endpoint.0, envoy_admin_endpoint.1
     );
 
-    let (step, exporter) = if let Some(c) = config.metric {
+    let (step, exporter) = if let Some(c) = &config.metric {
         if c.exporters.len() > 1 {
             bail!("Only one exporter is supported for now")
         }

@@ -113,6 +113,7 @@ mod tests {
 
         let expected = TngConfig {
             admin_bind: None,
+            control_interface: None,
             metric: Some(MetricArgs {
                 exporters: vec![ExportorType::Falcon(FalconConfig {
                     server_url: "http://127.0.0.1:1988".to_owned(),

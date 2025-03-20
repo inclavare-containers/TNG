@@ -379,6 +379,38 @@ Example:
 }
 ```
 
+### Control Interface
+
+> [!NOTE]
+> This interface is distinct from the <a href="#envoy_admin_interface">Envoy Admin Interface</a> below. The latter is Envoy's built-in management interface, which we plan to remove in future versions.
+
+#### Field Description
+- **`control_interface`** (ControlInterface, optional, default is empty): This field specifies the listening address and port for the control interface.
+    - **`restful`** (Endpoint, optional, default is empty): This field specifies the configuration for the RESTful API. It includes the following subfields:
+        - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+        - **`port`** (integer): The port number, required.
+
+Example:
+
+```json
+                "control_interface": {
+                    "restful": {
+                        "host": "0.0.0.0",
+                        "port": 50000
+                    }
+                }
+```
+
+In this example, tng will enable the Control Interface, and its RESTful API will listen on port `50000` at `0.0.0.0`.
+
+#### RESTful API
+
+Exposes RESTful API endpoints, supporting the following operations:
+- **`/livez`**: This endpoint returns the liveness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running.
+- **`/readyz`**: This endpoint returns the readiness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running and ready to handle traffic.
+
+<span id = "envoy_admin_interface"></span>
+
 ### Envoy Admin Interface
 
 The `admin_bind` option can be used to enable the [Admin Interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin) capability of the Envoy instance.
