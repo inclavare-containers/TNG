@@ -1,14 +1,16 @@
-use anyhow::{bail, Result};
+use std::sync::Arc;
+
+use anyhow::{bail, Context as _, Result};
 use async_trait::async_trait;
 use egress::mapping::MappingEgress;
 use ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
+    control_interface::ControlInterface,
     executor::iptables::IpTablesAction,
     observability::exporter::OpenTelemetryMetricExporterAdapter,
 };
@@ -19,22 +21,38 @@ pub(self) mod cert_verifier;
 mod egress;
 mod ingress;
 pub(self) mod service_metrics;
+mod state;
 mod utils;
 
 #[async_trait]
-pub(self) trait RegistedService {
+pub trait RegistedService {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()>;
+}
+
+pub struct TngState {
+    pub ready: (
+        tokio::sync::watch::Sender<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    ),
+}
+
+impl TngState {
+    pub fn new() -> Self {
+        TngState {
+            ready: tokio::sync::watch::channel(false),
+        }
+    }
 }
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
     iptables_actions: Vec<IpTablesAction>,
+    state: Arc<TngState>,
 }
 
 impl TngRuntime {
     fn setup_metric_exporter(tng_config: &TngConfig) -> Result<()> {
         // Initialize OpenTelemetry
-
         let exporter = if let Some(c) = &tng_config.metric {
             if c.exporters.len() > 1 {
                 bail!("Only one exporter is supported for now")
@@ -61,7 +79,7 @@ impl TngRuntime {
         Ok(())
     }
 
-    pub fn launch_from_config(tng_config: TngConfig) -> Result<Self> {
+    pub async fn new_from_config(tng_config: TngConfig) -> Result<Self> {
         let mut iptables_actions = vec![];
         let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
 
@@ -117,18 +135,31 @@ impl TngRuntime {
 
         Self::setup_metric_exporter(&tng_config)?;
 
+        let state = Arc::new(TngState::new());
+
+        // Launch Control Interface
+        if let Some(args) = tng_config.control_interface {
+            let control_interface = ControlInterface::new(args, state.clone())
+                .await
+                .context("Failed to init control interface")?;
+            services.push((
+                Box::new(control_interface),
+                tracing::info_span!("control_interface"),
+            ));
+        }
+
         Ok(Self {
             services,
             iptables_actions,
+            state,
         })
     }
 
-    pub async fn serve(
-        mut self,
-        shutdown_guard: ShutdownGuard,
-        task_exit: CancellationToken,
-        ready: tokio::sync::oneshot::Sender<()>,
-    ) -> Result<()> {
+    pub fn state(&self) -> Arc<TngState> {
+        Arc::clone(&self.state)
+    }
+
+    pub async fn serve(mut self, shutdown_guard: ShutdownGuard) -> Result<()> {
         // Setup iptables
         #[cfg(not(target_os = "linux"))]
         drop(iptables_actions);
@@ -140,26 +171,28 @@ impl TngRuntime {
         let service_count = self.services.len();
         tracing::info!("Starting all {service_count} services");
 
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(service_count);
+        let (mut ready_receiver, mut error_receiver) = {
+            let (ready_sender, ready_receiver) = tokio::sync::mpsc::channel(service_count);
+            let (error_sender, error_receiver) = tokio::sync::mpsc::channel(service_count);
 
-        for (service, span) in self.services.drain(..) {
-            let task_exit = task_exit.clone();
-            let sender = sender.clone();
-            shutdown_guard.spawn_task_fn(|shutdown_guard| {
-                async move {
-                    if let Err(e) = service.serve(shutdown_guard, sender).await {
-                        let error = format!("{e:#}");
-                        tracing::error!(%error, "failed to serve, canceling and exitng new");
-                        task_exit.cancel();
+            for (service, span) in self.services.drain(..) {
+                let ready_sender = ready_sender.clone();
+                let error_sender = error_sender.clone();
+                shutdown_guard.spawn_task_fn(|shutdown_guard| {
+                    async move {
+                        if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
+                            let _ = error_sender.send(e).await;
+                        }
                     }
-                }
-                .instrument(span)
-            });
-        }
+                    .instrument(span)
+                });
+            }
+            (ready_receiver, error_receiver)
+        };
 
         let check_services_ready = async {
             for _ in 0..service_count {
-                receiver.recv().await;
+                ready_receiver.recv().await;
             }
         };
 
@@ -170,16 +203,28 @@ impl TngRuntime {
             .build();
         live.record(0, &[]);
 
-        tokio::select! {
+        let maybe_err = tokio::select! {
             _ = check_services_ready => {
                 tracing::info!("All of the services are ready");
                 live.record(1, &[]);
 
-                let _ = ready.send(());// Ignore any error occuring during send
-                shutdown_guard.cancelled().await;
+                let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
+
+                tokio::select! {
+                    maybe_err = error_receiver.recv() => {maybe_err}
+                    _ = shutdown_guard.cancelled() => None
+                }
             }
-            _ = shutdown_guard.cancelled() => {}
+            maybe_err = error_receiver.recv() => {maybe_err}
+            _ = shutdown_guard.cancelled() => None
         };
+
+        if let Some(e) = maybe_err {
+            let error = format!("{e:#}");
+            tracing::error!(%error, "failed to serve, canceling and exitng now");
+        } else {
+            // Shutdown gracefully
+        }
 
         Ok(())
     }

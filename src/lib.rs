@@ -6,6 +6,7 @@ use anyhow::{Context as _, Result};
 use config::TngConfig;
 
 pub mod config;
+mod control_interface;
 mod executor;
 mod observability;
 pub mod tunnel;
@@ -30,27 +31,31 @@ impl TngBuilder {
 
     pub async fn serve_with_cancel(
         self,
-        task_exit: CancellationToken,
+        cancel_by_caller: CancellationToken, // This is a canell token which can be called from the caller to cancel the task. Note that this funnction will not call the cancel() function on this.
         ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
         // Start native part
         tracing::info!("Starting all service now");
 
-        let runtime = TngRuntime::launch_from_config(self.config)
+        let runtime = TngRuntime::new_from_config(self.config)
+            .await
             .context("Failed to launch envoy executor")?;
 
-        let for_cancel_safity = task_exit.clone();
+        let cancel_before_func_return = CancellationToken::new();
+        let for_cancel_safity = cancel_before_func_return.clone();
         defer! {
             // Cancel-Safity: exit tng in case of the future of this function is dropped
             for_cancel_safity.cancel();
         }
 
+        // Prepare for graceful shutdown
         let shutdown = {
-            let task_exit = task_exit.clone();
+            let cancel_before_func_return = cancel_before_func_return.clone();
             tokio_graceful::Shutdown::builder()
                 .with_signal(async move {
                     tokio::select! {
-                        _ = task_exit.cancelled() => {}
+                        _ = cancel_by_caller.cancelled() => {}
+                        _ = cancel_before_func_return.cancelled() => {}
                         _ = tokio_graceful::default_signal() => {}
                     }
                 })
@@ -58,12 +63,34 @@ impl TngBuilder {
                 .build()
         };
 
-        shutdown.spawn_task_fn(|shutdown_guard| runtime.serve(shutdown_guard, task_exit, ready));
+        // Watch the ready signal from the tng runtime state object.
+        {
+            let mut receiver = runtime.state().ready.0.subscribe();
+            shutdown.spawn_task_fn(move |shutdown_guard| {
+                async move {
+                    loop {
+                        tokio::select! {
+                            _ = receiver.changed() => {
+                                if *receiver.borrow_and_update() {
+                                    let _ = ready.send(());// Ignore any error occuring during send
+                                    break;
+                                }
+                            }
+                            _ = shutdown_guard.cancelled() => {}
+                        }
+                    }
+                }
+            });
+        }
 
+        // Wait for the runtime to finish serving.
+        runtime.serve(shutdown.guard()).await?;
+        // Trigger the shutdown guard to gracefully shutdown all the tokio tasks.
+        cancel_before_func_return.cancel();
+        // Wait for the shutdown guard to complete.
         shutdown.shutdown().await;
 
         tracing::debug!("All service shutdown complete");
-
         Ok(())
     }
 }

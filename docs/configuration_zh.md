@@ -372,6 +372,39 @@
 }
 ```
 
+### Control Interface
+
+> [!NOTE]
+> 该接口与下面的 <a href="#envoy_admin_interface">Envoy Admin Interface</a> 是完全不同的功能。后者是Envoy内置的管理接口，在未来的版本中，我们将对其删除。
+
+#### 字段说明
+- **`control_interface`** (ControlInterface, 可选，默认为空)：该字段指定了控制接口的监听地址和端口。
+    - **`restful`** (Endpoint, 可选，默认为空)：该字段指定了RESTful API的配置。包含以下子字段：
+        - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+        - **`port`** (integer)：监听的端口号，必填。
+
+实例：
+
+```json
+                "control_interface": {
+                    "restful": {
+                        "host": "0.0.0.0",
+                        "port": 50000
+                    }
+                }
+```
+
+在该示例中，tng将开启Control Interface，并且其RESTful API接口监听在`0.0.0.0:50000`端口上。
+
+#### RESTful API
+
+暴露RESTful API接口，支持以下操作：
+- **`/livez`**：该端口返回tng实例的存活状态。如果返回`200 OK`，则表示实例正在运行中。
+- **`/readyz`**：该端口返回tng实例的就绪状态。如果返回`200 OK`，则表示实例正在运行中，且已可以处理流量。
+
+
+<span id = "envoy_admin_interface"></span>
+
 ### Envoy Admin Interface
 
 > [!WARNING]
