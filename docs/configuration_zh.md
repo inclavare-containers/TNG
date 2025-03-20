@@ -2,6 +2,7 @@
 
 ## 顶层配置对象
 
+- **`metrics`** (Metrics)：指定tng实例的Metrics配置，在未指定该选项时将不启用Metrics功能。
 - **`add_ingress`** (array [Ingress])：在`add_ingress`数组中添加tng隧道的入口端点（ingress），根据client侧用户场景，可以选择对应的流量入站方式。
 - **`add_egress`** (array [Egress])：在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
 - **`admin_bind`** (AdminBind)：Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
