@@ -95,6 +95,7 @@ impl FalconExporter {
         Ok(Self {
             falcon_config,
             client: reqwest::ClientBuilder::new()
+                .no_proxy()
                 .user_agent(APP_USER_AGENT)
                 .build()?,
         })
