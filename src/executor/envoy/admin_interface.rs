@@ -46,7 +46,7 @@ impl EnvoyAdminInterface {
                 self.envoy_admin_endpoint.0, self.envoy_admin_endpoint.1
             );
 
-            let client = reqwest::Client::new();
+            let client = reqwest::ClientBuilder::new().no_proxy().build()?;
             let response = client.get(&url).send().await?;
             Ok::<_, anyhow::Error>(response.status() == reqwest::StatusCode::OK)
         }

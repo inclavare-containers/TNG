@@ -139,7 +139,7 @@ impl MetricCollector {
                 self.envoy_admin_endpoint.0, self.envoy_admin_endpoint.1
             );
 
-            let client = reqwest::Client::new();
+            let client = reqwest::ClientBuilder::new().no_proxy().build().unwrap(); // unwrap here is ok
 
             loop {
                 let envoy_stats = async {

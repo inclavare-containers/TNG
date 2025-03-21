@@ -110,7 +110,9 @@ mod tests {
 
         // tng is ready now, lets check the healthness
         {
-            let resp = reqwest::Client::new()
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
                 .get("http://127.0.0.1:50000/livez")
                 .send()
                 .await?;
@@ -118,7 +120,9 @@ mod tests {
         }
 
         {
-            let resp = reqwest::Client::new()
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
                 .get("http://127.0.0.1:50000/readyz")
                 .send()
                 .await?;
@@ -127,7 +131,9 @@ mod tests {
                 // Wait more time
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-                let resp = reqwest::Client::new()
+                let resp = reqwest::ClientBuilder::new()
+                    .no_proxy()
+                    .build()?
                     .get("http://127.0.0.1:50000/readyz")
                     .send()
                     .await?;
