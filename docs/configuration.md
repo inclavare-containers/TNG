@@ -2,6 +2,7 @@
 
 ## Top-Level Configuration Object
 
+- **`control_interface`** (ControlInterface): The configuration of the control plane for the TNG instance.
 - **`metrics`** (Metrics)：Specifies the configuration for Metrics, which is disabled by default.
 - **`add_ingress`** (array [Ingress]): Add ingress endpoints of the tng tunnel in the `add_ingress` array. Depending on the client-side user scenario, you can choose the appropriate inbound traffic method.
 - **`add_egress`** (array [Egress]): Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on the server-side user scenario, you can choose the appropriate outbound traffic method.
@@ -125,7 +126,7 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 
 ### mapping: Port Mapping Mode
 
-In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and decrypts all TCP requests before sending them to a specified TCP endpoint (`out.host`, `out.port`). The user's server program needs to change its TCP listening port to listen on (`in.host`, `in.port`).
+In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and decrypts all TCP requests before sending them to a specified TCP endpoint (`out.host`, `out.port`). The user's server program needs to change its TCP listening port to listen on (`out.host`, `out.port`).
 
 #### Field Descriptions
 

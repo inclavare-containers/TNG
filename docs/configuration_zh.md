@@ -2,11 +2,11 @@
 
 ## 顶层配置对象
 
+- **`control_interface`** (ControlInterface)：TNG实例的控制面配置。
 - **`metrics`** (Metrics)：指定tng实例的Metrics配置，在未指定该选项时将不启用Metrics功能。
 - **`add_ingress`** (array [Ingress])：在`add_ingress`数组中添加tng隧道的入口端点（ingress），根据client侧用户场景，可以选择对应的流量入站方式。
 - **`add_egress`** (array [Egress])：在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
 - **`admin_bind`** (AdminBind)：Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
-
 
 ## Ingress
 
@@ -128,7 +128,7 @@
 
 
 ### mapping：端口映射方式
-在该场景中，tng监听一个本地tcp端口（`in.host`, `in.port`），将所有tcp请求解密后发送到指定tcp端点（`out.host`, `out.port`）。用户的server程序需要改变其tcp监听端口监听在（`in.host`, `in.port`）上。
+在该场景中，tng监听一个本地tcp端口（`in.host`, `in.port`），将所有tcp请求解密后发送到指定tcp端点（`out.host`, `out.port`）。用户的server程序需要改变其tcp监听端口监听在（`out.host`, `out.port`）上。
 
 #### 字段说明
 - **`in`** (Endpoint)：指定tng监听的本地tcp端口。

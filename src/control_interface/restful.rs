@@ -70,7 +70,7 @@ mod tests {
 
     use super::*;
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-    async fn test_exporter() -> Result<()> {
+    async fn test_control_interface() -> Result<()> {
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "control_interface": {
