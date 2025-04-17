@@ -88,5 +88,8 @@ pub struct EndpointFilter {
     pub domain: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_regex: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
 }
