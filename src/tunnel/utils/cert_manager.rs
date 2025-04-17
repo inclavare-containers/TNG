@@ -11,7 +11,7 @@ use tracing::{Instrument, Span};
 use crate::config::ra::AttestArgs;
 
 const CERT_UPDATE_INTERVAL_SECOND: usize = 60 * 60; // 1 hour
-const CREATE_CERT_TIMEOUT_SECOND: usize = 30;
+const CREATE_CERT_TIMEOUT_SECOND: usize = 120; // 2 min
 
 #[derive(Debug)]
 pub struct CertManager {
