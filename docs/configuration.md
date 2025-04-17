@@ -72,6 +72,7 @@ In this scenario, tng listens on a local HTTP proxy port. User containers can ro
   - **`port`** (integer): The port number to listen on.
 - **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
   - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
+  - **`domain_regex`** (string, optional, default is `.*`): This field specifies a regular expression for matching target domains. It supports full regular expression syntax. The `domain_regex` field and the `domain` field are mutually exclusive; only one of them can be specified simultaneously.
   - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
 - (Deprecated) **`dst_filter`** (EndpointFilter): Used in TNG version 1.0.1 and earlier as a required parameter, now replaced by `dst_filters`. This is retained for compatibility with older configurations.
 
@@ -226,6 +227,8 @@ Parameters required to configure the TNG endpoint as a remote attestation Verifi
 - **`as_addr`** (string): Specifies the URL of the Attestation Service (AS) to connect to. Supports connecting to the Attestation Service with both gRPC protocol and Restful HTTP protocol. By default, it is parsed as a Restful HTTP URL, which can be controlled by the `as_is_grpc` option.
 - **`as_is_grpc`** (boolean, optional, default is false): If set to `true`, interprets `as_addr` as a gRPC URL.
 - **`policy_ids`** (array of strings): Specifies the list of policy IDs to use.
+- **`trusted_certs_paths`** (array of strings, optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the AS token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
+
 
 Example: Connecting to a Restful HTTP type AS service
 
@@ -246,6 +249,20 @@ Example: Connecting to a gRPC type AS service
         "as_is_grpc": true,
         "policy_ids": [
           "default"
+        ]
+      }
+```
+
+Example: Specifying Root Certificate Paths for AS Token Verification
+
+```json
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ],
+        "trusted_certs_paths": [
+          "/tmp/as-ca.pem"
         ]
       }
 ```

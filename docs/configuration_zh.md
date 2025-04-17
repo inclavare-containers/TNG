@@ -74,6 +74,7 @@
   - **`port`** (integer)：监听的端口号。
 - **`dst_filters`** (array [EndpointFilter], 可选，默认为空数组)：该项指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出）。当未指定该字段或者指定为空数组时，所有流量都会进入tng隧道。
   - **`domain`** (string, 可选，默认为`*`)：匹配的目标域名。该字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+  - **`domain_regex`** (string, 可选，默认为`.*`)：匹配的目标域名的正则表达式，该字段支持完整的正则表达式语法。`domain_regex`字段和`domain`只能同时指定其中之一。
   - **`port`** (integer, 可选，默认为`80`)：匹配的目标端口。如不指定则默认为80端口
 - （已废弃）**`dst_filter`** (EndpointFilter)：在1.0.1及以前版本的TNG中使用，为必选参数，现已被`dst_filters`替代，保留此项是为了兼容旧版中的配置
 
@@ -222,6 +223,7 @@
 - **`as_addr`** (string)：指定要连接到的Attestation Service (AS) 的URL。支持连接到以gRPC协议和Restful HTTP两种协议类型的Attestation Service。默认将其解析为Restful HTTP的URL，可通过`as_is_grpc`选项控制。
 - **`as_is_grpc`** (boolean, 可选，默认为false)：若设置为`true`，这将`as_addr`解释为gRPC URL。
 - **`policy_ids`** (array of strings)：指定要使用的policy ID列表。
+- **`trusted_certs_paths`** (array of strings, 可选，默认为空)：指定用于验证AS token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
 示例：连接到Restful HTTP类型的AS服务
 
@@ -242,6 +244,20 @@
         "as_is_grpc": true,
         "policy_ids": [
           "default"
+        ]
+      }
+```
+
+示例：指定验证AS token的根证书路径
+
+```json
+      "verify": {
+        "as_addr": "http://127.0.0.1:8080/",
+        "policy_ids": [
+          "default"
+        ],
+        "trusted_certs_paths": [
+          "/tmp/as-ca.pem"
         ]
       }
 ```

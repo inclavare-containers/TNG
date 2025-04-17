@@ -29,7 +29,7 @@ use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
-use crate::tunnel::utils::endpoint_matcher::RegexEndpointMatcher;
+use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::{utils, RegistedService};
 
 fn error_response(code: StatusCode, msg: String) -> Response {
@@ -216,7 +216,7 @@ impl RequestHelper {
 struct StreamRouter {
     trusted_stream_manager: TrustedStreamManager,
     unprotected_stream_manager: UnprotectedStreamManager,
-    endpoint_matcher: RegexEndpointMatcher,
+    endpoint_matcher: EndpointMatcher,
 }
 
 impl StreamRouter {
@@ -319,7 +319,7 @@ impl RegistedService for HttpProxyIngress {
             )
             .await?,
             unprotected_stream_manager: UnprotectedStreamManager::new(),
-            endpoint_matcher: RegexEndpointMatcher::new(&self.dst_filters)?,
+            endpoint_matcher: EndpointMatcher::new(&self.dst_filters)?,
         });
 
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);

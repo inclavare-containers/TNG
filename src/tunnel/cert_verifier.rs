@@ -39,7 +39,7 @@ impl CoCoCommonCertVerifier {
                     as_is_grpc: self.verify.as_is_grpc,
                 },
                 policy_ids: self.verify.policy_ids.to_owned(),
-                trusted_certs_paths: None,
+                trusted_certs_paths: Some(self.verify.trusted_certs_paths.clone()),
                 claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
                     *attestation_result.blocking_lock() =
                         Some(AttestationResult::from_claims(claims));

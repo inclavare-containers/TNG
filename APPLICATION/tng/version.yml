@@ -1,0 +1,13 @@
+# 版本关系依赖表，默认继承 version-base.yml 配置，可重写覆盖
+BaseDependency: ../version-base.yml
+Dependency:
+  name: tng
+  image_type: application
+  versions:
+    1.0.1:
+      # 对 AI 框架版本对 python 版本的要求
+      python_version: []
+      # gpu 对 cuda 版本的要求
+      cuda_version: []
+      # 对 baseos 的要求，*AnolisOS8.6 表示 Anolis8.6
+      baseos_version: [*Alinux3.2304]
