@@ -30,5 +30,5 @@ pub struct VerifyArgs {
     pub policy_ids: Vec<String>,
 
     #[serde(default = "Default::default")]
-    pub trusted_certs_paths: Vec<String>,
+    pub trusted_certs_paths: Option<Vec<String>>,
 }
