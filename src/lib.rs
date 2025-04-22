@@ -67,3 +67,171 @@ impl TngBuilder {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use axum::{routing::get, Router};
+    use get_port::{tcp::TcpPort, Ops};
+    use http::StatusCode;
+    use serde_json::json;
+    use tokio::{net::TcpListener, select};
+
+    use super::*;
+
+    pub async fn launch_fake_falcon_server(port: u16) {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move {
+            async fn handler() -> Result<(StatusCode, std::string::String), ()> {
+                Ok((StatusCode::OK, "".into()))
+            }
+            let app = Router::new().route("/{*path}", get(handler));
+            let server = axum::serve(listener, app);
+            server.await
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_exit_on_cancel() -> Result<()> {
+        let port = TcpPort::any("127.0.0.1").unwrap();
+
+        launch_fake_falcon_server(port).await;
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "metric": {
+                    "exporters": [{
+                        "type": "falcon",
+                        "server_url": format!("http://127.0.0.1:{port}"),
+                        "endpoint": "master-node",
+                        "tags": {
+                            "namespace": "ns1",
+                            "app": "tng-client"
+                        },
+                        "step": 60
+                    }]
+                },
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": 10001
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": 30001
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+
+        let cancel_token = CancellationToken::new();
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let cancel_token_clone = cancel_token.clone();
+        let join_handle = tokio::task::spawn(async move {
+            TngBuilder::from_config(config)
+                .serve_with_cancel(cancel_token_clone, ready_sender)
+                .await
+        });
+
+        ready_receiver.await?;
+        // tng is ready now, so we cancel it
+
+        cancel_token.cancel();
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            _ = join_handle => {}
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_exit_on_envoy_error() -> Result<()> {
+        let port = TcpPort::any("127.0.0.1").unwrap();
+
+        launch_fake_falcon_server(port).await;
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "metric": {
+                    "exporters": [{
+                        "type": "falcon",
+                        "server_url": format!("http://127.0.0.1:{port}"),
+                        "endpoint": "master-node",
+                        "tags": {
+                            "namespace": "ns1",
+                            "app": "tng-client"
+                        },
+                        "step": 60
+                    }]
+                },
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": 10001
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": 30001
+                            }
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///a/not/exist/path"
+                        }
+                    }
+                ]
+            }
+        ))?;
+
+        let cancel_token = CancellationToken::new();
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let cancel_token_clone = cancel_token.clone();
+        let join_handle = tokio::task::spawn(async move {
+            TngBuilder::from_config(config)
+                .serve_with_cancel(cancel_token_clone, ready_sender)
+                .await
+        });
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            res = ready_receiver => {
+                if !res.is_err(){
+                    defer! {
+                        std::process::exit(1);
+                    }
+                    panic!("The tng should report the error and exit, before it be ready status");
+                }
+            }
+        }
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            _ = join_handle => {}
+        }
+
+        Ok(())
+    }
+}
