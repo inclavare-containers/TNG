@@ -2,7 +2,7 @@
 
 Name: trusted-network-gateway
 Version: 2.0.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
 License: ASL 2.0
@@ -76,7 +76,17 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroo
 * Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.0.0-1
 - Rewrite all in rust
 
-* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4-1
+* Thu Mar 20 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.6
+- Add control interface with RESTful API for checking status of tng instances
+- Add metric exporter (open-falcon, stdout) for metrics reporting
+- Update rats-rs to handle "jwk" field in JWT header, so that tng can be used with CoCo Trustee
+- Some improvements on artifacts building and testing workflow
+
+* Mon Mar 3 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.5
+- Extend aa timeout to 2 minutes
+- Add trusted_certs_paths to verify field in config file
+
+* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4
 - Nothing but some adjust on build script
 
 * Wed Jan 22 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.3-2
