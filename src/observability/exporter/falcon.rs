@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{MetricExporter, SimpleMetric, ValueType};
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct FalconMetric {
     #[serde(rename = "endpoint")]
     endpoint: String,
@@ -26,7 +26,7 @@ struct FalconMetric {
     timestamp: u64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 enum FalconCounterType {
     #[serde(rename = "COUNTER")]
     Counter,
@@ -64,6 +64,58 @@ impl Serialize for FalconTags {
             .collect::<Vec<String>>()
             .join(",");
         serializer.serialize_str(&tags_str)
+    }
+}
+
+impl<'de> Deserialize<'de> for FalconTags {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(FalconTagsVisitor)
+    }
+}
+
+struct FalconTagsVisitor;
+
+impl<'de> serde::de::Visitor<'de> for FalconTagsVisitor {
+    type Value = FalconTags;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "a string of comma-separated key=value pairs")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        let mut map = IndexMap::new();
+
+        for pair in v.split(',') {
+            let parts: Vec<&str> = pair.splitn(2, '=').collect();
+
+            if parts.len() != 2 {
+                return Err(E::custom(format!(
+                    "Invalid tag format: \"{}\" (must be key=value)",
+                    pair
+                )));
+            }
+
+            let key = parts[0].trim().to_string();
+            let value = parts[1].trim().to_string();
+
+            if key.is_empty() {
+                return Err(E::custom("Key cannot be empty".to_string()));
+            }
+
+            if map.contains_key(&key) {
+                return Err(E::custom(format!("Duplicate key: {}", key)));
+            }
+
+            map.insert(key, value);
+        }
+
+        Ok(FalconTags(map))
     }
 }
 
@@ -310,6 +362,7 @@ mod tests {
 
         Ok(())
     }
+
     pub async fn launch_fake_falcon_server(port: u16) -> tokio::sync::mpsc::UnboundedReceiver<()> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -320,11 +373,11 @@ mod tests {
                 Json(payload): Json<serde_json::Value>,
             ) -> Result<(StatusCode, std::string::String), ()> {
                 assert!(payload.is_array());
-                payload.as_array().unwrap().iter().for_each(|item| {
-                    assert!(item.is_object());
-                    let item = item.as_object().unwrap();
-                    assert!(item.contains_key("counterType"))
-                });
+
+                let falcon_metrics: Vec<FalconMetric> = serde_json::from_value(payload).unwrap();
+
+                assert!(falcon_metrics.len() > 0);
+                tracing::info!("Fake falcon server got metrics: {falcon_metrics:?}");
 
                 let _ = tx.send(());
 
@@ -349,16 +402,18 @@ mod tests {
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "metric": {
-                    "exporters": [{
-                        "type": "falcon",
-                        "server_url": format!("http://127.0.0.1:{port}"),
-                        "endpoint": "master-node",
-                        "tags": {
-                            "namespace": "ns1",
-                            "app": "tng-client"
-                        },
-                        "step": 1
-                    }]
+                    "exporters": [
+                        {
+                            "type": "falcon",
+                            "server_url": format!("http://127.0.0.1:{port}"),
+                            "endpoint": "master-node",
+                            "tags": {
+                                "namespace": "ns1",
+                                "app": "tng-client"
+                            },
+                            "step": 1
+                        }
+                    ]
                 },
                 "add_ingress": [
                     {

@@ -72,37 +72,7 @@ impl<T: MetricExporter> OpenTelemetryMetricExporterAdapter<T> {
     ) -> Result<Vec<SimpleMetric>> {
         let mut out_metrics = vec![];
 
-        let mut attrs = IndexMap::new();
-
-        if let Some(schema_url) = metrics.resource.schema_url() {
-            attrs.insert("otel.resource.schema_url".to_owned(), schema_url.to_owned());
-        }
-
-        metrics.resource.iter().for_each(|(k, v)| {
-            attrs.insert(k.to_string(), v.to_string());
-        });
-
         for scope_metrics in &metrics.scope_metrics {
-            let mut attrs = attrs.clone();
-
-            attrs.insert(
-                "otel.scope.name".to_owned(),
-                scope_metrics.scope.name().to_owned(),
-            );
-
-            if let Some(version) = scope_metrics.scope.version() {
-                attrs.insert("otel.scope.version".to_owned(), version.to_owned());
-            }
-
-            if let Some(schema_url) = scope_metrics.scope.schema_url() {
-                attrs.insert("otel.scope.schema_url".to_owned(), schema_url.to_owned());
-            }
-            scope_metrics.scope.attributes().for_each(
-                |opentelemetry::KeyValue { key, value, .. }| {
-                    attrs.insert(key.to_string(), value.to_string());
-                },
-            );
-
             for metric in &scope_metrics.metrics {
                 let value_and_time = {
                     let data = metric.data.as_any();
@@ -221,7 +191,7 @@ impl<T: MetricExporter> OpenTelemetryMetricExporterAdapter<T> {
                 };
 
                 if let Some((value, time, value_type, attributes)) = value_and_time {
-                    let mut attrs = attrs.clone();
+                    let mut attrs = IndexMap::new();
 
                     attributes
                         .iter()
