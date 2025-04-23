@@ -1,10 +1,15 @@
-use anyhow::{Context, Result};
+use again::RetryPolicy;
+use anyhow::{anyhow, Context as _, Result};
 use rats_cert::{
     cert::create::CertBuilder,
     crypto::{AsymmetricAlgo, HashAlgo},
     tee::coco::attester::CocoAttester,
 };
-use std::sync::{Arc, Mutex};
+use scopeguard::defer;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
@@ -28,7 +33,7 @@ impl CertManager {
         let certed_key = {
             let attest_args = attest_args.clone();
             tokio::task::spawn_blocking(move || -> Result<_> {
-                Self::update_cert_blocking(attest_args)
+                Self::update_cert_blocking(&attest_args)
             })
             .await??
         };
@@ -43,7 +48,7 @@ impl CertManager {
                 async move {
                     let res = async {
                         loop {
-                            // Update every hour
+                            // Update certs in loop
                             tokio::select! {
                                 _ = shutdown_guard.cancelled() => {
                                     break;
@@ -53,24 +58,44 @@ impl CertManager {
                                 )) => {}
                             }
 
-                            let attest_args = attest_args.clone();
-                            let latest_cert = latest_cert.clone();
-                            let join_handle =
-                                tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
-                                    let certed_key: Arc<rustls::sign::CertifiedKey> =
-                                        Self::update_cert_blocking(attest_args)?;
-                                    *latest_cert.lock().unwrap() = certed_key;
-                                    Ok(())
-                                });
+                            let retry_policy =
+                                RetryPolicy::fixed(Duration::from_secs(1)).with_max_retries(3);
+                            let update_cert_result = retry_policy.retry(|| {
+                                let attest_args = attest_args.clone();
+                                let latest_cert = latest_cert.clone();
+                                async {
+                                    let join_handle = tokio::task::spawn_blocking(
+                                        move || -> Result<_, anyhow::Error> {
+                                            let certed_key: Arc<rustls::sign::CertifiedKey> =
+                                                Self::update_cert_blocking(&attest_args)?;
 
-                            let abort_handle = join_handle.abort_handle();
+                                            let mut lock = latest_cert.lock().map_err(|e| {
+                                                anyhow!("Failed to get lock: {e:#}")
+                                            })?;
+                                            *lock = certed_key;
+
+                                            Ok(())
+                                        },
+                                    );
+                                    let abort_handle = join_handle.abort_handle();
+                                    defer! {
+                                        abort_handle.abort();
+                                    }
+                                    join_handle
+                                        .await
+                                        .map_err(anyhow::Error::from)
+                                        .and_then(|r| r)
+                                }
+                            });
+
                             tokio::select! {
                                 _ = shutdown_guard.cancelled() => {
-                                    abort_handle.abort();
                                     break;
                                 }
-                                result = join_handle => {
-                                    result??;
+                                result = update_cert_result => {
+                                    if let Err(e) = result {
+                                        tracing::error!(error=?e,"Failed to update cert");
+                                    }
                                 }
                             }
                         }
@@ -90,7 +115,7 @@ impl CertManager {
         Ok(Self { latest_cert })
     }
 
-    fn update_cert_blocking(attest_args: AttestArgs) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    fn update_cert_blocking(attest_args: &AttestArgs) -> Result<Arc<rustls::sign::CertifiedKey>> {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
         tracing::trace!(
             aa_addr = &attest_args.aa_addr,
@@ -117,14 +142,21 @@ impl CertManager {
             .context("rustls crypto provider not installed")?;
         let certified_key = rustls::sign::CertifiedKey::new(
             vec![rustls::pki_types::CertificateDer::from(der_cert)],
-            crypto_provider
-                .key_provider
-                .load_private_key(rustls_pemfile::private_key(&mut privkey.as_bytes())?.unwrap())?,
+            crypto_provider.key_provider.load_private_key(
+                rustls_pemfile::private_key(&mut privkey.as_bytes())?
+                    .context("No private key found")?,
+            )?,
         );
         Ok(Arc::new(certified_key))
     }
 
-    pub fn get_latest_cert(&self) -> Arc<rustls::sign::CertifiedKey> {
-        self.latest_cert.lock().unwrap().clone()
+    pub fn get_latest_cert(&self) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        match self.latest_cert.lock() {
+            Ok(v) => Some(v.clone()),
+            Err(e) => {
+                tracing::error!(error=?e, "Failed to get latest cert");
+                None
+            }
+        }
     }
 }
