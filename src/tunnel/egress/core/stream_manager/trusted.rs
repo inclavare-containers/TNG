@@ -49,8 +49,7 @@ impl StreamManager for TrustedStreamManager {
             // TODO: handle allow_non_tng_traffic_regexes
             match stream {
                 Err(e) => {
-                    let error = format!("{e:#}");
-                    tracing::error!(%error, "Failed to decode stream");
+                    tracing::error!(error=?e, "Failed to decode stream");
                     continue;
                 }
                 Ok(stream) => {

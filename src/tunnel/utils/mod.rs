@@ -1,6 +1,7 @@
 pub mod cert_manager;
 pub mod endpoint_matcher;
 pub mod h2_stream;
+pub mod socket;
 
 use anyhow::{Context, Result};
 pub async fn forward_stream(

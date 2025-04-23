@@ -24,7 +24,7 @@ hyper-rustls = {version = "0.27.5", default-features = false, features = ["http1
 hyper-util = {version = "0.1.10", features = ["service"]}
 indexmap = {version = "2.8.0", features = ["serde"]}
 itertools = "0.14.0"
-nix = {version = "0.29.0", features = ["process", "signal"]}
+nix = {version = "0.29.0", features = ["process", "signal", "socket", "net"]}
 opentelemetry = "0.29.1"
 opentelemetry_sdk = "0.29.0"
 pin-project = "1"

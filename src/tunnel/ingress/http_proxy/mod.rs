@@ -32,6 +32,7 @@ use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
+use crate::tunnel::utils::socket::SetListenerCommonSockOpts;
 use crate::tunnel::{utils, RegistedService};
 
 pub enum RouteResult {
@@ -388,7 +389,8 @@ impl RegistedService for HttpProxyIngress {
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
-        // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
+        listener.set_listener_common_sock_opts()?;
+
         ready.send(()).await?;
 
         loop {

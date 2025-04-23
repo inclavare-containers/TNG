@@ -18,7 +18,8 @@ use crate::{
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
         ingress::core::TngEndpoint,
         service_metrics::ServiceMetrics,
-        utils, RegistedService,
+        utils::{self, socket::SetListenerCommonSockOpts},
+        RegistedService,
     },
 };
 
@@ -99,7 +100,8 @@ impl RegistedService for MappingEgress {
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
-        // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
+        listener.set_listener_common_sock_opts()?;
+
         ready.send(()).await?;
 
         loop {

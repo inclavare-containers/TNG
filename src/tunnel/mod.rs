@@ -181,6 +181,7 @@ impl TngRuntime {
                 shutdown_guard.spawn_task_fn(|shutdown_guard| {
                     async move {
                         if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
+                            tracing::error!(error=?e, "service failed");
                             let _ = error_sender.send(e).await;
                         }
                     }
@@ -219,9 +220,8 @@ impl TngRuntime {
             _ = shutdown_guard.cancelled() => None
         };
 
-        if let Some(e) = maybe_err {
-            let error = format!("{e:#}");
-            tracing::error!(%error, "failed to serve, canceling and exitng now");
+        if let Some(_e) = maybe_err {
+            tracing::error!("failed to serve all services, canceling and exiting now");
         } else {
             // Shutdown gracefully
         }
