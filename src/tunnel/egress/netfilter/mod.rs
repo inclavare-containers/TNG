@@ -30,12 +30,12 @@ const NETFILTER_SO_MARK_DEFAULT: u32 = 565;
 pub struct NetfilterEgress {
     listen_port: u16,
     so_mark: u32,
-    common_args: CommonArgs,
     metrics: ServiceMetrics,
+    trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
 impl NetfilterEgress {
-    pub fn new(
+    pub async fn new(
         id: usize,
         netfilter_args: &EgressNetfilterArgs,
         common_args: &CommonArgs,
@@ -60,11 +60,13 @@ impl NetfilterEgress {
             ("egress_port".to_owned(), listen_port.to_string()),
         ]);
 
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
+
         Ok(Self {
             listen_port,
             so_mark,
-            common_args: common_args.clone(),
             metrics,
+            trusted_stream_manager,
         })
     }
 }
@@ -72,9 +74,6 @@ impl NetfilterEgress {
 #[async_trait]
 impl RegistedService for NetfilterEgress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
-
         let listen_addr = format!("127.0.0.1:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -101,7 +100,7 @@ impl RegistedService for NetfilterEgress {
                 .as_socket()
                 .context("should be a tcp socket")?;
 
-            let trusted_stream_manager = trusted_stream_manager.clone();
+            let trusted_stream_manager = self.trusted_stream_manager.clone();
 
             let cx_total = self.metrics.cx_total.clone();
             let cx_active = self.metrics.cx_active.clone();

@@ -23,7 +23,7 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::config::ingress::{CommonArgs, EndpointFilter, IngressHttpProxyArgs};
+use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
 use crate::observability::metric::stream::StreamWithCounter;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
@@ -287,7 +287,11 @@ impl StreamRouter {
         #[auto_enum(tokio1::AsyncRead, tokio1::AsyncWrite)]
         let upstream = if !via_tunnel {
             // Forward via unprotected tcp
-            match self.unprotected_stream_manager.new_stream(&dst).await {
+            match self
+                .unprotected_stream_manager
+                .new_stream(&dst, shutdown_guard.clone())
+                .await
+            {
                 Ok((stream, att)) => {
                     attestation_result = att;
                     stream
@@ -301,7 +305,11 @@ impl StreamRouter {
             }
         } else {
             // Forward via trusted tunnel
-            match self.trusted_stream_manager.new_stream(&dst).await {
+            match self
+                .trusted_stream_manager
+                .new_stream(&dst, shutdown_guard.clone())
+                .await
+            {
                 Ok((stream, att)) => {
                     attestation_result = att;
                     stream
@@ -333,13 +341,12 @@ impl StreamRouter {
 pub struct HttpProxyIngress {
     listen_addr: String,
     listen_port: u16,
-    dst_filters: Vec<EndpointFilter>,
-    common_args: CommonArgs,
     metrics: ServiceMetrics,
+    stream_router: Arc<StreamRouter>,
 }
 
 impl HttpProxyIngress {
-    pub fn new(
+    pub async fn new(
         id: usize,
         http_proxy_args: &IngressHttpProxyArgs,
         common_args: &CommonArgs,
@@ -362,12 +369,17 @@ impl HttpProxyIngress {
             ),
         ]);
 
+        let stream_router = Arc::new(StreamRouter {
+            trusted_stream_manager: TrustedStreamManager::new(&common_args).await?,
+            unprotected_stream_manager: UnprotectedStreamManager::new(),
+            endpoint_matcher: EndpointMatcher::new(&http_proxy_args.dst_filters)?,
+        });
+
         Ok(Self {
             listen_addr,
             listen_port,
-            dst_filters: http_proxy_args.dst_filters.clone(),
-            common_args: common_args.clone(),
             metrics,
+            stream_router,
         })
     }
 }
@@ -375,16 +387,6 @@ impl HttpProxyIngress {
 #[async_trait]
 impl RegistedService for HttpProxyIngress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        let stream_router = Arc::new(StreamRouter {
-            trusted_stream_manager: TrustedStreamManager::new(
-                &self.common_args,
-                shutdown_guard.clone(),
-            )
-            .await?,
-            unprotected_stream_manager: UnprotectedStreamManager::new(),
-            endpoint_matcher: EndpointMatcher::new(&self.dst_filters)?,
-        });
-
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -403,7 +405,7 @@ impl RegistedService for HttpProxyIngress {
             };
 
             let peer_addr = downstream.peer_addr()?;
-            let stream_router = stream_router.clone();
+            let stream_router = self.stream_router.clone();
             let metrics = self.metrics.clone();
 
             let span = tracing::info_span!("serve", client=?peer_addr);

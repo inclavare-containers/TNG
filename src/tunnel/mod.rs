@@ -88,12 +88,13 @@ impl TngRuntime {
             match &add_ingress.ingress_mode {
                 IngressMode::Mapping(mapping_args) => {
                     services.push((
-                        Box::new(MappingIngress::new(id, mapping_args, &add_ingress.common)?),
+                        Box::new(MappingIngress::new(id, mapping_args, &add_ingress.common).await?),
                         tracing::info_span!("ingress", id),
                     ));
                 }
                 IngressMode::HttpProxy(http_proxy_args) => {
-                    let ingress = HttpProxyIngress::new(id, http_proxy_args, &add_ingress.common)?;
+                    let ingress =
+                        HttpProxyIngress::new(id, http_proxy_args, &add_ingress.common).await?;
                     services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
                 }
                 IngressMode::Netfilter(_) => {
@@ -110,7 +111,7 @@ impl TngRuntime {
             let add_egress = add_egress.clone();
             match &add_egress.egress_mode {
                 EgressMode::Mapping(mapping_args) => {
-                    let egress = MappingEgress::new(id, mapping_args, &add_egress.common)?;
+                    let egress = MappingEgress::new(id, mapping_args, &add_egress.common).await?;
                     services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
@@ -126,7 +127,8 @@ impl TngRuntime {
                             netfilter_args,
                             &add_egress.common,
                             &mut iptables_actions,
-                        )?;
+                        )
+                        .await?;
                         services.push((Box::new(egress), tracing::info_span!("egress", id)));
                     }
                 }

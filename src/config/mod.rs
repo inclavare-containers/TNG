@@ -115,8 +115,6 @@ mod tests {
 
         let config_json = serde_json::to_string_pretty(&config)?;
 
-        println!("{config_json}");
-
         let config2 = serde_json::from_str(&config_json)?;
 
         assert_eq!(config, config2);

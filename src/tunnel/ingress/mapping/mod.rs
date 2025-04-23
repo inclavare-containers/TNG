@@ -22,12 +22,12 @@ pub struct MappingIngress {
     listen_port: u16,
     upstream_addr: String,
     upstream_port: u16,
-    common_args: CommonArgs,
     metrics: ServiceMetrics,
+    trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
 impl MappingIngress {
-    pub fn new(
+    pub async fn new(
         id: usize,
         mapping_args: &IngressMappingArgs,
         common_args: &CommonArgs,
@@ -62,13 +62,15 @@ impl MappingIngress {
             ),
         ]);
 
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
+
         Ok(Self {
             listen_addr,
             listen_port,
             upstream_addr,
             upstream_port,
-            common_args: common_args.clone(),
             metrics,
+            trusted_stream_manager,
         })
     }
 }
@@ -76,9 +78,6 @@ impl MappingIngress {
 #[async_trait]
 impl RegistedService for MappingIngress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
-
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -98,19 +97,23 @@ impl RegistedService for MappingIngress {
             let peer_addr = downstream.peer_addr()?;
             let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
 
-            let trusted_stream_manager = trusted_stream_manager.clone();
+            let trusted_stream_manager = self.trusted_stream_manager.clone();
 
             self.metrics.cx_total.add(1);
-            let task = shutdown_guard.spawn_task({
-                let tx_bytes_total = self.metrics.tx_bytes_total.clone();
-                let rx_bytes_total = self.metrics.rx_bytes_total.clone();
+            let tx_bytes_total = self.metrics.tx_bytes_total.clone();
+            let rx_bytes_total = self.metrics.rx_bytes_total.clone();
 
+            let span = tracing::info_span!("serve", client=?peer_addr);
+            let task = shutdown_guard.spawn_task_fn(|shutdown_guard| {
                 async move {
                     let fut = async move {
                         tracing::trace!("Start serving new connection from client");
 
                         // Forward via trusted tunnel
-                        match trusted_stream_manager.new_stream(&dst).await {
+                        match trusted_stream_manager
+                            .new_stream(&dst, shutdown_guard)
+                            .await
+                        {
                             Ok((upstream, attestation_result)) => {
                                 // Print access log
                                 let access_log = AccessLog {
@@ -155,7 +158,7 @@ impl RegistedService for MappingIngress {
                         tracing::error!(error=?e, "Failed to forward stream");
                     }
                 }
-                .instrument(tracing::info_span!("serve", client=?peer_addr))
+                .instrument(span)
             });
 
             // Spawn a task to trace the connection status.

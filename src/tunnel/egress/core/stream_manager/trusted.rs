@@ -24,12 +24,10 @@ pub struct TrustedStreamManager {
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs, shutdown_guard: ShutdownGuard) -> Result<Self> {
+    pub async fn new(common_args: &CommonArgs) -> Result<Self> {
         Ok(Self {
             common_args: common_args.clone(),
-            security_layer: Arc::new(
-                SecurityLayer::new(&common_args.ra_args, shutdown_guard).await?,
-            ),
+            security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
         })
     }
 }
@@ -60,7 +58,7 @@ impl StreamManager for TrustedStreamManager {
                     shutdown_guard.spawn_task_fn(|shutdown_guard| {
                         async move {
                             let (tls_stream, attestation_result) = match security_layer
-                                .from_stream(stream)
+                                .from_stream(stream, shutdown_guard.clone())
                                 .await
                             {
                                 Ok(v) => v,

@@ -28,12 +28,12 @@ pub struct MappingEgress {
     listen_port: u16,
     upstream_addr: String,
     upstream_port: u16,
-    common_args: CommonArgs,
     metrics: ServiceMetrics,
+    trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
 impl MappingEgress {
-    pub fn new(
+    pub async fn new(
         id: usize,
         mapping_args: &EgressMappingArgs,
         common_args: &CommonArgs,
@@ -68,6 +68,8 @@ impl MappingEgress {
             ),
         ]);
 
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
+
         Ok(Self {
             listen_addr: mapping_args
                 .r#in
@@ -84,8 +86,8 @@ impl MappingEgress {
                 .context("'host' of 'out' field must be set")?
                 .to_owned(),
             upstream_port: mapping_args.out.port,
-            common_args: common_args.clone(),
             metrics,
+            trusted_stream_manager,
         })
     }
 }
@@ -93,9 +95,6 @@ impl MappingEgress {
 #[async_trait]
 impl RegistedService for MappingEgress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(&self.common_args, shutdown_guard.clone()).await?);
-
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -116,7 +115,7 @@ impl RegistedService for MappingEgress {
             let upstream_addr = self.upstream_addr.clone();
             let upstream_port = self.upstream_port;
 
-            let trusted_stream_manager = trusted_stream_manager.clone();
+            let trusted_stream_manager = self.trusted_stream_manager.clone();
 
             let cx_total = self.metrics.cx_total.clone();
             let cx_active = self.metrics.cx_active.clone();

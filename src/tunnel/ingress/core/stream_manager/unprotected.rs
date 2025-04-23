@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result};
 use tokio::net::TcpStream;
+use tokio_graceful::ShutdownGuard;
 
 use crate::tunnel::{attestation_result::AttestationResult, ingress::core::TngEndpoint};
 
@@ -19,6 +20,7 @@ impl StreamManager for UnprotectedStreamManager {
     async fn new_stream(
         &self,
         endpoint: &TngEndpoint,
+        _shutdown_guard: ShutdownGuard,
     ) -> Result<(
         <Self as StreamManager>::StreamType,
         Option<AttestationResult>,

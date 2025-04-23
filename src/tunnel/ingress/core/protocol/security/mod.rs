@@ -50,27 +50,23 @@ pub struct SecurityLayer {
 }
 
 impl SecurityLayer {
-    pub async fn new(
-        connector_creator: TransportLayerCreator,
-        ra_args: &RaArgs,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<Self> {
+    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
         // TODO: handle web_page_inject
 
         Ok(Self {
             next_id: AtomicU64::new(0),
             pool: RwLock::new(HashMap::new()),
-            security_connector_creator: SecurityConnectorCreator::new(
-                connector_creator,
-                ra_args,
-                shutdown_guard,
-            )
-            .await?,
+            security_connector_creator: SecurityConnectorCreator::new(connector_creator, ra_args)
+                .await?,
         })
     }
 
-    pub async fn get_client(&self, dst: &TngEndpoint) -> Result<RatsTlsClient> {
-        self.get_client_with_span(dst, Span::current())
+    pub async fn get_client(
+        &self,
+        dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
+    ) -> Result<RatsTlsClient> {
+        self.get_client_with_span(dst, shutdown_guard, Span::current())
             .instrument(tracing::info_span!(
                 "security",
                 session_id = tracing::field::Empty
@@ -81,6 +77,7 @@ impl SecurityLayer {
     async fn get_client_with_span(
         &self,
         dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<RatsTlsClient> {
         // Try to get the client from pool
@@ -114,7 +111,11 @@ impl SecurityLayer {
                         );
 
                         // Prepare the security connector
-                        let connector = self.security_connector_creator.create(&dst, parent_span);
+                        let connector = self.security_connector_creator.create(
+                            &dst,
+                            shutdown_guard,
+                            parent_span,
+                        );
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
@@ -135,14 +136,9 @@ impl SecurityLayer {
 struct SecurityConnectorCreator {
     connector_creator: TransportLayerCreator,
     ra_args: RaArgs,
-    shutdown_guard: ShutdownGuard,
 }
 impl SecurityConnectorCreator {
-    pub async fn new(
-        connector_creator: TransportLayerCreator,
-        ra_args: &RaArgs,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<Self> {
+    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
         // Sanity check for ra_args
         if ra_args.no_ra {
             if ra_args.verify != None {
@@ -163,16 +159,22 @@ impl SecurityConnectorCreator {
         Ok(Self {
             connector_creator,
             ra_args: ra_args.clone(),
-            shutdown_guard,
         })
     }
 
-    pub fn create(&self, dst: &TngEndpoint, parent_span: Span) -> SecurityConnector {
-        let transport_layer_connector = self.connector_creator.create(&dst, parent_span);
+    pub fn create(
+        &self,
+        dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> SecurityConnector {
+        let transport_layer_connector =
+            self.connector_creator
+                .create(&dst, shutdown_guard.clone(), parent_span);
 
         SecurityConnector {
             ra_args: self.ra_args.clone(),
-            shutdown_guard: self.shutdown_guard.clone(),
+            shutdown_guard,
             transport_layer_connector,
             span: Span::current(),
         }

@@ -19,23 +19,24 @@ use crate::{
 
 pub struct TransportLayerCreator {
     encap_in_http: Option<EncapInHttp>,
-    shutdown_guard: ShutdownGuard,
 }
 
 impl TransportLayerCreator {
-    pub fn new(encap_in_http: Option<EncapInHttp>, shutdown_guard: ShutdownGuard) -> Self {
-        Self {
-            encap_in_http,
-            shutdown_guard,
-        }
+    pub fn new(encap_in_http: Option<EncapInHttp>) -> Self {
+        Self { encap_in_http }
     }
 
-    pub fn create(&self, dst: &TngEndpoint, parent_span: Span) -> TransportLayerConnector {
+    pub fn create(
+        &self,
+        dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> TransportLayerConnector {
         match &self.encap_in_http {
             Some(encap_in_http) => TransportLayerConnector::Http(HttpTransportLayer {
                 dst: dst.clone(),
                 _encap_in_http: encap_in_http.clone(),
-                shutdown_guard: self.shutdown_guard.clone(),
+                shutdown_guard,
                 span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
             }),
             None => TransportLayerConnector::Tcp(TcpTransportLayer {

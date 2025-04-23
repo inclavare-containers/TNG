@@ -22,17 +22,11 @@ pub struct TrustedStreamManager {
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs, shutdown_guard: ShutdownGuard) -> Result<Self> {
-        let connector_creator =
-            TransportLayerCreator::new(common_args.encap_in_http.clone(), shutdown_guard.clone());
+    pub async fn new(common_args: &CommonArgs) -> Result<Self> {
+        let connector_creator = TransportLayerCreator::new(common_args.encap_in_http.clone());
 
         Ok(Self {
-            security_layer: SecurityLayer::new(
-                connector_creator,
-                &common_args.ra_args,
-                shutdown_guard,
-            )
-            .await?,
+            security_layer: SecurityLayer::new(connector_creator, &common_args.ra_args).await?,
         })
     }
 }
@@ -43,8 +37,9 @@ impl StreamManager for TrustedStreamManager {
     async fn new_stream(
         &self,
         dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
     ) -> Result<(Self::StreamType, Option<AttestationResult>)> {
-        let client = self.security_layer.get_client(dst).await?;
+        let client = self.security_layer.get_client(dst, shutdown_guard).await?;
 
         wrapping::create_stream_from_hyper(&client)
             .instrument(tracing::info_span!("wrapping"))

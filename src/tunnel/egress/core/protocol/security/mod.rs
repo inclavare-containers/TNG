@@ -19,11 +19,10 @@ use cert_verifier::CoCoClientCertVerifier;
 
 pub struct SecurityLayer {
     ra_args: RaArgs,
-    shutdown_guard: ShutdownGuard,
 }
 
 impl SecurityLayer {
-    pub async fn new(ra_args: &RaArgs, shutdown_guard: ShutdownGuard) -> Result<Self> {
+    pub async fn new(ra_args: &RaArgs) -> Result<Self> {
         // Sanity check for ra_args
 
         if ra_args.no_ra {
@@ -44,13 +43,13 @@ impl SecurityLayer {
 
         Ok(Self {
             ra_args: ra_args.clone(),
-            shutdown_guard,
         })
     }
 
     pub async fn from_stream(
         &self,
         stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+        shutdown_guard: ShutdownGuard,
     ) -> Result<(
         impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
         Option<AttestationResult>,
@@ -85,11 +84,7 @@ impl SecurityLayer {
             // Prepare server cert resolver
             if let Some(attest_args) = &ra_args.attest {
                 let cert_manager = Arc::new(
-                    CertManager::create_and_launch(
-                        attest_args.clone(),
-                        self.shutdown_guard.clone(),
-                    )
-                    .await?,
+                    CertManager::create_and_launch(attest_args.clone(), shutdown_guard).await?,
                 );
 
                 tls_server_config =
