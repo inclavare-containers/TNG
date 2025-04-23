@@ -131,11 +131,11 @@ mod tests {
                     {
                         "mapping": {
                             "in": {
-                                "port": 10001
+                                "port": portpicker::pick_unused_port().unwrap()
                             },
                             "out": {
                                 "host": "127.0.0.1",
-                                "port": 30001
+                                "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
                         "no_ra": true
@@ -186,11 +186,11 @@ mod tests {
                     {
                         "mapping": {
                             "in": {
-                                "port": 10001
+                                "port": portpicker::pick_unused_port().unwrap()
                             },
                             "out": {
                                 "host": "127.0.0.1",
-                                "port": 30001
+                                "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
                         "attest": {

@@ -78,23 +78,25 @@ mod tests {
     use super::*;
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_control_interface() -> Result<()> {
+        let port = portpicker::pick_unused_port().unwrap();
+
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "control_interface": {
                     "restful": {
                         "host": "127.0.0.1",
-                        "port": 50000
+                        "port": port
                     }
                 },
                 "add_ingress": [
                     {
                         "mapping": {
                             "in": {
-                                "port": 10001
+                                "port": portpicker::pick_unused_port().unwrap()
                             },
                             "out": {
                                 "host": "127.0.0.1",
-                                "port": 30001
+                                "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
                         "no_ra": true
@@ -120,7 +122,7 @@ mod tests {
             let resp = reqwest::ClientBuilder::new()
                 .no_proxy()
                 .build()?
-                .get("http://127.0.0.1:50000/livez")
+                .get(format!("http://127.0.0.1:{port}/livez"))
                 .send()
                 .await?;
             assert!(resp.status() == StatusCode::OK);
@@ -130,7 +132,7 @@ mod tests {
             let resp = reqwest::ClientBuilder::new()
                 .no_proxy()
                 .build()?
-                .get("http://127.0.0.1:50000/readyz")
+                .get(format!("http://127.0.0.1:{port}/readyz"))
                 .send()
                 .await?;
 
@@ -141,7 +143,7 @@ mod tests {
                 let resp = reqwest::ClientBuilder::new()
                     .no_proxy()
                     .build()?
-                    .get("http://127.0.0.1:50000/readyz")
+                    .get(format!("http://127.0.0.1:{port}/readyz"))
                     .send()
                     .await?;
                 assert!(resp.status() == StatusCode::OK);
