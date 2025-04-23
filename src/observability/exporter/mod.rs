@@ -285,7 +285,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        config::{metric::ExportorType, TngConfig},
+        config::{metric::ExporterType, TngConfig},
         TngBuilder,
     };
     use scopeguard::defer;
@@ -325,7 +325,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .exporters
-            .push(ExportorType::Mock {
+            .push(ExporterType::Mock {
                 step: 1,
                 exporter: Arc::new(move |_metric_and_values: &[SimpleMetric]| {
                     let _ = tx.send(());

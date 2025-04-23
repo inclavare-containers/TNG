@@ -12,13 +12,13 @@ use crate::observability::exporter::{
 #[serde(deny_unknown_fields)]
 pub struct MetricArgs {
     #[serde(default)]
-    pub exporters: Vec<ExportorType>,
+    pub exporters: Vec<ExporterType>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Derivative)]
 #[derivative(Debug, PartialEq)]
 #[serde(tag = "type")]
-pub enum ExportorType {
+pub enum ExporterType {
     #[serde(rename = "stdout")]
     Stdout {
         #[serde(default = "stdout_config_default_step")]
@@ -44,7 +44,7 @@ fn stdout_config_default_step() -> u64 {
     60
 }
 
-impl ExportorType {
+impl ExporterType {
     pub fn instantiate(
         &self,
     ) -> Result<(
@@ -52,15 +52,15 @@ impl ExportorType {
         Arc<dyn MetricExporter + Send + Sync + 'static>,
     )> {
         match self {
-            ExportorType::Stdout { step } => Ok((*step, Arc::new(StdoutExporter {}))),
-            ExportorType::Falcon(falcon_config) => {
+            ExporterType::Stdout { step } => Ok((*step, Arc::new(StdoutExporter {}))),
+            ExporterType::Falcon(falcon_config) => {
                 let falcon_exporter = crate::observability::exporter::falcon::FalconExporter::new(
                     falcon_config.clone(),
                 )?;
                 Ok((falcon_config.step, Arc::new(falcon_exporter)))
             }
             #[cfg(test)]
-            ExportorType::Mock { step, exporter } => Ok((*step, exporter.clone())),
+            ExporterType::Mock { step, exporter } => Ok((*step, exporter.clone())),
         }
     }
 }
@@ -116,7 +116,7 @@ mod tests {
             admin_bind: None,
             control_interface: None,
             metric: Some(MetricArgs {
-                exporters: vec![ExportorType::Falcon(FalconConfig {
+                exporters: vec![ExporterType::Falcon(FalconConfig {
                     server_url: "http://127.0.0.1:1988".to_owned(),
                     endpoint: "master-node".to_owned(),
                     tags: [
