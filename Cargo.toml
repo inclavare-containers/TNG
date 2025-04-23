@@ -26,7 +26,13 @@ indexmap = {version = "2.8.0", features = ["serde"]}
 itertools = "0.14.0"
 nix = {version = "0.29.0", features = ["process", "signal", "socket", "net"]}
 opentelemetry = "0.29.1"
-opentelemetry_sdk = "0.29.0"
+opentelemetry_sdk = {version = "0.29.0", features = [
+  "experimental_async_runtime",
+  "experimental_metrics_periodicreader_with_async_runtime",
+  "experimental_logs_batch_log_processor_with_async_runtime",
+  "experimental_trace_batch_span_processor_with_async_runtime",
+  "rt-tokio",
+]}
 pin-project = "1"
 portpicker = "0.1.1"
 rand = "0.9.0"

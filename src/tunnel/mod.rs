@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context as _, Result};
 use async_trait::async_trait;
@@ -53,25 +53,27 @@ pub struct TngRuntime {
 impl TngRuntime {
     fn setup_metric_exporter(tng_config: &TngConfig) -> Result<()> {
         // Initialize OpenTelemetry
-        let exporter = if let Some(c) = &tng_config.metric {
+
+        let step_and_exporter = if let Some(c) = &tng_config.metric {
             if c.exporters.len() > 1 {
                 bail!("Only one exporter is supported for now")
             }
             match c.exporters.iter().next() {
-                Some(exporter_type) => {
-                    let (_step, exporter) = exporter_type.instantiate()?;
-                    // TODO: Use the step to config opentelemetry
-                    Some(exporter)
-                }
+                Some(exporter_type) => Some(exporter_type.instantiate()?),
                 None => None,
             }
         } else {
             None
         };
 
-        if let Some(exporter) = exporter {
+        if let Some((step, exporter)) = step_and_exporter {
+            let exporter = OpenTelemetryMetricExporterAdapter::new(exporter);
+            let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                .with_interval(Duration::from_secs(step))
+                .build();
+
             let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                .with_periodic_exporter(OpenTelemetryMetricExporterAdapter::new(exporter))
+                .with_reader(reader)
                 .build();
             opentelemetry::global::set_meter_provider(meter_provider.clone());
         }

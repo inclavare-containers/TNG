@@ -3,7 +3,6 @@ pub mod task;
 use self::task::tng::launch_tng;
 use anyhow::{bail, Context, Result};
 use futures::StreamExt as _;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
 use task::app::AppType;
 use tokio::{
     sync::OnceCell,
@@ -12,7 +11,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-static INIT: OnceCell<SdkMeterProvider> = OnceCell::const_new();
+static INIT: OnceCell<()> = OnceCell::const_new();
 
 pub async fn run_test(
     server: &AppType,
@@ -41,14 +40,6 @@ pub async fn run_test(
             )
             .with(tracing_subscriber::fmt::layer())
             .init();
-
-        // Initialize OpenTelemetry
-        let exporter = opentelemetry_stdout::MetricExporter::default();
-        let meter_provider = SdkMeterProvider::builder()
-            .with_periodic_exporter(exporter)
-            .build();
-        opentelemetry::global::set_meter_provider(meter_provider.clone());
-        meter_provider
     })
     .await;
 

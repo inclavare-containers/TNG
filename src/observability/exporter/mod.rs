@@ -49,7 +49,7 @@ where
 #[async_trait]
 impl MetricExporter for Arc<dyn MetricExporter + Send + Sync + 'static> {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
-        self.push(metrics).await
+        self.as_ref().push(metrics).await
     }
 }
 
