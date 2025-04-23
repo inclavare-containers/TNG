@@ -77,7 +77,7 @@ impl RegistedService for NetfilterEgress {
         let listen_addr = format!("127.0.0.1:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
-        let listener = TcpListener::bind(listen_addr).await.unwrap();
+        let listener = TcpListener::bind(listen_addr).await?;
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
         ready.send(()).await?;
 
@@ -85,13 +85,13 @@ impl RegistedService for NetfilterEgress {
 
         loop {
             let (downstream, _) = tokio::select! {
-                res = listener.accept() => res.unwrap(),
+                res = listener.accept() => res?,
                 _ = shutdown_guard.cancelled() => {
                     tracing::debug!("Shutdown signal received, stop accepting new connections");
                     break;
                 }
             };
-            let peer_addr = downstream.peer_addr().unwrap();
+            let peer_addr = downstream.peer_addr()?;
 
             let socket_ref = SockRef::from(&downstream);
             let orig_dst = socket_ref
@@ -184,8 +184,7 @@ impl RegistedService for NetfilterEgress {
                     {
                         Ok(()) => {}
                         Err(e) => {
-                            let error = format!("{e:#}");
-                            tracing::error!(error, "Failed to consume stream from client");
+                            tracing::error!(error=?e, "Failed to consume stream from client");
                         }
                     }
                 }

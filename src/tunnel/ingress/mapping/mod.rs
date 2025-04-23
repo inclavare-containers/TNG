@@ -81,19 +81,19 @@ impl RegistedService for MappingIngress {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
-        let listener = TcpListener::bind(listen_addr).await.unwrap();
+        let listener = TcpListener::bind(listen_addr).await?;
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
         ready.send(()).await?;
 
         loop {
             let (downstream, _) = tokio::select! {
-                res = listener.accept() => res.unwrap(),
+                res = listener.accept() => res?,
                 _ = shutdown_guard.cancelled() => {
                     tracing::debug!("Shutdown signal received, stop accepting new connections");
                     break;
                 }
             };
-            let peer_addr = downstream.peer_addr().unwrap();
+            let peer_addr = downstream.peer_addr()?;
             let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
 
             let trusted_stream_manager = trusted_stream_manager.clone();
@@ -103,50 +103,57 @@ impl RegistedService for MappingIngress {
                 let tx_bytes_total = self.metrics.tx_bytes_total.clone();
                 let rx_bytes_total = self.metrics.rx_bytes_total.clone();
 
-                let fut = async move {
-                    tracing::trace!("Start serving new connection from client");
+                async move {
+                    let fut = async move {
+                        tracing::trace!("Start serving new connection from client");
 
-                    // Forward via trusted tunnel
-                    match trusted_stream_manager.new_stream(&dst).await {
-                        Ok((upstream, attestation_result)) => {
-                            // Print access log
-                            let access_log = AccessLog {
-                                downstream: downstream.peer_addr().unwrap(),
-                                upstream: dst.clone(),
-                                to_trusted_tunnel: true,
-                                peer_attested: attestation_result,
-                            };
-                            tracing::info!(?access_log);
+                        // Forward via trusted tunnel
+                        match trusted_stream_manager.new_stream(&dst).await {
+                            Ok((upstream, attestation_result)) => {
+                                // Print access log
+                                let access_log = AccessLog {
+                                    downstream: downstream.peer_addr()?,
+                                    upstream: dst.clone(),
+                                    to_trusted_tunnel: true,
+                                    peer_attested: attestation_result,
+                                };
+                                tracing::info!(?access_log);
 
-                            let downstream = StreamWithCounter {
-                                inner: downstream,
-                                tx_bytes_total,
-                                rx_bytes_total,
-                            };
-                            if let Err(e) = utils::forward_stream(upstream, downstream)
-                                .in_current_span()
-                                .await
-                            {
+                                let downstream = StreamWithCounter {
+                                    inner: downstream,
+                                    tx_bytes_total,
+                                    rx_bytes_total,
+                                };
+                                if let Err(e) = utils::forward_stream(upstream, downstream)
+                                    .in_current_span()
+                                    .await
+                                {
+                                    let error = format!("{e:#}");
+                                    tracing::error!(
+                                        %dst,
+                                        error,
+                                        "Failed during forwarding to upstream via trusted tunnel"
+                                    );
+                                }
+                            }
+                            Err(e) => {
                                 let error = format!("{e:#}");
                                 tracing::error!(
                                     %dst,
                                     error,
-                                    "Failed during forwarding to upstream via trusted tunnel"
+                                    "Failed to connect to upstream via trusted tunnel"
                                 );
                             }
-                        }
-                        Err(e) => {
-                            let error = format!("{e:#}");
-                            tracing::error!(
-                                %dst,
-                                error,
-                                "Failed to connect to upstream via trusted tunnel"
-                            );
-                        }
-                    }
-                };
+                        };
 
-                fut.instrument(tracing::info_span!("serve", client=?peer_addr))
+                        Ok::<(), anyhow::Error>(())
+                    };
+
+                    if let Err(e) = fut.await {
+                        tracing::error!(error=?e, "Failed to forward stream");
+                    }
+                }
+                .instrument(tracing::info_span!("serve", client=?peer_addr))
             });
 
             // Spawn a task to trace the connection status.

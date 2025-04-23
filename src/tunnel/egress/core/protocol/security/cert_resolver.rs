@@ -19,6 +19,6 @@ impl ResolvesServerCert for CoCoServerCertResolver {
         &self,
         _client_hello: rustls::server::ClientHello<'_>,
     ) -> Option<Arc<rustls::sign::CertifiedKey>> {
-        Some(self.cert_manager.get_latest_cert())
+        self.cert_manager.get_latest_cert()
     }
 }

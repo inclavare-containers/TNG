@@ -21,7 +21,7 @@ impl ResolvesClientCert for CoCoClientCertResolver {
         _root_hint_subjects: &[&[u8]],
         _sigschemes: &[rustls::SignatureScheme],
     ) -> Option<std::sync::Arc<rustls::sign::CertifiedKey>> {
-        Some(self.cert_manager.get_latest_cert())
+        self.cert_manager.get_latest_cert()
     }
 
     fn has_certs(&self) -> bool {

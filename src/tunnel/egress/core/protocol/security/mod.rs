@@ -67,8 +67,8 @@ impl SecurityLayer {
                     .with_single_cert(
                         rustls_pemfile::certs(&mut ENVOY_DUMMY_CERT.as_bytes())
                             .collect::<Result<Vec<_>, _>>()?,
-                        rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())
-                            .map(|key| key.unwrap())?,
+                        rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())?
+                            .context("No private key found")?,
                     )?;
         } else if ra_args.attest != None || ra_args.verify != None {
             let builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
@@ -98,8 +98,8 @@ impl SecurityLayer {
                 tls_server_config = builder.with_single_cert(
                     rustls_pemfile::certs(&mut ENVOY_DUMMY_CERT.as_bytes())
                         .collect::<Result<Vec<_>, _>>()?,
-                    rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())
-                        .map(|key| key.unwrap())?,
+                    rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())?
+                        .context("No private key found")?,
                 )?;
             }
         } else {

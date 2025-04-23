@@ -387,20 +387,20 @@ impl RegistedService for HttpProxyIngress {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
-        let listener = TcpListener::bind(listen_addr).await.unwrap();
+        let listener = TcpListener::bind(listen_addr).await?;
         // TODO: ENVOY_LISTENER_SOCKET_OPTIONS
         ready.send(()).await?;
 
         loop {
             let (downstream, _) = tokio::select! {
-                res = listener.accept() => res.unwrap(),
+                res = listener.accept() => res?,
                 _ = shutdown_guard.cancelled() => {
                     tracing::debug!("Shutdown signal received, stop accepting new connections");
                     break;
                 }
             };
 
-            let peer_addr = downstream.peer_addr().unwrap();
+            let peer_addr = downstream.peer_addr()?;
             let stream_router = stream_router.clone();
             let metrics = self.metrics.clone();
 
