@@ -285,7 +285,7 @@ mod tests {
         let mut falcon_metric = exporter.construct_metric(&SimpleMetric {
             name: "cx_active".to_owned(),
             value: 20.into(),
-            value_type: ValueType::Counter,
+            value_type: ValueType::Gauge,
             attributes: [("ingress_id".to_string(), "5".to_string())].into(),
             time: SystemTime::now(),
         })?;
@@ -364,11 +364,11 @@ mod tests {
                     {
                         "mapping": {
                             "in": {
-                                "port": 10001
+                                "port": portpicker::pick_unused_port().unwrap()
                             },
                             "out": {
                                 "host": "127.0.0.1",
-                                "port": 30001
+                                "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
                         "no_ra": true
