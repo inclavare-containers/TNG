@@ -17,6 +17,9 @@ pub struct RaArgs {
 #[serde(deny_unknown_fields)]
 pub struct AttestArgs {
     pub aa_addr: String,
+
+    // The interval seconds to refresh the evidence.
+    pub refresh_interval: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

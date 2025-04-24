@@ -107,6 +107,11 @@ mod tests {
     #[cfg(test)]
     #[ctor::ctor]
     fn init() {
+        // Initialize rustls crypto provider
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
+
         // Initialize log tracing
         tracing_subscriber::registry()
             .with(

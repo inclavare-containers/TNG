@@ -95,6 +95,10 @@ impl MappingEgress {
 #[async_trait]
 impl RegistedService for MappingEgress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
+        self.trusted_stream_manager
+            .prepare(shutdown_guard.clone())
+            .await?;
+
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 

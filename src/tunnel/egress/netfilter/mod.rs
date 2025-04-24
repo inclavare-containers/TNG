@@ -74,6 +74,10 @@ impl NetfilterEgress {
 #[async_trait]
 impl RegistedService for NetfilterEgress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
+        self.trusted_stream_manager
+            .prepare(shutdown_guard.clone())
+            .await?;
+
         let listen_addr = format!("127.0.0.1:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 

@@ -34,6 +34,11 @@ impl TrustedStreamManager {
 
 impl StreamManager for TrustedStreamManager {
     type Sender = mpsc::UnboundedSender<(Upgraded, Option<AttestationResult>)>;
+
+    async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        self.security_layer.prepare(shutdown_guard).await
+    }
+
     async fn consume_stream(
         &self,
         in_stream: TcpStream,
@@ -58,7 +63,7 @@ impl StreamManager for TrustedStreamManager {
                     shutdown_guard.spawn_task_fn(|shutdown_guard| {
                         async move {
                             let (tls_stream, attestation_result) = match security_layer
-                                .from_stream(stream, shutdown_guard.clone())
+                                .from_stream(stream)
                                 .await
                             {
                                 Ok(v) => v,

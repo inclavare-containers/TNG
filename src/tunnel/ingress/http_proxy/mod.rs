@@ -265,6 +265,16 @@ struct StreamRouter {
 }
 
 impl StreamRouter {
+    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        self.trusted_stream_manager
+            .prepare(shutdown_guard.clone())
+            .await?;
+        self.unprotected_stream_manager
+            .prepare(shutdown_guard.clone())
+            .await?;
+        Ok(())
+    }
+
     #[auto_enum]
     async fn route(
         &self,
@@ -387,6 +397,8 @@ impl HttpProxyIngress {
 #[async_trait]
 impl RegistedService for HttpProxyIngress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
+        self.stream_router.prepare(shutdown_guard.clone()).await?;
+
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 

@@ -34,6 +34,10 @@ impl TrustedStreamManager {
 impl StreamManager for TrustedStreamManager {
     type StreamType = TokioIo<Upgraded>;
 
+    async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        self.security_layer.prepare(shutdown_guard).await
+    }
+
     async fn new_stream(
         &self,
         dst: &TngEndpoint,

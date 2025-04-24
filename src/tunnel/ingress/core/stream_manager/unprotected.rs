@@ -17,6 +17,11 @@ impl UnprotectedStreamManager {
 impl StreamManager for UnprotectedStreamManager {
     type StreamType = TcpStream;
 
+    async fn prepare(&self, _shutdown_guard: ShutdownGuard) -> Result<()> {
+        /* Nothing */
+        Ok(())
+    }
+
     async fn new_stream(
         &self,
         endpoint: &TngEndpoint,

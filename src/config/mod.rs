@@ -106,6 +106,7 @@ mod tests {
                         no_ra: false,
                         attest: Some(AttestArgs {
                             aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                            refresh_interval: None,
                         }),
                         verify: None,
                     },

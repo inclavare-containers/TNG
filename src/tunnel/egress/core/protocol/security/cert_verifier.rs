@@ -55,7 +55,7 @@ impl rustls::server::danger::ClientCertVerifier for CoCoClientCertVerifier {
     ) -> std::result::Result<rustls::server::danger::ClientCertVerified, Error> {
         self.common
             .verify_cert(end_entity)
-            .map(|_| ClientCertVerified::assertion())
+            .map(|()| ClientCertVerified::assertion())
     }
 
     fn verify_tls12_signature(

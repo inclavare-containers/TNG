@@ -1,5 +1,5 @@
-mod cert_resolver;
 mod cert_verifier;
+mod rustls_config;
 
 use std::{
     collections::HashMap,
@@ -12,22 +12,20 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{bail, Context as _, Result};
-use cert_resolver::CoCoClientCertResolver;
-use cert_verifier::{coco::CoCoServerCertVerifier, dummy::DummyServerCertVerifier};
+use anyhow::{Context as _, Result};
 use http::Uri;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use pin_project::pin_project;
+use rustls_config::OnetimeTlsClientConfig;
 use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
     tunnel::{
         attestation_result::AttestationResult, ingress::core::TngEndpoint,
-        utils::cert_manager::CertManager,
+        utils::rustls_config::TlsConfigGenerator,
     },
 };
 
@@ -46,18 +44,45 @@ pub struct RatsTlsClient {
 pub struct SecurityLayer {
     pub next_id: AtomicU64,
     pool: RwLock<HashMap<PoolKey, RatsTlsClient>>,
-    security_connector_creator: SecurityConnectorCreator,
+    transport_layer_creator: TransportLayerCreator,
+    tls_config_generator: Arc<TlsConfigGenerator>,
 }
 
 impl SecurityLayer {
-    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
+    pub async fn new(
+        transport_layer_creator: TransportLayerCreator,
+        ra_args: &RaArgs,
+    ) -> Result<Self> {
         // TODO: handle web_page_inject
+
+        let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
         Ok(Self {
             next_id: AtomicU64::new(0),
             pool: RwLock::new(HashMap::new()),
-            security_connector_creator: SecurityConnectorCreator::new(connector_creator, ra_args)
-                .await?,
+            transport_layer_creator,
+            tls_config_generator,
+        })
+    }
+
+    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        self.tls_config_generator.prepare(shutdown_guard).await
+    }
+
+    pub async fn create_security_connector(
+        &self,
+        dst: &TngEndpoint,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> Result<SecurityConnector> {
+        let transport_layer_connector =
+            self.transport_layer_creator
+                .create(&dst, shutdown_guard.clone(), parent_span);
+
+        Ok(SecurityConnector {
+            tls_config_generator: self.tls_config_generator.clone(),
+            transport_layer_connector,
+            span: Span::current(),
         })
     }
 
@@ -111,11 +136,9 @@ impl SecurityLayer {
                         );
 
                         // Prepare the security connector
-                        let connector = self.security_connector_creator.create(
-                            &dst,
-                            shutdown_guard,
-                            parent_span,
-                        );
+                        let connector = self
+                            .create_security_connector(&dst, shutdown_guard, parent_span)
+                            .await?;
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
@@ -133,110 +156,14 @@ impl SecurityLayer {
     }
 }
 
-struct SecurityConnectorCreator {
-    connector_creator: TransportLayerCreator,
-    ra_args: RaArgs,
-}
-impl SecurityConnectorCreator {
-    pub async fn new(connector_creator: TransportLayerCreator, ra_args: &RaArgs) -> Result<Self> {
-        // Sanity check for ra_args
-        if ra_args.no_ra {
-            if ra_args.verify != None {
-                bail!("The 'no_ra: true' flag should not be used with 'verify' field");
-            }
-
-            if ra_args.attest != None {
-                bail!("The 'no_ra: true' flag should not be used with 'attest' field");
-            }
-
-            tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
-        } else if ra_args.attest != None || ra_args.verify != None {
-            // Nothing
-        } else {
-            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_ingress'");
-        }
-
-        Ok(Self {
-            connector_creator,
-            ra_args: ra_args.clone(),
-        })
-    }
-
-    pub fn create(
-        &self,
-        dst: &TngEndpoint,
-        shutdown_guard: ShutdownGuard,
-        parent_span: Span,
-    ) -> SecurityConnector {
-        let transport_layer_connector =
-            self.connector_creator
-                .create(&dst, shutdown_guard.clone(), parent_span);
-
-        SecurityConnector {
-            ra_args: self.ra_args.clone(),
-            shutdown_guard,
-            transport_layer_connector,
-            span: Span::current(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct SecurityConnector {
-    ra_args: RaArgs,
-    shutdown_guard: ShutdownGuard,
+    tls_config_generator: Arc<TlsConfigGenerator>,
     transport_layer_connector: TransportLayerConnector,
     span: Span,
 }
 
-impl SecurityConnector {
-    pub async fn create_config(
-        ra_args: RaArgs,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<(ClientConfig, Option<Arc<CoCoServerCertVerifier>>)> {
-        let mut tls_client_config;
-        let mut verifier = None;
-
-        if ra_args.no_ra {
-            tls_client_config =
-                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_no_client_auth();
-
-            tls_client_config
-                .dangerous()
-                .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
-        } else if ra_args.attest != None || ra_args.verify != None {
-            let config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(RootCertStore::empty());
-            if let Some(attest_args) = &ra_args.attest {
-                let cert_manager = Arc::new(
-                    CertManager::create_and_launch(attest_args.clone(), shutdown_guard).await?,
-                );
-
-                tls_client_config = config
-                    .with_client_cert_resolver(Arc::new(CoCoClientCertResolver::new(cert_manager)));
-            } else {
-                tls_client_config = config.with_no_client_auth();
-            }
-
-            if let Some(verify_args) = &ra_args.verify {
-                let v: Arc<CoCoServerCertVerifier> =
-                    Arc::new(CoCoServerCertVerifier::new(verify_args.clone())?);
-                verifier = Some(v.clone());
-                tls_client_config.dangerous().set_certificate_verifier(v);
-            } else {
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
-            }
-        } else {
-            unreachable!()
-        }
-
-        Ok((tls_client_config, verifier))
-    }
-}
+impl SecurityConnector {}
 
 impl tower::Service<Uri> for SecurityConnector {
     type Response = SecurityConnection<
@@ -257,14 +184,14 @@ impl tower::Service<Uri> for SecurityConnector {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, _uri: Uri /* Not use this as destination endpoint */) -> Self::Future {
-        let ra_args = self.ra_args.clone();
-        let shutdown_guard = self.shutdown_guard.clone();
+    fn call(&mut self, uri: Uri /* Not use this as destination endpoint */) -> Self::Future {
+        let tls_config_generator = self.tls_config_generator.clone();
         let transport_layer_connector = self.transport_layer_connector.clone();
         Box::pin(
-            async {
-                let (tls_client_config, verifier) =
-                    Self::create_config(ra_args, shutdown_guard).await?;
+            async move {
+                let OnetimeTlsClientConfig(tls_client_config, verifier) = tls_config_generator
+                    .get_one_time_rustls_client_config()
+                    .await?;
 
                 let mut https_connector = hyper_rustls::HttpsConnectorBuilder::new()
                     .with_tls_config(tls_client_config)
@@ -273,7 +200,7 @@ impl tower::Service<Uri> for SecurityConnector {
                     .wrap_connector(transport_layer_connector);
 
                 let res = https_connector
-                    .call(_uri)
+                    .call(uri)
                     .await
                     .map_err(|e| anyhow::Error::from_boxed(e))?;
 

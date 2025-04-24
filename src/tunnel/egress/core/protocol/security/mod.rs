@@ -1,107 +1,47 @@
-mod cert_resolver;
 mod cert_verifier;
+mod rustls_config;
 
 use std::sync::Arc;
 
 use crate::{
     config::ra::RaArgs,
-    executor::envoy::confgen::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
-    tunnel::{attestation_result::AttestationResult, utils::cert_manager::CertManager},
+    tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
 };
-use anyhow::{bail, Context as _, Result};
-use rustls::ServerConfig;
+use anyhow::{Context as _, Result};
+use rustls_config::OnetimeTlsServerConfig;
 use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
-use cert_resolver::CoCoServerCertResolver;
-use cert_verifier::CoCoClientCertVerifier;
-
 pub struct SecurityLayer {
-    ra_args: RaArgs,
+    tls_config_generator: TlsConfigGenerator,
 }
 
 impl SecurityLayer {
     pub async fn new(ra_args: &RaArgs) -> Result<Self> {
-        // Sanity check for ra_args
-
-        if ra_args.no_ra {
-            if ra_args.verify != None {
-                bail!("The 'no_ra: true' flag should not be used with 'verify' field");
-            }
-
-            if ra_args.attest != None {
-                bail!("The 'no_ra: true' flag should not be used with 'attest' field");
-            }
-
-            tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
-        } else if ra_args.attest != None || ra_args.verify != None {
-            // Nothing
-        } else {
-            bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
-        }
+        let tls_config_generator = TlsConfigGenerator::new(ra_args).await?;
 
         Ok(Self {
-            ra_args: ra_args.clone(),
+            tls_config_generator,
         })
+    }
+
+    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+        self.tls_config_generator.prepare(shutdown_guard).await
     }
 
     pub async fn from_stream(
         &self,
         stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-        shutdown_guard: ShutdownGuard,
     ) -> Result<(
         impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
         Option<AttestationResult>,
     )> {
         // Prepare TLS config
-        let ra_args = &self.ra_args;
-        let mut tls_server_config;
-        let mut verifier = None;
-
-        if ra_args.no_ra {
-            tls_server_config =
-                ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_no_client_auth()
-                    .with_single_cert(
-                        rustls_pemfile::certs(&mut ENVOY_DUMMY_CERT.as_bytes())
-                            .collect::<Result<Vec<_>, _>>()?,
-                        rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())?
-                            .context("No private key found")?,
-                    )?;
-        } else if ra_args.attest != None || ra_args.verify != None {
-            let builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
-
-            // Prepare client cert verifier
-            let builder = if let Some(verify_args) = &ra_args.verify {
-                let v = Arc::new(CoCoClientCertVerifier::new(verify_args.clone())?);
-                verifier = Some(v.clone());
-                builder.with_client_cert_verifier(v)
-            } else {
-                builder.with_no_client_auth()
-            };
-
-            // Prepare server cert resolver
-            if let Some(attest_args) = &ra_args.attest {
-                let cert_manager = Arc::new(
-                    CertManager::create_and_launch(attest_args.clone(), shutdown_guard).await?,
-                );
-
-                tls_server_config =
-                    builder.with_cert_resolver(Arc::new(CoCoServerCertResolver::new(cert_manager)));
-            } else {
-                tls_server_config = builder.with_single_cert(
-                    rustls_pemfile::certs(&mut ENVOY_DUMMY_CERT.as_bytes())
-                        .collect::<Result<Vec<_>, _>>()?,
-                    rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())?
-                        .context("No private key found")?,
-                )?;
-            }
-        } else {
-            unreachable!()
-        }
-
-        tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
+        let OnetimeTlsServerConfig(tls_server_config, verifier) = self
+            .tls_config_generator
+            .get_one_time_rustls_server_config()
+            .await?;
 
         let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
         let tls_stream = async move {

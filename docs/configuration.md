@@ -209,12 +209,20 @@ Parameters required to configure the TNG endpoint as a remote attestation Attest
 ### Field Descriptions
 
 - **`aa_addr`** (string): Specifies the address of the Attestation Agent (AA).
+- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining evidence from the Attestation Agent and updating its own X.509 certificate (in seconds). If set to 0, it requests the latest evidence each time a secure session is established.
 
 Example:
 
 ```json
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+```
+
+```json
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                "refresh_interval": 600
             }
 ```
 

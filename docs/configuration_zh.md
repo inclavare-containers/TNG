@@ -205,12 +205,20 @@
 
 ### 字段说明
 - **`aa_addr`** (string)：指定Attestation Agent (AA) 的地址。
+- **`refresh_interval`** (int，可选，默认值为600)：指定从Attestation Agent获取证明材料（Evidence）并更新自身X.509证书的频率（单位为秒）。如果指定为0，则在每次安全会话建立时都请求获取最新的Evidence。
 
 示例：
 
 ```json
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+```
+
+```json
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                "refresh_interval": 600
             }
 ```
 
