@@ -4,6 +4,7 @@ use anyhow::{bail, Context as _, Result};
 use async_trait::async_trait;
 use egress::mapping::MappingEgress;
 use ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
+use state::TngState;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
@@ -21,27 +22,12 @@ pub(self) mod cert_verifier;
 mod egress;
 mod ingress;
 pub(self) mod service_metrics;
-mod state;
+pub mod state;
 mod utils;
 
 #[async_trait]
 pub trait RegistedService {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()>;
-}
-
-pub struct TngState {
-    pub ready: (
-        tokio::sync::watch::Sender<bool>,
-        tokio::sync::watch::Receiver<bool>,
-    ),
-}
-
-impl TngState {
-    pub fn new() -> Self {
-        TngState {
-            ready: tokio::sync::watch::channel(false),
-        }
-    }
 }
 
 pub struct TngRuntime {
