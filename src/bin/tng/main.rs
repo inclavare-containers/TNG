@@ -3,15 +3,12 @@ use std::{fs::File, io::BufReader};
 use anyhow::{bail, Result};
 use clap::Parser as _;
 use cli::Args;
-use shadow_rs::shadow;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use tng::config::TngConfig;
-use tng::TngBuilder;
+use tng::{build, TngBuilder};
 
 mod cli;
-
-shadow!(build);
 
 #[tokio::main]
 

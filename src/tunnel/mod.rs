@@ -10,7 +10,7 @@ use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
 use crate::{
-    config::{egress::EgressMode, ingress::IngressMode, TngConfig},
+    config::{egress::EgressMode, ingress::IngressMode, metric::ExporterInstance, TngConfig},
     control_interface::ControlInterface,
     executor::iptables::IpTablesAction,
     observability::exporter::OpenTelemetryMetricExporterAdapter,
@@ -40,7 +40,7 @@ impl TngRuntime {
     fn setup_metric_exporter(tng_config: &TngConfig) -> Result<()> {
         // Initialize OpenTelemetry
 
-        let step_and_exporter = if let Some(c) = &tng_config.metric {
+        let exporter = if let Some(c) = &tng_config.metric {
             if c.exporters.len() > 1 {
                 bail!("Only one exporter is supported for now")
             }
@@ -52,15 +52,36 @@ impl TngRuntime {
             None
         };
 
-        if let Some((step, exporter)) = step_and_exporter {
-            let exporter = OpenTelemetryMetricExporterAdapter::new(exporter);
-            let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
-                .with_interval(Duration::from_secs(step))
+        if let Some(exporter) = exporter {
+            let resource = opentelemetry_sdk::Resource::builder()
+                .with_service_name("tng")
+                .with_attribute(
+                    // https://opentelemetry.io/docs/specs/semconv/attributes-registry/service/
+                    opentelemetry::KeyValue::new("service.version", crate::build::PKG_VERSION),
+                )
                 .build();
+            let meter_provider = match exporter {
+                ExporterInstance::Simple(step, simple_metric_exporter) => {
+                    let exporter = OpenTelemetryMetricExporterAdapter::new(simple_metric_exporter);
+                    let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                        .with_interval(Duration::from_secs(step))
+                        .build();
+                    opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                        .with_reader(reader)
+                        .with_resource(resource)
+                        .build()
+                }
+                ExporterInstance::OpenTelemetry(step, exporter) => {
+                    let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                        .with_interval(Duration::from_secs(step))
+                        .build();
+                    opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                        .with_reader(reader)
+                        .with_resource(resource)
+                        .build()
+                }
+            };
 
-            let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                .with_reader(reader)
-                .build();
             opentelemetry::global::set_meter_provider(meter_provider.clone());
         }
 

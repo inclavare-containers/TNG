@@ -26,6 +26,17 @@ indexmap = {version = "2.8.0", features = ["serde"]}
 itertools = "0.14.0"
 nix = {version = "0.29.0", features = ["process", "signal", "socket", "net"]}
 opentelemetry = "0.29.1"
+opentelemetry-otlp = {version = "0.29.0", default-features = false, features = [
+  "logs",
+  "metrics",
+  "grpc-tonic",
+  "gzip-tonic",
+  "tls-webpki-roots",
+  "reqwest-client",
+  "http-proto",
+  "http-json",
+  "reqwest-rustls-webpki-roots",
+]}
 opentelemetry_sdk = {version = "0.29.0", features = [
   "experimental_async_runtime",
   "experimental_metrics_periodicreader_with_async_runtime",

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::{MetricExporter, SimpleMetric, ValueType};
+use super::{SimpleMetricExporter, SimpleMetric, ValueType};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct FalconMetric {
@@ -175,7 +175,7 @@ impl FalconExporter {
 }
 
 #[async_trait]
-impl MetricExporter for FalconExporter {
+impl SimpleMetricExporter for FalconExporter {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
         let falcon_metrics = metrics
             .into_iter()

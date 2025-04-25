@@ -502,10 +502,11 @@
 | egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
 
 
-目前，TNG支持如下类型的exporter，其他类型的Metrics导出方式（如Prometheus等）正在开发中。
+目前，TNG支持如下类型的exporter：
 
-> **`stdout`**：打印到日志输出
+> **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点，如Prometheus和Jaeger。
 > **`falcon`**：导出到open-falcon服务
+> **`stdout`**：打印到日志输出
 
 您可以通过指定`metrics`字段来开启对Metrics的支持。
 
@@ -516,8 +517,13 @@
     - **`exporters`** (array [Exporter], 可选，默认为空数组)：该字段指定了Metrics的导出器列表。包含以下子字段：
         - **`type`** (string)：该字段指定了Metrics的导出器类型。
 
-- 对于stdout导出器（`type="stdout"`），包含以下子字段：
-    - **`step`** (integer, 可选，默认为60)：该字段指定了metric采集和打印的间隔时间step值，单位为秒。
+- 对于OTLP导出器（`type="otlp"`），包含以下子字段：
+    - **`protocol`** (string)：该字段指定了OTLP协议的数据格式类型，有如下可选值：
+        - `grpc`：使用gRPC上报
+        - `http/protobuf`：使用HTTP上报，内容使用protobuf序列化方式
+        - `http/json`：使用HTTP上报，内容使用json序列化方式
+    - **`endpoint`** (string)：该字段指定了OTLP端点的url
+    - **`step`** (integer, 可选，默认为60)：该字段指定了metric采集和上报的间隔时间step值，单位为秒。
 
 - 对于open-falcon导出器（`type="falcon"`），包含以下子字段：
     - **`server_url`** (string)：该字段指定了open-falcon服务端地址。
@@ -525,19 +531,19 @@
     - **`tags`** (map [string], 可选，默认为空)：该字段指定了每条metric的额外附加标签，这些标签将和TNG产生的metric的标签一起被发送给open-falcon服务端。
     - **`step`** (integer, 可选，默认为60)：该字段指定了metric采集和上报的间隔时间step值，单位为秒。
 
+- 对于stdout导出器（`type="stdout"`），包含以下子字段：
+    - **`step`** (integer, 可选，默认为60)：该字段指定了metric采集和打印的间隔时间step值，单位为秒。
 
 示例：
+
 ```json
 {
-    "metric": {
-        "exporters": [{
-            "type": "stdout",
-            "step": 60
-        }]
-    }
+    "type": "oltp",
+    "protocol": "http/protobuf",
+    "endpoint": "https://oltp.example.com/example/url",
+    "step": 2
 }
 ```
-
 
 ```json
 {
@@ -550,6 +556,17 @@
                 "namespace": "ns1",
                 "app": "tng"
             },
+            "step": 60
+        }]
+    }
+}
+```
+
+```json
+{
+    "metric": {
+        "exporters": [{
+            "type": "stdout",
             "step": 60
         }]
     }

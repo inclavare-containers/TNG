@@ -1,4 +1,5 @@
 use scopeguard::defer;
+use shadow_rs::shadow;
 use tokio_util::sync::CancellationToken;
 use tunnel::TngRuntime;
 
@@ -10,6 +11,8 @@ mod control_interface;
 mod executor;
 mod observability;
 pub mod tunnel;
+
+shadow!(build);
 
 pub struct TngBuilder {
     config: TngConfig,

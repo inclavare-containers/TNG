@@ -3,14 +3,14 @@ use async_trait::async_trait;
 
 use super::SimpleMetric;
 
-use super::MetricExporter;
+use super::SimpleMetricExporter;
 
 pub struct StdoutExporter {}
 
 impl StdoutExporter {}
 
 #[async_trait]
-impl MetricExporter for StdoutExporter {
+impl SimpleMetricExporter for StdoutExporter {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
         tracing::info!("current metrics: {metrics:?}",);
         Ok(())

@@ -32,12 +32,15 @@ pub struct SimpleMetric {
 }
 
 #[async_trait]
-pub trait MetricExporter {
+/// A simple metric exporter for exporting metrics to other place. This trait is a simplified
+/// version of opentelemetry rust exporter and it is designed to be used with
+/// OpenTelemetryMetricExporterAdapter.
+pub trait SimpleMetricExporter {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()>;
 }
 
 #[async_trait]
-impl<F> MetricExporter for F
+impl<F> SimpleMetricExporter for F
 where
     F: Fn(&[SimpleMetric]) -> Result<()> + std::marker::Sync,
 {
@@ -47,18 +50,18 @@ where
 }
 
 #[async_trait]
-impl MetricExporter for Arc<dyn MetricExporter + Send + Sync + 'static> {
+impl SimpleMetricExporter for Arc<dyn SimpleMetricExporter + Send + Sync + 'static> {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
         self.as_ref().push(metrics).await
     }
 }
 
-pub struct OpenTelemetryMetricExporterAdapter<T: MetricExporter> {
+pub struct OpenTelemetryMetricExporterAdapter<T: SimpleMetricExporter> {
     inner: T,
     is_shutdown: atomic::AtomicBool,
 }
 
-impl<T: MetricExporter> OpenTelemetryMetricExporterAdapter<T> {
+impl<T: SimpleMetricExporter> OpenTelemetryMetricExporterAdapter<T> {
     pub fn new(inner: T) -> Self {
         Self {
             inner,
@@ -214,7 +217,7 @@ impl<T: MetricExporter> OpenTelemetryMetricExporterAdapter<T> {
     }
 }
 
-impl<T: MetricExporter + std::marker::Sync + std::marker::Send + 'static>
+impl<T: SimpleMetricExporter + std::marker::Sync + std::marker::Send + 'static>
     opentelemetry_sdk::metrics::exporter::PushMetricExporter
     for OpenTelemetryMetricExporterAdapter<T>
 {
