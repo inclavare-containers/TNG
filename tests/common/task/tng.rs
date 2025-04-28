@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tng::TngBuilder;
+use tng::runtime::TngRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -26,9 +26,15 @@ pub async fn launch_tng(
             });
         }
 
-        TngBuilder::from_config(config)
-            .serve_with_cancel(tng_token, sender)
-            .await?;
+        TngRuntime::from_config_with_reload_handle(
+            config,
+            crate::common::BIN_TEST_LOG_RELOAD_HANDLE
+                .get()
+                .expect("log reload handle not initialized"),
+        )
+        .await?
+        .serve_with_cancel(tng_token, sender)
+        .await?;
 
         tracing::info!("The {task_name} task normally exit now");
         Ok(())

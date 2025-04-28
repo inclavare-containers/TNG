@@ -69,7 +69,7 @@ impl RestfulControlInterface {
 #[cfg(test)]
 mod tests {
 
-    use crate::{config::TngConfig, TngBuilder};
+    use crate::{config::TngConfig, runtime::TngRuntime};
     use scopeguard::defer;
     use serde_json::json;
     use tokio::select;
@@ -110,7 +110,8 @@ mod tests {
 
         let cancel_token_clone = cancel_token.clone();
         let join_handle = tokio::task::spawn(async move {
-            TngBuilder::from_config(config)
+            TngRuntime::from_config(config)
+                .await?
                 .serve_with_cancel(cancel_token_clone, ready_sender)
                 .await
         });

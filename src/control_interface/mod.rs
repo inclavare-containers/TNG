@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{config::control_interface::ControlInterfaceArgs, tunnel::{state::TngState, RegistedService}};
+use crate::{
+    config::control_interface::ControlInterfaceArgs, service::RegistedService, state::TngState,
+};
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use restful::RestfulControlInterface;

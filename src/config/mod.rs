@@ -1,13 +1,13 @@
 use control_interface::ControlInterfaceArgs;
 use egress::AddEgressArgs;
 use ingress::AddIngressArgs;
-use metric::MetricArgs;
+use observability::{log::LogArgs, metric::MetricArgs};
 use serde::{Deserialize, Serialize};
 
 pub mod control_interface;
 pub mod egress;
 pub mod ingress;
-pub mod metric;
+pub mod observability;
 pub mod ra;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -20,6 +20,10 @@ pub struct TngConfig {
     #[serde(default = "Option::default")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric: Option<MetricArgs>,
+
+    #[serde(default = "Option::default")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log: Option<LogArgs>,
 
     #[serde(default)]
     pub add_ingress: Vec<AddIngressArgs>,
@@ -57,6 +61,7 @@ mod tests {
             admin_bind: None,
             control_interface: None,
             metric: None,
+            log: None,
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping(ingress::IngressMappingArgs {
                     r#in: Endpoint {

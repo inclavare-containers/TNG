@@ -4,14 +4,15 @@ use self::task::tng::launch_tng;
 use anyhow::{bail, Context, Result};
 use futures::StreamExt as _;
 use task::app::AppType;
+use tng::runtime::TracingReloadHandle;
 use tokio::{
     sync::OnceCell,
     task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-static INIT: OnceCell<()> = OnceCell::const_new();
+static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<TracingReloadHandle> = OnceCell::const_new();
 
 pub async fn run_test(
     server: &AppType,
@@ -19,29 +20,35 @@ pub async fn run_test(
     tng_server_config: &str,
     tng_client_config: &str,
 ) -> Result<()> {
-    INIT.get_or_init(|| async {
-        // Initialize rustls crypto provider
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("Failed to install rustls crypto provider");
+    BIN_TEST_LOG_RELOAD_HANDLE
+        .get_or_init(|| async {
+            // Initialize rustls crypto provider
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .expect("Failed to install rustls crypto provider");
 
-        // Initialize log tracing
-        tracing_subscriber::registry()
-            // .with(console_subscriber::spawn()) // Initialize tokio console
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                    format!(
-                        "none,tng=debug,{}=debug",
-                        std::module_path!().split("::").next().unwrap()
-                    )
-                    .into()
-                }),
-                // .unwrap_or_else(|_| "none,tng=debug,tokio=trace,runtime=trace".into()),
-            )
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-    })
-    .await;
+            // Initialize log tracing
+            let pending_tracing_layers = vec![tracing_subscriber::fmt::layer()
+                .with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                        format!(
+                            "info,tng=debug,{}=debug",
+                            std::module_path!().split("::").next().unwrap()
+                        )
+                        .into()
+                    }),
+                )
+                .boxed()];
+            let (pending_tracing_layers, reload_handle) =
+                tracing_subscriber::reload::Layer::new(pending_tracing_layers);
+            tracing_subscriber::registry()
+                .with(pending_tracing_layers)
+                // .with(console_subscriber::spawn()) // Initialize tokio console
+                .init();
+
+            reload_handle
+        })
+        .await;
 
     let token = CancellationToken::new();
 

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::{SimpleMetricExporter, SimpleMetric, ValueType};
+use super::{SimpleMetric, SimpleMetricExporter, ValueType};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct FalconMetric {
@@ -217,7 +217,7 @@ mod tests {
 
     use std::time::SystemTime;
 
-    use crate::{config::TngConfig, TngBuilder};
+    use crate::{config::TngConfig, runtime::TngRuntime};
     use axum::{extract::State, routing::post, Json, Router};
     use http::StatusCode;
     use scopeguard::defer;
@@ -437,7 +437,8 @@ mod tests {
 
         let cancel_token_clone = cancel_token.clone();
         let join_handle = tokio::task::spawn(async move {
-            TngBuilder::from_config(config)
+            TngRuntime::from_config(config)
+                .await?
                 .serve_with_cancel(cancel_token_clone, ready_sender)
                 .await
         });

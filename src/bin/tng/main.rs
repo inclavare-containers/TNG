@@ -1,30 +1,36 @@
 use std::{fs::File, io::BufReader};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context};
 use clap::Parser as _;
 use cli::Args;
+use tng::runtime::TngRuntime;
+use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use tng::build;
 use tng::config::TngConfig;
-use tng::{build, TngBuilder};
 
 mod cli;
 
 #[tokio::main]
 
-async fn main() -> Result<()> {
+async fn main() {
     // Initialize rustls crypto provider
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
     // Initialize log tracing
-    tracing_subscriber::registry()
-        .with(
+    let pending_tracing_layers = vec![tracing_subscriber::fmt::layer()
+        .with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "none,tng=info".into()),
+                .unwrap_or_else(|_| "info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .boxed()];
+    let (pending_tracing_layers, reload_handle) =
+        tracing_subscriber::reload::Layer::new(pending_tracing_layers);
+    tracing_subscriber::registry()
+        .with(pending_tracing_layers)
         .init();
 
     let cmd = Args::parse();
@@ -41,29 +47,43 @@ async fn main() -> Result<()> {
         build::BUILD_TIME
     );
 
-    match cmd {
-        Args::Launch(options) => {
-            // Load config
-            let config: TngConfig = match (options.config_file, options.config_content) {
-                (Some(_), Some(_)) | (None, None) => {
-                    bail!("Either --config-file or --config-content should be set")
+    let fut = async {
+        match cmd {
+            Args::Launch(options) => {
+                // Load config
+                let config: TngConfig = async {
+                    Ok::<_, anyhow::Error>(match (options.config_file, options.config_content) {
+                        (Some(_), Some(_)) | (None, None) => {
+                            bail!("Either --config-file or --config-content should be set")
+                        }
+                        (None, Some(s)) => serde_json::from_str(&s)?,
+                        (Some(path), None) => {
+                            tracing::info!("Loading config from: {path:?}");
+                            let file = File::open(path)?;
+                            let reader = BufReader::new(file);
+                            serde_json::from_reader(reader)?
+                        }
+                    })
                 }
-                (None, Some(s)) => serde_json::from_str(&s)?,
-                (Some(path), None) => {
-                    tracing::info!("Loading config from: {path:?}");
-                    let file = File::open(path)?;
-                    let reader = BufReader::new(file);
-                    serde_json::from_reader(reader)? // TODO: 显示详细的错误，并在具体的json字符串位置上标出，看下serde有没有自带这个功能
-                }
-            };
+                .await
+                .context("Failed to load config")?;
 
-            tracing::debug!("TNG config: {config:#?}");
+                tracing::debug!("TNG config: {config:#?}");
 
-            TngBuilder::from_config(config).serve_forever().await?;
+                TngRuntime::from_config_with_reload_handle(config, &reload_handle)
+                    .await?
+                    .serve_forever()
+                    .await?;
 
-            tracing::info!("Gracefully exit now");
+                tracing::info!("Gracefully exit now");
+            }
         }
-    }
 
-    Ok(())
+        Ok::<_, anyhow::Error>(())
+    };
+
+    if let Err(error) = fut.await {
+        tracing::error!(error = format!("{error:#}"));
+        std::process::exit(1);
+    }
 }

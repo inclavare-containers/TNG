@@ -15,12 +15,12 @@ use crate::{
     config::egress::{CommonArgs, EgressNetfilterArgs},
     executor::iptables::IpTablesAction,
     observability::metric::stream::StreamWithCounter,
+    service::RegistedService,
     tunnel::{
         access_log::AccessLog,
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
         service_metrics::ServiceMetrics,
         utils::{self, socket::SetListenerCommonSockOpts},
-        RegistedService,
     },
 };
 

@@ -9,13 +9,14 @@ use tracing::Instrument;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
 use crate::observability::metric::stream::StreamWithCounter;
+use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::tunnel::utils;
 use crate::tunnel::utils::socket::SetListenerCommonSockOpts;
-use crate::tunnel::{utils, RegistedService};
 
 pub struct MappingIngress {
     listen_addr: String,

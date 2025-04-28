@@ -258,8 +258,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        config::{metric::ExporterType, TngConfig},
-        TngBuilder,
+        config::{observability::metric::MetricExporterType, TngConfig},
+        runtime::TngRuntime,
     };
     use scopeguard::defer;
     use serde_json::json;
@@ -298,7 +298,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .exporters
-            .push(ExporterType::Mock {
+            .push(MetricExporterType::Mock {
                 step: 1,
                 exporter: Arc::new(move |_metric_and_values: &[SimpleMetric]| {
                     let _ = tx.send(());
@@ -311,7 +311,8 @@ mod tests {
 
         let cancel_token_clone = cancel_token.clone();
         let join_handle = tokio::task::spawn(async move {
-            TngBuilder::from_config(config)
+            TngRuntime::from_config(config)
+                .await?
                 .serve_with_cancel(cancel_token_clone, ready_sender)
                 .await
         });

@@ -65,6 +65,7 @@ mod tests {
         let expected = TngConfig {
             admin_bind: None,
             metric: None,
+            log: None,
             control_interface: Some(ControlInterfaceArgs {
                 restful: Some(RestfulArgs {
                     address: Endpoint {
@@ -133,6 +134,7 @@ mod tests {
         let expected = TngConfig {
             admin_bind: None,
             metric: None,
+            log: None,
             control_interface: Some(ControlInterfaceArgs {
                 ttrpc: Some(TtrpcArgs {
                     path: "/var/run/tng.sock".to_string(),

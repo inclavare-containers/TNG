@@ -513,6 +513,8 @@
 
 #### 字段说明
 
+https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
+
 - **`metrics`** (Metrics, 可选，默认为空)：该字段指定了Metrics的配置。包含以下子字段：
     - **`exporters`** (array [Exporter], 可选，默认为空数组)：该字段指定了Metrics的导出器列表。包含以下子字段：
         - **`type`** (string)：该字段指定了Metrics的导出器类型。

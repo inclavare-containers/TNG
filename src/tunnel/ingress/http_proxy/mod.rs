@@ -25,15 +25,16 @@ use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
 use crate::observability::metric::stream::StreamWithCounter;
+use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::tunnel::utils;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::socket::SetListenerCommonSockOpts;
-use crate::tunnel::{utils, RegistedService};
 
 pub enum RouteResult {
     // At least in this time, we got no error, and this request should be handled in background.
