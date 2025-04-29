@@ -38,6 +38,7 @@ opentelemetry-otlp = {version = "0.29.0", default-features = false, features = [
   "http-json",
   "reqwest-rustls-webpki-roots",
 ]}
+opentelemetry-stdout = "0.29.0"
 opentelemetry_sdk = {version = "0.29.0", features = [
   "experimental_async_runtime",
   "experimental_metrics_periodicreader_with_async_runtime",

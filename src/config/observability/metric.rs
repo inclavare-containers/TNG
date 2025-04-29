@@ -6,7 +6,8 @@ use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig, WithTonicConfig}
 use serde::{Deserialize, Serialize};
 
 use crate::observability::exporter::{
-    falcon::FalconConfig, stdout::StdoutExporter, SimpleMetricExporter,
+    falcon::FalconConfig, stdout::StdoutExporter, OpenTelemetryMetricExporterAdapter,
+    SimpleMetricExporter,
 };
 
 use super::{OltpCommonExporterConfig, OltpExporterProtocol};
@@ -140,6 +141,33 @@ pub enum MetricExporterInstance {
         Arc<dyn SimpleMetricExporter + Send + Sync + 'static>,
     ),
     OpenTelemetry(u64 /* step */, opentelemetry_otlp::MetricExporter),
+}
+
+impl MetricExporterInstance {
+    pub fn into_sdk_meter_provider(self) -> opentelemetry_sdk::metrics::SdkMeterProvider {
+        let meter_provider = match self {
+            MetricExporterInstance::Simple(step, simple_metric_exporter) => {
+                let exporter = OpenTelemetryMetricExporterAdapter::new(simple_metric_exporter);
+                let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                    .with_interval(Duration::from_secs(step))
+                    .build();
+                opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                    .with_reader(reader)
+                    .with_resource(crate::observability::otlp_resource())
+                    .build()
+            }
+            MetricExporterInstance::OpenTelemetry(step, exporter) => {
+                let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                    .with_interval(Duration::from_secs(step))
+                    .build();
+                opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                    .with_reader(reader)
+                    .with_resource(crate::observability::otlp_resource())
+                    .build()
+            }
+        };
+        meter_provider
+    }
 }
 
 #[cfg(test)]

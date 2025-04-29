@@ -20,6 +20,10 @@ pub enum LogExporterType {
     /// Exporting in the OpenTelemetry Protocol (OTLP) format
     #[serde(rename = "oltp")]
     Oltp(OltpLogExporterConfig),
+
+    /// Exporting traces to stdout (for debug only)
+    #[serde(rename = "stdout")]
+    Stdout,
 }
 
 type OltpLogExporterConfig = OltpCommonExporterConfig;
@@ -32,7 +36,7 @@ impl LogExporterType {
                 endpoint,
                 headers,
             }) => {
-                let exporter = match protocol {
+                let span_exporter = match protocol {
                     OltpExporterProtocol::HttpProtobuf | OltpExporterProtocol::HttpJson => {
                         let mut builder = opentelemetry_otlp::SpanExporter::builder()
                             .with_http()
@@ -73,14 +77,40 @@ impl LogExporterType {
                             .context("Failed to create OTLP gRPC exporter")?
                     }
                 };
-                Ok(LogExporterInstance::OpenTelemetry(exporter))
+
+                Ok(LogExporterInstance::OpenTelemetryOltp(span_exporter))
             }
+            LogExporterType::Stdout => Ok(LogExporterInstance::OpenTelemetryStdout(
+                opentelemetry_stdout::SpanExporter::default(),
+            )),
         }
     }
 }
 
 pub enum LogExporterInstance {
-    OpenTelemetry(opentelemetry_otlp::SpanExporter),
+    OpenTelemetryOltp(opentelemetry_otlp::SpanExporter),
+    OpenTelemetryStdout(opentelemetry_stdout::SpanExporter),
+}
+
+impl LogExporterInstance {
+    pub fn into_sdk_tracer_provider(self) -> opentelemetry_sdk::trace::SdkTracerProvider {
+        match self {
+            LogExporterInstance::OpenTelemetryOltp(span_exporter) => {
+                let batch = opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
+                let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                    .with_span_processor(batch)
+                    .with_resource(crate::observability::otlp_resource())
+                    .build();
+                tracer_provider
+            }
+            LogExporterInstance::OpenTelemetryStdout(span_exporter) => {
+                opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                    .with_simple_exporter(span_exporter)
+                    .with_resource(crate::observability::otlp_resource())
+                    .build()
+            }
+        }
+    }
 }
 
 #[cfg(test)]

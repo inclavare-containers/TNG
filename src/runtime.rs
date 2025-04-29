@@ -1,7 +1,5 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use crate::config::observability::log::LogExporterInstance;
-use crate::config::observability::metric::MetricExporterInstance;
 use crate::observability::log::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
@@ -11,12 +9,10 @@ use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
     control_interface::ControlInterface,
     executor::iptables::IpTablesAction,
-    observability::exporter::OpenTelemetryMetricExporterAdapter,
 };
 
 use anyhow::{bail, Context as _, Result};
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_sdk::trace::SpanProcessor;
 use scopeguard::defer;
 use tokio_graceful::ShutdownGuard;
 use tokio_util::sync::CancellationToken;
@@ -286,28 +282,7 @@ impl TngRuntime {
         };
 
         if let Some(exporter) = exporter {
-            let meter_provider = match exporter {
-                MetricExporterInstance::Simple(step, simple_metric_exporter) => {
-                    let exporter = OpenTelemetryMetricExporterAdapter::new(simple_metric_exporter);
-                    let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
-                        .with_interval(Duration::from_secs(step))
-                        .build();
-                    opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                        .with_reader(reader)
-                        .with_resource(crate::observability::otlp_resource())
-                        .build()
-                }
-                MetricExporterInstance::OpenTelemetry(step, exporter) => {
-                    let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
-                        .with_interval(Duration::from_secs(step))
-                        .build();
-                    opentelemetry_sdk::metrics::SdkMeterProvider::builder()
-                        .with_reader(reader)
-                        .with_resource(crate::observability::otlp_resource())
-                        .build()
-                }
-            };
-
+            let meter_provider = exporter.into_sdk_meter_provider();
             opentelemetry::global::set_meter_provider(meter_provider);
         }
 
@@ -321,30 +296,20 @@ impl TngRuntime {
         if let Some(log_args) = &tng_config.log {
             for exporter in &log_args.exporters {
                 let exporter = exporter.instantiate()?;
+                let tracer_provider = exporter.into_sdk_tracer_provider();
 
-                match exporter {
-                    LogExporterInstance::OpenTelemetry(span_exporter) => {
-                        let batch = opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
-                        let tracer_provider =
-                            opentelemetry_sdk::trace::SdkTracerProvider::builder()
-                                .with_span_processor(batch)
-                                .with_resource(crate::observability::otlp_resource())
-                                .build();
+                // Note here we register the tracer provider into tracing crate, so there is no need to call `opentelemetry::global::set_tracer_provider()`
+                let tracer = tracer_provider.tracer("tng");
+                let telemetry_layer = tracing_opentelemetry::layer()
+                    .with_level(true)
+                    .with_tracer(tracer);
 
-                        // Note here we register the tracer provider into tracing crate, so there is no need to call `opentelemetry::global::set_tracer_provider()`
-                        let tracer = tracer_provider.tracer("tng");
-                        let telemetry_layer = tracing_opentelemetry::layer()
-                            .with_level(true)
-                            .with_tracer(tracer);
-
-                        let reload_result = reload_handle.modify(|layers| {
-                            (*layers).push(Box::new(telemetry_layer));
-                        });
-                        match reload_result {
-                            Ok(_) => {} // Great!
-                            Err(err) => tracing::warn!("Unable to add new layer: {}", err),
-                        }
-                    }
+                let reload_result = reload_handle.modify(|layers| {
+                    (*layers).push(Box::new(telemetry_layer));
+                });
+                match reload_result {
+                    Ok(_) => {} // Great!
+                    Err(err) => tracing::warn!("Unable to add new layer: {}", err),
                 }
             }
         }
