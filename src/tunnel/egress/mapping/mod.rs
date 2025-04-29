@@ -11,7 +11,7 @@ use tokio_graceful::ShutdownGuard;
 
 use crate::{
     config::egress::{CommonArgs, EgressMappingArgs},
-    observability::{log::ShutdownGuardExt as _, metric::stream::StreamWithCounter},
+    observability::{metric::stream::StreamWithCounter, trace::ShutdownGuardExt as _},
     service::RegistedService,
     tunnel::{
         access_log::AccessLog,

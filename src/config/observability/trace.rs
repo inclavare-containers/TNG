@@ -8,30 +8,30 @@ use super::{OltpCommonExporterConfig, OltpExporterProtocol};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct LogArgs {
+pub struct TraceArgs {
     #[serde(default)]
-    pub exporters: Vec<LogExporterType>,
+    pub exporters: Vec<TraceExporterType>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "type")]
 #[serde(deny_unknown_fields)]
-pub enum LogExporterType {
+pub enum TraceExporterType {
     /// Exporting in the OpenTelemetry Protocol (OTLP) format
     #[serde(rename = "oltp")]
-    Oltp(OltpLogExporterConfig),
+    Oltp(OltpTraceExporterConfig),
 
     /// Exporting traces to stdout (for debug only)
     #[serde(rename = "stdout")]
     Stdout,
 }
 
-type OltpLogExporterConfig = OltpCommonExporterConfig;
+type OltpTraceExporterConfig = OltpCommonExporterConfig;
 
-impl LogExporterType {
-    pub fn instantiate(&self) -> Result<LogExporterInstance> {
+impl TraceExporterType {
+    pub fn instantiate(&self) -> Result<TraceExporterInstance> {
         match self {
-            LogExporterType::Oltp(OltpLogExporterConfig {
+            TraceExporterType::Oltp(OltpTraceExporterConfig {
                 protocol,
                 endpoint,
                 headers,
@@ -78,24 +78,24 @@ impl LogExporterType {
                     }
                 };
 
-                Ok(LogExporterInstance::OpenTelemetryOltp(span_exporter))
+                Ok(TraceExporterInstance::OpenTelemetryOltp(span_exporter))
             }
-            LogExporterType::Stdout => Ok(LogExporterInstance::OpenTelemetryStdout(
+            TraceExporterType::Stdout => Ok(TraceExporterInstance::OpenTelemetryStdout(
                 opentelemetry_stdout::SpanExporter::default(),
             )),
         }
     }
 }
 
-pub enum LogExporterInstance {
+pub enum TraceExporterInstance {
     OpenTelemetryOltp(opentelemetry_otlp::SpanExporter),
     OpenTelemetryStdout(opentelemetry_stdout::SpanExporter),
 }
 
-impl LogExporterInstance {
+impl TraceExporterInstance {
     pub fn into_sdk_tracer_provider(self) -> opentelemetry_sdk::trace::SdkTracerProvider {
         match self {
-            LogExporterInstance::OpenTelemetryOltp(span_exporter) => {
+            TraceExporterInstance::OpenTelemetryOltp(span_exporter) => {
                 let batch = opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
                 let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                     .with_span_processor(batch)
@@ -103,7 +103,7 @@ impl LogExporterInstance {
                     .build();
                 tracer_provider
             }
-            LogExporterInstance::OpenTelemetryStdout(span_exporter) => {
+            TraceExporterInstance::OpenTelemetryStdout(span_exporter) => {
                 opentelemetry_sdk::trace::SdkTracerProvider::builder()
                     .with_simple_exporter(span_exporter)
                     .with_resource(crate::observability::otlp_resource())
@@ -121,8 +121,11 @@ mod tests {
 
     use super::*;
 
-    fn test_config_common(json_value: serde_json::Value, expected: LogExporterType) -> Result<()> {
-        let deserialized: LogExporterType = serde_json::from_value(json_value)?;
+    fn test_config_common(
+        json_value: serde_json::Value,
+        expected: TraceExporterType,
+    ) -> Result<()> {
+        let deserialized: TraceExporterType = serde_json::from_value(json_value)?;
 
         deserialized.instantiate()?;
 
@@ -144,7 +147,7 @@ mod tests {
                 },
             }
         );
-        let expected = LogExporterType::Oltp(OltpLogExporterConfig {
+        let expected = TraceExporterType::Oltp(OltpTraceExporterConfig {
             protocol: OltpExporterProtocol::Grpc,
             endpoint: "http://127.0.0.1:4318".to_string(),
             headers: Some(
@@ -164,7 +167,7 @@ mod tests {
                 "endpoint": "http://127.0.0.1:4318",
             }
         );
-        let expected = LogExporterType::Oltp(OltpLogExporterConfig {
+        let expected = TraceExporterType::Oltp(OltpTraceExporterConfig {
             protocol: OltpExporterProtocol::Grpc,
             endpoint: "http://127.0.0.1:4318".to_string(),
             headers: None,
@@ -178,7 +181,7 @@ mod tests {
                 "endpoint": "http://127.0.0.1:4318",
             }
         );
-        let expected = LogExporterType::Oltp(OltpLogExporterConfig {
+        let expected = TraceExporterType::Oltp(OltpTraceExporterConfig {
             protocol: OltpExporterProtocol::HttpJson,
             endpoint: "http://127.0.0.1:4318".to_string(),
             headers: None,
@@ -192,7 +195,7 @@ mod tests {
                 "endpoint": "http://127.0.0.1:4318",
             }
         );
-        let expected = LogExporterType::Oltp(OltpLogExporterConfig {
+        let expected = TraceExporterType::Oltp(OltpTraceExporterConfig {
             protocol: OltpExporterProtocol::HttpProtobuf,
             endpoint: "http://127.0.0.1:4318".to_string(),
             headers: None,
@@ -210,7 +213,7 @@ mod tests {
                 },
             }
         );
-        let expected = LogExporterType::Oltp(OltpLogExporterConfig {
+        let expected = TraceExporterType::Oltp(OltpTraceExporterConfig {
             protocol: OltpExporterProtocol::HttpProtobuf,
             endpoint: "http://127.0.0.1:4318".to_string(),
             headers: Some(

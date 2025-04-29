@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-pub mod log;
 pub mod metric;
+pub mod trace;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]

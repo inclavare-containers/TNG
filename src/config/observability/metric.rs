@@ -5,7 +5,7 @@ use derivative::Derivative;
 use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig, WithTonicConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::observability::exporter::{
+use crate::observability::metric::exporter::{
     falcon::FalconConfig, stdout::StdoutExporter, OpenTelemetryMetricExporterAdapter,
     SimpleMetricExporter,
 };
@@ -67,9 +67,10 @@ impl MetricExporterType {
                 Arc::new(StdoutExporter {}),
             )),
             MetricExporterType::Falcon(falcon_config) => {
-                let falcon_exporter = crate::observability::exporter::falcon::FalconExporter::new(
-                    falcon_config.clone(),
-                )?;
+                let falcon_exporter =
+                    crate::observability::metric::exporter::falcon::FalconExporter::new(
+                        falcon_config.clone(),
+                    )?;
                 Ok(MetricExporterInstance::Simple(
                     falcon_config.step,
                     Arc::new(falcon_exporter),

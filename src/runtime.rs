@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::observability::log::ShutdownGuardExt;
+use crate::observability::trace::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
 use crate::tunnel::egress::mapping::MappingEgress;
@@ -52,8 +52,8 @@ impl TngRuntime {
 
         Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
 
-        Self::setup_logs_exporter(&tng_config, reload_handle)
-            .context("Failed to setup log exporter")?;
+        Self::setup_trace_exporter(&tng_config, reload_handle)
+            .context("Failed to setup trace exporter")?;
 
         // Create all ingress and egress.
         let mut iptables_actions = vec![];
@@ -289,11 +289,11 @@ impl TngRuntime {
         Ok(())
     }
 
-    fn setup_logs_exporter(
+    fn setup_trace_exporter(
         tng_config: &TngConfig,
         reload_handle: &TracingReloadHandle,
     ) -> Result<()> {
-        if let Some(log_args) = &tng_config.log {
+        if let Some(log_args) = &tng_config.trace {
             for exporter in &log_args.exporters {
                 let exporter = exporter.instantiate()?;
                 let tracer_provider = exporter.into_sdk_tracer_provider();

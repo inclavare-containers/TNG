@@ -14,7 +14,7 @@ use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
-    observability::log::ShutdownGuardExt,
+    observability::trace::ShutdownGuardExt,
     tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
 };
 

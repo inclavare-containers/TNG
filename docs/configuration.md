@@ -389,12 +389,12 @@ Example:
 }
 ```
 
-### Control Interface
+## Control Interface
 
 > [!NOTE]
 > This interface is distinct from the <a href="#envoy_admin_interface">Envoy Admin Interface</a> below. The latter is Envoy's built-in management interface, which we plan to remove in future versions.
 
-#### Field Description
+### Field Description
 - **`control_interface`** (ControlInterface, optional, default is empty): This field specifies the listening address and port for the control interface.
     - **`restful`** (Endpoint, optional, default is empty): This field specifies the configuration for the RESTful API. It includes the following subfields:
         - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
@@ -413,7 +413,7 @@ Example:
 
 In this example, tng will enable the Control Interface, and its RESTful API will listen on port `50000` at `0.0.0.0`.
 
-#### RESTful API
+### RESTful API
 
 Exposes RESTful API endpoints, supporting the following operations:
 - **`/livez`**: This endpoint returns the liveness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running.
@@ -421,8 +421,7 @@ Exposes RESTful API endpoints, supporting the following operations:
 
 <span id = "envoy_admin_interface"></span>
 
-### Envoy Admin Interface
-
+## Envoy Admin Interface
 
 > [!WARNING]
 > Due to the removal of Envoy, this option has been deprecated. Configuring this option will have no effect.
@@ -451,7 +450,20 @@ In this example, the `admin_bind` field specifies that the Envoy admin interface
 }
 ```
 
-### Observability
+## Observability
+
+Observability refers to the monitoring of the system's operational status to help operations personnel understand the system's running conditions and take appropriate measures. The concept of observability includes three aspects: Log, Metric, and Trace.
+
+### Log
+
+The current version of TNG defaults to enabling the capability of outputting logs to standard output. Users can control the log level of tng by setting the value of the `RUST_LOG` environment variable. Supported levels include `error`, `warn`, `info`, `debug`, `trace`, and a special level `off`.
+
+By default, the log level is set to `info`, and logging from all third-party libraries is disabled.
+
+> [!NOTE]
+> In addition to simple log levels, complex configurations are also supported. Please refer to the documentation for the [tracing-subscriber](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives) crate.
+
+### Metric
 
 Observability refers to the monitoring of system runtime status to help operations personnel understand the system's operating conditions and take appropriate measures. The concept of observability includes three levels: Log, Metric, and Tracing. TNG currently includes support for Metrics.
 
@@ -516,12 +528,13 @@ Currently, TNG supports the following types of exporters:
 > **`falcon`**: Exports to the open-falcon service.
 > **`stdout`**: Prints to log output.
 
-You can enable Metrics support by specifying the metrics field.
+You can enable Metric support by specifying the `metric` field.
 
-#### Field Description
-- **`metrics`** (Metrics, optional, default is empty): This field specifies the configuration of Metrics. It includes the following subfields:
-    - **`exporters`** (array [Exporter], optional, default is an empty array): This field specifies the list of Metrics exporters. It includes the following subfields:
-        - **`type`** (string): This field specifies the type of the Metrics exporter.
+### Field Description
+
+- **`metric`** (Metric, optional, default is empty): This field specifies the configuration of Metric. It includes the following subfields:
+    - **`exporters`** (array [MetricExporter], optional, default is an empty array): This field specifies the list of Metric exporters. It includes the following subfields:
+        - **`type`** (string): This field specifies the type of the Metric exporter.
 
 - For the OTLP exporter (`type="otlp"`), it includes the following sub-fields:
     - **`protocol`** (string): This field specifies the data format type of the OTLP protocol, with the following optional values:
@@ -529,6 +542,7 @@ You can enable Metrics support by specifying the metrics field.
         - `http/protobuf`: Reports using HTTP, with content serialized in protobuf format.
         - `http/json`: Reports using HTTP, with content serialized in JSON format.
     - **`endpoint`** (string): This field specifies the URL of the OTLP endpoint.
+    - **`headers`** (Map, optional): A list of HTTP Headers to be attached in the export request. For example, you can add an `Authorization` header to meet the authentication requirements of the OTLP endpoint. Additionally, regardless of whether this field is filled or not, headers can also be added via [environment variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration).
     - **`step`** (integer, optional, default is 60): This field specifies the interval time step value for metric collection and reporting, in seconds.
 
 - For the open-falcon exporter (`type="falcon"`), it includes the following subfields:
@@ -547,6 +561,9 @@ Example:
     "type": "oltp",
     "protocol": "http/protobuf",
     "endpoint": "https://oltp.example.com/example/url",
+    "headers": {
+        "Authorization": "XXXXXXXXX",
+    },
     "step": 2
 }
 ```
@@ -576,5 +593,49 @@ Example:
             "step": 60
         }]
     }
+}
+```
+
+### Trace
+
+TNG supports the export of tracing events under the OpenTelemetry standard semantics, including Trace, Span, and Events information for each request.
+
+The following types of exporters are supported:
+
+> **`otlp`**: Export to an endpoint compatible with the OpenTelemetry Protocol (OTLP).  
+> **`stdout`**: Print to standard output. Note that this exporter outputs Trace information synchronously (not asynchronously), which can significantly impact performance in high-concurrency scenarios, so it should only be used for debugging purposes.
+
+You can enable support for Trace by specifying the `trace` field.
+
+
+#### Field Description
+
+- **`trace`** (Trace, optional, default is empty): This field specifies the configuration for Trace. It includes the following subfields:
+    - **`exporters`** (array [TraceExporter], optional, default is an empty array): This field specifies the list of Trace exporters. It includes the following subfields:
+        - **`type`** (string): This field specifies the type of the Trace exporter.
+
+- For the OTLP exporter (`type="otlp"`), it includes the following subfields:
+    - **`protocol`** (string): This field specifies the data format type of the OTLP protocol, with the following optional values:
+        - `grpc`: Use gRPC for reporting.
+        - `http/protobuf`: Use HTTP for reporting, with content serialized using protobuf.
+        - `http/json`: Use HTTP for reporting, with content serialized using JSON.
+    - **`endpoint`** (string): This field specifies the URL of the OTLP endpoint.
+    - **`headers`** (Map, optional): This is a list of HTTP Headers to be attached to the export request. For example, you can add an `Authorization` header to meet the authentication requirements of the OTLP endpoint. Additionally, regardless of whether this field is filled or not, headers can also be added via [environment variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration).
+
+- For the stdout exporter (`type="stdout"`), no additional fields need to be configured.
+
+Examples:
+
+```json
+{
+    "type": "oltp",
+    "protocol": "http/protobuf",
+    "endpoint": "https://oltp.example.com/example/url"
+}
+```
+
+```json
+{
+    "type": "stdout"
 }
 ```

@@ -7,8 +7,8 @@ use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
-use crate::observability::log::ShutdownGuardExt;
 use crate::observability::metric::stream::StreamWithCounter;
+use crate::observability::trace::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;

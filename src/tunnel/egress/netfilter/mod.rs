@@ -13,7 +13,7 @@ use tokio_graceful::ShutdownGuard;
 use crate::{
     config::egress::{CommonArgs, EgressNetfilterArgs},
     executor::iptables::IpTablesAction,
-    observability::{log::ShutdownGuardExt, metric::stream::StreamWithCounter},
+    observability::{metric::stream::StreamWithCounter, trace::ShutdownGuardExt},
     service::RegistedService,
     tunnel::{
         access_log::AccessLog,

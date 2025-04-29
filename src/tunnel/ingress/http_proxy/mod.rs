@@ -24,8 +24,8 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
-use crate::observability::log::ShutdownGuardExt;
 use crate::observability::metric::stream::StreamWithCounter;
+use crate::observability::trace::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;

@@ -380,12 +380,13 @@
 }
 ```
 
-### Control Interface
+## Control Interface
 
 > [!NOTE]
 > 该接口与下面的 <a href="#envoy_admin_interface">Envoy Admin Interface</a> 是完全不同的功能。后者是Envoy内置的管理接口，在未来的版本中，我们将对其删除。
 
-#### 字段说明
+### 字段说明
+
 - **`control_interface`** (ControlInterface, 可选，默认为空)：该字段指定了控制接口的监听地址和端口。
     - **`restful`** (Endpoint, 可选，默认为空)：该字段指定了RESTful API的配置。包含以下子字段：
         - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
@@ -404,7 +405,7 @@
 
 在该示例中，tng将开启Control Interface，并且其RESTful API接口监听在`0.0.0.0:50000`端口上。
 
-#### RESTful API
+### RESTful API
 
 暴露RESTful API接口，支持以下操作：
 - **`/livez`**：该端口返回tng实例的存活状态。如果返回`200 OK`，则表示实例正在运行中。
@@ -413,7 +414,7 @@
 
 <span id = "envoy_admin_interface"></span>
 
-### Envoy Admin Interface
+## Envoy Admin Interface
 
 > [!WARNING]
 > 由于我们放弃了与envoy的集成，该选项已被弃用。配置该选项将不会有任何效果。
@@ -441,9 +442,21 @@
 }
 ```
 
-### 可观测性（Observability）
+## 可观测性（Observability）
 
-可观测性是指对系统运行状态的监控，以帮助运维人员了解系统的运行情况，并采取适当的措施。可观测性的概念包含Log、Metric、Tracing三个层面。TNG目前包含了对Metric的支持。
+可观测性是指对系统运行状态的监控，以帮助运维人员了解系统的运行情况，并采取适当的措施。可观测性的概念包含Log、Metric、Trace三个层面。
+
+### Log
+
+TNG当前版本默认启用了将日志输出到标准输出的能力，用户可以通过`RUST_LOG`环境变量的值控制tng的输出日志等级，支持的等级包括`error``warn``info``debug``trace`和一个特殊的等级`off`。
+
+默认情况下日志为`info`级别，且禁用了所有第三方库的日志。
+
+> [!NOTE]
+> 除了简单日志级别外，也支持复杂配置，请参考[tracing-subscriber](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives) crate 的文档。
+
+
+### Metric
 
 在TNG中，我们提供如下Metrics：
 
@@ -508,16 +521,14 @@
 > **`falcon`**：导出到open-falcon服务
 > **`stdout`**：打印到日志输出
 
-您可以通过指定`metrics`字段来开启对Metrics的支持。
+您可以通过指定`metric`字段来开启对Metric的支持。
 
 
 #### 字段说明
 
-https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
-
-- **`metrics`** (Metrics, 可选，默认为空)：该字段指定了Metrics的配置。包含以下子字段：
-    - **`exporters`** (array [Exporter], 可选，默认为空数组)：该字段指定了Metrics的导出器列表。包含以下子字段：
-        - **`type`** (string)：该字段指定了Metrics的导出器类型。
+- **`metric`** (Metric, 可选，默认为空)：该字段指定了Metric的配置。包含以下子字段：
+    - **`exporters`** (array [MetricExporter], 可选，默认为空数组)：该字段指定了Metric的导出器列表。包含以下子字段：
+        - **`type`** (string)：该字段指定了Metric的导出器类型。
 
 - 对于OTLP导出器（`type="otlp"`），包含以下子字段：
     - **`protocol`** (string)：该字段指定了OTLP协议的数据格式类型，有如下可选值：
@@ -525,6 +536,7 @@ https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
         - `http/protobuf`：使用HTTP上报，内容使用protobuf序列化方式
         - `http/json`：使用HTTP上报，内容使用json序列化方式
     - **`endpoint`** (string)：该字段指定了OTLP端点的url
+    - **`headers`** (Map，可选)：发出的导出请求中需附加的HTTP Header列表。例如，可以附加`Authorization`请求头满足OTLP端点的鉴权需求。此外，无论是否填写该字段，都可以通过[环境变量](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration)的方式添加header
     - **`step`** (integer, 可选，默认为60)：该字段指定了metric采集和上报的间隔时间step值，单位为秒。
 
 - 对于open-falcon导出器（`type="falcon"`），包含以下子字段：
@@ -543,6 +555,9 @@ https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
     "type": "oltp",
     "protocol": "http/protobuf",
     "endpoint": "https://oltp.example.com/example/url",
+    "headers": {
+        "Authorization": "XXXXXXXXX",
+    },
     "step": 2
 }
 ```
@@ -572,5 +587,49 @@ https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/
             "step": 60
         }]
     }
+}
+```
+
+### Trace
+
+TNG支持OpenTelemetry标准语义下的tracing事件导出，包括每个请求中的Trace、Span、Events信息。
+
+支持如下类型的exporter：
+
+> **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点。
+> **`stdout`**：打印到标准输出，注意该导出器将以同步方式（而非异步方式）输出Trace信息，在高并发情况下对性能有较大影响，故应仅作调试使用。
+
+您可以通过指定`trace`字段来开启对Trace的支持。
+
+
+#### 字段说明
+
+- **`trace`** (Trace, 可选，默认为空)：该字段指定了Trace的配置。包含以下子字段：
+    - **`exporters`** (array [TraceExporter], 可选，默认为空数组)：该字段指定了Trace的导出器列表。包含以下子字段：
+        - **`type`** (string)：该字段指定了Trace的导出器类型。
+
+- 对于OTLP导出器（`type="otlp"`），包含以下子字段：
+    - **`protocol`** (string)：该字段指定了OTLP协议的数据格式类型，有如下可选值：
+        - `grpc`：使用gRPC上报
+        - `http/protobuf`：使用HTTP上报，内容使用protobuf序列化方式
+        - `http/json`：使用HTTP上报，内容使用json序列化方式
+    - **`endpoint`** (string)：该字段指定了OTLP端点的url
+    - **`headers`** (Map，可选)：发出的导出请求中需附加的HTTP Header列表。例如，可以附加`Authorization`请求头满足OTLP端点的鉴权需求。此外，无论是否填写该字段，都可以通过[环境变量](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration)的方式添加header
+
+- 对于stdout导出器（`type="stdout"`），无需配置额外字段。
+
+示例：
+
+```json
+{
+    "type": "oltp",
+    "protocol": "http/protobuf",
+    "endpoint": "https://oltp.example.com/example/url"
+}
+```
+
+```json
+{
+    "type": "stdout"
 }
 ```

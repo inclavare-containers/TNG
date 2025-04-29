@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     config::egress::CommonArgs,
-    observability::log::ShutdownGuardExt,
+    observability::trace::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
         egress::core::protocol::{

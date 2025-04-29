@@ -1,6 +1,5 @@
-pub mod exporter;
-pub mod log;
 pub mod metric;
+pub mod trace;
 
 pub fn otlp_resource() -> opentelemetry_sdk::Resource {
     let resource = opentelemetry_sdk::Resource::builder()
