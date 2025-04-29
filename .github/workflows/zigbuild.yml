@@ -34,7 +34,7 @@ jobs:
         if: ${{ env.build-tool == 'zigbuild' }}
       - name: Install cargo-zigbuild
         if: ${{ env.build-tool == 'zigbuild' }}
-        run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild
+        run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild --version 0.19.8
       - name: cargo compile
         run: |
           ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/"' || ''  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
