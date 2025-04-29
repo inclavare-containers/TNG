@@ -24,6 +24,7 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
+use crate::observability::log::ShutdownGuardExt;
 use crate::observability::metric::stream::StreamWithCounter;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
@@ -135,7 +136,7 @@ impl RequestHelper {
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
     ) -> RouteResult {
-        let span = tracing::info_span!("forward");
+        let forawrd_span = tracing::info_span!("forward");
 
         if self.req.method() == Method::CONNECT {
             tracing::debug!(
@@ -144,40 +145,35 @@ impl RequestHelper {
             );
 
             // Spawn a background task to handle the upgraded stream.
-            let task = shutdown_guard.spawn_task(
-                async move {
-                    let fut = async {
-                        let upgraded = hyper::upgrade::on(self.req)
-                            .await
-                            .context("Failed during http connect upgrade")?;
-                        tracing::debug!(
-                            "Stream from downstream is ready, keeping forwarding to upstream now"
-                        );
+            let task = shutdown_guard.spawn_task_with_span(forawrd_span.clone(), async move {
+                let fut = async {
+                    let upgraded = hyper::upgrade::on(self.req)
+                        .await
+                        .context("Failed during http connect upgrade")?;
+                    tracing::debug!(
+                        "Stream from downstream is ready, keeping forwarding to upstream now"
+                    );
 
-                        let downstream = StreamWithCounter {
-                            inner: TokioIo::new(upgraded),
-                            tx_bytes_total: metrics.tx_bytes_total,
-                            rx_bytes_total: metrics.rx_bytes_total,
-                        };
-
-                        utils::forward_stream(upstream, downstream).await
+                    let downstream = StreamWithCounter {
+                        inner: TokioIo::new(upgraded),
+                        tx_bytes_total: metrics.tx_bytes_total,
+                        rx_bytes_total: metrics.rx_bytes_total,
                     };
 
-                    if let Err(e) = fut.await {
-                        tracing::error!(error=?e, "Failed handling http connect request");
-                    }
+                    utils::forward_stream(upstream, downstream).await
+                };
+
+                if let Err(e) = fut.await {
+                    tracing::error!(error=?e, "Failed handling http connect request");
                 }
-                .instrument(span),
-            );
+            });
 
             // Spawn a task to trace the connection status.
-            shutdown_guard.spawn_task({
-                async move {
-                    if !matches!(task.await, Ok(())) {
-                        metrics.cx_failed.add(1);
-                    }
-                    metrics.cx_active.add(-1);
+            shutdown_guard.spawn_task_with_span(forawrd_span.clone(), async move {
+                if !matches!(task.await, Ok(())) {
+                    metrics.cx_failed.add(1);
                 }
+                metrics.cx_active.add(-1);
             });
 
             RouteResult::HandleInBackgroud
@@ -187,11 +183,11 @@ impl RequestHelper {
                 "Setting up stream from http-proxy downstream"
             );
 
-            // TODO: optimize this mem copy
-            let (s1, s2) = tokio::io::duplex(4 * 1024);
+            async {
+                // TODO: optimize this mem copy
+                let (s1, s2) = tokio::io::duplex(4 * 1024);
 
-            shutdown_guard.spawn_task(
-                async move {
+                shutdown_guard.spawn_task_current_span(async move {
                     let downstream = StreamWithCounter {
                         inner: s2,
                         tx_bytes_total: metrics.tx_bytes_total,
@@ -201,60 +197,58 @@ impl RequestHelper {
                     if let Err(e) = utils::forward_stream(upstream, downstream).await {
                         tracing::error!("{e:#}");
                     }
-                }
-                .instrument(span),
-            );
+                });
 
-            // TODO: support send both http1 and http2 payload
-            let (mut sender, conn) =
-                match hyper::client::conn::http1::handshake(TokioIo::new(s1)).await {
+                // TODO: support send both http1 and http2 payload
+                let (mut sender, conn) =
+                    match hyper::client::conn::http1::handshake(TokioIo::new(s1)).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return RouteResult::InternalError(
+                                StatusCode::BAD_REQUEST,
+                                format!("Failed during http handshake with upstream: {e:#}"),
+                            )
+                        }
+                    };
+
+                let http_conn_span = tracing::info_span!("http_conn");
+                shutdown_guard.spawn_task_with_span(http_conn_span, async move {
+                    if let Err(e) = conn.await {
+                        tracing::error!(?e, "The HTTP connection with upstream is broken");
+                    }
+                });
+
+                let mut parts = self.req.uri().clone().into_parts();
+                parts.authority = None;
+                parts.scheme = None;
+                *self.req.uri_mut() = match http::Uri::from_parts(parts) {
                     Ok(v) => v,
                     Err(e) => {
                         return RouteResult::InternalError(
                             StatusCode::BAD_REQUEST,
-                            format!("Failed during http handshake with upstream: {e:#}"),
+                            format!(
+                            "Failed convert uri {} for forwarding http request to upstream: {e:#}",
+                            self.req.uri()
+                        ),
                         )
                     }
                 };
 
-            let span = tracing::info_span!("http_conn");
-            shutdown_guard.spawn_task(
-                async move {
-                    if let Err(e) = conn.await {
-                        tracing::error!(?e, "The HTTP connection with upstream is broken");
-                    }
-                }
-                .instrument(span),
-            );
-
-            let mut parts = self.req.uri().clone().into_parts();
-            parts.authority = None;
-            parts.scheme = None;
-            *self.req.uri_mut() = match http::Uri::from_parts(parts) {
-                Ok(v) => v,
-                Err(e) => {
-                    return RouteResult::InternalError(
+                tracing::debug!("Forwarding HTTP request to upstream now");
+                match sender
+                    .send_request(self.req)
+                    .await
+                    .map(|res| res.into_response())
+                {
+                    Ok(resp) => RouteResult::UpstreamResponse(resp),
+                    Err(e) => RouteResult::InternalError(
                         StatusCode::BAD_REQUEST,
-                        format!(
-                            "Failed convert uri {} for forwarding http request to upstream: {e:#}",
-                            self.req.uri()
-                        ),
-                    )
+                        format!("Failed to forawrd http request to upstream: {e:#}"),
+                    ),
                 }
-            };
-
-            tracing::debug!("Forwarding HTTP request to upstream now");
-            match sender
-                .send_request(self.req)
-                .await
-                .map(|res| res.into_response())
-            {
-                Ok(resp) => RouteResult::UpstreamResponse(resp),
-                Err(e) => RouteResult::InternalError(
-                    StatusCode::BAD_REQUEST,
-                    format!("Failed to forawrd http request to upstream: {e:#}"),
-                ),
             }
+            .instrument(forawrd_span)
+            .await
         }
     }
 }
@@ -421,10 +415,9 @@ impl RegistedService for HttpProxyIngress {
             let stream_router = self.stream_router.clone();
             let metrics = self.metrics.clone();
 
-            let span = tracing::info_span!("serve", client=?peer_addr);
-
-            shutdown_guard.spawn_task_fn(move |shutdown_guard| {
-                let fut = async move {
+            shutdown_guard.spawn_task_fn_with_span(
+                tracing::info_span!("serve", client=?peer_addr),
+                move |shutdown_guard| async move {
                     tracing::debug!("Start serving new connection from client");
 
                     let svc = {
@@ -471,10 +464,8 @@ impl RegistedService for HttpProxyIngress {
                     {
                         tracing::error!("Failed to serve connection: {e:?}");
                     }
-                };
-
-                fut.instrument(span)
-            });
+                },
+            );
         }
 
         Ok(())

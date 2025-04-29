@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
-use tracing::Instrument;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
+use crate::observability::log::ShutdownGuardExt;
 use crate::observability::metric::stream::StreamWithCounter;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
@@ -108,9 +108,9 @@ impl RegistedService for MappingIngress {
             let tx_bytes_total = self.metrics.tx_bytes_total.clone();
             let rx_bytes_total = self.metrics.rx_bytes_total.clone();
 
-            let span = tracing::info_span!("serve", client=?peer_addr);
-            let task = shutdown_guard.spawn_task_fn(|shutdown_guard| {
-                async move {
+            let task = shutdown_guard.spawn_task_fn_with_span(
+                tracing::info_span!("serve", client=?peer_addr),
+                |shutdown_guard| async move {
                     let fut = async move {
                         tracing::trace!("Start serving new connection from client");
 
@@ -134,10 +134,7 @@ impl RegistedService for MappingIngress {
                                     tx_bytes_total,
                                     rx_bytes_total,
                                 };
-                                if let Err(e) = utils::forward_stream(upstream, downstream)
-                                    .in_current_span()
-                                    .await
-                                {
+                                if let Err(e) = utils::forward_stream(upstream, downstream).await {
                                     let error = format!("{e:#}");
                                     tracing::error!(
                                         %dst,
@@ -162,12 +159,11 @@ impl RegistedService for MappingIngress {
                     if let Err(e) = fut.await {
                         tracing::error!(error=?e, "Failed to forward stream");
                     }
-                }
-                .instrument(span)
-            });
+                },
+            );
 
             // Spawn a task to trace the connection status.
-            shutdown_guard.spawn_task({
+            shutdown_guard.spawn_task_current_span({
                 let cx_active = self.metrics.cx_active.clone();
                 let cx_failed = self.metrics.cx_failed.clone();
                 async move {

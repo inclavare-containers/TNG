@@ -82,7 +82,7 @@ impl SecurityLayer {
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
             transport_layer_connector,
-            span: Span::current(),
+            security_layer_span: Span::current(),
         })
     }
 
@@ -160,7 +160,7 @@ impl SecurityLayer {
 pub struct SecurityConnector {
     tls_config_generator: Arc<TlsConfigGenerator>,
     transport_layer_connector: TransportLayerConnector,
-    span: Span,
+    security_layer_span: Span,
 }
 
 impl SecurityConnector {}
@@ -218,7 +218,7 @@ impl tower::Service<Uri> for SecurityConnector {
                     attestation_result,
                 ))
             }
-            .instrument(self.span.clone()),
+            .instrument(self.security_layer_span.clone()),
         )
     }
 }

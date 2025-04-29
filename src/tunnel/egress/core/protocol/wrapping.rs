@@ -14,7 +14,9 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::tunnel::attestation_result::AttestationResult;
+use crate::{
+    observability::log::ShutdownGuardExt as _, tunnel::attestation_result::AttestationResult,
+};
 
 use super::super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 
@@ -81,23 +83,20 @@ impl WrappingLayer {
         let req = req.map(Body::new);
 
         if req.method() == Method::CONNECT {
-            shutdown_guard.spawn_task(
-                async move {
-                    match hyper::upgrade::on(req).await {
-                        Ok(upgraded) => {
-                            tracing::debug!("Trusted tunnel established");
+            shutdown_guard.spawn_task_current_span(async move {
+                match hyper::upgrade::on(req).await {
+                    Ok(upgraded) => {
+                        tracing::debug!("Trusted tunnel established");
 
-                            if let Err(e) = channel.send((upgraded, attestation_result)) {
-                                tracing::error!("Failed to send stream via channel: {e:#}");
-                            }
+                        if let Err(e) = channel.send((upgraded, attestation_result)) {
+                            tracing::error!("Failed to send stream via channel: {e:#}");
                         }
-                        Err(e) => {
-                            tracing::error!("Failed during http connect upgrade: {e:#}");
-                        }
-                    };
-                }
-                .in_current_span(),
-            );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed during http connect upgrade: {e:#}");
+                    }
+                };
+            });
             Ok(Response::new(Body::empty()).into_response())
         } else {
             return Ok(error_response(

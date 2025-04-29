@@ -14,6 +14,7 @@ use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
+    observability::log::ShutdownGuardExt,
     tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
 };
 
@@ -37,11 +38,11 @@ impl TransportLayerCreator {
                 dst: dst.clone(),
                 _encap_in_http: encap_in_http.clone(),
                 shutdown_guard,
-                span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
+                transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
             }),
             None => TransportLayerConnector::Tcp(TcpTransportLayer {
                 dst: dst.clone(),
-                span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
+                transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
             }),
         }
     }
@@ -50,7 +51,7 @@ impl TransportLayerCreator {
 #[derive(Debug, Clone)]
 pub struct TcpTransportLayer {
     dst: TngEndpoint,
-    span: Span,
+    transport_layer_span: Span,
 }
 
 impl<Req> tower::Service<Req> for TcpTransportLayer {
@@ -73,7 +74,7 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
 
             Ok(TokioIo::new(TransportLayerStream::Tcp(tcp_stream)))
         }
-        .instrument(self.span.clone());
+        .instrument(self.transport_layer_span.clone());
 
         Box::pin(fut)
     }
@@ -84,7 +85,7 @@ pub struct HttpTransportLayer {
     dst: TngEndpoint,
     _encap_in_http: EncapInHttp,
     shutdown_guard: ShutdownGuard,
-    span: Span,
+    transport_layer_span: Span,
 }
 
 impl HttpTransportLayer {
@@ -97,14 +98,11 @@ impl HttpTransportLayer {
 
         let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
         {
-            shutdown_guard.spawn_task(
-                async move {
-                    if let Err(e) = conn.await {
-                        tracing::error!(?e, "The H2 connection is broken");
-                    }
+            shutdown_guard.spawn_task_current_span(async move {
+                if let Err(e) = conn.await {
+                    tracing::error!(?e, "The H2 connection is broken");
                 }
-                .instrument(Span::current()),
-            );
+            });
         }
 
         // TODO: we need to support path rewrites instead of hard encode the path as '/'
@@ -155,7 +153,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
             tracing::debug!("Establish the underlying h2 stream with upstream");
             Self::create_internal(endpoint_owned, shutdown_guard).await
         }
-        .instrument(self.span.clone());
+        .instrument(self.transport_layer_span.clone());
 
         Box::pin(fut)
     }

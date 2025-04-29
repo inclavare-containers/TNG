@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use crate::config::observability::log::LogExporterInstance;
 use crate::config::observability::metric::MetricExporterInstance;
+use crate::observability::log::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
 use crate::tunnel::egress::mapping::MappingEgress;
@@ -18,7 +19,8 @@ use opentelemetry::trace::TracerProvider;
 use scopeguard::defer;
 use tokio_graceful::ShutdownGuard;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span};
+use tracing::Span;
+use tracing_subscriber::Layer;
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
@@ -222,14 +224,11 @@ impl TngRuntime {
             for (service, span) in self.services.drain(..) {
                 let ready_sender = ready_sender.clone();
                 let error_sender = error_sender.clone();
-                shutdown_guard.spawn_task_fn(|shutdown_guard| {
-                    async move {
-                        if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
-                            tracing::error!(error=?e, "service failed");
-                            let _ = error_sender.send(e).await;
-                        }
+                shutdown_guard.spawn_task_fn_with_span(span, |shutdown_guard| async move {
+                    if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
+                        tracing::error!(error=?e, "service failed");
+                        let _ = error_sender.send(e).await;
                     }
-                    .instrument(span)
                 });
             }
             (ready_receiver, error_receiver)
@@ -332,17 +331,15 @@ impl TngRuntime {
                                 .with_resource(crate::observability::otlp_resource())
                                 .build();
 
-                        // let tracer_provider =
-                        //     opentelemetry_sdk::trace::SdkTracerProvider::builder()
-                        //         .with_simple_exporter(span_exporter)
-                        //         .with_resource(crate::observability::otlp_resource())
-                        //         .build();
-
                         // Note here we register the tracer provider into tracing crate, so there is no need to call `opentelemetry::global::set_tracer_provider()`
                         let tracer = tracer_provider.tracer("tng");
                         let telemetry_layer = tracing_opentelemetry::layer()
                             .with_level(true)
-                            .with_tracer(tracer);
+                            .with_tracer(tracer)
+                            .with_filter(
+                                tracing_subscriber::EnvFilter::try_from_default_env()
+                                    .unwrap_or_else(|_| "info,tng=trace".into()),
+                            );
 
                         let reload_result = reload_handle.modify(|layers| {
                             (*layers).push(Box::new(telemetry_layer));

@@ -37,33 +37,36 @@ impl SecurityLayer {
         impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
         Option<AttestationResult>,
     )> {
-        // Prepare TLS config
-        let OnetimeTlsServerConfig(tls_server_config, verifier) = self
-            .tls_config_generator
-            .get_one_time_rustls_server_config()
+        async {
+            // Prepare TLS config
+            let OnetimeTlsServerConfig(tls_server_config, verifier) = self
+                .tls_config_generator
+                .get_one_time_rustls_server_config()
+                .await?;
+
+            let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
+            let tls_stream = async move {
+                tracing::trace!("Start to estabilish rats-tls session");
+                tls_acceptor.accept(stream).await.map(|v| {
+                    tracing::debug!("New rats-tls session established");
+                    v
+                })
+            }
             .await?;
 
-        let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
-        let tls_stream = async move {
-            tracing::trace!("Start to estabilish rats-tls session");
-            tls_acceptor.accept(stream).await.map(|v| {
-                tracing::debug!("New rats-tls session established");
-                v
-            })
+            let attestation_result = match verifier {
+                Some(verifier) => Some(
+                    verifier
+                        .get_attestation_result()
+                        .await
+                        .context("No attestation result found")?,
+                ),
+                None => None,
+            };
+
+            Ok((tls_stream, attestation_result))
         }
         .instrument(tracing::info_span!("security"))
-        .await?;
-
-        let attestation_result = match verifier {
-            Some(verifier) => Some(
-                verifier
-                    .get_attestation_result()
-                    .await
-                    .context("No attestation result found")?,
-            ),
-            None => None,
-        };
-
-        Ok((tls_stream, attestation_result))
+        .await
     }
 }

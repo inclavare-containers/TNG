@@ -9,9 +9,8 @@ use scopeguard::defer;
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tokio_graceful::ShutdownGuard;
-use tracing::{Instrument, Span};
 
-use crate::config::ra::AttestArgs;
+use crate::{config::ra::AttestArgs, observability::log::ShutdownGuardExt};
 
 const CERT_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 const CREATE_CERT_TIMEOUT_SECOND: u64 = 120; // 2 min
@@ -94,49 +93,45 @@ impl CertManager {
                 let interval = *interval;
                 let aa_addr = self.aa_addr.clone();
                 let latest_cert = latest_cert.clone();
-                let span = Span::current();
 
-                shutdown_guard.spawn_task_fn(move |shutdown_guard| {
-                    async move {
-                        let res = async {
-                            loop {
-                                // Update certs in loop
-                                let fut = async {
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                                        interval as u64,
-                                    ))
-                                    .await;
+                shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| async move {
+                    let res = async {
+                        loop {
+                            // Update certs in loop
+                            let fut = async {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(
+                                    interval as u64,
+                                ))
+                                .await;
 
-                                    let certed_key = Self::fetch_new_cert(&aa_addr).await?;
+                                let certed_key = Self::fetch_new_cert(&aa_addr).await?;
 
-                                    latest_cert
-                                        .0
-                                        .send(certed_key)
-                                        .context("Failed to set the latest cert")
-                                };
+                                latest_cert
+                                    .0
+                                    .send(certed_key)
+                                    .context("Failed to set the latest cert")
+                            };
 
-                                tokio::select! {
-                                    _ = shutdown_guard.cancelled() => {
-                                        break;
+                            tokio::select! {
+                                _ = shutdown_guard.cancelled() => {
+                                    break;
+                                }
+                                result = fut => {
+                                    if let Err(e) = result {
+                                        tracing::error!(error=?e,"Failed to update cert");
                                     }
-                                    result = fut => {
-                                        if let Err(e) = result {
-                                            tracing::error!(error=?e,"Failed to update cert");
-                                        }
 
-                                    }
                                 }
                             }
-                            #[allow(unreachable_code)]
-                            Ok::<(), anyhow::Error>(())
                         }
-                        .await;
-
-                        if let Err(e) = res {
-                            tracing::error!(error=?e, "Failed to update cert");
-                        }
+                        #[allow(unreachable_code)]
+                        Ok::<(), anyhow::Error>(())
                     }
-                    .instrument(span)
+                    .await;
+
+                    if let Err(e) = res {
+                        tracing::error!(error=?e, "Failed to update cert");
+                    }
                 });
 
                 *refresh_task = Some(RefreshTask {})
