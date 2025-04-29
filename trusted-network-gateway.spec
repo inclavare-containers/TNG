@@ -73,7 +73,7 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroo
 /usr/bin/tng
 
 %changelog
-* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.1.0-1
+* Tue Apr 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.1.0-1
 - Fixed the issue of using incorrect spans in some async tasks during request handling.
 - Add traces exporter (otlp, stdout) for metrics reporting.
 - Add the "refresh_interval" field in the configuration to control the evidence caching strategy.
@@ -81,8 +81,6 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroo
 - Add metrics exporter (otlp, falcon, stdout) for metrics reporting.
 - Fix the behavior of the "domain" field in "ingress/http_proxy" and added the "domain_regex" field.
 
-* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.0.0-1
-- Rewrite all in rust
 
 * Thu Mar 20 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.6
 - Add control interface with RESTful API for checking status of tng instances
@@ -93,6 +91,9 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroo
 * Mon Mar 3 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.5
 - Extend aa timeout to 2 minutes
 - Add trusted_certs_paths to verify field in config file
+
+* Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.0.0-1
+- Rewrite all in rust
 
 * Mon Feb 24 2025 Kun Lai <laikun@linux.alibaba.com> - 1.0.4
 - Nothing but some adjust on build script
