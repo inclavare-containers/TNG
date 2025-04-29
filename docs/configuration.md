@@ -524,9 +524,9 @@ In TNG, we provide the following Metrics:
 
 Currently, TNG supports the following types of exporters:
 
-> **`otlp`**: Exports to endpoints compatible with the OpenTelemetry Protocol (OTLP), such as Prometheus and Jaeger.
-> **`falcon`**: Exports to the open-falcon service.
-> **`stdout`**: Prints to log output.
+- **`otlp`**: Exports to endpoints compatible with the OpenTelemetry Protocol (OTLP), such as Prometheus and Jaeger.
+- **`falcon`**: Exports to the open-falcon service.
+- **`stdout`**: Prints to log output.
 
 You can enable Metric support by specifying the `metric` field.
 
@@ -602,8 +602,8 @@ TNG supports the export of tracing events under the OpenTelemetry standard seman
 
 The following types of exporters are supported:
 
-> **`otlp`**: Export to an endpoint compatible with the OpenTelemetry Protocol (OTLP).  
-> **`stdout`**: Print to standard output. Note that this exporter outputs Trace information synchronously (not asynchronously), which can significantly impact performance in high-concurrency scenarios, so it should only be used for debugging purposes.
+- **`otlp`**: Export to an endpoint compatible with the OpenTelemetry Protocol (OTLP).  
+- **`stdout`**: Print to standard output. Note that this exporter outputs Trace information synchronously (not asynchronously), which can significantly impact performance in high-concurrency scenarios, so it should only be used for debugging purposes.
 
 You can enable support for Trace by specifying the `trace` field.
 

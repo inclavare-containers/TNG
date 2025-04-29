@@ -517,9 +517,9 @@ TNG当前版本默认启用了将日志输出到标准输出的能力，用户�
 
 目前，TNG支持如下类型的exporter：
 
-> **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点，如Prometheus和Jaeger。
-> **`falcon`**：导出到open-falcon服务
-> **`stdout`**：打印到日志输出
+- **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点，如Prometheus和Jaeger。
+- **`falcon`**：导出到open-falcon服务
+- **`stdout`**：打印到日志输出
 
 您可以通过指定`metric`字段来开启对Metric的支持。
 
@@ -596,8 +596,8 @@ TNG支持OpenTelemetry标准语义下的tracing事件导出，包括每个请求
 
 支持如下类型的exporter：
 
-> **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点。
-> **`stdout`**：打印到标准输出，注意该导出器将以同步方式（而非异步方式）输出Trace信息，在高并发情况下对性能有较大影响，故应仅作调试使用。
+- **`otlp`**：导出到与OpenTelemetry Protocol（OTLP）兼容的端点。
+- **`stdout`**：打印到标准输出，注意该导出器将以同步方式（而非异步方式）输出Trace信息，在高并发情况下对性能有较大影响，故应仅作调试使用。
 
 您可以通过指定`trace`字段来开启对Trace的支持。
 
