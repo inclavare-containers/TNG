@@ -28,8 +28,17 @@ pub async fn run_test(
                 .expect("Failed to install rustls crypto provider");
 
             // Initialize log tracing
-            let pending_tracing_layers = vec![tracing_subscriber::fmt::layer()
-                .with_filter(
+            let pending_tracing_layers = vec![];
+            let (pending_tracing_layers, reload_handle) =
+                tracing_subscriber::reload::Layer::new(pending_tracing_layers);
+            tracing_subscriber::registry()
+                .with(
+                    pending_tracing_layers.with_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| "info,tng=trace".into()),
+                    ),
+                )
+                .with(tracing_subscriber::fmt::layer().with_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                         format!(
                             "info,tng=debug,{}=debug",
@@ -37,12 +46,7 @@ pub async fn run_test(
                         )
                         .into()
                     }),
-                )
-                .boxed()];
-            let (pending_tracing_layers, reload_handle) =
-                tracing_subscriber::reload::Layer::new(pending_tracing_layers);
-            tracing_subscriber::registry()
-                .with(pending_tracing_layers)
+                ))
                 // .with(console_subscriber::spawn()) // Initialize tokio console
                 .init();
 

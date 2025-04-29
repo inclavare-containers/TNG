@@ -16,11 +16,11 @@ use crate::{
 
 use anyhow::{bail, Context as _, Result};
 use opentelemetry::trace::TracerProvider;
+use opentelemetry_sdk::trace::SpanProcessor;
 use scopeguard::defer;
 use tokio_graceful::ShutdownGuard;
 use tokio_util::sync::CancellationToken;
 use tracing::Span;
-use tracing_subscriber::Layer;
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
@@ -53,6 +53,11 @@ impl TngRuntime {
             tracing::warn!("The field `admin_bind` in configuration is ignored, since envoy admin interface is deprecated");
             tng_config.admin_bind = None;
         }
+
+        Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
+
+        Self::setup_logs_exporter(&tng_config, reload_handle)
+            .context("Failed to setup log exporter")?;
 
         // Create all ingress and egress.
         let mut iptables_actions = vec![];
@@ -110,11 +115,6 @@ impl TngRuntime {
             }
         }
 
-        Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
-
-        Self::setup_logs_exporter(&tng_config, reload_handle)
-            .context("Failed to setup log exporter")?;
-
         let state = Arc::new(TngState::new());
 
         // Launch Control Interface
@@ -150,7 +150,7 @@ impl TngRuntime {
         ready: tokio::sync::oneshot::Sender<()>,
     ) -> Result<()> {
         // Start native part
-        tracing::info!("Starting all service now");
+        tracing::info!("Starting tng instance now");
 
         let cancel_before_func_return = CancellationToken::new();
         let for_cancel_safity = cancel_before_func_return.clone();
@@ -201,7 +201,7 @@ impl TngRuntime {
         // Wait for the shutdown guard to complete.
         shutdown.shutdown().await;
 
-        tracing::debug!("All service shutdown complete");
+        tracing::debug!("The instance is shutdown complete");
         Ok(())
     }
 
@@ -335,11 +335,7 @@ impl TngRuntime {
                         let tracer = tracer_provider.tracer("tng");
                         let telemetry_layer = tracing_opentelemetry::layer()
                             .with_level(true)
-                            .with_tracer(tracer)
-                            .with_filter(
-                                tracing_subscriber::EnvFilter::try_from_default_env()
-                                    .unwrap_or_else(|_| "info,tng=trace".into()),
-                            );
+                            .with_tracer(tracer);
 
                         let reload_result = reload_handle.modify(|layers| {
                             (*layers).push(Box::new(telemetry_layer));

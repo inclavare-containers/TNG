@@ -21,16 +21,21 @@ async fn main() {
         .expect("Failed to install rustls crypto provider");
 
     // Initialize log tracing
-    let pending_tracing_layers = vec![tracing_subscriber::fmt::layer()
-        .with_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .boxed()];
+    let pending_tracing_layers = vec![];
     let (pending_tracing_layers, reload_handle) =
         tracing_subscriber::reload::Layer::new(pending_tracing_layers);
     tracing_subscriber::registry()
-        .with(pending_tracing_layers)
+        // Here we add two layer each has it's own filter (per-layer filter), and the first layer is
+        // a vector which can be updated dynamically later(e.g. to append a layer like otlp exporter).
+        .with(
+            pending_tracing_layers.with_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info,tng=trace".into()),
+            ),
+        )
+        .with(tracing_subscriber::fmt::layer().with_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        ))
         .init();
 
     let cmd = Args::parse();

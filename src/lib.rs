@@ -37,16 +37,22 @@ mod tests {
             .expect("Failed to install rustls crypto provider");
 
         // Initialize log tracing
-        let pending_tracing_layers = vec![tracing_subscriber::fmt::layer()
-            .with_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,tng=debug".into()),
-            )
-            .boxed()];
+        let pending_tracing_layers = vec![];
         let (pending_tracing_layers, reload_handle) =
             tracing_subscriber::reload::Layer::new(pending_tracing_layers);
         tracing_subscriber::registry()
-            .with(pending_tracing_layers)
+            .with(
+                pending_tracing_layers.with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,tng=trace".into()),
+                ),
+            )
+            .with(
+                tracing_subscriber::fmt::layer().with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,tng=debug".into()),
+                ),
+            )
             .init();
         // Set the reload handle to the global static variable so that we can use it in tests
         if RELOAD_HANDLE.set(reload_handle).is_err() {
