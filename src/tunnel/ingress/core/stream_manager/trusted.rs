@@ -22,8 +22,9 @@ pub struct TrustedStreamManager {
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs) -> Result<Self> {
-        let connector_creator = TransportLayerCreator::new(common_args.encap_in_http.clone());
+    pub async fn new(common_args: &CommonArgs, transport_so_mark: u32) -> Result<Self> {
+        let connector_creator =
+            TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone());
 
         Ok(Self {
             security_layer: SecurityLayer::new(connector_creator, &common_args.ra_args).await?,

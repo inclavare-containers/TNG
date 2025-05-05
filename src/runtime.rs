@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
-use crate::executor::iptables::IpTablesAction;
 use crate::observability::trace::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
@@ -21,8 +19,6 @@ use tracing::Span;
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
-    #[cfg(target_os = "linux")]
-    iptables_actions: Vec<IpTablesAction>,
     state: Arc<TngState>,
 }
 
@@ -58,8 +54,6 @@ impl TngRuntime {
             .context("Failed to setup trace exporter")?;
 
         // Create all ingress and egress.
-        #[cfg(target_os = "linux")]
-        let mut iptables_actions = vec![];
         let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
 
         for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
@@ -76,12 +70,19 @@ impl TngRuntime {
                         HttpProxyIngress::new(id, http_proxy_args, &add_ingress.common).await?;
                     services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
                 }
-                IngressMode::Netfilter(_) => {
+                IngressMode::Netfilter(netfilter_args) => {
                     if !cfg!(target_os = "linux") {
+                        let _ = netfilter_args;
                         anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
                     }
 
-                    todo!()
+                    #[cfg(target_os = "linux")]
+                    {
+                        use crate::tunnel::ingress::netfilter::NetfilterIngress;
+                        let egress =
+                            NetfilterIngress::new(id, netfilter_args, &add_ingress.common).await?;
+                        services.push((Box::new(egress), tracing::info_span!("ingress", id)));
+                    }
                 }
             }
         }
@@ -102,13 +103,8 @@ impl TngRuntime {
                     #[cfg(target_os = "linux")]
                     {
                         use crate::tunnel::egress::netfilter::NetfilterEgress;
-                        let egress = NetfilterEgress::new(
-                            id,
-                            netfilter_args,
-                            &add_egress.common,
-                            &mut iptables_actions,
-                        )
-                        .await?;
+                        let egress =
+                            NetfilterEgress::new(id, netfilter_args, &add_egress.common).await?;
                         services.push((Box::new(egress), tracing::info_span!("egress", id)));
                     }
                 }
@@ -128,12 +124,7 @@ impl TngRuntime {
             ));
         }
 
-        Ok(Self {
-            services,
-            #[cfg(target_os = "linux")]
-            iptables_actions,
-            state,
-        })
+        Ok(Self { services, state })
     }
 
     pub fn state(&self) -> Arc<TngState> {
@@ -207,11 +198,6 @@ impl TngRuntime {
     }
 
     async fn serve(mut self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        // Setup iptables
-        #[cfg(target_os = "linux")]
-        let _iptables_guard =
-            crate::executor::iptables::IPTablesGuard::setup_from_actions(self.iptables_actions)?;
-
         // Setup all services
         let service_count = self.services.len();
         tracing::info!("Starting all {service_count} services");

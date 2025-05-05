@@ -112,9 +112,59 @@
 
 ### netfilter：透明代理方式
 
-在该场景中，tng监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
+在该场景中，tng将会监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
 
-> 暂未实现
+在该模式下，可以通过配置目标tcp端口、程序所在的cgroup等选项来实现对需要捕获的流量的精确控制。
+
+#### 字段说明
+
+- **`capture_dst`** (array [Endpoint], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的目标地址和端口。如果未指定该字段或者指定为空数组，则所有流量都将被tng隧道捕获。
+- **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将捕获所有cgroup下的流量，等同于配置`capture_cgroup: ["/"]`。
+- **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng隧道捕获的流量的cgroup。
+- **`listen_port`** (integer, 可选)：指定tng监听的端口号，用于接收捕获后的请求，通常不需要手动指定。如果未指定该字段，则tng将随机分配一个端口号。
+
+对流量的捕获使用如下规则进行
+
+```mermaid
+flowchart TD
+    A[开始] --> B{是否匹配任意一条 capture_cgroup 规则?}
+    B --否--> C[忽略流量]
+    B --是--> D{是否匹配任意一条 nocapture_cgroup 规则?}
+    D --是--> C
+    D --否--> E{是否命中任意一个 capture_dst 规则?}
+    E --是--> F[捕获流量]
+    E --否--> C
+```
+
+> **注意**：该模式只能捕获TCP流量，且不会捕获发往本机地址的流量
+
+示例：
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
 
 
 ## Egress
@@ -512,7 +562,7 @@ TNG当前版本默认启用了将日志输出到标准输出的能力，用户�
 | ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress | `http_proxy` | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | egress | `mapping` | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
-| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
+| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 
 
 目前，TNG支持如下类型的exporter：

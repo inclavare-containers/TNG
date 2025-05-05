@@ -1,6 +1,8 @@
 pub mod cert_manager;
 pub mod endpoint_matcher;
 pub mod h2_stream;
+#[cfg(target_os = "linux")]
+pub mod iptables;
 pub mod rustls_config;
 pub mod socket;
 

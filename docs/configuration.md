@@ -109,9 +109,59 @@ Example:
 
 ### netfilter: Transparent Proxy Mode
 
-In this scenario, tng listens on a local TCP port and forwards user traffic to this port by configuring iptables rules. The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
+In this mode, tng will listen on a local TCP port and forward user traffic to the port listened to by the tng client by configuring iptables rules. The latter is responsible for encrypting all user TCP requests and sending them to the original destination address. Therefore, the user's client program does not need to modify its TCP request target.
 
-> Not yet implemented
+Precise control over the traffic to be captured can be achieved by configuring options such as the target TCP port and the cgroup where the program resides.
+
+#### Field Descriptions
+
+- **`capture_dst`** (array [Endpoint], optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic will be captured by the tng tunnel.
+- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic under all cgroups will be captured, equivalent to configuring `capture_cgroup: ["/"]`.
+- **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
+- **`listen_port`** (integer, optional): Specifies the port number that tng listens on to receive captured requests, usually no manual specification is required. If this field is not specified, tng will randomly assign a port number.
+
+Traffic capture follows the rules below:
+
+```mermaid
+flowchart TD
+    A[Start] --> B{Does it match any `capture_cgroup` rule?}
+    B --No--> C[Ignore traffic]
+    B --Yes--> D{Does it match any `nocapture_cgroup` rule?}
+    D --Yes--> C
+    D --No--> E{Does it match any `capture_dst` rule?}
+    E --Yes--> F[Capture traffic]
+    E --No--> C
+```
+
+> **Note**：This mode can only capture TCP traffic and will not capture traffic destined for address owned by any interfaces on the local machine.
+
+Example:
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
 
 ## Egress
 
@@ -520,7 +570,7 @@ In TNG, we provide the following Metrics:
 | ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress | `http_proxy` | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | egress | `mapping` | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
-| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_port={port}` |
+| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 
 Currently, TNG supports the following types of exporters:
 

@@ -4,27 +4,34 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::{bail, Context as _, Result};
-use http::{Request, Uri};
+use anyhow::Result;
+use http::HttpTransportLayer;
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
+use tcp::TcpTransportLayer;
 use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
-use tracing::{Instrument, Span};
+use tracing::Span;
 
 use crate::{
     config::ingress::EncapInHttp,
-    observability::trace::ShutdownGuardExt,
     tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
 };
 
+mod http;
+mod tcp;
+
 pub struct TransportLayerCreator {
+    so_mark: u32,
     encap_in_http: Option<EncapInHttp>,
 }
 
 impl TransportLayerCreator {
-    pub fn new(encap_in_http: Option<EncapInHttp>) -> Self {
-        Self { encap_in_http }
+    pub fn new(so_mark: u32, encap_in_http: Option<EncapInHttp>) -> Self {
+        Self {
+            so_mark,
+            encap_in_http,
+        }
     }
 
     pub fn create(
@@ -36,126 +43,17 @@ impl TransportLayerCreator {
         match &self.encap_in_http {
             Some(encap_in_http) => TransportLayerConnector::Http(HttpTransportLayer {
                 dst: dst.clone(),
+                so_mark: self.so_mark,
                 _encap_in_http: encap_in_http.clone(),
                 shutdown_guard,
                 transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
             }),
             None => TransportLayerConnector::Tcp(TcpTransportLayer {
                 dst: dst.clone(),
+                so_mark: self.so_mark,
                 transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
             }),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TcpTransportLayer {
-    dst: TngEndpoint,
-    transport_layer_span: Span,
-}
-
-impl<Req> tower::Service<Req> for TcpTransportLayer {
-    type Response = TokioIo<TransportLayerStream>;
-    type Error = anyhow::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Ok(()).into()
-    }
-
-    fn call(&mut self, _: Req) -> Self::Future {
-        let endpoint_owned = self.dst.to_owned();
-        let fut = async move {
-            tracing::debug!("Establish the underlying tcp connection with upstream");
-
-            let tcp_stream = TcpStream::connect((endpoint_owned.host(), endpoint_owned.port()))
-                .await
-                .context("Failed to establish the underlying tcp connection for rats-tls")?;
-
-            Ok(TokioIo::new(TransportLayerStream::Tcp(tcp_stream)))
-        }
-        .instrument(self.transport_layer_span.clone());
-
-        Box::pin(fut)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct HttpTransportLayer {
-    dst: TngEndpoint,
-    _encap_in_http: EncapInHttp,
-    shutdown_guard: ShutdownGuard,
-    transport_layer_span: Span,
-}
-
-impl HttpTransportLayer {
-    async fn create_internal(
-        dst: TngEndpoint,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<TokioIo<TransportLayerStream>> {
-        // TODO: reuse the same tcp stream for all the h2 streams
-        let tcp_stream = TcpStream::connect((dst.host(), dst.port())).await?;
-
-        let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
-        {
-            shutdown_guard.spawn_task_current_span(async move {
-                if let Err(e) = conn.await {
-                    tracing::error!(?e, "The H2 connection is broken");
-                }
-            });
-        }
-
-        // TODO: we need to support path rewrites instead of hard encode the path as '/'
-        let req = Request::builder()
-            .uri(
-                Uri::builder()
-                    .scheme("http")
-                    .authority(format!("{}:{}", dst.host(), dst.port()))
-                    .path_and_query("/")
-                    .build()?,
-            )
-            .method("POST")
-            .header("tng", "{}")
-            .body(())?;
-
-        let (response, send_stream) = sender.send_request(req, false)?;
-
-        let response = response.await?;
-
-        if response.status() != hyper::StatusCode::OK {
-            bail!("unexpected status code: {}", response.status());
-        }
-
-        let recv_stream = response.into_body();
-
-        return Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
-            send_stream,
-            recv_stream,
-            Span::current(),
-        ))));
-    }
-}
-
-impl<Req> tower::Service<Req> for HttpTransportLayer {
-    type Response = TokioIo<TransportLayerStream>;
-    type Error = anyhow::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Ok(()).into()
-    }
-
-    fn call(&mut self, _: Req) -> Self::Future {
-        let endpoint_owned = self.dst.to_owned();
-        let shutdown_guard = self.shutdown_guard.to_owned();
-
-        let fut = async {
-            tracing::debug!("Establish the underlying h2 stream with upstream");
-            Self::create_internal(endpoint_owned, shutdown_guard).await
-        }
-        .instrument(self.transport_layer_span.clone());
-
-        Box::pin(fut)
     }
 }
 

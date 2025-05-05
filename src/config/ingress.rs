@@ -51,6 +51,7 @@ pub struct IngressMappingArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IngressHttpProxyArgs {
     pub proxy_listen: Endpoint,
+
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
     // In TNG version <= 1.0.1, this field is named as `dst_filter`
@@ -61,7 +62,18 @@ pub struct IngressHttpProxyArgs {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IngressNetfilterArgs {
-    pub dst: Endpoint,
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    pub capture_dst: Vec<Endpoint>,
+
+    #[serde(default = "Vec::new")]
+    pub capture_cgroup: Vec<String>,
+
+    #[serde(default = "Vec::new")]
+    pub nocapture_cgroup: Vec<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

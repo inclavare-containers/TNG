@@ -18,7 +18,7 @@ use crate::{
         egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
         ingress::core::TngEndpoint,
         service_metrics::ServiceMetrics,
-        utils::{self, socket::SetListenerCommonSockOpts},
+        utils::{self, socket::SetListenerSockOpts},
     },
 };
 

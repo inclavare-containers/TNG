@@ -10,7 +10,7 @@ URL: www.alibaba.com
 Source0: https://github.com/inclavare-containers/tng/releases/download/v{version}/trusted-network-gateway-%{version}.tar.gz
 Source1: config
 
-Requires: curl iptables openssl
+Requires: curl iptables openssl iproute
 Recommends: attestation-agent
 
 BuildRequires: make

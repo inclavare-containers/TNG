@@ -35,7 +35,7 @@ use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
-use crate::tunnel::utils::socket::SetListenerCommonSockOpts;
+use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
 
 pub enum RouteResult {
     // At least in this time, we got no error, and this request should be handled in background.
@@ -375,7 +375,11 @@ impl HttpProxyIngress {
         ]);
 
         let stream_router = Arc::new(StreamRouter {
-            trusted_stream_manager: TrustedStreamManager::new(&common_args).await?,
+            trusted_stream_manager: TrustedStreamManager::new(
+                &common_args,
+                TCP_CONNECT_SO_MARK_DEFAULT,
+            )
+            .await?,
             unprotected_stream_manager: UnprotectedStreamManager::new(),
             endpoint_matcher: EndpointMatcher::new(&http_proxy_args.dst_filters)?,
         });

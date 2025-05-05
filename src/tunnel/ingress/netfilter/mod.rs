@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use socket2::SockRef;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
-use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
+use crate::config::ingress::CommonArgs;
+use crate::config::ingress::IngressNetfilterArgs;
+use crate::config::Endpoint;
 use crate::observability::metric::stream::StreamWithCounter;
 use crate::observability::trace::ShutdownGuardExt;
 use crate::service::RegistedService;
@@ -16,61 +19,57 @@ use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils;
-use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
+use crate::tunnel::utils::iptables::IptablesExecutor;
+use crate::tunnel::utils::socket::SetListenerSockOpts;
+use crate::tunnel::utils::socket::TCP_CONNECT_SO_MARK_DEFAULT;
 
-pub struct MappingIngress {
-    listen_addr: String,
+mod iptables;
+
+pub struct NetfilterIngress {
+    id: usize,
+    capture_dst: Vec<Endpoint>,
+    capture_cgroup: Vec<String>,
+    nocapture_cgroup: Vec<String>,
     listen_port: u16,
-    upstream_addr: String,
-    upstream_port: u16,
+    so_mark: u32,
     metrics: ServiceMetrics,
     trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
-impl MappingIngress {
+impl NetfilterIngress {
     pub async fn new(
         id: usize,
-        mapping_args: &IngressMappingArgs,
+        netfilter_args: &IngressNetfilterArgs,
         common_args: &CommonArgs,
     ) -> Result<Self> {
-        let listen_addr = mapping_args
-            .r#in
-            .host
-            .as_deref()
-            .unwrap_or("0.0.0.0")
-            .to_owned();
-        let listen_port = mapping_args.r#in.port;
+        let listen_port = match netfilter_args.listen_port {
+            Some(p) => p,
+            None => portpicker::pick_unused_port().context("Failed to pick a free port")?,
+        };
 
-        let upstream_addr = mapping_args
-            .out
-            .host
-            .as_deref()
-            .context("'host' of 'out' field must be set")?
-            .to_owned();
-        let upstream_port = mapping_args.out.port;
+        if netfilter_args.capture_dst.is_empty() && netfilter_args.capture_cgroup.is_empty() {
+            bail!("At least one of capture_dst, capture_cgroup must be set and not empty");
+        }
 
-        // ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}
+        // ingress_type=netfilter,ingress_id={id},ingress_listen_port={listen_port}
         let metrics = ServiceMetrics::new([
-            ("ingress_type".to_owned(), "mapping".to_owned()),
+            ("ingress_type".to_owned(), "netfilter".to_owned()),
             ("ingress_id".to_owned(), id.to_string()),
-            (
-                "ingress_in".to_owned(),
-                format!("{}:{}", listen_addr, listen_port),
-            ),
-            (
-                "ingress_out".to_owned(),
-                format!("{}:{}", upstream_addr, upstream_port),
-            ),
+            ("ingress_listen_port".to_owned(), listen_port.to_string()),
         ]);
 
+        let so_mark = TCP_CONNECT_SO_MARK_DEFAULT;
+
         let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(&common_args, TCP_CONNECT_SO_MARK_DEFAULT).await?);
+            Arc::new(TrustedStreamManager::new(&common_args, so_mark).await?);
 
         Ok(Self {
-            listen_addr,
+            id,
+            capture_dst: netfilter_args.capture_dst.clone(),
+            capture_cgroup: netfilter_args.capture_cgroup.clone(),
+            nocapture_cgroup: netfilter_args.nocapture_cgroup.clone(),
             listen_port,
-            upstream_addr,
-            upstream_port,
+            so_mark,
             metrics,
             trusted_stream_manager,
         })
@@ -78,17 +77,21 @@ impl MappingIngress {
 }
 
 #[async_trait]
-impl RegistedService for MappingIngress {
+impl RegistedService for NetfilterIngress {
     async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
         self.trusted_stream_manager
             .prepare(shutdown_guard.clone())
             .await?;
 
-        let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
+        let listen_addr = format!("127.0.0.1:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
+
+        // Setup iptables
+        let _iptables_guard = IptablesExecutor::setup(self)?;
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
+        listener.set_listener_tproxy_sock_opts()?;
 
         ready.send(()).await?;
 
@@ -101,7 +104,21 @@ impl RegistedService for MappingIngress {
                 }
             };
             let peer_addr = downstream.peer_addr()?;
-            let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
+            let socket_ref = SockRef::from(&downstream);
+            // Note here since we are using TPROXY, the original destination is recorded in the local address.
+            let orig_dst = socket_ref
+                .local_addr()
+                .context("failed to get original destination")?
+                .as_socket()
+                .context("should be a ip address")?;
+
+            // Check if the original destination is the same as the listener port to prevert from the recursion.
+            let listen_addr = listener.local_addr()?;
+            if listen_addr.port() == orig_dst.port() && orig_dst.ip().is_loopback() {
+                bail!("The original destination is the same as the listener port, recursion is detected")
+            }
+
+            let orig_dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
 
             let trusted_stream_manager = self.trusted_stream_manager.clone();
 
@@ -117,14 +134,14 @@ impl RegistedService for MappingIngress {
 
                         // Forward via trusted tunnel
                         match trusted_stream_manager
-                            .new_stream(&dst, shutdown_guard)
+                            .new_stream(&orig_dst, shutdown_guard)
                             .await
                         {
                             Ok((upstream, attestation_result)) => {
                                 // Print access log
                                 let access_log = AccessLog {
                                     downstream: downstream.peer_addr()?,
-                                    upstream: dst.clone(),
+                                    upstream: orig_dst.clone(),
                                     to_trusted_tunnel: true,
                                     peer_attested: attestation_result,
                                 };
@@ -138,7 +155,7 @@ impl RegistedService for MappingIngress {
                                 if let Err(e) = utils::forward_stream(upstream, downstream).await {
                                     let error = format!("{e:#}");
                                     tracing::error!(
-                                        %dst,
+                                        %orig_dst,
                                         error,
                                         "Failed during forwarding to upstream via trusted tunnel"
                                     );
@@ -147,7 +164,7 @@ impl RegistedService for MappingIngress {
                             Err(e) => {
                                 let error = format!("{e:#}");
                                 tracing::error!(
-                                    %dst,
+                                    %orig_dst,
                                     error,
                                     "Failed to connect to upstream via trusted tunnel"
                                 );
