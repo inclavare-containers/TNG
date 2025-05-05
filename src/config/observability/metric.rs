@@ -6,8 +6,8 @@ use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig, WithTonicConfig}
 use serde::{Deserialize, Serialize};
 
 use crate::observability::metric::exporter::{
-    falcon::FalconConfig, stdout::StdoutExporter, OpenTelemetryMetricExporterAdapter,
-    SimpleMetricExporter,
+    falcon::FalconConfig, opentelemetry_metric_reader::ShutdownInStandaloneTokioThreadMetricReader,
+    stdout::StdoutExporter, OpenTelemetryMetricExporterAdapter, SimpleMetricExporter,
 };
 
 use super::{OltpCommonExporterConfig, OltpExporterProtocol};
@@ -152,15 +152,17 @@ impl MetricExporterInstance {
                 let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
                     .with_interval(Duration::from_secs(step))
                     .build();
+                let reader = ShutdownInStandaloneTokioThreadMetricReader::new(reader);
                 opentelemetry_sdk::metrics::SdkMeterProvider::builder()
                     .with_reader(reader)
                     .with_resource(crate::observability::otlp_resource())
                     .build()
             }
             MetricExporterInstance::OpenTelemetry(step, exporter) => {
-                let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+                let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
                     .with_interval(Duration::from_secs(step))
                     .build();
+                let reader = ShutdownInStandaloneTokioThreadMetricReader::new(reader);
                 opentelemetry_sdk::metrics::SdkMeterProvider::builder()
                     .with_reader(reader)
                     .with_resource(crate::observability::otlp_resource())
@@ -175,7 +177,12 @@ impl MetricExporterInstance {
 mod tests {
 
     use anyhow::Result;
+    use scopeguard::defer;
     use serde_json::json;
+    use tokio::select;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::{config::TngConfig, runtime::TngRuntime};
 
     use super::*;
 
@@ -290,6 +297,76 @@ mod tests {
         });
 
         test_config_common(json_value, expected)?;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_multi_tng_instance() -> Result<()> {
+        let mut set = tokio::task::JoinSet::new();
+
+        for _ in 0..5 {
+            set.spawn(async {
+                let config: TngConfig = serde_json::from_value(json!(
+                    {
+                        "metric": {
+                            "exporters": [
+                                {
+                                    "type": "stdout",
+                                    "step": 1
+                                }
+                            ]
+                        },
+                        "add_ingress": [
+                            {
+                                "mapping": {
+                                    "in": {
+                                        "port": portpicker::pick_unused_port().unwrap()
+                                    },
+                                    "out": {
+                                        "host": "127.0.0.1",
+                                        "port": portpicker::pick_unused_port().unwrap()
+                                    }
+                                },
+                                "no_ra": true
+                            }
+                        ]
+                    }
+                ))?;
+
+                let cancel_token = CancellationToken::new();
+                let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+                let cancel_token_clone = cancel_token.clone();
+                let join_handle = tokio::task::spawn(async move {
+                    TngRuntime::from_config(config)
+                        .await?
+                        .serve_with_cancel(cancel_token_clone, ready_sender)
+                        .await
+                });
+
+                ready_receiver.await?;
+                // tng is ready now, so we cancel it
+
+                cancel_token.cancel();
+
+                select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                        defer! {
+                            std::process::exit(1);
+                        }
+                        panic!("Wait for tng exit timeout")
+                    }
+                    _ = join_handle => {}
+                }
+
+                Ok::<_, anyhow::Error>(())
+            });
+        }
+
+        for res in set.join_all().await {
+            res?;
+        }
 
         Ok(())
     }

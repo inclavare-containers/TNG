@@ -64,12 +64,6 @@ mod tests {
     async fn test_exit_on_cancel() -> Result<()> {
         let config: TngConfig = serde_json::from_value(json!(
             {
-                "metric": {
-                    "exporters": [{
-                        "type": "stdout",
-                        "step": 1
-                    }]
-                },
                 "add_ingress": [
                     {
                         "mapping": {
@@ -120,12 +114,6 @@ mod tests {
     async fn test_exit_on_envoy_error() -> Result<()> {
         let config: TngConfig = serde_json::from_value(json!(
             {
-                "metric": {
-                    "exporters": [{
-                        "type": "stdout",
-                        "step": 1
-                    }]
-                },
                 "add_ingress": [
                     {
                         "mapping": {

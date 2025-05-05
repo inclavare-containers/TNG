@@ -16,6 +16,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     service::TowerToHyperService,
 };
+use opentelemetry::metrics::MeterProvider;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
@@ -25,7 +26,7 @@ use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
 use crate::observability::metric::stream::StreamWithCounter;
-use crate::observability::trace::ShutdownGuardExt;
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
@@ -355,6 +356,7 @@ impl HttpProxyIngress {
         id: usize,
         http_proxy_args: &IngressHttpProxyArgs,
         common_args: &CommonArgs,
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     ) -> Result<Self> {
         let listen_addr = http_proxy_args
             .proxy_listen
@@ -365,14 +367,17 @@ impl HttpProxyIngress {
         let listen_port = http_proxy_args.proxy_listen.port;
 
         // ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}
-        let metrics = ServiceMetrics::new([
-            ("ingress_type".to_owned(), "http_proxy".to_owned()),
-            ("ingress_id".to_owned(), id.to_string()),
-            (
-                "ingress_proxy_listen".to_owned(),
-                format!("{}:{}", listen_addr, listen_port),
-            ),
-        ]);
+        let metrics = ServiceMetrics::new(
+            meter_provider,
+            [
+                ("ingress_type".to_owned(), "http_proxy".to_owned()),
+                ("ingress_id".to_owned(), id.to_string()),
+                (
+                    "ingress_proxy_listen".to_owned(),
+                    format!("{}:{}", listen_addr, listen_port),
+                ),
+            ],
+        );
 
         let stream_router = Arc::new(StreamRouter {
             trusted_stream_manager: TrustedStreamManager::new(

@@ -14,9 +14,8 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::{
-    observability::trace::ShutdownGuardExt as _, tunnel::attestation_result::AttestationResult,
-};
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
+use crate::tunnel::attestation_result::AttestationResult;
 
 use super::super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 

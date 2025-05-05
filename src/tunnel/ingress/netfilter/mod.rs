@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use opentelemetry::metrics::MeterProvider;
 use socket2::SockRef;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
@@ -11,7 +12,7 @@ use crate::config::ingress::CommonArgs;
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::Endpoint;
 use crate::observability::metric::stream::StreamWithCounter;
-use crate::observability::trace::ShutdownGuardExt;
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
@@ -41,6 +42,7 @@ impl NetfilterIngress {
         id: usize,
         netfilter_args: &IngressNetfilterArgs,
         common_args: &CommonArgs,
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     ) -> Result<Self> {
         let listen_port = match netfilter_args.listen_port {
             Some(p) => p,
@@ -52,11 +54,14 @@ impl NetfilterIngress {
         }
 
         // ingress_type=netfilter,ingress_id={id},ingress_listen_port={listen_port}
-        let metrics = ServiceMetrics::new([
-            ("ingress_type".to_owned(), "netfilter".to_owned()),
-            ("ingress_id".to_owned(), id.to_string()),
-            ("ingress_listen_port".to_owned(), listen_port.to_string()),
-        ]);
+        let metrics = ServiceMetrics::new(
+            meter_provider,
+            [
+                ("ingress_type".to_owned(), "netfilter".to_owned()),
+                ("ingress_id".to_owned(), id.to_string()),
+                ("ingress_listen_port".to_owned(), listen_port.to_string()),
+            ],
+        );
 
         let so_mark = TCP_CONNECT_SO_MARK_DEFAULT;
 

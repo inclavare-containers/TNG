@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use opentelemetry::metrics::MeterProvider;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
 use crate::config::{ingress::CommonArgs, ingress::IngressMappingArgs};
 use crate::observability::metric::stream::StreamWithCounter;
-use crate::observability::trace::ShutdownGuardExt;
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
@@ -32,6 +33,7 @@ impl MappingIngress {
         id: usize,
         mapping_args: &IngressMappingArgs,
         common_args: &CommonArgs,
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     ) -> Result<Self> {
         let listen_addr = mapping_args
             .r#in
@@ -50,18 +52,21 @@ impl MappingIngress {
         let upstream_port = mapping_args.out.port;
 
         // ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}
-        let metrics = ServiceMetrics::new([
-            ("ingress_type".to_owned(), "mapping".to_owned()),
-            ("ingress_id".to_owned(), id.to_string()),
-            (
-                "ingress_in".to_owned(),
-                format!("{}:{}", listen_addr, listen_port),
-            ),
-            (
-                "ingress_out".to_owned(),
-                format!("{}:{}", upstream_addr, upstream_port),
-            ),
-        ]);
+        let metrics = ServiceMetrics::new(
+            meter_provider,
+            [
+                ("ingress_type".to_owned(), "mapping".to_owned()),
+                ("ingress_id".to_owned(), id.to_string()),
+                (
+                    "ingress_in".to_owned(),
+                    format!("{}:{}", listen_addr, listen_port),
+                ),
+                (
+                    "ingress_out".to_owned(),
+                    format!("{}:{}", upstream_addr, upstream_port),
+                ),
+            ],
+        );
 
         let trusted_stream_manager =
             Arc::new(TrustedStreamManager::new(&common_args, TCP_CONNECT_SO_MARK_DEFAULT).await?);

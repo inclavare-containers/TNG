@@ -608,29 +608,18 @@ Example:
 
 ```json
 {
-    "type": "oltp",
-    "protocol": "http/protobuf",
-    "endpoint": "https://oltp.example.com/example/url",
-    "headers": {
-        "Authorization": "XXXXXXXXX",
-    },
-    "step": 2
-}
-```
-
-```json
-{
     "metric": {
-        "exporters": [{
-            "type": "falcon",
-            "server_url": "http://127.0.0.1:1988",
-            "endpoint": "master-node",
-            "tags": {
-                "namespace": "ns1",
-                "app": "tng"
-            },
-            "step": 60
-        }]
+        "exporters": [
+            {
+                "type": "oltp",
+                "protocol": "http/protobuf",
+                "endpoint": "https://oltp.example.com/example/url",
+                "headers": {
+                    "Authorization": "XXXXXXXXX",
+                },
+                "step": 2
+            }
+        ]
     }
 }
 ```
@@ -638,10 +627,31 @@ Example:
 ```json
 {
     "metric": {
-        "exporters": [{
-            "type": "stdout",
-            "step": 60
-        }]
+        "exporters": [
+            {
+                "type": "falcon",
+                "server_url": "http://127.0.0.1:1988",
+                "endpoint": "master-node",
+                "tags": {
+                    "namespace": "ns1",
+                    "app": "tng"
+                },
+                "step": 60
+            }
+        ]
+    }
+}
+```
+
+```json
+{
+    "metric": {
+        "exporters": [
+            {
+                "type": "stdout",
+                "step": 60
+            }
+        ]
     }
 }
 ```
@@ -678,14 +688,26 @@ Examples:
 
 ```json
 {
-    "type": "oltp",
-    "protocol": "http/protobuf",
-    "endpoint": "https://oltp.example.com/example/url"
+    "trace": {
+        "exporters": [
+            {
+                "type": "oltp",
+                "protocol": "http/protobuf",
+                "endpoint": "https://oltp.example.com/example/url"
+            }
+        ]
+    }
 }
 ```
 
 ```json
 {
-    "type": "stdout"
+    "trace": {
+        "exporters": [
+            {
+                "type": "stdout"
+            }
+        ]
+    }
 }
 ```

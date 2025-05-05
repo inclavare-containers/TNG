@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hyper_util::rt::TokioIo;
+use opentelemetry::metrics::MeterProvider;
 use socket2::{Domain, SockRef, Socket, Type};
 use tokio::{
     net::{TcpListener, TcpSocket},
@@ -15,7 +16,9 @@ use crate::{
         egress::{CommonArgs, EgressNetfilterArgs},
         Endpoint,
     },
-    observability::{metric::stream::StreamWithCounter, trace::ShutdownGuardExt},
+    observability::{
+        metric::stream::StreamWithCounter, trace::shutdown_guard_ext::ShutdownGuardExt,
+    },
     service::RegistedService,
     tunnel::{
         access_log::AccessLog,
@@ -46,6 +49,7 @@ impl NetfilterEgress {
         id: usize,
         netfilter_args: &EgressNetfilterArgs,
         common_args: &CommonArgs,
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     ) -> Result<Self> {
         let listen_port = match netfilter_args.listen_port {
             Some(p) => p,
@@ -57,11 +61,14 @@ impl NetfilterEgress {
             .unwrap_or(TCP_CONNECT_SO_MARK_DEFAULT);
 
         // egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}
-        let metrics = ServiceMetrics::new([
-            ("egress_type".to_owned(), "netfilter".to_owned()),
-            ("egress_id".to_owned(), id.to_string()),
-            ("egress_listen_port".to_owned(), listen_port.to_string()),
-        ]);
+        let metrics = ServiceMetrics::new(
+            meter_provider,
+            [
+                ("egress_type".to_owned(), "netfilter".to_owned()),
+                ("egress_id".to_owned(), id.to_string()),
+                ("egress_listen_port".to_owned(), listen_port.to_string()),
+            ],
+        );
 
         let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
 

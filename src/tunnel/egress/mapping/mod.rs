@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hyper_util::rt::TokioIo;
+use opentelemetry::metrics::MeterProvider;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc::{self, Sender},
@@ -11,7 +12,9 @@ use tokio_graceful::ShutdownGuard;
 
 use crate::{
     config::egress::{CommonArgs, EgressMappingArgs},
-    observability::{metric::stream::StreamWithCounter, trace::ShutdownGuardExt as _},
+    observability::{
+        metric::stream::StreamWithCounter, trace::shutdown_guard_ext::ShutdownGuardExt as _,
+    },
     service::RegistedService,
     tunnel::{
         access_log::AccessLog,
@@ -36,6 +39,7 @@ impl MappingEgress {
         id: usize,
         mapping_args: &EgressMappingArgs,
         common_args: &CommonArgs,
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     ) -> Result<Self> {
         let listen_addr = mapping_args
             .r#in
@@ -54,18 +58,21 @@ impl MappingEgress {
         let upstream_port = mapping_args.out.port;
 
         // egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}
-        let metrics = ServiceMetrics::new([
-            ("egress_type".to_owned(), "mapping".to_owned()),
-            ("egress_id".to_owned(), id.to_string()),
-            (
-                "egress_in".to_owned(),
-                format!("{}:{}", listen_addr, listen_port),
-            ),
-            (
-                "egress_out".to_owned(),
-                format!("{}:{}", upstream_addr, upstream_port),
-            ),
-        ]);
+        let metrics = ServiceMetrics::new(
+            meter_provider,
+            [
+                ("egress_type".to_owned(), "mapping".to_owned()),
+                ("egress_id".to_owned(), id.to_string()),
+                (
+                    "egress_in".to_owned(),
+                    format!("{}:{}", listen_addr, listen_port),
+                ),
+                (
+                    "egress_out".to_owned(),
+                    format!("{}:{}", upstream_addr, upstream_port),
+                ),
+            ],
+        );
 
         let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
 

@@ -602,29 +602,18 @@ TNG当前版本默认启用了将日志输出到标准输出的能力，用户�
 
 ```json
 {
-    "type": "oltp",
-    "protocol": "http/protobuf",
-    "endpoint": "https://oltp.example.com/example/url",
-    "headers": {
-        "Authorization": "XXXXXXXXX",
-    },
-    "step": 2
-}
-```
-
-```json
-{
     "metric": {
-        "exporters": [{
-            "type": "falcon",
-            "server_url": "http://127.0.0.1:1988",
-            "endpoint": "master-node",
-            "tags": {
-                "namespace": "ns1",
-                "app": "tng"
-            },
-            "step": 60
-        }]
+        "exporters": [
+            {
+                "type": "oltp",
+                "protocol": "http/protobuf",
+                "endpoint": "https://oltp.example.com/example/url",
+                "headers": {
+                    "Authorization": "XXXXXXXXX",
+                },
+                "step": 2
+            }
+        ]
     }
 }
 ```
@@ -632,10 +621,31 @@ TNG当前版本默认启用了将日志输出到标准输出的能力，用户�
 ```json
 {
     "metric": {
-        "exporters": [{
-            "type": "stdout",
-            "step": 60
-        }]
+        "exporters": [
+            {
+                "type": "falcon",
+                "server_url": "http://127.0.0.1:1988",
+                "endpoint": "master-node",
+                "tags": {
+                    "namespace": "ns1",
+                    "app": "tng"
+                },
+                "step": 60
+            }
+        ]
+    }
+}
+```
+
+```json
+{
+    "metric": {
+        "exporters": [
+            {
+                "type": "stdout",
+                "step": 60
+            }
+        ]
     }
 }
 ```
@@ -672,14 +682,26 @@ TNG支持OpenTelemetry标准语义下的tracing事件导出，包括每个请求
 
 ```json
 {
-    "type": "oltp",
-    "protocol": "http/protobuf",
-    "endpoint": "https://oltp.example.com/example/url"
+    "trace": {
+        "exporters": [
+            {
+                "type": "oltp",
+                "protocol": "http/protobuf",
+                "endpoint": "https://oltp.example.com/example/url"
+            }
+        ]
+    }
 }
 ```
 
 ```json
 {
-    "type": "stdout"
+    "trace": {
+        "exporters": [
+            {
+                "type": "stdout"
+            }
+        ]
+    }
 }
 ```

@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _, WithTonicConfig};
 use serde::{Deserialize, Serialize};
 
+use crate::observability::trace::opentelemetry_span_processor::ShutdownInStandaloneTokioThreadSpanProcessor;
+
 use super::{OltpCommonExporterConfig, OltpExporterProtocol};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -96,7 +98,9 @@ impl TraceExporterInstance {
     pub fn into_sdk_tracer_provider(self) -> opentelemetry_sdk::trace::SdkTracerProvider {
         match self {
             TraceExporterInstance::OpenTelemetryOltp(span_exporter) => {
-                let batch = opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
+                let batch =
+                    opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
+                let batch = ShutdownInStandaloneTokioThreadSpanProcessor::new(batch);
                 let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                     .with_span_processor(batch)
                     .with_resource(crate::observability::otlp_resource())
@@ -117,7 +121,12 @@ impl TraceExporterInstance {
 mod tests {
 
     use anyhow::Result;
+    use scopeguard::defer;
     use serde_json::json;
+    use tokio::select;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::{config::TngConfig, runtime::TngRuntime};
 
     use super::*;
 
@@ -225,6 +234,75 @@ mod tests {
             ),
         });
         test_config_common(json_value, expected)?;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_multi_tng_instance() -> Result<()> {
+        let mut set = tokio::task::JoinSet::new();
+
+        for _ in 0..5 {
+            set.spawn(async {
+                let config: TngConfig = serde_json::from_value(json!(
+                    {
+                        "metric": {
+                            "exporters": [
+                                {
+                                    "type": "stdout"
+                                }
+                            ]
+                        },
+                        "add_ingress": [
+                            {
+                                "mapping": {
+                                    "in": {
+                                        "port": portpicker::pick_unused_port().unwrap()
+                                    },
+                                    "out": {
+                                        "host": "127.0.0.1",
+                                        "port": portpicker::pick_unused_port().unwrap()
+                                    }
+                                },
+                                "no_ra": true
+                            }
+                        ]
+                    }
+                ))?;
+
+                let cancel_token = CancellationToken::new();
+                let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+                let cancel_token_clone = cancel_token.clone();
+                let join_handle = tokio::task::spawn(async move {
+                    TngRuntime::from_config(config)
+                        .await?
+                        .serve_with_cancel(cancel_token_clone, ready_sender)
+                        .await
+                });
+
+                ready_receiver.await?;
+                // tng is ready now, so we cancel it
+
+                cancel_token.cancel();
+
+                select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                        defer! {
+                            std::process::exit(1);
+                        }
+                        panic!("Wait for tng exit timeout")
+                    }
+                    _ = join_handle => {}
+                }
+
+                Ok::<_, anyhow::Error>(())
+            });
+        }
+
+        for res in set.join_all().await {
+            res?;
+        }
 
         Ok(())
     }

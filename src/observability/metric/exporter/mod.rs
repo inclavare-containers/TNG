@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 
 pub mod falcon;
+pub mod noop;
+pub mod opentelemetry_metric_reader;
 pub mod stdout;
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]

@@ -10,7 +10,8 @@ use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tokio_graceful::ShutdownGuard;
 
-use crate::{config::ra::AttestArgs, observability::trace::ShutdownGuardExt};
+use crate::config::ra::AttestArgs;
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 
 const CERT_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 const CREATE_CERT_TIMEOUT_SECOND: u64 = 120; // 2 min

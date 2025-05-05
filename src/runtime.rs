@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::observability::trace::ShutdownGuardExt;
+use crate::observability::metric::exporter::noop::NoopMeterProvider;
+use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
 use crate::tunnel::egress::mapping::MappingEgress;
@@ -11,6 +12,7 @@ use crate::{
 };
 
 use anyhow::{bail, Context as _, Result};
+use opentelemetry::metrics::MeterProvider;
 use opentelemetry::trace::TracerProvider;
 use scopeguard::defer;
 use tokio_graceful::ShutdownGuard;
@@ -20,6 +22,7 @@ use tracing::Span;
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
     state: Arc<TngState>,
+    meter_provider: Arc<dyn MeterProvider + Send + Sync>,
 }
 
 pub type TracingReloadHandle = tracing_subscriber::reload::Handle<
@@ -48,7 +51,8 @@ impl TngRuntime {
             tng_config.admin_bind = None;
         }
 
-        Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
+        let meter_provider =
+            Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
 
         Self::setup_trace_exporter(&tng_config, reload_handle)
             .context("Failed to setup trace exporter")?;
@@ -61,14 +65,31 @@ impl TngRuntime {
             match &add_ingress.ingress_mode {
                 IngressMode::Mapping(mapping_args) => {
                     services.push((
-                        Box::new(MappingIngress::new(id, mapping_args, &add_ingress.common).await?),
+                        Box::new(
+                            MappingIngress::new(
+                                id,
+                                mapping_args,
+                                &add_ingress.common,
+                                meter_provider.clone(),
+                            )
+                            .await?,
+                        ),
                         tracing::info_span!("ingress", id),
                     ));
                 }
                 IngressMode::HttpProxy(http_proxy_args) => {
-                    let ingress =
-                        HttpProxyIngress::new(id, http_proxy_args, &add_ingress.common).await?;
-                    services.push((Box::new(ingress), tracing::info_span!("ingress", id)));
+                    services.push((
+                        Box::new(
+                            HttpProxyIngress::new(
+                                id,
+                                http_proxy_args,
+                                &add_ingress.common,
+                                meter_provider.clone(),
+                            )
+                            .await?,
+                        ),
+                        tracing::info_span!("ingress", id),
+                    ));
                 }
                 IngressMode::Netfilter(netfilter_args) => {
                     if !cfg!(target_os = "linux") {
@@ -79,9 +100,18 @@ impl TngRuntime {
                     #[cfg(target_os = "linux")]
                     {
                         use crate::tunnel::ingress::netfilter::NetfilterIngress;
-                        let egress =
-                            NetfilterIngress::new(id, netfilter_args, &add_ingress.common).await?;
-                        services.push((Box::new(egress), tracing::info_span!("ingress", id)));
+                        services.push((
+                            Box::new(
+                                NetfilterIngress::new(
+                                    id,
+                                    netfilter_args,
+                                    &add_ingress.common,
+                                    meter_provider.clone(),
+                                )
+                                .await?,
+                            ),
+                            tracing::info_span!("ingress", id),
+                        ));
                     }
                 }
             }
@@ -91,7 +121,13 @@ impl TngRuntime {
             let add_egress = add_egress.clone();
             match &add_egress.egress_mode {
                 EgressMode::Mapping(mapping_args) => {
-                    let egress = MappingEgress::new(id, mapping_args, &add_egress.common).await?;
+                    let egress = MappingEgress::new(
+                        id,
+                        mapping_args,
+                        &add_egress.common,
+                        meter_provider.clone(),
+                    )
+                    .await?;
                     services.push((Box::new(egress), tracing::info_span!("egress", id)));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
@@ -103,8 +139,13 @@ impl TngRuntime {
                     #[cfg(target_os = "linux")]
                     {
                         use crate::tunnel::egress::netfilter::NetfilterEgress;
-                        let egress =
-                            NetfilterEgress::new(id, netfilter_args, &add_egress.common).await?;
+                        let egress = NetfilterEgress::new(
+                            id,
+                            netfilter_args,
+                            &add_egress.common,
+                            meter_provider.clone(),
+                        )
+                        .await?;
                         services.push((Box::new(egress), tracing::info_span!("egress", id)));
                     }
                 }
@@ -124,7 +165,11 @@ impl TngRuntime {
             ));
         }
 
-        Ok(Self { services, state })
+        Ok(Self {
+            services,
+            state,
+            meter_provider,
+        })
     }
 
     pub fn state(&self) -> Arc<TngState> {
@@ -225,7 +270,7 @@ impl TngRuntime {
             }
         };
 
-        let meter = opentelemetry::global::meter("tng");
+        let meter = self.meter_provider.meter("tng");
         let live = meter
             .u64_gauge("live")
             .with_description("Indicates the server is alive or not")
@@ -239,6 +284,7 @@ impl TngRuntime {
 
                 let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
 
+                // Now waiting for exiting signal
                 tokio::select! {
                     maybe_err = error_receiver.recv() => {maybe_err}
                     _ = shutdown_guard.cancelled() => None
@@ -251,13 +297,15 @@ impl TngRuntime {
         if let Some(_e) = maybe_err {
             tracing::error!("failed to serve all services, canceling and exiting now");
         } else {
-            // Shutdown gracefully
+            tracing::info!("Now shutdown the instance gracefully");
         }
 
         Ok(())
     }
 
-    fn setup_metric_exporter(tng_config: &TngConfig) -> Result<()> {
+    fn setup_metric_exporter(
+        tng_config: &TngConfig,
+    ) -> Result<Arc<dyn MeterProvider + Send + Sync>> {
         let exporter = if let Some(c) = &tng_config.metric {
             if c.exporters.len() > 1 {
                 bail!("Only one exporter is supported for now")
@@ -270,12 +318,12 @@ impl TngRuntime {
             None
         };
 
-        if let Some(exporter) = exporter {
+        Ok(if let Some(exporter) = exporter {
             let meter_provider = exporter.into_sdk_meter_provider();
-            opentelemetry::global::set_meter_provider(meter_provider);
-        }
-
-        Ok(())
+            Arc::new(meter_provider)
+        } else {
+            Arc::new(NoopMeterProvider::new())
+        })
     }
 
     fn setup_trace_exporter(
