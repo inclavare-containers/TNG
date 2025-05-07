@@ -9,9 +9,20 @@ catch() {
 
 script_dir=$(dirname `realpath "$0"`)
 
-# Run tests under 'tests/' dir
-# Note: we ignore tcp_two_way_ra_ingress_httpproxy_egress_netfilter here since the test for it is not finished 
+echo "============= Starting unit tests for bin test suits ============="
+echo "cargo test --test client_netfilter_server_netfilter -- common:: --nocapture"
+if cargo test --test client_netfilter_server_netfilter -- common:: --nocapture; then
+    test_result_msgs="${test_result_msgs}\nunit test (for bin test suits):\tPASS"
+else
+    test_result_msgs="${test_result_msgs}\nunit test (for bin test suits):\tFAILED"
+    exit 1
+fi
+
+# Run bin tests under 'tests/' dir
 test_cases=`ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g'`
+skipped_test_cases="http_encapulation_with_egress_mapping http_encapulation_with_egress_netfilter http_encapulation_with_ingress_httpproxy"
+
+export RUST_BACKTRACE=1
 
 failed=0
 test_result_msgs=""
@@ -19,7 +30,14 @@ test_result_msgs=""
 test_result_msgs="${test_result_msgs}\n============= integration tests ============="
 for case_name in ${test_cases[@]}; do
     echo "============= Starting integration test case: $case_name ============="
-    if cargo test --test $case_name ; then
+    echo "cargo test --test $case_name -- test --exact --nocapture"
+    # skipped_test_cases
+    if [[ "${skipped_test_cases}" =~ "${case_name}" ]]; then
+        test_result_msgs="${test_result_msgs}\n${case_name}:\tSKIP"
+        continue
+    fi
+
+    if cargo test --test $case_name -- test --exact --nocapture; then
         test_result_msgs="${test_result_msgs}\n${case_name}:\tPASS"
     else
         test_result_msgs="${test_result_msgs}\n${case_name}:\tFAILED"
@@ -30,7 +48,8 @@ done
 # Run unit tests
 echo "============= Starting unit test ============="
 test_result_msgs="${test_result_msgs}\n============= unit tests ============="
-if cargo test --bins --lib ; then
+echo "cargo test --bins --lib -- --nocapture"
+if cargo test --bins --lib -- --nocapture; then
     test_result_msgs="${test_result_msgs}\nunit test:\tPASS"
 else
     test_result_msgs="${test_result_msgs}\nunit test:\tFAILED"

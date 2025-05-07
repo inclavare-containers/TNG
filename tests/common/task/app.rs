@@ -1,8 +1,9 @@
 use std::{net::SocketAddr, time::Duration};
 
 use again::RetryPolicy;
-use anyhow::{bail, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use async_http_proxy::http_connect_tokio;
+use async_trait::async_trait;
 use axum::{body::Body, extract::Request, routing::get, Router};
 use axum_extra::extract::Host;
 use http::StatusCode;
@@ -13,6 +14,8 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
+
+use super::{NodeType, Task};
 
 const TCP_PAYLOAD: &str = "Hello World TCP!";
 const HTTP_RESPONSE_BODY: &str = "Hello World HTTP!";
@@ -42,9 +45,29 @@ pub enum AppType {
     },
 }
 
-impl AppType {
-    pub async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
-        match *self {
+#[async_trait]
+impl Task for AppType {
+    fn name(&self) -> String {
+        match self {
+            AppType::HttpServer { .. } => "app_server",
+            AppType::HttpClient { .. } => "app_client",
+            AppType::TcpServer { .. } => "app_server",
+            AppType::TcpClient { .. } => "app_client",
+        }
+        .to_owned()
+    }
+
+    fn node_type(&self) -> NodeType {
+        match self {
+            AppType::HttpServer { .. } => NodeType::Server,
+            AppType::HttpClient { .. } => NodeType::Client,
+            AppType::TcpServer { .. } => NodeType::Server,
+            AppType::TcpClient { .. } => NodeType::Client,
+        }
+    }
+
+    async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+        Ok(match *self {
             AppType::HttpServer {
                 port,
                 expected_host_header,
@@ -67,7 +90,7 @@ impl AppType {
                 port,
                 http_proxy,
             } => launch_tcp_client(token, host, port, http_proxy).await,
-        }
+        }?)
     }
 }
 
@@ -78,14 +101,17 @@ pub struct HttpProxy {
 }
 
 async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHandle<Result<()>>> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("TCP server listening on 127.0.0.1:{port}");
+    tracing::info!("TCP server listening on 0.0.0.0:{port}");
 
     Ok(tokio::task::spawn(async move {
         loop {
             tokio::select! {
-                _ = token.cancelled() => break,
+                _ = token.cancelled() => {
+                    tracing::info!("The TCP server task cancelled.");
+                    break
+                },
                 result = listener.accept() => {
                     let (mut stream, addr) = result?;
                     tracing::info!("Accepted connection from {}", addr);
@@ -103,7 +129,6 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
                 }
             }
         }
-        tracing::info!("The TCP server task normally exited.");
         Ok(())
     }))
 }
@@ -126,21 +151,31 @@ async fn launch_tcp_client(
                 port
             );
 
-            let mut stream = match http_proxy {
-                Some(http_proxy) => {
-                    let mut stream =
-                        TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
+            let connect_task = async {
+                Ok(match http_proxy {
+                    Some(http_proxy) => {
+                        let mut stream =
+                            TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
+                                .await
+                                .context("Failed to connect to http proxy server")?;
+                        http_connect_tokio(&mut stream, &host, port)
                             .await
-                            .context("Failed to connect to http proxy server")?;
-                    http_connect_tokio(&mut stream, &host, port)
+                            .context("Failed to connect to app server via http proxy server")?;
+                        stream
+                    }
+                    None => TcpStream::connect(format!("{}:{}", host, port))
                         .await
-                        .context("Failed to connect to app server via http proxy server")?;
-                    stream
-                }
-                None => TcpStream::connect(format!("{}:{}", host, port))
-                    .await
-                    .context("Failed to connect to app server")?,
+                        .context("Failed to connect to app server")?,
+                })
             };
+
+            let mut stream = tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    Err(anyhow!("The TCP client task timed out."))
+                }
+                result = connect_task => result,
+            }?;
+
             tracing::info!("Connected to the server");
 
             let message = TCP_PAYLOAD.as_bytes();
@@ -174,9 +209,9 @@ pub async fn launch_http_server(
     let expected_host_header = expected_host_header.to_owned();
     let expected_path_and_query = expected_path_and_query.to_owned();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("Listening on 127.0.0.1:{port} and waiting for connection from client");
+    tracing::info!("Listening on 0.0.0.0:{port} and waiting for connection from client");
 
     Ok(tokio::task::spawn(async move {
         let app = Router::new().route(

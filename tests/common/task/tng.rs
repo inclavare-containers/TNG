@@ -1,46 +1,74 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use tng::runtime::TngRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-pub async fn launch_tng(
-    token: CancellationToken,
-    task_name: &str,
-    config_json: &str,
-) -> Result<JoinHandle<Result<()>>> {
-    let config_json = config_json.to_owned();
+use super::{NodeType, Task};
 
-    let task_name = task_name.to_owned();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
+pub enum TngInstance {
+    TngClient(&'static str),
+    TngServer(&'static str),
+}
 
-    let join_handle = tokio::task::spawn(async move {
-        let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
+#[async_trait]
+impl Task for TngInstance {
+    fn name(&self) -> String {
+        match self {
+            TngInstance::TngClient(_) => "tng_client",
+            TngInstance::TngServer(_) => "tng_server",
+        }
+        .to_string()
+    }
 
-        let tng_token = CancellationToken::new();
+    fn node_type(&self) -> NodeType {
+        match self {
+            TngInstance::TngClient(_) => NodeType::Client,
+            TngInstance::TngServer(_) => NodeType::Server,
+        }
+    }
 
-        {
-            let tng_token = tng_token.clone();
-            tokio::task::spawn(async move {
-                token.cancelled().await;
-                tng_token.cancel();
-            });
+    async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+        let config_json = match self {
+            TngInstance::TngClient(config_json) | TngInstance::TngServer(config_json) => {
+                config_json
+            }
+        }
+        .to_string();
+
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+
+        let join_handle = tokio::task::spawn(async move {
+            let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
+
+            let tng_token = CancellationToken::new();
+
+            {
+                let tng_token = tng_token.clone();
+                tokio::task::spawn(async move {
+                    token.cancelled().await;
+                    tng_token.cancel();
+                });
+            }
+
+            TngRuntime::from_config_with_reload_handle(
+                config,
+                crate::common::BIN_TEST_LOG_RELOAD_HANDLE
+                    .get()
+                    .expect("log reload handle not initialized"),
+            )
+            .await?
+            .serve_with_cancel(tng_token, sender)
+            .await?;
+
+            Ok::<_, anyhow::Error>(())
+        });
+
+        // Wait for the tng runtime to be ready
+        if let Err(e) = receiver.await {
+            tracing::error!(error=?e, "failed to receive tng runtime ready signal");
         }
 
-        TngRuntime::from_config_with_reload_handle(
-            config,
-            crate::common::BIN_TEST_LOG_RELOAD_HANDLE
-                .get()
-                .expect("log reload handle not initialized"),
-        )
-        .await?
-        .serve_with_cancel(tng_token, sender)
-        .await?;
-
-        tracing::info!("The {task_name} task normally exit now");
-        Ok(())
-    });
-
-    receiver.await?;
-
-    return Ok(join_handle);
+        return Ok(join_handle);
+    }
 }

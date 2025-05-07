@@ -1,7 +1,14 @@
 mod common;
 
 use anyhow::Result;
-use common::{run_test, task::app::AppType};
+use common::{
+    run_test,
+    task::{
+        app::{AppType, HttpProxy},
+        tng::TngInstance,
+        Task,
+    },
+};
 
 /// tng client as verifier and tng server as attester, with "HTTP encapulation" enabled and `allow_non_tng_traffic_regexes` set, while tng server is using `netfilter` mode instead of `mapping` mode.
 ///
@@ -15,26 +22,26 @@ use common::{run_test, task::app::AppType};
 /// First, try to send request via tng client. It should work.
 ///
 /// ```sh
-/// all_proxy="http://127.0.0.1:41000" curl http://127.0.0.1:30001 -vvvvv
+/// all_proxy="http://127.0.0.1:41000" curl http://192.168.1.1:30001 -vvvvv
 /// ```
 ///
 /// Then, try to send non-tng traffic, it should be denied.
 ///
 /// ```sh
-/// curl http://127.0.0.1:30001 -vvvvv
+/// curl http://192.168.1.1:30001 -vvvvv
 /// ```
 ///
 /// Finally, try to send non-tng traffic which is in the configed `allow_non_tng_traffic_regexes` option.
 ///
 /// ```sh
 /// # it should not work, since `/public` not matches `/public/.*`
-/// curl http://127.0.0.1:30001/public
+/// curl http://192.168.1.1:30001/public
 /// # it should work, since `/public/` matches `/public/.*`
-/// curl http://127.0.0.1:30001/public/
+/// curl http://192.168.1.1:30001/public/
 /// # it should work, since `/public/abc` matches `/public/.*`
-/// curl http://127.0.0.1:30001/public/abc
+/// curl http://192.168.1.1:30001/public/abc
 /// # it should work, since `/public/abc` matches `/public/.*`
-/// curl -X POST http://127.0.0.1:30001/public/abc
+/// curl -X POST http://192.168.1.1:30001/public/abc
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_access_via_tng() -> Result<()> {
@@ -62,13 +69,10 @@ async fn test_access_via_tng() -> Result<()> {
         {
             "add_ingress": [
                 {
-                    "mapping": {
-                        "in": {
-                            "port": 10001
-                        },
-                        "out": {
-                            "host": "127.0.0.1",
-                            "port": 30001
+                    "http_proxy": {
+                        "proxy_listen": {
+                            "host": "0.0.0.0",
+                            "port": 41000
                         }
                     },
                     "encap_in_http": {
@@ -80,7 +84,7 @@ async fn test_access_via_tng() -> Result<()> {
                         ]
                     },
                     "verify": {
-                        "as_addr": "http://127.0.0.1:8080/",
+                        "as_addr": "http://192.168.1.254:8080/",
                         "policy_ids": [
                             "default"
                         ]
@@ -90,41 +94,50 @@ async fn test_access_via_tng() -> Result<()> {
         }
         "#;
 
-    run_test(
-        &AppType::HttpServer {
+    run_test(vec![
+        TngInstance::TngServer(tng_server_config).boxed(),
+        TngInstance::TngClient(tng_client_config).boxed(),
+        AppType::HttpServer {
             port: 30001,
             expected_host_header: "example.com",
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
-        },
-        // TODO: add a HttpInspector for inspecting network traffic and check http body.
-        &AppType::HttpClient {
-            host: "127.0.0.1",
+        }
+        .boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.1",
             port: 10001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
-            http_proxy: None,
-        },
-        tng_server_config,
-        tng_client_config,
-    )
+            http_proxy: Some(HttpProxy {
+                host: "127.0.0.1",
+                port: 41000,
+            }),
+        }
+        .boxed(),
+    ])
     .await?;
 
-    run_test(
-        &AppType::HttpServer {
+    run_test(vec![
+        TngInstance::TngServer(tng_server_config).boxed(),
+        TngInstance::TngClient(tng_client_config).boxed(),
+        AppType::HttpServer {
             port: 30001,
             expected_host_header: "example.com",
             expected_path_and_query: "/public/resource",
-        },
-        &AppType::HttpClient {
-            host: "127.0.0.1",
+        }
+        .boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.1",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/public/resource",
-            http_proxy: None,
-        },
-        tng_server_config,
-        tng_client_config,
-    )
+            http_proxy: Some(HttpProxy {
+                host: "127.0.0.1",
+                port: 41000,
+            }),
+        }
+        .boxed(),
+    ])
     .await?;
 
     Ok(())
