@@ -44,13 +44,13 @@ mod tests {
             .with(
                 pending_tracing_layers.with_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "info,tng=trace".into()),
+                        .unwrap_or_else(|_| "info,tokio_graceful=off,tng=trace".into()),
                 ),
             )
             .with(
                 tracing_subscriber::fmt::layer().with_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "info,tng=debug".into()),
+                        .unwrap_or_else(|_| "info,tokio_graceful=off,tng=debug".into()),
                 ),
             )
             .init();
