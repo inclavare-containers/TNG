@@ -239,10 +239,10 @@ cat config.json | jq '.attestation_token_config.signer.cert_path="/tmp/as.pem" |
 4. 运行
 
 ```sh
-RUST_LOG=debug restful-as --socket 127.0.0.1:8080 --config-file /trustee/attestation-service/config_with_cert.json
+RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /trustee/attestation-service/config_with_cert.json
 ```
 
-这将运行一个attestation-service实例，并在`127.0.0.1:8080`上创建HTTP restful监听
+这将运行一个attestation-service实例，并在`0.0.0.0:8080`上创建HTTP restful监听
 
 ### 运行tng测试
 

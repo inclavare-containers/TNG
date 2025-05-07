@@ -91,7 +91,9 @@ impl RegistedService for NetfilterEgress {
             .prepare(shutdown_guard.clone())
             .await?;
 
-        let listen_addr = format!("127.0.0.1:{}", self.listen_port);
+        // We have to listen on 0.0.0.0 to capture all traffic been redirected from any interface.
+        // See REDIRECT section on https://ipset.netfilter.org/iptables-extensions.man.html
+        let listen_addr = format!("0.0.0.0:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         // Setup iptables

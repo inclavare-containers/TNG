@@ -137,7 +137,7 @@ jobs:
             cat config.json | jq '.attestation_token_config.signer.cert_path="/tmp/as.pem" | .attestation_token_config.signer.key_path="/tmp/as.key"' > /tmp/config_with_cert.json
           fi
 
-          RUST_LOG=debug restful-as --socket 127.0.0.1:8080 --config-file /tmp/config_with_cert.json &
+          RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json &
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
