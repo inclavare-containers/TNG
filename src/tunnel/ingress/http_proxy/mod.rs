@@ -411,71 +411,92 @@ impl RegistedService for HttpProxyIngress {
 
         ready.send(()).await?;
 
-        loop {
-            let (downstream, _) = tokio::select! {
-                res = listener.accept() => res?,
-                _ = shutdown_guard.cancelled() => {
-                    tracing::debug!("Shutdown signal received, stop accepting new connections");
-                    break;
-                }
-            };
+        let loop_task = async {
+            loop {
+                async {
+                    let (downstream, peer_addr) = listener.accept().await?;
 
-            let peer_addr = downstream.peer_addr()?;
-            let stream_router = self.stream_router.clone();
-            let metrics = self.metrics.clone();
+                    let stream_router = self.stream_router.clone();
+                    let metrics = self.metrics.clone();
 
-            shutdown_guard.spawn_task_fn_with_span(
-                tracing::info_span!("serve", client=?peer_addr),
-                move |shutdown_guard| async move {
-                    tracing::debug!("Start serving new connection from client");
+                    shutdown_guard.spawn_task_fn_with_span(
+                        tracing::info_span!("serve", client=?peer_addr),
+                        move |shutdown_guard| async move {
+                            tracing::debug!("Start serving new connection from client");
 
-                    let svc = {
-                        ServiceBuilder::new()
-                            .layer(TraceLayer::new_for_http())
-                            .layer(SetResponseHeaderLayer::overriding(
-                                http::header::SERVER,
-                                HeaderValue::from_static("tng"),
-                            ))
-                            .service(tower::service_fn(move |req| {
-                                let stream_router = stream_router.clone();
-                                let shutdown_guard = shutdown_guard.clone();
-                                let metrics = metrics.clone();
+                            let svc = {
+                                ServiceBuilder::new()
+                                    .layer(TraceLayer::new_for_http())
+                                    .layer(SetResponseHeaderLayer::overriding(
+                                        http::header::SERVER,
+                                        HeaderValue::from_static("tng"),
+                                    ))
+                                    .service(tower::service_fn(move |req| {
+                                        let stream_router = stream_router.clone();
+                                        let shutdown_guard = shutdown_guard.clone();
+                                        let metrics = metrics.clone();
 
-                                async move {
-                                    metrics.cx_total.add(1);
-                                    metrics.cx_active.add(1);
+                                        async move {
+                                            metrics.cx_total.add(1);
+                                            metrics.cx_active.add(1);
 
-                                    let route_result = stream_router
-                                        .route(req, peer_addr, shutdown_guard, metrics.clone())
-                                        .await;
+                                            let route_result = stream_router
+                                                .route(
+                                                    req,
+                                                    peer_addr,
+                                                    shutdown_guard,
+                                                    metrics.clone(),
+                                                )
+                                                .await;
 
-                                    if matches!(route_result, RouteResult::InternalError(..))
-                                        || matches!(route_result, RouteResult::UpstreamResponse(..))
-                                    {
-                                        if matches!(route_result, RouteResult::InternalError(..)) {
-                                            metrics.cx_failed.add(1);
+                                            if matches!(
+                                                route_result,
+                                                RouteResult::InternalError(..)
+                                            ) || matches!(
+                                                route_result,
+                                                RouteResult::UpstreamResponse(..)
+                                            ) {
+                                                if matches!(
+                                                    route_result,
+                                                    RouteResult::InternalError(..)
+                                                ) {
+                                                    metrics.cx_failed.add(1);
+                                                }
+                                                metrics.cx_active.add(-1);
+                                            }
+
+                                            Result::<_, String>::Ok(route_result.into())
                                         }
-                                        metrics.cx_active.add(-1);
-                                    }
+                                    }))
+                            };
+                            let svc = TowerToHyperService::new(svc);
 
-                                    Result::<_, String>::Ok(route_result.into())
-                                }
-                            }))
-                    };
-                    let svc = TowerToHyperService::new(svc);
+                            let io = TokioIo::new(downstream);
 
-                    let io = TokioIo::new(downstream);
+                            if let Err(e) =
+                                hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                                    .serve_connection_with_upgrades(io, svc)
+                                    .await
+                            {
+                                tracing::error!("Failed to serve connection: {e:?}");
+                            }
+                        },
+                    );
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!(error=?e, "Failed to serve incoming connection from client");
+                })
+            }
+        };
 
-                    if let Err(e) =
-                        hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                            .serve_connection_with_upgrades(io, svc)
-                            .await
-                    {
-                        tracing::error!("Failed to serve connection: {e:?}");
-                    }
-                },
-            );
-        }
+        tokio::select! {
+            () = loop_task => {/* should not be here */},
+            _ = shutdown_guard.cancelled() => {
+                tracing::debug!("Shutdown signal received, stop accepting new connections");
+            }
+        };
 
         Ok(())
     }
