@@ -2,19 +2,20 @@ use std::sync::Arc;
 
 use crate::{
     config::ra::{RaArgs, VerifyArgs},
-    executor::envoy::confgen::{ENVOY_DUMMY_CERT, ENVOY_DUMMY_KEY},
     tunnel::utils::cert_manager::CertManager,
 };
 use anyhow::{bail, Context as _, Result};
 use tokio_graceful::ShutdownGuard;
 
+use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
+
 pub struct RustlsDummyCert {}
 
 impl RustlsDummyCert {
     pub fn new() -> Result<Arc<rustls::sign::SingleCertAndKey>> {
-        let cert_chain = rustls_pemfile::certs(&mut ENVOY_DUMMY_CERT.as_bytes())
-            .collect::<Result<Vec<_>, _>>()?;
-        let key_der = rustls_pemfile::private_key(&mut ENVOY_DUMMY_KEY.as_bytes())?
+        let cert_chain =
+            rustls_pemfile::certs(&mut TNG_DUMMY_CERT.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+        let key_der = rustls_pemfile::private_key(&mut TNG_DUMMY_KEY.as_bytes())?
             .context("No private key found")?;
         let crypto_provider = rustls::crypto::CryptoProvider::get_default()
             .context("rustls crypto provider not installed")?;

@@ -1,4 +1,5 @@
 pub mod cert_manager;
+pub mod certs;
 pub mod endpoint_matcher;
 pub mod forward;
 pub mod h2_stream;

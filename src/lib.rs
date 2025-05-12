@@ -2,7 +2,6 @@ use shadow_rs::shadow;
 
 pub mod config;
 mod control_interface;
-mod executor;
 mod observability;
 pub mod runtime;
 mod service;

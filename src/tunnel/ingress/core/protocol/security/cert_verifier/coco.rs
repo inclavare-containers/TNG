@@ -6,8 +6,10 @@ use tokio_rustls::rustls::RootCertStore;
 
 use crate::{
     config::ra::VerifyArgs,
-    executor::envoy::confgen::ENVOY_DUMMY_CERT,
-    tunnel::{attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier},
+    tunnel::{
+        attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
+        utils::certs::TNG_DUMMY_CERT,
+    },
 };
 
 #[derive(Debug)]
@@ -18,7 +20,7 @@ pub struct CoCoServerCertVerifier {
 
 impl CoCoServerCertVerifier {
     pub fn new(verify: VerifyArgs) -> Result<Self> {
-        let mut cert = ENVOY_DUMMY_CERT.as_bytes();
+        let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
         let mut roots = RootCertStore::empty();
         roots.add_parsable_certificates(certs);

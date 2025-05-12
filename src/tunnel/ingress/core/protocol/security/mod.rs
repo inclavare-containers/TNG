@@ -50,8 +50,6 @@ impl SecurityLayer {
         transport_layer_creator: TransportLayerCreator,
         ra_args: &RaArgs,
     ) -> Result<Self> {
-        // TODO: handle web_page_inject
-
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
         Ok(Self {

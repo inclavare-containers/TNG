@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use auto_enums::auto_enum;
 use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
@@ -34,6 +34,10 @@ pub struct TrustedStreamManager {
 
 impl TrustedStreamManager {
     pub async fn new(common_args: &CommonArgs, transport_so_mark: u32) -> Result<Self> {
+        if common_args.web_page_inject {
+            bail!("The `web_page_inject` field is not supported")
+        }
+
         let transport_layer_creator =
             TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
 

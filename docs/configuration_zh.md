@@ -6,7 +6,7 @@
 - **`metrics`** (Metrics)：指定tng实例的Metrics配置，在未指定该选项时将不启用Metrics功能。
 - **`add_ingress`** (array [Ingress])：在`add_ingress`数组中添加tng隧道的入口端点（ingress），根据client侧用户场景，可以选择对应的流量入站方式。
 - **`add_egress`** (array [Egress])：在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
-- **`admin_bind`** (AdminBind)：(⚠️已废弃) Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
+- （已废弃）**`admin_bind`** (AdminBind)：Envoy实例的Admin Interface配置，在未指定该选项时将不开启Admin Interface功能
 
 ## Ingress
 
@@ -16,7 +16,8 @@
 
 - **`ingress_mode`** (IngressMode)：指定流量入站的方式，可以是`mapping`、`http_proxy`或`netfilter`。
 - **`encap_in_http`** (EncapInHttp, 可选)：HTTP封装配置。
-- **`web_page_inject`** (boolean, 可选，默认为`false`)：开启该选项后，会在网页最上方注入一个标题栏，以显示当前页面的远程证明状态信息，这可以让浏览器用户强感知到远程证明的存在。注意，该功能需要同时指定`encap_in_http`字段
+- （已废弃）**`web_page_inject`** (boolean, 可选，默认为`false`)：开启该选项后，会在网页最上方注入一个标题栏，以显示当前页面的远程证明状态信息，这可以让浏览器用户强感知到远程证明的存在。注意，该功能需要同时指定`encap_in_http`字段
+    > 注意：该选项仅在2.0.0之前的版本中可用
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。

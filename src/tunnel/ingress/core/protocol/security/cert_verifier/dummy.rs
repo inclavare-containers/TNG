@@ -4,7 +4,7 @@ use anyhow::Result;
 use rustls::client::WebPkiServerVerifier;
 use tokio_rustls::rustls::RootCertStore;
 
-use crate::executor::envoy::confgen::ENVOY_DUMMY_CERT;
+use crate::tunnel::utils::certs::TNG_DUMMY_CERT;
 
 #[derive(Debug)]
 pub struct DummyServerCertVerifier {
@@ -13,7 +13,7 @@ pub struct DummyServerCertVerifier {
 
 impl DummyServerCertVerifier {
     pub fn new() -> Result<Self> {
-        let mut cert = ENVOY_DUMMY_CERT.as_bytes();
+        let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
         let mut roots = RootCertStore::empty();
         roots.add_parsable_certificates(certs);
