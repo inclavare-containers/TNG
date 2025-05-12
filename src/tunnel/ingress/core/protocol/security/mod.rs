@@ -13,7 +13,7 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use http::Uri;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use pin_project::pin_project;
@@ -204,6 +204,10 @@ impl tower::Service<Uri> for SecurityConnector {
                     .call(uri)
                     .await
                     .map_err(|e| anyhow::Error::from_boxed(e))?;
+
+                if !matches!(res, hyper_rustls::MaybeHttpsStream::Https(_)) {
+                    bail!("BUG detected, the connection is not secured by Rats-Tls")
+                }
 
                 let attestation_result = match verifier {
                     Some(verifier) => Some(

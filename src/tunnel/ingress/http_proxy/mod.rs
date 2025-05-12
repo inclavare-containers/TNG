@@ -21,7 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
-use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
@@ -40,7 +40,7 @@ pub enum RouteResult {
     // At least in this time, we got no error, and this request should be handled in background.
     HandleInBackgroud,
     // There is an error during routing and we failed. No background task is remained.
-    InternalError(/*code*/ StatusCode, /* msg */ String),
+    Error(/*code*/ StatusCode, /* msg */ String),
     // We got a response to send to the client from upstream. No background task is remained.
     UpstreamResponse(Response),
 }
@@ -49,7 +49,7 @@ impl Into<Response> for RouteResult {
     fn into(self) -> Response {
         match self {
             RouteResult::HandleInBackgroud => Response::new(Body::empty()).into_response(),
-            RouteResult::InternalError(code, msg) => {
+            RouteResult::Error(code, msg) => {
                 tracing::error!(?code, ?msg, "responding errors to downstream");
                 (code, msg).into_response()
             }
@@ -126,7 +126,7 @@ impl RequestHelper {
     }
 
     pub async fn handle(
-        mut self,
+        self,
         stream_router: Arc<StreamRouter>,
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
@@ -134,7 +134,7 @@ impl RequestHelper {
     ) -> RouteResult {
         let dst = match self.get_dst() {
             Ok(dst) => dst,
-            Err(e) => return RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}")),
+            Err(e) => return RouteResult::Error(StatusCode::BAD_REQUEST, format!("{e:#}")),
         };
 
         if self.req.method() == Method::CONNECT {
@@ -145,7 +145,7 @@ impl RequestHelper {
 
             // Spawn a background task to handle the upgraded stream.
             let metrics_cloned = metrics.clone();
-            let upgrade_span = tracing::info_span!("http-connect upgrade");
+            let upgrade_span = tracing::info_span!("http-connect-upgrade");
             let task = shutdown_guard.spawn_task_fn_with_span(
                 upgrade_span.clone(),
                 move |shutdown_guard| async move {
@@ -186,7 +186,7 @@ impl RequestHelper {
                 "Setting up stream from http-proxy downstream"
             );
 
-            let forward_span = tracing::info_span!("http-proxy forward");
+            let forward_span = tracing::info_span!("http-proxy-forward");
             async {
                 let (s1, s2) = tokio::io::duplex(4096);
 
@@ -216,16 +216,6 @@ impl RequestHelper {
                         }
                     });
 
-                    let mut parts = self.req.uri().clone().into_parts();
-                    parts.authority = None;
-                    parts.scheme = None;
-                    *self.req.uri_mut() = http::Uri::from_parts(parts).with_context(|| {
-                        format!(
-                            "Failed convert uri {} for forwarding http request to upstream",
-                            self.req.uri()
-                        )
-                    })?;
-
                     tracing::debug!("Forwarding HTTP request to upstream now");
                     sender
                         .send_request(self.req)
@@ -236,12 +226,10 @@ impl RequestHelper {
 
                 match tokio::join!(forward_task, send_task) {
                     // If there are errors during the forwarding, we report it to the downstream.
-                    (Err(e), _) => {
-                        RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}"))
-                    }
+                    (Err(e), _) => RouteResult::Error(StatusCode::BAD_REQUEST, format!("{e:#}")),
                     (Ok(_), Ok(response)) => RouteResult::UpstreamResponse(response),
                     (Ok(_), Err(e)) => {
-                        RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}"))
+                        RouteResult::Error(StatusCode::BAD_REQUEST, format!("{e:#}"))
                     }
                 }
             }
@@ -421,7 +409,6 @@ impl RegistedService for HttpProxyIngress {
 
                             let svc = {
                                 ServiceBuilder::new()
-                                    .layer(TraceLayer::new_for_http())
                                     .layer(SetResponseHeaderLayer::overriding(
                                         http::header::SERVER,
                                         HeaderValue::from_static("tng"),
@@ -444,17 +431,13 @@ impl RegistedService for HttpProxyIngress {
                                                 )
                                                 .await;
 
-                                            if matches!(
-                                                route_result,
-                                                RouteResult::InternalError(..)
-                                            ) || matches!(
-                                                route_result,
-                                                RouteResult::UpstreamResponse(..)
-                                            ) {
-                                                if matches!(
+                                            if matches!(route_result, RouteResult::Error(..))
+                                                || matches!(
                                                     route_result,
-                                                    RouteResult::InternalError(..)
-                                                ) {
+                                                    RouteResult::UpstreamResponse(..)
+                                                )
+                                            {
+                                                if matches!(route_result, RouteResult::Error(..)) {
                                                     metrics.cx_failed.add(1);
                                                 }
                                                 metrics.cx_active.add(-1);
