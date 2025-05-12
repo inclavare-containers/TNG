@@ -83,10 +83,23 @@ impl Bridge {
                 set -x ; set -e ;
 
                 echo 1 > /proc/sys/net/ipv4/ip_forward
-                iptables -t nat -A POSTROUTING -s {}/{} ! -o {} -j MASQUERADE
-                iptables -t filter -A FORWARD -i any -o {} -j ACCEPT
-                iptables -t filter -A FORWARD -i {} -o {} -j ACCEPT
-                iptables -t filter -A FORWARD -i {} ! -o {} -j ACCEPT
+                iptables -t nat -D POSTROUTING -j TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+                iptables -t nat -F TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+                iptables -t nat -X TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+
+                iptables -t filter -D FORWARD -j TNG_TEST_NETNS_FORWARD 2>/dev/null || true
+                iptables -t filter -F TNG_TEST_NETNS_FORWARD 2>/dev/null || true
+                iptables -t filter -X TNG_TEST_NETNS_FORWARD 2>/dev/null || true
+
+                iptables -t nat -N TNG_TEST_NETNS_POSTROUTING
+                iptables -t nat -A TNG_TEST_NETNS_POSTROUTING -s {}/{} ! -o {} -j MASQUERADE
+                iptables -t nat -A POSTROUTING -j TNG_TEST_NETNS_POSTROUTING
+
+                iptables -t filter -N TNG_TEST_NETNS_FORWARD
+                iptables -t filter -A TNG_TEST_NETNS_FORWARD -i any -o {} -j ACCEPT
+                iptables -t filter -A TNG_TEST_NETNS_FORWARD -i {} -o {} -j ACCEPT
+                iptables -t filter -A TNG_TEST_NETNS_FORWARD -i {} ! -o {} -j ACCEPT
+                iptables -t filter -A FORWARD -j TNG_TEST_NETNS_FORWARD
                 ",
                     bridge_addr.to_string(),
                     prefix_len,
@@ -120,7 +133,7 @@ impl Drop for Bridge {
             tokio::runtime::Handle::current().block_on(async {
                 // Remove iptables rules used for network access.
                 match (self.bridge_addr, self.prefix_len) {
-                    (Some(bridge_addr), Some(prefix_len)) => {
+                    (Some(_bridge_addr), Some(_prefix_len)) => {// The bridge network has been initialized.
                         let output = tokio::process::Command::new("sh")
                             .args(&[
                                 "-c",
@@ -129,19 +142,15 @@ impl Drop for Bridge {
                                     set -x ; set -e ;
                         
                                     echo 1 > /proc/sys/net/ipv4/ip_forward
-                                    iptables -t nat -D POSTROUTING -s {}/{} ! -o {} -j MASQUERADE
-                                    iptables -t filter -D FORWARD -i any -o {} -j ACCEPT
-                                    iptables -t filter -D FORWARD -i {} -o {} -j ACCEPT
-                                    iptables -t filter -D FORWARD -i {} ! -o {} -j ACCEPT
+                                    iptables -t nat -D POSTROUTING -j TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+                                    iptables -t nat -F TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+                                    iptables -t nat -X TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
+
+
+                                    iptables -t filter -D FORWARD -j TNG_TEST_NETNS_FORWARD 2>/dev/null || true
+                                    iptables -t filter -F TNG_TEST_NETNS_FORWARD 2>/dev/null || true
+                                    iptables -t filter -X TNG_TEST_NETNS_FORWARD 2>/dev/null || true
                                     ",
-                                    bridge_addr.to_string(),
-                                    prefix_len,
-                                    self.bridge_name,
-                                    self.bridge_name,
-                                    self.bridge_name,
-                                    self.bridge_name,
-                                    self.bridge_name,
-                                    self.bridge_name
                                 ),
                             ])
                             .output()
