@@ -5,54 +5,96 @@ use std::{
 };
 
 use anyhow::Result;
-use http::HttpTransportLayer;
+use extra_data::PoolKeyExtraDataInserter;
+use http::{HttpTransportLayer, HttpTransportLayerCreator};
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
-use tcp::TcpTransportLayer;
+use tcp::{TcpTransportLayer, TcpTransportLayerCreator};
 use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::Span;
 
-use crate::{
-    config::ingress::EncapInHttp,
-    tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
-};
+use crate::{config::ingress::EncapInHttp, tunnel::utils::h2_stream::H2Stream};
 
+use super::security::pool::PoolKey;
+
+pub mod extra_data;
 mod http;
 mod tcp;
 
-pub struct TransportLayerCreator {
-    so_mark: u32,
-    encap_in_http: Option<EncapInHttp>,
+pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
+    type TransportLayerConnector;
+
+    fn create(
+        &self,
+        pool_key: &PoolKey,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> Result<Self::TransportLayerConnector>;
+}
+
+/// The transport layer creator is used to create the transport layer.
+///
+/// This struct is just a enum wrapper of the real implementation of transport layer creator. By design, each transport layer creator should implement the TransportLayerCreatorTrait.
+pub enum TransportLayerCreator {
+    Http(HttpTransportLayerCreator),
+    Tcp(TcpTransportLayerCreator),
 }
 
 impl TransportLayerCreator {
-    pub fn new(so_mark: u32, encap_in_http: Option<EncapInHttp>) -> Self {
-        Self {
-            so_mark,
-            encap_in_http,
+    pub fn new(so_mark: u32, encap_in_http: Option<EncapInHttp>) -> Result<Self> {
+        Ok(match encap_in_http {
+            Some(encap_in_http) => {
+                Self::Http(HttpTransportLayerCreator::new(so_mark, encap_in_http)?)
+            }
+            None => Self::Tcp(TcpTransportLayerCreator::new(so_mark)),
+        })
+    }
+}
+
+impl TransportLayerCreatorTrait for TransportLayerCreator {
+    type TransportLayerConnector = TransportLayerConnector;
+    fn create(
+        &self,
+        pool_key: &PoolKey,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> Result<TransportLayerConnector> {
+        Ok(match self {
+            TransportLayerCreator::Http(creater) => TransportLayerConnector::Http(creater.create(
+                pool_key,
+                shutdown_guard,
+                parent_span,
+            )?),
+            TransportLayerCreator::Tcp(creater) => TransportLayerConnector::Tcp(creater.create(
+                pool_key,
+                shutdown_guard,
+                parent_span,
+            )?),
+        })
+    }
+}
+
+impl PoolKeyExtraDataInserter for TransportLayerCreator {
+    fn need_to_insert_extra_data(&self) -> bool {
+        match self {
+            TransportLayerCreator::Http(creater) => creater.need_to_insert_extra_data(),
+            TransportLayerCreator::Tcp(creater) => creater.need_to_insert_extra_data(),
         }
     }
 
-    pub fn create(
+    fn insert_extra_data_to_pool_key(
         &self,
-        dst: &TngEndpoint,
-        shutdown_guard: ShutdownGuard,
-        parent_span: Span,
-    ) -> TransportLayerConnector {
-        match &self.encap_in_http {
-            Some(encap_in_http) => TransportLayerConnector::Http(HttpTransportLayer {
-                dst: dst.clone(),
-                so_mark: self.so_mark,
-                _encap_in_http: encap_in_http.clone(),
-                shutdown_guard,
-                transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
-            }),
-            None => TransportLayerConnector::Tcp(TcpTransportLayer {
-                dst: dst.clone(),
-                so_mark: self.so_mark,
-                transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
-            }),
+        request_info: &crate::tunnel::ingress::core::stream_manager::trusted::http_inspector::RequestInfo,
+        target_pool_key: &mut PoolKey,
+    ) -> Result<()> {
+        match self {
+            TransportLayerCreator::Http(creater) => {
+                creater.insert_extra_data_to_pool_key(request_info, target_pool_key)
+            }
+            TransportLayerCreator::Tcp(creater) => {
+                creater.insert_extra_data_to_pool_key(request_info, target_pool_key)
+            }
         }
     }
 }
@@ -64,7 +106,6 @@ pub enum TransportLayerConnector {
 }
 
 // TODO: The connector will be cloned each time when we clone the hyper http client. Maybe we can replace it with std::borrow::Cow to save memory.
-
 impl<Req> tower::Service<Req> for TransportLayerConnector {
     type Response = TokioIo<TransportLayerStream>;
     type Error = anyhow::Error;

@@ -25,7 +25,6 @@ use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::config::ingress::{CommonArgs, IngressHttpProxyArgs};
-use crate::observability::metric::stream::StreamWithCounter;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
@@ -34,7 +33,6 @@ use crate::tunnel::ingress::core::stream_manager::unprotected::UnprotectedStream
 use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
-use crate::tunnel::utils;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
 
@@ -127,17 +125,17 @@ impl RequestHelper {
         }
     }
 
-    pub async fn forward_to_upstream_in_background(
+    pub async fn handle(
         mut self,
-        upstream: impl tokio::io::AsyncRead
-            + tokio::io::AsyncWrite
-            + std::marker::Unpin
-            + Send
-            + 'static,
+        stream_router: Arc<StreamRouter>,
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
+        peer_addr: SocketAddr,
     ) -> RouteResult {
-        let forawrd_span = tracing::info_span!("forward");
+        let dst = match self.get_dst() {
+            Ok(dst) => dst,
+            Err(e) => return RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        };
 
         if self.req.method() == Method::CONNECT {
             tracing::debug!(
@@ -146,31 +144,35 @@ impl RequestHelper {
             );
 
             // Spawn a background task to handle the upgraded stream.
-            let task = shutdown_guard.spawn_task_with_span(forawrd_span.clone(), async move {
-                let fut = async {
-                    let upgraded = hyper::upgrade::on(self.req)
-                        .await
-                        .context("Failed during http connect upgrade")?;
-                    tracing::debug!(
-                        "Stream from downstream is ready, keeping forwarding to upstream now"
-                    );
+            let metrics_cloned = metrics.clone();
+            let upgrade_span = tracing::info_span!("http-connect upgrade");
+            let task = shutdown_guard.spawn_task_fn_with_span(
+                upgrade_span.clone(),
+                move |shutdown_guard| async move {
+                    let fut = async {
+                        let upgraded = hyper::upgrade::on(self.req)
+                            .await
+                            .context("Failed during http connect upgrade")?;
 
-                    let downstream = StreamWithCounter {
-                        inner: TokioIo::new(upgraded),
-                        tx_bytes_total: metrics.tx_bytes_total,
-                        rx_bytes_total: metrics.rx_bytes_total,
+                        stream_router
+                            .forward_to_upstream(
+                                dst,
+                                TokioIo::new(upgraded),
+                                shutdown_guard,
+                                metrics_cloned,
+                                peer_addr,
+                            )
+                            .await
                     };
 
-                    utils::forward_stream(upstream, downstream).await
-                };
-
-                if let Err(e) = fut.await {
-                    tracing::error!(error=?e, "Failed handling http connect request");
-                }
-            });
+                    if let Err(e) = fut.await {
+                        tracing::error!(error=?e, "Failed handling http connect request");
+                    }
+                },
+            );
 
             // Spawn a task to trace the connection status.
-            shutdown_guard.spawn_task_with_span(forawrd_span.clone(), async move {
+            shutdown_guard.spawn_task_with_span(upgrade_span.clone(), async move {
                 if !matches!(task.await, Ok(())) {
                     metrics.cx_failed.add(1);
                 }
@@ -184,71 +186,66 @@ impl RequestHelper {
                 "Setting up stream from http-proxy downstream"
             );
 
+            let forward_span = tracing::info_span!("http-proxy forward");
             async {
-                // TODO: optimize this mem copy
-                let (s1, s2) = tokio::io::duplex(4 * 1024);
+                let (s1, s2) = tokio::io::duplex(4096);
 
-                shutdown_guard.spawn_task_current_span(async move {
-                    let downstream = StreamWithCounter {
-                        inner: s2,
-                        tx_bytes_total: metrics.tx_bytes_total,
-                        rx_bytes_total: metrics.rx_bytes_total,
-                    };
-
-                    if let Err(e) = utils::forward_stream(upstream, downstream).await {
-                        tracing::error!("{e:#}");
-                    }
-                });
-
-                // TODO: support send both http1 and http2 payload
-                let (mut sender, conn) =
-                    match hyper::client::conn::http1::handshake(TokioIo::new(s1)).await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return RouteResult::InternalError(
-                                StatusCode::BAD_REQUEST,
-                                format!("Failed during http handshake with upstream: {e:#}"),
-                            )
-                        }
-                    };
-
-                let http_conn_span = tracing::info_span!("http_conn");
-                shutdown_guard.spawn_task_with_span(http_conn_span, async move {
-                    if let Err(e) = conn.await {
-                        tracing::error!(?e, "The HTTP connection with upstream is broken");
-                    }
-                });
-
-                let mut parts = self.req.uri().clone().into_parts();
-                parts.authority = None;
-                parts.scheme = None;
-                *self.req.uri_mut() = match http::Uri::from_parts(parts) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return RouteResult::InternalError(
-                            StatusCode::BAD_REQUEST,
-                            format!(
-                            "Failed convert uri {} for forwarding http request to upstream: {e:#}",
-                            self.req.uri()
-                        ),
-                        )
+                let forward_task = async {
+                    if let Err(e) = stream_router
+                        .forward_to_upstream(dst, s2, shutdown_guard.clone(), metrics, peer_addr)
+                        .await
+                    {
+                        tracing::error!(error=?e);
+                        Err(e)
+                    } else {
+                        Ok(())
                     }
                 };
 
-                tracing::debug!("Forwarding HTTP request to upstream now");
-                match sender
-                    .send_request(self.req)
-                    .await
-                    .map(|res| res.into_response())
-                {
-                    Ok(resp) => RouteResult::UpstreamResponse(resp),
-                    Err(e) => RouteResult::InternalError(
-                        StatusCode::BAD_REQUEST,
-                        format!("Failed to forawrd http request to upstream: {e:#}"),
-                    ),
+                let send_task = async {
+                    // TODO: support send both http1 and http2 payload
+                    let (mut sender, conn) =
+                        hyper::client::conn::http1::handshake(TokioIo::new(s1))
+                            .await
+                            .context("Failed during http handshake with upstream")?;
+
+                    let http_conn_span = tracing::info_span!("http_conn");
+                    shutdown_guard.spawn_task_with_span(http_conn_span, async move {
+                        if let Err(e) = conn.await {
+                            tracing::error!(?e, "The HTTP connection with upstream is broken");
+                        }
+                    });
+
+                    let mut parts = self.req.uri().clone().into_parts();
+                    parts.authority = None;
+                    parts.scheme = None;
+                    *self.req.uri_mut() = http::Uri::from_parts(parts).with_context(|| {
+                        format!(
+                            "Failed convert uri {} for forwarding http request to upstream",
+                            self.req.uri()
+                        )
+                    })?;
+
+                    tracing::debug!("Forwarding HTTP request to upstream now");
+                    sender
+                        .send_request(self.req)
+                        .await
+                        .map(|res| res.into_response())
+                        .context("Failed to send http request to upstream")
+                };
+
+                match tokio::join!(forward_task, send_task) {
+                    // If there are errors during the forwarding, we report it to the downstream.
+                    (Err(e), _) => {
+                        RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}"))
+                    }
+                    (Ok(_), Ok(response)) => RouteResult::UpstreamResponse(response),
+                    (Ok(_), Err(e)) => {
+                        RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}"))
+                    }
                 }
             }
-            .instrument(forawrd_span)
+            .instrument(forward_span)
             .await
         }
     }
@@ -272,75 +269,73 @@ impl StreamRouter {
     }
 
     #[auto_enum]
-    async fn route(
+    pub async fn forward_to_upstream(
         &self,
-        req: Request<Incoming>,
-        peer_addr: SocketAddr,
+        dst: TngEndpoint,
+        downstream: impl tokio::io::AsyncRead
+            + tokio::io::AsyncWrite
+            + std::marker::Unpin
+            + std::marker::Send
+            + 'static,
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
-    ) -> RouteResult {
-        let helper = RequestHelper::from_request(req);
-        let dst = match helper.get_dst() {
-            Ok(dst) => dst,
-            Err(e) => return RouteResult::InternalError(StatusCode::BAD_REQUEST, format!("{e:#}")),
-        };
+        peer_addr: SocketAddr,
+    ) -> Result<()> {
+        tracing::debug!("Stream from downstream is ready, keeping forwarding to upstream now");
 
         // Check if need to send via tng tunnel, and get stream to the upstream
         let via_tunnel = self.endpoint_matcher.matches(&dst);
         tracing::debug!(%dst, via_tunnel, "Acquire connection to upstream");
 
         let attestation_result;
-        #[auto_enum(tokio1::AsyncRead, tokio1::AsyncWrite)]
-        let upstream = if !via_tunnel {
+        #[auto_enum(Future)]
+        let forward_stream_task = if !via_tunnel {
             // Forward via unprotected tcp
-            match self
+            let (forward_stream_task, att) = self
                 .unprotected_stream_manager
-                .new_stream(&dst, shutdown_guard.clone())
+                .forward_stream(&dst, downstream, shutdown_guard.clone(), metrics)
                 .await
-            {
-                Ok((stream, att)) => {
-                    attestation_result = att;
-                    stream
-                }
-                Err(e) => {
-                    return RouteResult::InternalError(
-                        StatusCode::BAD_REQUEST,
-                        format!("Failed to connect to upstream {dst} via unprotected tcp: {e:#}"),
-                    )
-                }
-            }
+                .with_context(|| {
+                    format!("Failed to connect to upstream {dst} via unprotected tcp")
+                })?;
+
+            attestation_result = att;
+            forward_stream_task
         } else {
             // Forward via trusted tunnel
-            match self
+            let (forward_stream_task, att) = self
                 .trusted_stream_manager
-                .new_stream(&dst, shutdown_guard.clone())
+                .forward_stream(&dst, downstream, shutdown_guard.clone(), metrics)
                 .await
-            {
-                Ok((stream, att)) => {
-                    attestation_result = att;
-                    stream
-                }
-                Err(e) => {
-                    return RouteResult::InternalError(
-                        StatusCode::BAD_REQUEST,
-                        format!("Failed to connect to upstream {dst} via trusted tunnel: {e:#}"),
-                    )
-                }
-            }
+                .with_context(|| {
+                    format!("Failed to connect to upstream {dst} via trusted tunnel")
+                })?;
+
+            attestation_result = att;
+            forward_stream_task
         };
 
         // Print access log
         let access_log = AccessLog {
             downstream: peer_addr,
-            upstream: dst,
+            upstream: &dst,
             to_trusted_tunnel: via_tunnel,
             peer_attested: attestation_result,
         };
         tracing::info!(?access_log);
 
-        helper
-            .forward_to_upstream_in_background(upstream, shutdown_guard, metrics)
-            .await
+        shutdown_guard.spawn_task_with_span(tracing::info_span!("forward"), async move {
+            if let Err(e) = forward_stream_task.await {
+                let error = format!("{e:#}");
+                tracing::error!(
+                    %dst,
+                    error,
+                    "Failed during forwarding to upstream"
+                );
+            }
+        });
+
+        Ok(())
     }
 }
 
@@ -440,12 +435,12 @@ impl RegistedService for HttpProxyIngress {
                                             metrics.cx_total.add(1);
                                             metrics.cx_active.add(1);
 
-                                            let route_result = stream_router
-                                                .route(
-                                                    req,
-                                                    peer_addr,
+                                            let route_result = RequestHelper::from_request(req)
+                                                .handle(
+                                                    stream_router,
                                                     shutdown_guard,
                                                     metrics.clone(),
+                                                    peer_addr,
                                                 )
                                                 .await;
 

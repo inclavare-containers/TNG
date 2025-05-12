@@ -4,29 +4,71 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{bail, Context as _, Result};
+use extra_data::HttpPoolKeyExtraData;
 use http::{Request, Uri};
 use hyper_util::rt::TokioIo;
-use socket2::{Domain, Socket, Type};
-use tokio::net::TcpSocket;
+use path_rewrite::PathRewriteGroup;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
-    tunnel::{ingress::core::TngEndpoint, utils::h2_stream::H2Stream},
+    tunnel::{
+        ingress::core::{protocol::security::pool::PoolKey, TngEndpoint},
+        utils::{h2_stream::H2Stream, socket::tcp_connect_with_so_mark},
+    },
 };
 
-use super::TransportLayerStream;
+use super::{TransportLayerCreatorTrait, TransportLayerStream};
+
+mod extra_data;
+mod path_rewrite;
+
+pub struct HttpTransportLayerCreator {
+    so_mark: u32,
+    path_rewrite_group: PathRewriteGroup,
+}
+
+impl HttpTransportLayerCreator {
+    pub fn new(so_mark: u32, encap_in_http: EncapInHttp) -> Result<Self> {
+        Ok(Self {
+            so_mark,
+            path_rewrite_group: PathRewriteGroup::new(encap_in_http.path_rewrites)?,
+        })
+    }
+}
+
+impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
+    type TransportLayerConnector = HttpTransportLayer;
+
+    fn create(
+        &self,
+        pool_key: &PoolKey,
+        shutdown_guard: ShutdownGuard,
+        parent_span: Span,
+    ) -> Result<HttpTransportLayer> {
+        Ok(HttpTransportLayer {
+            dst: pool_key.get_endpoint().clone(),
+            extra_data: pool_key
+                .get_extra_data::<HttpPoolKeyExtraData>()
+                .context("Failed to get the extra data from the pool key")?
+                .clone(),
+            so_mark: self.so_mark,
+            shutdown_guard,
+            transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct HttpTransportLayer {
-    pub dst: TngEndpoint,
-    pub so_mark: u32,
-    pub _encap_in_http: EncapInHttp,
-    pub shutdown_guard: ShutdownGuard,
-    pub transport_layer_span: Span,
+    dst: TngEndpoint,
+    extra_data: HttpPoolKeyExtraData,
+    so_mark: u32,
+    shutdown_guard: ShutdownGuard,
+    transport_layer_span: Span,
 }
 
 impl<Req> tower::Service<Req> for HttpTransportLayer {
@@ -40,7 +82,8 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
     fn call(&mut self, _: Req) -> Self::Future {
         let so_mark = self.so_mark;
-        let dst = self.dst.to_owned();
+        let dst = self.dst.clone();
+        let extra_data = self.extra_data.clone();
         let shutdown_guard = self.shutdown_guard.clone();
 
         let fut = async move {
@@ -48,26 +91,8 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
             // TODO: reuse the same tcp stream for all the h2 streams
             let (recv_stream, send_stream) = async {
-                let addrs = tokio::net::lookup_host((dst.host(), dst.port())).await?;
-
-                let mut last_result = None;
-                for addr in addrs {
-                    let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
-                    socket.set_nonblocking(true)?;
-                    #[cfg(not(target_os = "macos"))]
-                    socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
-                    let socket = TcpSocket::from_std_stream(socket.into());
-
-                    let result = socket.connect(addr).await.map_err(anyhow::Error::from);
-                    if result.is_ok() {
-                        last_result = Some(result);
-                        break;
-                    }
-                    last_result = Some(result);
-                }
-
                 let tcp_stream =
-                    last_result.unwrap_or_else(|| Err(anyhow!("No address resolved")))?;
+                    tcp_connect_with_so_mark((dst.host(), dst.port()), so_mark).await?;
 
                 let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
                 {
@@ -78,13 +103,12 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
                     });
                 }
 
-                // TODO: we need to support path rewrites instead of hard encode the path as '/'
                 let req = Request::builder()
                     .uri(
                         Uri::builder()
                             .scheme("http")
-                            .authority(format!("{}:{}", dst.host(), dst.port()))
-                            .path_and_query("/")
+                            .authority(extra_data.authority)
+                            .path_and_query(extra_data.path)
                             .build()?,
                     )
                     .method("POST")

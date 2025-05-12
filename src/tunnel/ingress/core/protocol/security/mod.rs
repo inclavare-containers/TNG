@@ -1,4 +1,5 @@
 mod cert_verifier;
+pub mod pool;
 mod rustls_config;
 
 use std::{
@@ -16,6 +17,7 @@ use anyhow::{Context as _, Result};
 use http::Uri;
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 use pin_project::pin_project;
+use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls_config::OnetimeTlsClientConfig;
 use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
@@ -23,17 +25,12 @@ use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
-    tunnel::{
-        attestation_result::AttestationResult, ingress::core::TngEndpoint,
-        utils::rustls_config::TlsConfigGenerator,
-    },
+    tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
 };
 
-use super::transport::{TransportLayerConnector, TransportLayerCreator};
-
-type PoolKey = TngEndpoint;
-
-type HyperClientType = Client<SecurityConnector, axum::body::Body>;
+use super::transport::{
+    TransportLayerConnector, TransportLayerCreator, TransportLayerCreatorTrait as _,
+};
 
 #[derive(Clone)]
 pub struct RatsTlsClient {
@@ -42,8 +39,8 @@ pub struct RatsTlsClient {
 }
 
 pub struct SecurityLayer {
-    pub next_id: AtomicU64,
-    pool: RwLock<HashMap<PoolKey, RatsTlsClient>>,
+    next_id: AtomicU64,
+    pool: RwLock<ClientPool>,
     transport_layer_creator: TransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
 }
@@ -71,13 +68,13 @@ impl SecurityLayer {
 
     pub async fn create_security_connector(
         &self,
-        dst: &TngEndpoint,
+        pool_key: &PoolKey,
         shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<SecurityConnector> {
         let transport_layer_connector =
             self.transport_layer_creator
-                .create(&dst, shutdown_guard.clone(), parent_span);
+                .create(&pool_key, shutdown_guard, parent_span)?;
 
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
@@ -88,10 +85,10 @@ impl SecurityLayer {
 
     pub async fn get_client(
         &self,
-        dst: &TngEndpoint,
+        pool_key: &PoolKey,
         shutdown_guard: ShutdownGuard,
     ) -> Result<RatsTlsClient> {
-        self.get_client_with_span(dst, shutdown_guard, Span::current())
+        self.get_client_with_span(pool_key, shutdown_guard, Span::current())
             .instrument(tracing::info_span!(
                 "security",
                 session_id = tracing::field::Empty
@@ -101,14 +98,14 @@ impl SecurityLayer {
 
     async fn get_client_with_span(
         &self,
-        dst: &TngEndpoint,
+        pool_key: &PoolKey,
         shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<RatsTlsClient> {
         // Try to get the client from pool
         let client = {
             let read = self.pool.read().await;
-            read.get(dst).map(|c| c.clone())
+            read.get(pool_key).map(|c| c.clone())
         };
 
         let client = match client {
@@ -121,7 +118,7 @@ impl SecurityLayer {
                 // If client not exist then we need to create one
                 let mut write = self.pool.write().await;
                 // Check if client has been created by other "task"
-                match write.get(dst) {
+                match write.get(pool_key) {
                     Some(c) => {
                         Span::current().record("session_id", c.id);
                         tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
@@ -137,7 +134,7 @@ impl SecurityLayer {
 
                         // Prepare the security connector
                         let connector = self
-                            .create_security_connector(&dst, shutdown_guard, parent_span)
+                            .create_security_connector(pool_key, shutdown_guard, parent_span)
                             .await?;
 
                         // Build the hyper client from the security connector.
@@ -145,7 +142,7 @@ impl SecurityLayer {
                             id: id,
                             hyper: Client::builder(TokioExecutor::new()).build(connector),
                         };
-                        write.insert(dst.to_owned(), client.clone());
+                        write.insert(pool_key.to_owned(), client.clone());
                         client
                     }
                 }
@@ -153,6 +150,10 @@ impl SecurityLayer {
         };
 
         Ok(client)
+    }
+
+    pub fn transport_layer_creator_ref(&self) -> &TransportLayerCreator {
+        &self.transport_layer_creator
     }
 }
 

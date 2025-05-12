@@ -1,7 +1,8 @@
 use std::os::fd::AsFd;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use nix::sys::socket::setsockopt;
+use tokio::net::TcpStream;
 
 pub const TCP_CONNECT_SO_MARK_DEFAULT: u32 = 0x235; // 565
 
@@ -30,4 +31,29 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
 
         Ok(())
     }
+}
+
+pub async fn tcp_connect_with_so_mark<T>(host: T, so_mark: u32) -> Result<TcpStream>
+where
+    T: tokio::net::ToSocketAddrs,
+{
+    let addrs = tokio::net::lookup_host(host).await?;
+
+    let mut last_result = None;
+    for addr in addrs {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+        socket.set_nonblocking(true)?;
+        #[cfg(not(target_os = "macos"))]
+        socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
+        let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
+
+        let result = socket.connect(addr).await.map_err(anyhow::Error::from);
+        if result.is_ok() {
+            last_result = Some(result);
+            break;
+        }
+        last_result = Some(result);
+    }
+
+    last_result.unwrap_or_else(|| Err(anyhow!("No address resolved")))
 }

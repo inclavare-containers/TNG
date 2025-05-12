@@ -353,13 +353,23 @@ flowchart TD
 可通过在`add_ingress`对象中指定的`encap_in_http`字段来开启伪装能力。如未指定`encap_in_http`则不会开启伪装能力。
 
 #### 字段说明
-- **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，着将默认设置伪装后http流量的path为`/`。
-    - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式。
-    - **`substitution`** (string)：当path匹配上match_regex时，伪装后http流量的path将被重写为substitution。支持使用`\数字`的方式来引用正则匹配到的group。
+
+- **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，这将默认设置伪装后http流量的path为`/`。
+    - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式，该字段的值将被用于针对整个path字符串进行匹配，而不是部分匹配。
+
+        > Note:
+        > - 在2.0.0之前的版本中，`match_regex`字段中仅支持RE2语法。RE2是Google的正则表达式引擎，其语法格式可以参考[此处](https://github.com/google/re2/wiki/Syntax)，如需在线测试语法正确性可以参考[此处的工具](https://re2js.leopard.in.ua/)。
+        > - 在2.0.0版本及之后的版本中，`match_regex`字段中支持的是常见的正则表达式语法，而非RE2语法，因此不支持正向预查（look-around）和 反向引用（backreferences）特性。支持的完整语法规则请参考[此处](https://docs.rs/regex/1.11.1/regex/index.html#syntax)。
+
+    - **`substitution`** (string)：当http请求的原始path与`match_regex`匹配时，伪装后http流量的path将被整个替换为`substitution`的值。
+        > Note:
+        > - 在2.0.0之前的版本中，`substitution`字段在该字段中，支持使用`\整数`（整数从1开始）的方式来引用`match_regex`字段中的正则表达式所匹配到的组中的内容。例如该字段中的`\1`将被替换为匹配到的第一个组中的内容。具体规则请参考envoy中对应的`substitution`字段的[描述](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute)。
+        > - 在2.0.0版本及之后的版本中，上述引用规则已被淘汰，支持以`$ref`语法来引用匹配到的组，其中`ref`可以是一个整数，对应于捕获组的索引，或者它可以是一个名称，用于引用被命名的组。具体规则请参考[此处](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace)。此外，`substitution`字段仍然支持上述`\整数`引用规则，以提供后向兼容性。
+
 
 示例：
 
-在这个示例中，我们添加了一个PathRewrite规则，表示将path能够匹配上`^/foo/bar/([^/]+)([/]?.*)$`的所有用户HTTP Reqesut，其tng隧道的HTTP外壳流量的path重写为`/foo/bar/\1`（注意其中`\1`是一个正则替换规则）。
+在这个示例中，我们添加了一个PathRewrite规则，表示将path能够匹配上`^/foo/bar/([^/]+)([/]?.*)$`的所有用户HTTP Reqesut，其tng隧道的HTTP外壳流量的path重写为`/foo/bar/$1`（注意其中`$1`是一个正则替换规则）。
 
 ```json
 {
@@ -379,7 +389,7 @@ flowchart TD
                 "path_rewrites": [
                     {
                         "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
-                        "substitution": "/foo/bar/\\1"
+                        "substitution": "/foo/bar/$1"
                     }
                 ]
             },

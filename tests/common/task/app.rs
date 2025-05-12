@@ -275,6 +275,7 @@ pub async fn launch_http_client(
                 .retry(|| async {
                     let mut builder = reqwest::Client::builder();
 
+                    // TODO: add test for send http proxy via both http-connect and http-reverse-proxy
                     if let Some(http_proxy) = &http_proxy {
                         let proxy = reqwest::Proxy::http(format!(
                             "http://{}:{}",

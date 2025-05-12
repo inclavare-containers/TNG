@@ -11,7 +11,6 @@ use tokio_graceful::ShutdownGuard;
 use crate::config::ingress::CommonArgs;
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::Endpoint;
-use crate::observability::metric::stream::StreamWithCounter;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
@@ -19,7 +18,6 @@ use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
-use crate::tunnel::utils;
 use crate::tunnel::utils::iptables::IptablesExecutor;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::socket::TCP_CONNECT_SO_MARK_DEFAULT;
@@ -124,36 +122,30 @@ impl RegistedService for NetfilterIngress {
                     let trusted_stream_manager = self.trusted_stream_manager.clone();
 
                     self.metrics.cx_total.add(1);
-                    let tx_bytes_total = self.metrics.tx_bytes_total.clone();
-                    let rx_bytes_total = self.metrics.rx_bytes_total.clone();
+                    let metrics = self.metrics.clone();
 
                     let task = shutdown_guard.spawn_task_fn_with_span(
                         tracing::info_span!("serve", client=?peer_addr),
-                        |shutdown_guard| async move {
+                        move |shutdown_guard| async move {
                             let fut = async move {
                                 tracing::trace!("Start serving new connection from client");
 
                                 // Forward via trusted tunnel
                                 match trusted_stream_manager
-                                    .new_stream(&orig_dst, shutdown_guard)
+                                    .forward_stream(&orig_dst, downstream, shutdown_guard, metrics)
                                     .await
                                 {
-                                    Ok((upstream, attestation_result)) => {
+                                    Ok((forward_stream_task, attestation_result)) => {
                                         // Print access log
                                         let access_log = AccessLog {
-                                            downstream: downstream.peer_addr()?,
+                                            downstream: peer_addr,
                                             upstream: orig_dst.clone(),
                                             to_trusted_tunnel: true,
                                             peer_attested: attestation_result,
                                         };
                                         tracing::info!(?access_log);
 
-                                        let downstream = StreamWithCounter {
-                                            inner: downstream,
-                                            tx_bytes_total,
-                                            rx_bytes_total,
-                                        };
-                                        if let Err(e) = utils::forward_stream(upstream, downstream).await {
+                                        if let Err(e) = forward_stream_task.await {
                                             let error = format!("{e:#}");
                                             tracing::error!(
                                                 %orig_dst,

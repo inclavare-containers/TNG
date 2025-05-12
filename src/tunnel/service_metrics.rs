@@ -5,6 +5,9 @@ use opentelemetry::metrics::{Counter, MeterProvider, UpDownCounter};
 
 use crate::observability::metric::counter::{AttributedCounter, WithAttributes};
 
+/// ServiceMetrics is a set of metrics for a service.
+///
+/// This struct is free be cloned and used anywhere.
 #[derive(Debug, Clone)]
 pub struct ServiceMetrics {
     pub cx_total: AttributedCounter<Counter<u64>, u64>,

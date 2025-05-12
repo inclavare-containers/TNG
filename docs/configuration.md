@@ -360,14 +360,23 @@ The disguising capability can be enabled by specifying the `encap_in_http` field
 
 #### Field Descriptions
 
-- **`path_rewrites`** (array [PathRewrite], optional, default is an empty array): This field specifies a list of parameters for traffic path rewriting using regular expressions. All rewrites will be performed in the order they appear in the path_rewrites list, and only one item in the list will be matched. If the HTTP request does not match any valid member of the path_rewrites list, the path of the disguised HTTP traffic will default to `/`.
+- **`path_rewrites`** (array [PathRewrite], optional, default: empty array): This field specifies a list of parameters for rewriting the path of traffic using regular expressions. All rewrites will be applied in the order they appear in the `path_rewrites` list, and only one match will be performed per request. If an HTTP request does not match any valid member of the `path_rewrites` list, the default path for the encapsulated HTTP traffic will be set to `/`.
 
-    - **`match_regex`** (string): A regular expression used to match the path of the protected business HTTP request inside.
-    - **`substitution`** (string): When the path matches the match_regex, the path of the disguised HTTP traffic will be rewritten to this substitution. It supports using `\digit` to reference the groups matched by the regular expression.
+    - **`match_regex`** (string): A regular expression used to match the path of the inner protected HTTP request. The value of this field will be used to match the entire path string, not just a part of it.
+
+        > Note:
+        > - Prior to version 2.0.0, the `match_regex` field supported only RE2 syntax. RE2 is Google's regular expression engine, and its syntax can be found [here](https://github.com/google/re2/wiki/Syntax). For online testing, refer to [this tool](https://re2js.leopard.in.ua/).
+        > - Starting from version 2.0.0, the `match_regex` field supports common regular expression syntax rather than RE2 syntax. Features like look-around and backreferences are not supported. For the full syntax rules, refer to [this documentation](https://docs.rs/regex/1.11.1/regex/index.html#syntax).
+
+    - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the encapsulated HTTP traffic will be replaced entirely with the value of `substitution`.
+
+        > Note:
+        > - Prior to version 2.0.0, the `substitution` field supported referencing captured groups using `\integer` (where `integer` starts from 1). For example, `\1` would be replaced by the content of the first captured group. Refer to the corresponding `substitution` field description in Envoy [here](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute).
+        > - Starting from version 2.0.0, the above referencing rule has been deprecated. Instead, `$ref` syntax is supported to reference captured groups, where `ref` can be an integer (index of the capturing group) or a name (for named groups). Refer to [this documentation](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace). Additionally, the `\integer` referencing rule is still supported for backward compatibility.
 
 Example:
 
-In this example, we add a PathRewrite rule indicating that for all user HTTP requests whose paths match `^/foo/bar/([^/]+)([/]?.*)$`, the path of the TNG tunnel's HTTP wrapper traffic will be rewritten to `/foo/bar/\1` (note that `\1` is a regex substitution rule).
+In this example, we add a PathRewrite rule that matches all user HTTP requests with paths that can be matched by `^/foo/bar/([^/]+)([/]?.*)$`. The path of the TNG tunnel's HTTP outer traffic will be rewritten to `/foo/bar/$1` (note that `$1` is a regular expression replacement rule).
 
 ```json
 {
@@ -387,7 +396,7 @@ In this example, we add a PathRewrite rule indicating that for all user HTTP req
                 "path_rewrites": [
                     {
                         "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
-                        "substitution": "/foo/bar/\\1"
+                        "substitution": "/foo/bar/$1"
                     }
                 ]
             },

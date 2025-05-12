@@ -7,7 +7,7 @@ version = "2.1.0"
 again = "0.1.2"
 anyhow = "1.0.95"
 async-trait = "0.1.86"
-auto_enums = {version = "0.8", features = ["tokio1"]}
+auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = "0.8.1"
 bytes = "1.10.0"
 clap = {version = "4.5.28", features = ["derive"]}
@@ -19,6 +19,7 @@ futures = "0.3.31"
 h2 = {version = "0.4.7", features = ["stream"]}
 http = "1.2.0"
 http-body-util = "0.1.2"
+httparse = "1.10.1"
 hyper = {version = "1", features = ["full"]}
 hyper-rustls = {version = "0.27.5", default-features = false, features = ["http1", "logging", "native-tokio", "tls12", "ring", "http2"]}
 hyper-util = {version = "0.1.10", features = ["service"]}
