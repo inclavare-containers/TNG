@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use rats_cert::{
-    cert::verify::{CertVerifier, ClaimsCheck, CocoVerifyMode, VerifyPolicy, VerifyPolicyOutput},
-    tee::claims::Claims,
+use rats_cert::cert::verify::{
+    CertVerifier, ClaimsCheck, CocoVerifyMode, VerifyPolicy, VerifyPolicyOutput,
 };
 use rustls::Error;
 use tokio::sync::Mutex;
@@ -65,13 +64,5 @@ impl CoCoCommonCertVerifier {
                 ));
             }
         }
-    }
-}
-
-impl AttestationResult {
-    pub fn from_claims(claims: &Claims) -> Self {
-        // TODO
-
-        Self {}
     }
 }

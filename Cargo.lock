@@ -3498,6 +3498,7 @@ dependencies = [
  "either",
  "futures",
  "h2",
+ "hex",
  "http",
  "http-body-util",
  "httparse",
