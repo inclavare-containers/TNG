@@ -7,7 +7,7 @@ use rats_cert::{
 };
 use scopeguard::defer;
 use std::{path::Path, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_graceful::ShutdownGuard;
 
 use crate::config::ra::AttestArgs;
@@ -36,7 +36,9 @@ pub enum RefreshStrategy {
 }
 
 #[derive(Debug)]
-pub struct RefreshTask {}
+pub struct RefreshTask {
+    join_handle: JoinHandle<()>,
+}
 
 impl CertManager {
     pub async fn new(attest_args: AttestArgs) -> Result<Self> {
@@ -74,8 +76,6 @@ impl CertManager {
         })
     }
 
-    // TODO: terminate the task when CertManager is dropped
-
     pub async fn launch_refresh_task_if_required(
         &self,
         shutdown_guard: ShutdownGuard,
@@ -95,47 +95,47 @@ impl CertManager {
                 let aa_addr = self.aa_addr.clone();
                 let latest_cert = latest_cert.clone();
 
-                shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| async move {
-                    let res = async {
-                        loop {
-                            // Update certs in loop
-                            let fut = async {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(
-                                    interval as u64,
-                                ))
-                                .await;
+                let join_handle =
+                    shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| async move {
+                        let res = async {
+                            loop {
+                                // Update certs in loop
+                                let fut = async {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                                        interval as u64,
+                                    ))
+                                    .await;
 
-                                let certed_key = Self::fetch_new_cert(&aa_addr).await?;
+                                    let certed_key = Self::fetch_new_cert(&aa_addr).await?;
 
-                                latest_cert
-                                    .0
-                                    .send(certed_key)
-                                    .context("Failed to set the latest cert")
-                            };
+                                    latest_cert
+                                        .0
+                                        .send(certed_key)
+                                        .context("Failed to set the latest cert")
+                                };
 
-                            tokio::select! {
-                                _ = shutdown_guard.cancelled() => {
-                                    break;
-                                }
-                                result = fut => {
-                                    if let Err(e) = result {
-                                        tracing::error!(error=?e,"Failed to update cert");
+                                tokio::select! {
+                                    _ = shutdown_guard.cancelled() => {
+                                        break;
                                     }
+                                    result = fut => {
+                                        if let Err(e) = result {
+                                            tracing::error!(error=?e,"Failed to update cert");
+                                        }
 
+                                    }
                                 }
                             }
+                            #[allow(unreachable_code)]
+                            Ok::<(), anyhow::Error>(())
                         }
-                        #[allow(unreachable_code)]
-                        Ok::<(), anyhow::Error>(())
-                    }
-                    .await;
+                        .await;
 
-                    if let Err(e) = res {
-                        tracing::error!(error=?e, "Failed to update cert");
-                    }
-                });
-
-                *refresh_task = Some(RefreshTask {})
+                        if let Err(e) = res {
+                            tracing::error!(error=?e, "Failed to update cert");
+                        }
+                    });
+                *refresh_task = Some(RefreshTask { join_handle })
             }
             RefreshStrategy::WhenRequired => {
                 // Do nothing
@@ -207,6 +207,13 @@ impl CertManager {
             } => Ok(latest_cert.1.borrow().clone()),
             RefreshStrategy::WhenRequired => Self::fetch_new_cert(&self.aa_addr).await,
         }
+    }
+}
+
+impl Drop for RefreshTask {
+    fn drop(&mut self) {
+        // terminate the task when dropped
+        self.join_handle.abort();
     }
 }
 
