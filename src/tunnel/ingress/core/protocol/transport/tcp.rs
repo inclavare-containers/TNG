@@ -10,10 +10,8 @@ use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
 use crate::tunnel::{
-    ingress::core::{
-        protocol::security::pool::PoolKey, stream_manager::trusted::http_inspector::RequestInfo,
-    },
-    utils::socket::tcp_connect_with_so_mark,
+    ingress::core::protocol::security::pool::PoolKey,
+    utils::{http_inspector::RequestInfo, socket::tcp_connect_with_so_mark},
 };
 
 use super::{

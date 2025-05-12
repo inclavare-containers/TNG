@@ -120,7 +120,7 @@ impl RegistedService for MappingIngress {
                                     {
                                         Ok((forward_stream_task, attestation_result)) => {
                                             // Print access log
-                                            let access_log = AccessLog {
+                                            let access_log = AccessLog::Ingress {
                                                 downstream: peer_addr,
                                                 upstream: dst.clone(),
                                                 to_trusted_tunnel: true,

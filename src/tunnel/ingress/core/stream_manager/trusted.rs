@@ -2,7 +2,6 @@ use std::future::Future;
 
 use anyhow::{Context, Result};
 use auto_enums::auto_enum;
-use http_inspector::{HttpRequestInspector, InspectionResult};
 use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
@@ -20,13 +19,14 @@ use crate::{
             TngEndpoint,
         },
         service_metrics::ServiceMetrics,
-        utils,
+        utils::{
+            self,
+            http_inspector::{HttpRequestInspector, InspectionResult},
+        },
     },
 };
 
 use super::StreamManager;
-
-pub mod http_inspector;
 
 pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
@@ -110,7 +110,7 @@ impl StreamManager for TrustedStreamManager {
             .await?;
 
         Ok((
-            async { utils::forward_stream(upstream, downstream).await },
+            async { utils::forward::forward_stream(upstream, downstream).await },
             attestation_result,
         ))
     }

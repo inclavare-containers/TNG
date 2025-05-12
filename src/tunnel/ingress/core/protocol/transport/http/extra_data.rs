@@ -2,12 +2,12 @@ use anyhow::Result;
 use http::uri::Authority;
 
 use super::HttpTransportLayerCreator;
-use crate::tunnel::ingress::core::{
-    protocol::{
+use crate::tunnel::{
+    ingress::core::protocol::{
         security::pool::{ExtraValueMarkTrait, PoolKey},
         transport::extra_data::PoolKeyExtraDataInserter,
     },
-    stream_manager::trusted::http_inspector::RequestInfo,
+    utils::http_inspector::RequestInfo,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]

@@ -3,8 +3,6 @@ pub const ENVOY_DUMMY_KEY: &'static str = include_str!("serverkey.pem");
 
 pub const ENVOY_HTTP2_CONNECT_WRAPPER_STREAM_IDLE_TIMEOUT: &'static str = "3600s"; // 1 hour
 
-pub const ENVOY_L7_RESPONSE_BODY_DENIED: &'static str = "This service is secured by TNG secure session and you must establish the connection via TNG.\n\nIf this is an unexpected behavior, add path matching rules to `decap_from_http.allow_non_tng_traffic_regexes` option.";
-
 pub const ENVOY_L7_RESPONSE_BODY_INJECT_TAG_HEAD: &'static str = r#"
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

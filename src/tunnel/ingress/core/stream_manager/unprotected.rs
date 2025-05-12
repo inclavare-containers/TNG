@@ -55,7 +55,7 @@ impl StreamManager for UnprotectedStreamManager {
         };
 
         Ok((
-            async { utils::forward_stream(upstream, downstream).await },
+            async { utils::forward::forward_stream(upstream, downstream).await },
             None,
         ))
     }

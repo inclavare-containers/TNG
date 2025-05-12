@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use crate::tunnel::ingress::core::{
-    protocol::security::pool::PoolKey, stream_manager::trusted::http_inspector::RequestInfo,
+use crate::tunnel::{
+    ingress::core::protocol::security::pool::PoolKey, utils::http_inspector::RequestInfo,
 };
 
 pub trait PoolKeyExtraDataInserter {

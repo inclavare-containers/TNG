@@ -20,7 +20,7 @@ fi
 
 # Run bin tests under 'tests/' dir
 test_cases=$(ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g')
-skipped_test_cases="allow_non_tng_traffic"
+skipped_test_cases=""
 
 export RUST_BACKTRACE=1
 

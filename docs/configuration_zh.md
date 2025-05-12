@@ -358,8 +358,7 @@ flowchart TD
     - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式，该字段的值将被用于针对整个path字符串进行匹配，而不是部分匹配。
 
         > Note:
-        > - 在2.0.0之前的版本中，`match_regex`字段中仅支持RE2语法。RE2是Google的正则表达式引擎，其语法格式可以参考[此处](https://github.com/google/re2/wiki/Syntax)，如需在线测试语法正确性可以参考[此处的工具](https://re2js.leopard.in.ua/)。
-        > - 在2.0.0版本及之后的版本中，`match_regex`字段中支持的是常见的正则表达式语法，而非RE2语法，因此不支持正向预查（look-around）和 反向引用（backreferences）特性。支持的完整语法规则请参考[此处](https://docs.rs/regex/1.11.1/regex/index.html#syntax)。
+        > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
 
     - **`substitution`** (string)：当http请求的原始path与`match_regex`匹配时，伪装后http流量的path将被整个替换为`substitution`的值。
         > Note:
@@ -411,6 +410,9 @@ flowchart TD
 
 #### 字段说明
 - **`allow_non_tng_traffic_regexes`** (array [string], 可选，默认为空数组)：该字段指定了允许非加密http请求流量传入的正则表达式列表。每个元素是一个正则表达式字符串，只有当http请求路径与这些正则表达式匹配时，非加密http请求流量才会被放行。
+
+    > Note:
+    > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
 
 
 示例：
@@ -472,9 +474,8 @@ flowchart TD
 - **`/readyz`**：该端口返回tng实例的就绪状态。如果返回`200 OK`，则表示实例正在运行中，且已可以处理流量。
 
 
-<span id = "envoy_admin_interface"></span>
-
 ## Envoy Admin Interface
+<span id = "envoy_admin_interface"></span>
 
 > [!WARNING]
 > 由于我们放弃了与envoy的集成，该选项已被弃用。配置该选项将不会有任何效果。
@@ -715,3 +716,11 @@ TNG支持OpenTelemetry标准语义下的tracing事件导出，包括每个请求
     }
 }
 ```
+
+## 正则表达式
+<span id = "regex"></span>
+
+TNG配置文件中有部分字段允许指定正则表达式，而在TNG的迭代过程中，正则表达式的语法规则进行了调整，现作说明如下：
+
+- 在2.0.0之前的版本中，仅支持RE2语法。RE2是Google的正则表达式引擎，其语法格式可以参考[此处](https://github.com/google/re2/wiki/Syntax)，如需在线测试语法正确性可以参考[此处的工具](https://re2js.leopard.in.ua/)。
+- 在2.0.0版本及之后的版本中，支持的是常见的正则表达式语法，而非RE2语法，因此不支持正向预查（look-around）和 反向引用（backreferences）特性。支持的完整语法规则请参考[此处](https://docs.rs/regex/1.11.1/regex/index.html#syntax)。

@@ -385,11 +385,11 @@ mod tests {
                 ))
             };
             let svc = TowerToHyperService::new(svc);
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+            if let Err(error) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
                 .serve_connection_with_upgrades(TokioIo::new(unmodified_stream), svc)
                 .await
             {
-                tracing::error!("Failed to serve connection: {e:?}");
+                tracing::error!(?error, "Failed to serve connection");
             }
 
             Ok::<_, anyhow::Error>(())

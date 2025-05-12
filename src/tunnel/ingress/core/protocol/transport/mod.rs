@@ -14,7 +14,10 @@ use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::Span;
 
-use crate::{config::ingress::EncapInHttp, tunnel::utils::h2_stream::H2Stream};
+use crate::{
+    config::ingress::EncapInHttp,
+    tunnel::utils::{h2_stream::H2Stream, http_inspector::RequestInfo},
+};
 
 use super::security::pool::PoolKey;
 
@@ -85,7 +88,7 @@ impl PoolKeyExtraDataInserter for TransportLayerCreator {
 
     fn insert_extra_data_to_pool_key(
         &self,
-        request_info: &crate::tunnel::ingress::core::stream_manager::trusted::http_inspector::RequestInfo,
+        request_info: &RequestInfo,
         target_pool_key: &mut PoolKey,
     ) -> Result<()> {
         match self {

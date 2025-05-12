@@ -3,9 +3,17 @@ use std::fmt::Debug;
 use super::attestation_result::AttestationResult;
 
 #[derive(Debug)]
-pub struct AccessLog<T1: Debug, T2: Debug> {
-    pub downstream: T1,
-    pub upstream: T2,
-    pub to_trusted_tunnel: bool,
-    pub peer_attested: Option<AttestationResult>,
+pub enum AccessLog<T1: Debug, T2: Debug> {
+    Ingress {
+        downstream: T1,
+        upstream: T2,
+        to_trusted_tunnel: bool,
+        peer_attested: Option<AttestationResult>,
+    },
+    Egress {
+        downstream: T1,
+        upstream: T2,
+        from_trusted_tunnel: bool,
+        peer_attested: Option<AttestationResult>,
+    },
 }

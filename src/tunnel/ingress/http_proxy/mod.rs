@@ -304,7 +304,7 @@ impl StreamRouter {
         };
 
         // Print access log
-        let access_log = AccessLog {
+        let access_log = AccessLog::Ingress {
             downstream: peer_addr,
             upstream: &dst,
             to_trusted_tunnel: via_tunnel,
@@ -451,12 +451,12 @@ impl RegistedService for HttpProxyIngress {
 
                             let io = TokioIo::new(downstream);
 
-                            if let Err(e) =
+                            if let Err(error) =
                                 hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
                                     .serve_connection_with_upgrades(io, svc)
                                     .await
                             {
-                                tracing::error!("Failed to serve connection: {e:?}");
+                                tracing::error!(?error, "Failed to serve connection");
                             }
                         },
                     );

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use hyper_util::rt::TokioIo;
 use opentelemetry::metrics::MeterProvider;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -18,7 +17,10 @@ use crate::{
     service::RegistedService,
     tunnel::{
         access_log::AccessLog,
-        egress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
+        egress::core::stream_manager::{
+            trusted::{StreamType, TrustedStreamManager},
+            StreamManager,
+        },
         ingress::core::TngEndpoint,
         service_metrics::ServiceMetrics,
         utils::{self, socket::SetListenerSockOpts},
@@ -135,11 +137,11 @@ impl RegistedService for MappingEgress {
                             async move {
                                 tracing::debug!("Start serving new connection from client");
 
-                                let (sender, mut receiver) = mpsc::unbounded_channel();
+                                let (sender, mut receiver) = mpsc::unbounded_channel::<(StreamType,_)>();
 
                                 shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| {
                                     async move {
-                                        while let Some((downstream, attestation_result)) =
+                                        while let Some((stream_type, attestation_result)) =
                                             receiver.recv().await
                                         {
                                             cx_total.add(1);
@@ -154,16 +156,18 @@ impl RegistedService for MappingEgress {
                                                 async move {
                                                     let fut = async {
                                                         // Print access log
-                                                        let access_log = AccessLog {
+                                                        let access_log = AccessLog::Egress {
                                                             downstream: peer_addr,
                                                             upstream: TngEndpoint::new(
                                                                 &upstream_addr,
                                                                 upstream_port,
                                                             ),
-                                                            to_trusted_tunnel: true, // TODO: handle allow_non_tng_traffic
+                                                            from_trusted_tunnel: stream_type.is_secured(),
                                                             peer_attested: attestation_result,
                                                         };
                                                         tracing::info!(?access_log);
+
+                                                        let downstream = stream_type.into_stream();
 
                                                         let upstream = TcpStream::connect((
                                                             upstream_addr.as_str(),
@@ -173,11 +177,11 @@ impl RegistedService for MappingEgress {
                                                         .context("Failed to connect to upstream")?;
 
                                                         let downstream = StreamWithCounter {
-                                                            inner: TokioIo::new(downstream),
+                                                            inner: downstream,
                                                             tx_bytes_total,
                                                             rx_bytes_total,
                                                         };
-                                                        utils::forward_stream(upstream, downstream).await
+                                                        utils::forward::forward_stream(upstream, downstream).await
                                                     };
 
                                                     if let Err(e) = fut.await {

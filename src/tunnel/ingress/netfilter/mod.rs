@@ -137,7 +137,7 @@ impl RegistedService for NetfilterIngress {
                                 {
                                     Ok((forward_stream_task, attestation_result)) => {
                                         // Print access log
-                                        let access_log = AccessLog {
+                                        let access_log = AccessLog::Ingress {
                                             downstream: peer_addr,
                                             upstream: orig_dst.clone(),
                                             to_trusted_tunnel: true,

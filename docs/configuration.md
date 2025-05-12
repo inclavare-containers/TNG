@@ -365,8 +365,7 @@ The disguising capability can be enabled by specifying the `encap_in_http` field
     - **`match_regex`** (string): A regular expression used to match the path of the inner protected HTTP request. The value of this field will be used to match the entire path string, not just a part of it.
 
         > Note:
-        > - Prior to version 2.0.0, the `match_regex` field supported only RE2 syntax. RE2 is Google's regular expression engine, and its syntax can be found [here](https://github.com/google/re2/wiki/Syntax). For online testing, refer to [this tool](https://re2js.leopard.in.ua/).
-        > - Starting from version 2.0.0, the `match_regex` field supports common regular expression syntax rather than RE2 syntax. Features like look-around and backreferences are not supported. For the full syntax rules, refer to [this documentation](https://docs.rs/regex/1.11.1/regex/index.html#syntax).
+        > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
 
     - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the encapsulated HTTP traffic will be replaced entirely with the value of `substitution`.
 
@@ -420,6 +419,9 @@ Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you c
 #### Field Descriptions
 
 - **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
+
+    > Note:
+    > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
 
 Example:
 
@@ -478,9 +480,8 @@ Exposes RESTful API endpoints, supporting the following operations:
 - **`/livez`**: This endpoint returns the liveness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running.
 - **`/readyz`**: This endpoint returns the readiness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running and ready to handle traffic.
 
-<span id = "envoy_admin_interface"></span>
-
 ## Envoy Admin Interface
+<span id = "envoy_admin_interface"></span>
 
 > [!WARNING]
 > Due to the removal of Envoy, this option has been deprecated. Configuring this option will have no effect.
@@ -720,3 +721,12 @@ Examples:
     }
 }
 ```
+
+
+## Regular Expressions
+<span id="regex"></span>
+
+Some fields in the TNG configuration file allow the specification of regular expressions. During the evolution of TNG, the syntax rules for regular expressions have been updated. The following provides an explanation:
+
+- In versions prior to 2.0.0, only RE2 syntax was supported. RE2 is Google's regular expression engine. Its syntax format can be found [here](https://github.com/google/re2/wiki/Syntax). If you need to test the correctness of your syntax online, you can use tools available [here](https://re2js.leopard.in.ua/).
+- Starting from version 2.0.0 and onwards, common regular expression syntax is supported instead of RE2 syntax. As a result, features such as look-around assertions and backreferences are not supported. Complete syntax rules can be found [here](https://docs.rs/regex/1.11.1/regex/index.html#syntax).

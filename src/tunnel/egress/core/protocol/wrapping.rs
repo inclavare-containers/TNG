@@ -14,8 +14,11 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
 use crate::tunnel::attestation_result::AttestationResult;
+use crate::{
+    observability::trace::shutdown_guard_ext::ShutdownGuardExt as _,
+    tunnel::egress::core::stream_manager::trusted::StreamType,
+};
 
 use super::super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 
@@ -62,12 +65,12 @@ impl WrappingLayer {
 
         let svc = TowerToHyperService::new(svc);
 
-        if let Err(err) = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+        if let Err(error) = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
             .serve_connection(TokioIo::new(tls_stream), svc)
             .instrument(span)
             .await
         {
-            tracing::error!("Failed to serve connection: {err:?}");
+            tracing::error!(?error, "Failed to serve connection");
         }
     }
 
@@ -87,7 +90,10 @@ impl WrappingLayer {
                     Ok(upgraded) => {
                         tracing::debug!("Trusted tunnel established");
 
-                        if let Err(e) = channel.send((upgraded, attestation_result)) {
+                        if let Err(e) = channel.send((
+                            StreamType::SecuredStream(Box::new(TokioIo::new(upgraded))),
+                            attestation_result,
+                        )) {
                             tracing::error!("Failed to send stream via channel: {e:#}");
                         }
                     }
