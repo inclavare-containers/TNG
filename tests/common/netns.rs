@@ -129,7 +129,7 @@ impl Bridge {
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        tokio::task::block_in_place(|| {
+        let res = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 // Remove iptables rules used for network access.
                 match (self.bridge_addr, self.prefix_len) {
@@ -180,8 +180,11 @@ impl Drop for Bridge {
                 Ok::<_, anyhow::Error>(())
             })
         })
-        .context("drop bridge network failed")
-        .unwrap();
+        .context("drop bridge network failed");
+
+        if let Err(error) = res {
+            tracing::warn!(?error)
+        }
     }
 }
 
@@ -308,7 +311,7 @@ impl VethPair {
 impl Drop for VethPair {
     fn drop(&mut self) {
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
+            let res = tokio::runtime::Handle::current()
                 .block_on(async {
                     // We don't need to delete the second side of the veth pair, because it will be deleted when the first side is deleted.
                     self.handle
@@ -320,8 +323,10 @@ impl Drop for VethPair {
 
                     Ok::<_, anyhow::Error>(())
                 })
-                .context("drop veth pair failed")
-                .unwrap();
+                .context("drop veth pair failed");
+            if let Err(error) = res {
+                tracing::warn!(?error)
+            }
         })
     }
 }
@@ -341,7 +346,10 @@ impl Drop for Node {
         }
 
         if let Some(netns) = self.netns.take() {
-            netns.remove().context("Failed to delete netns").unwrap();
+            let res = netns.remove().context("Failed to delete netns");
+            if let Err(error) = res {
+                tracing::warn!(?error)
+            }
         }
     }
 }

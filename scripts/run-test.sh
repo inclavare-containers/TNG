@@ -9,6 +9,8 @@ catch() {
 
 script_dir=$(dirname $(realpath "$0"))
 
+export RUST_BACKTRACE=1
+
 echo "============= Starting unit tests for bin test suits ============="
 echo "cargo test --test client_netfilter_server_netfilter -- common:: --nocapture"
 if cargo test --test client_netfilter_server_netfilter -- common:: --nocapture; then
@@ -21,8 +23,6 @@ fi
 # Run bin tests under 'tests/' dir
 test_cases=$(ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g')
 skipped_test_cases=""
-
-export RUST_BACKTRACE=1
 
 failed=0
 test_result_msgs=""
