@@ -23,6 +23,7 @@ install-test-deps:
 .PHONE: run-test
 run-test:
 	which iptables || { yum install -y iptables ; }
+	which ping || { yum install -y iputils ; }
 	which gcc || { yum install -y gcc ; }
 	./scripts/run-test.sh
 
