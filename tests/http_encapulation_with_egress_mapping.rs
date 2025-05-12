@@ -92,7 +92,6 @@ async fn test() -> Result<()> {
             port: 10001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
-            http_proxy: None,
         }.boxed(),
     ])
     .await?;

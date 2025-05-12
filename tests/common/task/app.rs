@@ -33,7 +33,12 @@ pub enum AppType {
         port: u16,
         host_header: &'static str,
         path_and_query: &'static str,
-        http_proxy: Option<HttpProxy>,
+    },
+    #[allow(dead_code)]
+    HttpClientWithReverseProxy {
+        host_header: &'static str,
+        path_and_query: &'static str,
+        http_proxy: HttpProxy,
     },
     #[allow(dead_code)]
     TcpServer { port: u16 },
@@ -49,20 +54,20 @@ pub enum AppType {
 impl Task for AppType {
     fn name(&self) -> String {
         match self {
-            AppType::HttpServer { .. } => "app_server",
-            AppType::HttpClient { .. } => "app_client",
-            AppType::TcpServer { .. } => "app_server",
-            AppType::TcpClient { .. } => "app_client",
+            AppType::HttpServer { .. } | AppType::TcpServer { .. } => "app_server",
+            AppType::HttpClient { .. }
+            | AppType::HttpClientWithReverseProxy { .. }
+            | AppType::TcpClient { .. } => "app_client",
         }
         .to_owned()
     }
 
     fn node_type(&self) -> NodeType {
         match self {
-            AppType::HttpServer { .. } => NodeType::Server,
-            AppType::HttpClient { .. } => NodeType::Client,
-            AppType::TcpServer { .. } => NodeType::Server,
-            AppType::TcpClient { .. } => NodeType::Client,
+            AppType::HttpServer { .. } | AppType::TcpServer { .. } => NodeType::Server,
+            AppType::HttpClient { .. }
+            | AppType::HttpClientWithReverseProxy { .. }
+            | AppType::TcpClient { .. } => NodeType::Client,
         }
     }
 
@@ -80,9 +85,30 @@ impl Task for AppType {
                 port,
                 host_header,
                 path_and_query,
+            } => {
+                launch_http_client_common(
+                    token,
+                    host_header,
+                    path_and_query,
+                    HttpClientMode::NoProxy {
+                        host: host.to_string(),
+                        port,
+                    },
+                )
+                .await
+            }
+            AppType::HttpClientWithReverseProxy {
+                host_header,
+                path_and_query,
                 http_proxy,
             } => {
-                launch_http_client(token, host, port, host_header, path_and_query, http_proxy).await
+                launch_http_client_common(
+                    token,
+                    host_header,
+                    path_and_query,
+                    HttpClientMode::ProxyWithReverseMode { http_proxy },
+                )
+                .await
             }
             AppType::TcpServer { port } => launch_tcp_server(token, port).await,
             AppType::TcpClient {
@@ -94,7 +120,7 @@ impl Task for AppType {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct HttpProxy {
     pub host: &'static str,
     pub port: u16,
@@ -152,7 +178,7 @@ async fn launch_tcp_client(
             );
 
             let connect_task = async {
-                Ok(match http_proxy {
+                Ok(match &http_proxy {
                     Some(http_proxy) => {
                         let mut stream =
                             TcpStream::connect(format!("{}:{}", http_proxy.host, http_proxy.port))
@@ -251,45 +277,74 @@ pub async fn launch_http_server(
     }))
 }
 
-pub async fn launch_http_client(
+pub enum HttpClientMode {
+    NoProxy {
+        host: String,
+        port: u16,
+    },
+    /// In this case, the http `Host` header is used to indicate the server to proxy to.
+    ProxyWithReverseMode {
+        http_proxy: HttpProxy,
+    },
+}
+
+pub async fn launch_http_client_common(
     token: CancellationToken,
-    host: &str,
-    port: u16,
     host_header: &str,
     path_and_query: &str,
-    http_proxy: Option<HttpProxy>,
+    client_mode: HttpClientMode,
 ) -> Result<JoinHandle<Result<()>>> {
-    let host = host.to_owned();
     let host_header = host_header.to_owned();
+
+    assert!(path_and_query.starts_with("/"));
     let path_and_query = path_and_query.to_owned();
-    let http_proxy = http_proxy.map(|t| t.to_owned());
 
     Ok(tokio::task::spawn(async move {
         let _drop_guard = token.drop_guard();
 
         for i in 1..6 {
             // repeat 5 times
-            tracing::info!("HTTP client test repeat {i}, sending http request to {host}:{port}");
+            match &client_mode {
+                HttpClientMode::NoProxy { host, port } => {
+                    tracing::info!(
+                        "HTTP client test repeat {i}, sending http request to {host}:{port} without proxy"
+                    );
+                }
+                HttpClientMode::ProxyWithReverseMode { http_proxy } => {
+                    tracing::info!(
+                        "HTTP client test repeat {i}, sending http request to host {host_header} with proxy {http_proxy:?} in reverse proxy mode"
+                    );
+                }
+            }
+
             let resp = RetryPolicy::fixed(Duration::from_secs(1))
                 .with_max_retries(5)
                 .retry(|| async {
                     let mut builder = reqwest::Client::builder();
 
                     // TODO: add test for send http proxy via both http-connect and http-reverse-proxy
-                    if let Some(http_proxy) = &http_proxy {
-                        let proxy = reqwest::Proxy::http(format!(
-                            "http://{}:{}",
-                            http_proxy.host, http_proxy.port
-                        ))?;
-                        builder = builder.proxy(proxy);
+                    match &client_mode {
+                        HttpClientMode::NoProxy { .. } => { /* Nothing */ }
+                        HttpClientMode::ProxyWithReverseMode { http_proxy } => {
+                            let proxy = reqwest::Proxy::http(format!(
+                                "http://{}:{}",
+                                http_proxy.host, http_proxy.port
+                            ))?;
+                            builder = builder.proxy(proxy);
+                        }
                     }
 
+                    let url = match &client_mode {
+                        HttpClientMode::NoProxy { host, port } => {
+                            format!("http://{host}:{port}{path_and_query}")
+                        }
+                        HttpClientMode::ProxyWithReverseMode { .. } => {
+                            format!("http://dummy{path_and_query}")
+                        }
+                    };
+
                     let client = builder.build()?;
-                    client
-                        .get(format!("http:///{host}:{port}{path_and_query}"))
-                        .header(HOST, &host_header)
-                        .send()
-                        .await
+                    client.get(url).header(HOST, &host_header).send().await
                 })
                 .await?;
 

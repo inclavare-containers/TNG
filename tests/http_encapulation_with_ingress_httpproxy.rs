@@ -94,15 +94,13 @@ async fn test() -> Result<()> {
             expected_host_header: "192.168.1.1:30001",
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
-        AppType::HttpClient {
-            host: "192.168.1.1",
-            port: 30001,
-            host_header: "example.com",
+        AppType::HttpClientWithReverseProxy {
+            host_header: "192.168.1.1:30001",
             path_and_query: "/foo/bar/www?type=1&case=1",
-            http_proxy: Some(HttpProxy {
+            http_proxy: HttpProxy {
                 host: "127.0.0.1",
                 port: 41000,
-            }),
+            },
         }.boxed(),
     ])
     .await?;

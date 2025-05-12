@@ -7,7 +7,7 @@ catch() {
     echo "An error has occurred. Exit now"
 }
 
-script_dir=$(dirname `realpath "$0"`)
+script_dir=$(dirname $(realpath "$0"))
 
 echo "============= Starting unit tests for bin test suits ============="
 echo "cargo test --test client_netfilter_server_netfilter -- common:: --nocapture"
@@ -19,8 +19,8 @@ else
 fi
 
 # Run bin tests under 'tests/' dir
-test_cases=`ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g'`
-skipped_test_cases="http_encapulation_with_egress_mapping http_encapulation_with_egress_netfilter http_encapulation_with_ingress_httpproxy"
+test_cases=$(ls ${script_dir}/../tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g')
+skipped_test_cases="allow_non_tng_traffic"
 
 export RUST_BACKTRACE=1
 
