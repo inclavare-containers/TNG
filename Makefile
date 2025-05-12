@@ -25,6 +25,7 @@ run-test:
 	which iptables || { yum install -y iptables ; }
 	which ping || { yum install -y iputils ; }
 	which gcc || { yum install -y gcc ; }
+	which dig || { yum install -y bind-utils ; }
 	./scripts/run-test.sh
 
 VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')

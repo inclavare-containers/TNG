@@ -81,6 +81,7 @@ impl Bridge {
                 &format!(
                     "
                 set -x ; set -e ;
+                exec 2>&1 ;
 
                 echo 1 > /proc/sys/net/ipv4/ip_forward
                 iptables -t nat -D POSTROUTING -j TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
@@ -140,6 +141,7 @@ impl Drop for Bridge {
                                 &format!(
                                     "
                                     set -x ; set -e ;
+                                    exec 2>&1 ;
                         
                                     echo 1 > /proc/sys/net/ipv4/ip_forward
                                     iptables -t nat -D POSTROUTING -j TNG_TEST_NETNS_POSTROUTING 2>/dev/null || true
@@ -519,13 +521,17 @@ mod tests {
                         "-c",
                         "
                         set -x ; set -e ;
+                        exec 2>&1 ;
                         
                         ip -4 a | grep 192.168.1. ;
                         ip route show | grep default ;
                         ping 192.168.1.1 -c 1 -W 5 ;
                         ping 192.168.1.2 -c 1 -W 5 ;
                         ping 192.168.1.254 -c 1 -W 5 ;
-                        ping 8.8.8.8 -c 1 -W 5 ;
+                        cat /etc/resolv.conf
+                        dig @8.8.8.8 connectivitycheck.gstatic.com
+                        dig connectivitycheck.gstatic.com
+                        curl http://connectivitycheck.gstatic.com/generate_204 --connect-timeout 5;
                         ",
                     ])
                     .output()

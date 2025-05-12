@@ -161,7 +161,14 @@ jobs:
         with:
           submodules: 'true'
       - name: Run test script from repo
-        run: make run-test
+        run: |
+          set -e
+          set -x
+
+          # Append dns server
+          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          # Run test
+          make run-test
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
