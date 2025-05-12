@@ -96,7 +96,7 @@ impl Bridge {
                 iptables -t nat -A POSTROUTING -j TNG_TEST_NETNS_POSTROUTING
 
                 iptables -t filter -N TNG_TEST_NETNS_FORWARD
-                iptables -t filter -A TNG_TEST_NETNS_FORWARD -i any -o {} -j ACCEPT
+                iptables -t filter -A TNG_TEST_NETNS_FORWARD -o {} -j ACCEPT
                 iptables -t filter -A TNG_TEST_NETNS_FORWARD -i {} -o {} -j ACCEPT
                 iptables -t filter -A TNG_TEST_NETNS_FORWARD -i {} ! -o {} -j ACCEPT
                 iptables -t filter -A FORWARD -j TNG_TEST_NETNS_FORWARD
