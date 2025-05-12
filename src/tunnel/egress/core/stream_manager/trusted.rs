@@ -47,7 +47,7 @@ impl StreamManager for TrustedStreamManager {
     ) -> Result<()> {
         let transport = TransportLayerDecoder::new(self.common_args.decap_from_http.clone());
 
-        let mut next_stream = transport.decode(in_stream).await?;
+        let mut next_stream = transport.decode(in_stream, shutdown_guard.clone()).await?;
         while let Some(stream) = next_stream.next().await {
             // TODO: handle allow_non_tng_traffic_regexes
             match stream {
