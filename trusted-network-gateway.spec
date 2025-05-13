@@ -54,7 +54,6 @@ ln -s `realpath %{_builddir}/%{name}-%{version}/vendor` ~/vendor
 # Build tng
 pushd src/
 cargo install --locked --path . --root %{_builddir}/%{name}-%{version}/install/tng/
-strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
 # Remove vendor
 rm -f ~/vendor

@@ -26,8 +26,6 @@ COPY --from=code-pull /code/. .
 
 RUN cargo install --locked --path . --root /usr/local/cargo/
 
-RUN strip /usr/local/cargo/bin/tng
-
 
 FROM registry.openanolis.cn/openanolis/anolisos:8 as tng-release
 
