@@ -4,8 +4,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub mod app;
+pub mod shell;
 pub mod tng;
 
+#[derive(Debug, Clone, Copy)]
 pub enum NodeType {
     Client,
     Server,

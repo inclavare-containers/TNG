@@ -36,6 +36,8 @@ use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
 
+const TNG_HTTP_FORWARD_HEADER: &str = "X-Tng-Http-Forward";
+
 pub enum RouteResult {
     // At least in this time, we got no error, and this request should be handled in background.
     HandleInBackgroud,
@@ -126,7 +128,7 @@ impl RequestHelper {
     }
 
     pub async fn handle(
-        self,
+        mut self,
         stream_router: Arc<StreamRouter>,
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
@@ -188,6 +190,12 @@ impl RequestHelper {
 
             let forward_span = tracing::info_span!("http-proxy-forward");
             async {
+
+                if self.req.headers().get(TNG_HTTP_FORWARD_HEADER).is_some() {
+                    tracing::debug!("Got header \"{TNG_HTTP_FORWARD_HEADER}\" in http request, recursion is detected");
+                    return RouteResult::Error(StatusCode::BAD_REQUEST, "recursion is detected".to_string())
+                }
+
                 let (s1, s2) = tokio::io::duplex(4096);
 
                 let forward_task = async {
@@ -215,6 +223,9 @@ impl RequestHelper {
                             tracing::error!(?e, "The HTTP connection with upstream is broken");
                         }
                     });
+
+                    self.req.headers_mut().remove(TNG_HTTP_FORWARD_HEADER);
+                    self.req.headers_mut().insert(TNG_HTTP_FORWARD_HEADER, HeaderValue::from_static("true"));
 
                     tracing::debug!("Forwarding HTTP request to upstream now");
                     sender

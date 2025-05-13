@@ -7,7 +7,9 @@ use tokio_util::sync::CancellationToken;
 use super::{NodeType, Task};
 
 pub enum TngInstance {
+    #[allow(unused)]
     TngClient(&'static str),
+    #[allow(unused)]
     TngServer(&'static str),
 }
 
