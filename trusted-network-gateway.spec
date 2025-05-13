@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.1.0
+Version: 2.2.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -81,6 +81,16 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Tue May 13 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.0-1
+- Add new ingress type "netfilter" with cgroup match support.
+- Add systemd service file.
+- Fix error when io stream is closed by peer in egress.
+- Fix connection refused caused by wrong listen address in netfilter mode egress.
+- Fix missing authority header when forwarding http request in http_proxy mode ingress.
+- Fix path_rewrites feature.
+- Fix decap_from_http.allow_non_tng_traffic_regexes feature.
+
+
 * Tue Apr 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.1.0-1
 - Fixed the issue of using incorrect spans in some async tasks during request handling.
 - Add traces exporter (otlp, stdout) for metrics reporting.
