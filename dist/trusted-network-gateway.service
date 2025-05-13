@@ -1,0 +1,11 @@
+[Unit]
+Description=Trusted Network Gateway Launch Service
+Documentation=tng
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/tng launch --config-file /etc/tng/config.json'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

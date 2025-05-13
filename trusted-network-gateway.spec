@@ -58,19 +58,28 @@ strip %{_builddir}/%{name}-%{version}/install/tng/bin/tng
 popd
 # Remove vendor
 rm -f ~/vendor
+# Remove cargo config
+rm -f ~/.cargo/config
 
 
 %install
 # Install tng
 mkdir -p %{buildroot}/usr/bin/
 install -p -m 755 %{_builddir}/%{name}-%{version}/install/tng/bin/tng %{buildroot}/usr/bin/tng
-
+mkdir -p %{buildroot}/etc/tng/
+install -p -m 755 src/dist/config.json %{buildroot}/etc/tng/config.json
+mkdir -p %{buildroot}/usr/lib/systemd/system/
+install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/systemd/system/trusted-network-gateway.service
 
 %define __requires_exclude librats_rs.so
 
 %files
 %license src/LICENSE
 /usr/bin/tng
+/usr/lib/systemd/system/trusted-network-gateway.service
+%dir /etc/tng/
+/etc/tng/config.json
+
 
 %changelog
 * Tue Apr 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.1.0-1

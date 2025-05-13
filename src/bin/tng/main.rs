@@ -33,9 +33,12 @@ async fn main() {
                     .unwrap_or_else(|_| "info,tokio_graceful=off,tng=trace".into()),
             ),
         )
-        .with(tracing_subscriber::fmt::layer().with_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tokio_graceful=off".into()),
-        ))
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "info,tokio_graceful=off".into()),
+            ),
+        )
         .init();
 
     let cmd = Args::parse();
@@ -58,7 +61,10 @@ async fn main() {
                 // Load config
                 let config: TngConfig = async {
                     Ok::<_, anyhow::Error>(match (options.config_file, options.config_content) {
-                        (Some(_), Some(_)) | (None, None) => {
+                        (Some(_), Some(_)) => {
+                            bail!("Cannot set both --config-file and --config-content at the same time")
+                        }
+                        (None, None) => {
                             bail!("Either --config-file or --config-content should be set")
                         }
                         (None, Some(s)) => serde_json::from_str(&s)?,
