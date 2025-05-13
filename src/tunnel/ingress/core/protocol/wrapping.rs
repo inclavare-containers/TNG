@@ -37,7 +37,7 @@ pub async fn create_stream_from_hyper(
     }
     let upgraded = hyper::upgrade::on(&mut resp)
         .await
-        .with_context(|| format!("Failed to establish HTTP/2 CONNECT tunnel"))?;
+        .context("Failed to establish HTTP/2 CONNECT tunnel")?;
 
     tracing::debug!("Trusted tunnel established");
 

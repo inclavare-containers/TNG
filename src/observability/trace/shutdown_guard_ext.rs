@@ -6,6 +6,7 @@ use tracing::{Instrument, Span};
 /// A supervised task is a task that will be cancelled immediately when the shutdown guard is
 /// cancelled. In this case, all the tasks can be cancelled quickly and cleanly when the tng instance
 /// is shutting down.
+#[allow(dead_code)]
 pub trait ShutdownGuardExt {
     #[inline]
     fn spawn_supervised_task_fn_current_span<F, T>(&self, task: F) -> tokio::task::JoinHandle<()>

@@ -13,7 +13,7 @@ impl TlsConfigGenerator {
                 let mut tls_server_config =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
-                        .with_cert_resolver(RustlsDummyCert::new()?);
+                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
                 tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
                 Ok(OnetimeTlsServerConfig(tls_server_config, None))
             }
@@ -22,7 +22,7 @@ impl TlsConfigGenerator {
                 let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
-                        .with_cert_resolver(RustlsDummyCert::new()?);
+                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
                 tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
                 Ok(OnetimeTlsServerConfig(tls_server_config, Some(verifier)))
             }

@@ -11,7 +11,7 @@ use std::convert::Infallible;
 
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 
-const INVALID_HTTP_REQUEST_RESPONSE_BODY: &'static str = "This service is secured by TNG secure session and you must establish the connection via TNG.\n\nIf this is an unexpected behavior, add path matching rules to `decap_from_http.allow_non_tng_traffic_regexes` option.";
+const INVALID_HTTP_REQUEST_RESPONSE_BODY: &str = "This service is secured by TNG secure session and you must establish the connection via TNG.\n\nIf this is an unexpected behavior, add path matching rules to `decap_from_http.allow_non_tng_traffic_regexes` option.";
 
 const READ_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 

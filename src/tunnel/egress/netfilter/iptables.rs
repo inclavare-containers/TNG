@@ -64,16 +64,14 @@ impl IptablesRuleGenerator for NetfilterEgress {
                     "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype ! --src-type LOCAL --dst {addr}/32 --dport {} -j REDIRECT --to-ports {} ; ", self.capture_dst.port, self.listen_port
                 );
             }
+        } else if self.capture_local_traffic {
+            redirect_invoke_script += &format!(
+                "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype --dst-type LOCAL --dport {} -j REDIRECT --to-ports {} ; ", self.capture_dst.port, self.listen_port
+            );
         } else {
-            if self.capture_local_traffic {
-                redirect_invoke_script += &format!(
-                    "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype --dst-type LOCAL --dport {} -j REDIRECT --to-ports {} ; ", self.capture_dst.port, self.listen_port
-                );
-            } else {
-                redirect_invoke_script += &format!(
-                    "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype ! --src-type LOCAL --dst-type LOCAL --dport {} -j REDIRECT --to-ports {} ; ", self.capture_dst.port, self.listen_port
-                );
-            }
+            redirect_invoke_script += &format!(
+                "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype ! --src-type LOCAL --dst-type LOCAL --dport {} -j REDIRECT --to-ports {} ; ", self.capture_dst.port, self.listen_port
+            );
         }
 
         redirect_invoke_script += &format!(

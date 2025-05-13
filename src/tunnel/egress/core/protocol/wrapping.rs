@@ -35,7 +35,7 @@ impl WrappingLayer {
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
-    ) -> () {
+    ) {
         let span = tracing::info_span!("wrapping");
         let svc = {
             let span = span.clone();
@@ -104,10 +104,10 @@ impl WrappingLayer {
             });
             Ok(Response::new(Body::empty()).into_response())
         } else {
-            return Ok(error_response(
+            Ok(error_response(
                 StatusCode::BAD_REQUEST,
-                format!("Protocol Error: the method should be CONNECT, may be a invalid client"),
-            ));
+                "Protocol Error: the method should be CONNECT, may be a invalid client".to_string(),
+            ))
         }
     }
 }

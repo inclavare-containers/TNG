@@ -9,6 +9,7 @@ pub const TCP_CONNECT_SO_MARK_DEFAULT: u32 = 0x235; // 565
 pub trait SetListenerSockOpts {
     fn set_listener_common_sock_opts(&self) -> Result<()>;
 
+    #[cfg(not(target_os = "macos"))]
     fn set_listener_tproxy_sock_opts(&self) -> Result<()>;
 }
 
@@ -24,9 +25,9 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
         Ok(())
     }
 
+    #[cfg(not(target_os = "macos"))]
     fn set_listener_tproxy_sock_opts(&self) -> Result<()> {
         let fd = self.as_fd();
-        #[cfg(not(target_os = "macos"))]
         setsockopt(&fd, nix::sys::socket::sockopt::IpTransparent, &true)?;
 
         Ok(())
@@ -44,7 +45,10 @@ where
         let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
         socket.set_nonblocking(true)?;
         #[cfg(not(target_os = "macos"))]
-        socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
+        {
+            let _ = so_mark;
+            socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
+        }
         let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
 
         let result = socket.connect(addr).await.map_err(anyhow::Error::from);

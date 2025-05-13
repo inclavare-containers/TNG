@@ -12,7 +12,7 @@ use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
 pub struct RustlsDummyCert {}
 
 impl RustlsDummyCert {
-    pub fn new() -> Result<Arc<rustls::sign::SingleCertAndKey>> {
+    pub fn new_rustls_cert() -> Result<Arc<rustls::sign::SingleCertAndKey>> {
         let cert_chain =
             rustls_pemfile::certs(&mut TNG_DUMMY_CERT.as_bytes()).collect::<Result<Vec<_>, _>>()?;
         let key_der = rustls_pemfile::private_key(&mut TNG_DUMMY_KEY.as_bytes())?
@@ -40,11 +40,11 @@ impl TlsConfigGenerator {
     pub async fn new(ra_args: &RaArgs) -> Result<Self> {
         Ok(if ra_args.no_ra {
             // Sanity check for ra_args
-            if ra_args.verify != None {
+            if ra_args.verify.is_some() {
                 bail!("The 'no_ra: true' flag should not be used with 'verify' field");
             }
 
-            if ra_args.attest != None {
+            if ra_args.attest.is_some() {
                 bail!("The 'no_ra: true' flag should not be used with 'attest' field");
             }
 

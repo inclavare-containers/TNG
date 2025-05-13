@@ -64,7 +64,7 @@ impl StreamManager for TrustedStreamManager {
                     shutdown_guard.spawn_supervised_task_fn_current_span(
                         |shutdown_guard| async move {
                             let (tls_stream, attestation_result) = match security_layer
-                                .from_stream(stream)
+                                .handshake(stream)
                                 .await
                             {
                                 Ok(v) => v,

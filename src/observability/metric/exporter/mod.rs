@@ -18,7 +18,7 @@ pub enum ValueType {
     Gauge,
 }
 
-pub(self) type MetricValue = serde_json::Number;
+type MetricValue = serde_json::Number;
 
 #[derive(Debug, PartialEq)]
 pub struct SimpleMetric {
@@ -122,13 +122,14 @@ impl<T: SimpleMetricExporter> OpenTelemetryMetricExporterAdapter<T> {
                     {
                         match sum.data_points.last() {
                             Some(data_point) => Some((
-                                serde_json::Number::from_f64(data_point.value as f64)
-                                    .with_context(|| {
+                                serde_json::Number::from_f64(data_point.value).with_context(
+                                    || {
                                         format!(
                                             "Failed to convert num {} to json",
                                             data_point.value
                                         )
-                                    })?,
+                                    },
+                                )?,
                                 sum.time,
                                 ValueType::Counter,
                                 &data_point.attributes,

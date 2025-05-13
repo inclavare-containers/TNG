@@ -59,7 +59,7 @@ impl AsyncWrite for H2Stream {
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
-        return Poll::Ready(Ok(()));
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
@@ -97,7 +97,7 @@ impl AsyncRead for H2Stream {
                 buf.put_slice(&to_consume);
                 this.recv_remain = Some(bs.clone());
             } else {
-                buf.put_slice(&bs);
+                buf.put_slice(bs);
                 this.recv_remain = None;
             }
             return Poll::Ready(Ok(()));

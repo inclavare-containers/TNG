@@ -307,7 +307,7 @@ impl TngRuntime {
             if c.exporters.len() > 1 {
                 bail!("Only one exporter is supported for now")
             }
-            match c.exporters.iter().next() {
+            match c.exporters.first() {
                 Some(exporter_type) => Some(exporter_type.instantiate()?),
                 None => None,
             }

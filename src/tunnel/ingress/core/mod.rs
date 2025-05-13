@@ -1,4 +1,4 @@
-pub(self) mod protocol;
+mod protocol;
 pub(super) mod stream_manager;
 
 use std::fmt::Display;

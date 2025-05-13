@@ -67,7 +67,7 @@ impl MappingIngress {
         );
 
         let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(&common_args, TCP_CONNECT_SO_MARK_DEFAULT).await?);
+            Arc::new(TrustedStreamManager::new(common_args, TCP_CONNECT_SO_MARK_DEFAULT).await?);
 
         Ok(Self {
             listen_addr,

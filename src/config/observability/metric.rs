@@ -146,7 +146,7 @@ pub enum MetricExporterInstance {
 
 impl MetricExporterInstance {
     pub fn into_sdk_meter_provider(self) -> opentelemetry_sdk::metrics::SdkMeterProvider {
-        let meter_provider = match self {
+        match self {
             MetricExporterInstance::Simple(step, simple_metric_exporter) => {
                 let exporter = OpenTelemetryMetricExporterAdapter::new(simple_metric_exporter);
                 let reader = opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
@@ -168,8 +168,7 @@ impl MetricExporterInstance {
                     .with_resource(crate::observability::otlp_resource())
                     .build()
             }
-        };
-        meter_provider
+        }
     }
 }
 

@@ -76,7 +76,7 @@ impl Bridge {
 
         // Enable internet network access.
         let output = tokio::process::Command::new("sh")
-            .args(&[
+            .args([
                 "-c",
                 &format!(
                     "
@@ -102,7 +102,7 @@ impl Bridge {
                 iptables -t filter -A TNG_TEST_NETNS_FORWARD -i {} ! -o {} -j ACCEPT
                 iptables -t filter -A FORWARD -j TNG_TEST_NETNS_FORWARD
                 ",
-                    bridge_addr.to_string(),
+                    bridge_addr,
                     prefix_len,
                     self.bridge_name,
                     self.bridge_name,
@@ -136,10 +136,9 @@ impl Drop for Bridge {
                 match (self.bridge_addr, self.prefix_len) {
                     (Some(_bridge_addr), Some(_prefix_len)) => {// The bridge network has been initialized.
                         let output = tokio::process::Command::new("sh")
-                            .args(&[
+                            .args([
                                 "-c",
-                                &format!(
-                                    "
+                                "
                                     set -x ; set -e ;
                                     exec 2>&1 ;
                         
@@ -153,7 +152,6 @@ impl Drop for Bridge {
                                     iptables -t filter -F TNG_TEST_NETNS_FORWARD 2>/dev/null || true
                                     iptables -t filter -X TNG_TEST_NETNS_FORWARD 2>/dev/null || true
                                     ",
-                                ),
                             ])
                             .output()
                             .await?;
@@ -456,7 +454,7 @@ impl Node {
                 )
                 .execute()
                 .await
-                .with_context(|| format!("add default route in new netns failed"))?;
+                .context("add default route in new netns failed")?;
 
             Ok::<_, anyhow::Error>(())
         })
@@ -517,7 +515,7 @@ mod tests {
         for node in [&network1_node1, &network1_node2] {
             node.run(async move {
                 let output = tokio::process::Command::new("sh")
-                    .args(&[
+                    .args([
                         "-c",
                         "
                         set -x ; set -e ;

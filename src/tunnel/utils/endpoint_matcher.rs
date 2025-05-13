@@ -26,7 +26,7 @@ impl EndpointMatcher {
                             .context("The value of 'domain' should be a regex")?;
                         Either::Left(regex)
                     }
-                    (Some(domain), None) => Either::Right(EnvoyDomainMatcher::new(&domain)?),
+                    (Some(domain), None) => Either::Right(EnvoyDomainMatcher::new(domain)?),
                     (Some(_), Some(_)) => {
                         bail!("Cannot specify both 'domain' and 'domain_regex")
                     }
@@ -77,17 +77,13 @@ impl EnvoyDomainMatcher {
     pub fn new(domain: &str) -> Result<Self> {
         if domain == "*" {
             Ok(EnvoyDomainMatcher::MatchAny)
-        } else if domain.starts_with('*') || domain.ends_with('*') {
-            if domain.starts_with('*') {
-                Ok(EnvoyDomainMatcher::Suffix(domain[1..].to_owned()))
-            } else if domain.ends_with('*') {
-                Ok(EnvoyDomainMatcher::Prefix(
-                    domain[..(domain.len() - 1)].to_owned(),
-                ))
-            } else {
-                bail!("The domain wildcard should be prefix or suffix only: {domain}")
-            }
-        } else if !domain.contains("*") {
+        } else if domain.starts_with('*') {
+            Ok(EnvoyDomainMatcher::Suffix(domain[1..].to_owned()))
+        } else if domain.ends_with('*') {
+            Ok(EnvoyDomainMatcher::Prefix(
+                domain[..(domain.len() - 1)].to_owned(),
+            ))
+        } else if !domain.contains('*') {
             Ok(EnvoyDomainMatcher::Exact(domain.to_owned()))
         } else {
             bail!("The wildcard * should not be used in the middle of the domain: {domain}")
@@ -114,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_domain_match() -> Result<()> {
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain": "*",
                 "port": 9991
@@ -123,7 +119,7 @@ mod tests {
         assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 9991)));
         assert!(endpoint_matcher.matches(&TngEndpoint::new("*.foo.com", 9991)));
 
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain": "*.foo.com",
                 "port": 9991
@@ -133,7 +129,7 @@ mod tests {
         assert!(endpoint_matcher.matches(&TngEndpoint::new("*.foo.com", 9991)));
         assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.bar.com", 9991)));
 
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain": "www.foo.*",
                 "port": 9991
@@ -144,7 +140,7 @@ mod tests {
         assert!(!endpoint_matcher.matches(&TngEndpoint::new("*.foo.com", 9991)));
         assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.bar.com", 9991)));
 
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain": "www.foo.com",
                 "port": 9991
@@ -153,7 +149,7 @@ mod tests {
         assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 9991)));
         assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.bar.com", 9991)));
 
-        assert!(EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        assert!(EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain_regex": "*",
                 "port": 9991
@@ -161,7 +157,7 @@ mod tests {
         })?])
         .is_err());
 
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain_regex": ".*",
                 "port": 9991
@@ -171,7 +167,7 @@ mod tests {
         assert!(endpoint_matcher.matches(&TngEndpoint::new("*.foo.com", 9991)));
         assert!(endpoint_matcher.matches(&TngEndpoint::new("www.bar.com", 9991)));
 
-        let endpoint_matcher = EndpointMatcher::new(&vec![serde_json::from_value(json! {
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json! {
             {
                 "domain_regex": r".*foo\.com",
                 "port": 9991

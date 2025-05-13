@@ -98,8 +98,7 @@ impl HttpRequestInspector {
                     req.path,
                     req.headers
                         .iter()
-                        .filter(|r| r.name.eq_ignore_ascii_case("Host"))
-                        .next(),
+                        .find(|r| r.name.eq_ignore_ascii_case("Host")),
                 ) {
                     (Some(path), host) => {
                         // Accroding to RFC 9112, we have to accept the absolute-form in requests, even when host header is missing.
@@ -118,7 +117,7 @@ impl HttpRequestInspector {
                         };
 
                         return Ok(RequestInfo::Http1 {
-                            authority: authority,
+                            authority,
                             path: uri.path().to_owned(),
                         });
                     }

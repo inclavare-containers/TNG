@@ -128,11 +128,11 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
             .await
             .context("Failed to establish the underlying http connection for rats-tls")?;
 
-            return Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
+            Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
                 send_stream,
                 recv_stream,
                 Span::current(),
-            ))));
+            ))))
         }
         .instrument(self.transport_layer_span.clone());
 

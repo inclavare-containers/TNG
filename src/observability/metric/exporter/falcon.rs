@@ -178,7 +178,7 @@ impl FalconExporter {
 impl SimpleMetricExporter for FalconExporter {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
         let falcon_metrics = metrics
-            .into_iter()
+            .iter()
             .map(|metric| self.construct_metric(metric))
             .collect::<Result<Vec<_>>>()?;
 
@@ -376,7 +376,7 @@ mod tests {
 
                 let falcon_metrics: Vec<FalconMetric> = serde_json::from_value(payload).unwrap();
 
-                assert!(falcon_metrics.len() > 0);
+                assert!(!falcon_metrics.is_empty());
                 tracing::info!("Fake falcon server got metrics: {falcon_metrics:?}");
 
                 let _ = tx.send(());

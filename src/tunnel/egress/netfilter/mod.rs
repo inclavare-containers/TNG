@@ -72,7 +72,7 @@ impl NetfilterEgress {
             ],
         );
 
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args).await?);
 
         Ok(Self {
             id,

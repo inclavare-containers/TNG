@@ -296,7 +296,7 @@ pub async fn launch_http_client_common(
 ) -> Result<JoinHandle<Result<()>>> {
     let host_header = host_header.to_owned();
 
-    assert!(path_and_query.starts_with("/"));
+    assert!(path_and_query.starts_with('/'));
     let path_and_query = path_and_query.to_owned();
 
     Ok(tokio::task::spawn(async move {

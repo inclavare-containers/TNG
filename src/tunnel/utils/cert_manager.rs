@@ -100,10 +100,8 @@ impl CertManager {
                         loop {
                             // Update certs in loop
                             let fut = async {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(
-                                    interval as u64,
-                                ))
-                                .await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(interval))
+                                    .await;
 
                                 let certed_key = Self::fetch_new_cert(&aa_addr).await?;
 

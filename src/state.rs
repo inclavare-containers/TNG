@@ -5,6 +5,12 @@ pub struct TngState {
     ),
 }
 
+impl Default for TngState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TngState {
     pub fn new() -> Self {
         TngState {

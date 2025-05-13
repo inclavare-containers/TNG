@@ -47,9 +47,9 @@ pub enum RouteResult {
     UpstreamResponse(Response),
 }
 
-impl Into<Response> for RouteResult {
-    fn into(self) -> Response {
-        match self {
+impl From<RouteResult> for Response {
+    fn from(val: RouteResult) -> Self {
+        match val {
             RouteResult::HandleInBackgroud => Response::new(Body::empty()).into_response(),
             RouteResult::Error(code, msg) => {
                 tracing::error!(?code, ?msg, "responding errors to downstream");
@@ -88,7 +88,7 @@ impl RequestHelper {
 
                 Ok(endpoint)
             } else {
-                return Err(anyhow!("No authority in HTTP CONNECT request URI"));
+                Err(anyhow!("No authority in HTTP CONNECT request URI"))
             }
         } else {
             match self.req.headers().get(http::header::HOST) {
@@ -122,7 +122,7 @@ impl RequestHelper {
 
                     Ok(endpoint)
                 }
-                None => return Err(anyhow!("No 'HOST' header in http request")),
+                None => Err(anyhow!("No 'HOST' header in http request")),
             }
         }
     }
@@ -378,7 +378,7 @@ impl HttpProxyIngress {
 
         let stream_router = Arc::new(StreamRouter {
             trusted_stream_manager: TrustedStreamManager::new(
-                &common_args,
+                common_args,
                 TCP_CONNECT_SO_MARK_DEFAULT,
             )
             .await?,

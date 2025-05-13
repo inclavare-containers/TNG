@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use super::attestation_result::AttestationResult;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AccessLog<T1: Debug, T2: Debug> {
     Ingress {
         downstream: T1,

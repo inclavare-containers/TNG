@@ -45,7 +45,7 @@ pub enum PathRewriteResult {
 
 impl PathRewrite {
     pub fn new(match_regex: &str, substitution: &str) -> Result<Self> {
-        let _re = regex::Regex::new(&match_regex)
+        let _re = regex::Regex::new(match_regex)
             .with_context(|| format!("Failed to compile user provided regex: {}", match_regex))?;
 
         // Let's wrap the match_regex to match the whole string.

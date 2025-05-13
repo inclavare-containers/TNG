@@ -72,7 +72,7 @@ impl SecurityLayer {
     ) -> Result<SecurityConnector> {
         let transport_layer_connector =
             self.transport_layer_creator
-                .create(&pool_key, shutdown_guard, parent_span)?;
+                .create(pool_key, shutdown_guard, parent_span)?;
 
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
@@ -103,7 +103,7 @@ impl SecurityLayer {
         // Try to get the client from pool
         let client = {
             let read = self.pool.read().await;
-            read.get(pool_key).map(|c| c.clone())
+            read.get(pool_key).cloned()
         };
 
         let client = match client {
@@ -137,7 +137,7 @@ impl SecurityLayer {
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
-                            id: id,
+                            id,
                             hyper: Client::builder(TokioExecutor::new()).build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
@@ -201,7 +201,7 @@ impl tower::Service<Uri> for SecurityConnector {
                 let res = https_connector
                     .call(uri)
                     .await
-                    .map_err(|e| anyhow::Error::from_boxed(e))?;
+                    .map_err(anyhow::Error::from_boxed)?;
 
                 if !matches!(res, hyper_rustls::MaybeHttpsStream::Https(_)) {
                     bail!("BUG detected, the connection is not secured by Rats-Tls")

@@ -153,7 +153,7 @@ mod tests {
                 panic!("Wait for tng exit timeout")
             }
             res = ready_receiver => {
-                if !res.is_err(){
+                if res.is_ok(){
                     defer! {
                         std::process::exit(1);
                     }

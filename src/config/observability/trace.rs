@@ -101,11 +101,11 @@ impl TraceExporterInstance {
                 let batch =
                     opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor::builder(span_exporter, opentelemetry_sdk::runtime::Tokio).build();
                 let batch = ShutdownInStandaloneTokioThreadSpanProcessor::new(batch);
-                let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+
+                opentelemetry_sdk::trace::SdkTracerProvider::builder()
                     .with_span_processor(batch)
                     .with_resource(crate::observability::otlp_resource())
-                    .build();
-                tracer_provider
+                    .build()
             }
             TraceExporterInstance::OpenTelemetryStdout(span_exporter) => {
                 opentelemetry_sdk::trace::SdkTracerProvider::builder()

@@ -17,7 +17,7 @@ pub struct CoCoCommonCertVerifier {
 impl CoCoCommonCertVerifier {
     pub fn new(verify: VerifyArgs) -> Self {
         Self {
-            verify: verify,
+            verify,
             attestation_result: Arc::new(Mutex::new(None)),
         }
     }
@@ -46,23 +46,17 @@ impl CoCoCommonCertVerifier {
                     VerifyPolicyOutput::Passed
                 })),
             })
-            .verify_der(&end_entity)
+            .verify_der(end_entity)
         });
 
         match res {
-            Ok(VerifyPolicyOutput::Passed) => {
-                return Ok(());
-            }
-            Ok(VerifyPolicyOutput::Failed) => {
-                return Err(Error::General(
-                    "Verify failed because of claims".to_string(),
-                ));
-            }
-            Err(err) => {
-                return Err(Error::General(
-                    format!("Verify failed with err: {:?}", err).to_string(),
-                ));
-            }
+            Ok(VerifyPolicyOutput::Passed) => Ok(()),
+            Ok(VerifyPolicyOutput::Failed) => Err(Error::General(
+                "Verify failed because of claims".to_string(),
+            )),
+            Err(err) => Err(Error::General(
+                format!("Verify failed with err: {:?}", err).to_string(),
+            )),
         }
     }
 }

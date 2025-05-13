@@ -30,7 +30,7 @@ impl SecurityLayer {
         self.tls_config_generator.prepare(shutdown_guard).await
     }
 
-    pub async fn from_stream(
+    pub async fn handshake(
         &self,
         stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
     ) -> Result<(

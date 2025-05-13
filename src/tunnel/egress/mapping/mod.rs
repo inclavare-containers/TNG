@@ -76,7 +76,7 @@ impl MappingEgress {
             ],
         );
 
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(&common_args).await?);
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args).await?);
 
         Ok(Self {
             listen_addr: mapping_args
