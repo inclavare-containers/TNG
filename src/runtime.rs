@@ -214,19 +214,19 @@ impl TngRuntime {
         // Watch the ready signal from the tng runtime state object.
         {
             let mut receiver = self.state().ready.0.subscribe();
-            shutdown.spawn_task_fn(move |shutdown_guard| {
-                async move {
+            shutdown.spawn_task_fn(move |shutdown_guard| async move {
+                let fut = async move {
                     loop {
-                        tokio::select! {
-                            _ = receiver.changed() => {
-                                if *receiver.borrow_and_update() {
-                                    let _ = ready.send(());// Ignore any error occuring during send
-                                    break;
-                                }
-                            }
-                            _ = shutdown_guard.cancelled() => {}
+                        let _ = receiver.changed().await; // Ignore any error
+                        if *receiver.borrow_and_update() {
+                            let _ = ready.send(()); // Ignore any error occuring during send
+                            break;
                         }
                     }
+                };
+                tokio::select! {
+                    _ = fut => {}
+                    _ = shutdown_guard.cancelled() => {}
                 }
             });
         }

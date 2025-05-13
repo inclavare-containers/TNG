@@ -97,7 +97,7 @@ impl CertManager {
 
                 let join_handle =
                     shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| async move {
-                        let res = async {
+                        let fut = async {
                             loop {
                                 // Update certs in loop
                                 let fut = async {
@@ -114,25 +114,21 @@ impl CertManager {
                                         .context("Failed to set the latest cert")
                                 };
 
-                                tokio::select! {
-                                    _ = shutdown_guard.cancelled() => {
-                                        break;
-                                    }
-                                    result = fut => {
-                                        if let Err(e) = result {
-                                            tracing::error!(error=?e,"Failed to update cert");
-                                        }
-
-                                    }
+                                if let Err(e) = fut.await {
+                                    tracing::error!(error=?e,"Failed to update cert");
                                 }
                             }
                             #[allow(unreachable_code)]
                             Ok::<(), anyhow::Error>(())
-                        }
-                        .await;
+                        };
 
-                        if let Err(e) = res {
-                            tracing::error!(error=?e, "Failed to update cert");
+                        tokio::select! {
+                            _ = shutdown_guard.cancelled() => {}
+                            result = fut => {
+                                if let Err(e) = result {
+                                    tracing::error!(error=?e, "Failed to update cert");
+                                }
+                            }
                         }
                     });
                 *refresh_task = Some(RefreshTask { join_handle })
