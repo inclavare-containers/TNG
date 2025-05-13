@@ -1,47 +1,50 @@
-use std::{
-    os::{
-        linux::net::SocketAddrExt,
-        unix::net::{SocketAddr, UnixListener},
-    },
-    process::Command,
-};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use tokio::{net::UnixListener, process::Command, sync::OnceCell};
+use tracing::{Instrument, Span};
 
+static ONLY_ONE_TNG_PER_NETNS: OnceCell<UnixListener> = OnceCell::const_new();
+
+#[async_trait]
 pub trait IptablesRuleGenerator {
-    fn gen_script(&self) -> Result<(String, String)>;
+    async fn gen_script(&self) -> Result<(String, String)>;
 }
 
 pub struct IptablesExecutor {}
 
 pub struct IptablesGuard {
     iptables_revoke_script: String,
-    _unix_listener: UnixListener,
+    span: Span,
 }
 
 impl IptablesExecutor {
-    pub fn setup(rule_generator: &impl IptablesRuleGenerator) -> Result<IptablesGuard> {
+    pub async fn setup(rule_generator: &impl IptablesRuleGenerator) -> Result<IptablesGuard> {
         tracing::info!("Setting up iptables rule");
 
         // Check if there is annother TNG instance running in same network namespace.
-        let unix_listener = UnixListener::bind_addr(&SocketAddr::from_abstract_name(b"tng")?).context("Running more than 1 TNG instances concurrently in same network namespace which need iptables rules is not supported in current TNG version")?;
+        ONLY_ONE_TNG_PER_NETNS.get_or_try_init(|| async {
+            UnixListener::bind(Path::new("\0tng"))
+                .context("Running more than one TNG instances concurrently in same network namespace which need iptables rules is not supported in current TNG version")
+        }).await?;
 
-        let (iptables_invoke_script, iptables_revoke_script) = rule_generator.gen_script()?;
+        let (iptables_invoke_script, iptables_revoke_script) = rule_generator.gen_script().await?;
 
         let guard = IptablesGuard {
             iptables_revoke_script,
-            _unix_listener: unix_listener,
+            span: Span::current(),
         };
 
-        IptablesExecutor::execute_script(&iptables_invoke_script)?;
+        IptablesExecutor::execute_script(&iptables_invoke_script).await?;
 
         Ok(guard)
     }
 
-    fn execute_script(script: &str) -> Result<()> {
+    async fn execute_script(script: &str) -> Result<()> {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(&format!("set -e ; true ; {}", script));
-        let output = cmd.output();
+        let output = cmd.output().await;
 
         match output {
             Ok(output) => {
@@ -68,8 +71,17 @@ impl IptablesExecutor {
 
 impl Drop for IptablesGuard {
     fn drop(&mut self) {
-        if let Err(e) = IptablesExecutor::execute_script(&self.iptables_revoke_script) {
-            tracing::error!("Failed to revoke iptables rules: {e:#}");
-        }
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                async {
+                    if let Err(e) =
+                        IptablesExecutor::execute_script(&self.iptables_revoke_script).await
+                    {
+                        tracing::error!("Failed to revoke iptables rules: {e:#}");
+                    }
+                }
+                .instrument(self.span.clone()),
+            );
+        })
     }
 }

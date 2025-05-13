@@ -90,7 +90,7 @@ impl RegistedService for NetfilterIngress {
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         // Setup iptables
-        let _iptables_guard = IptablesExecutor::setup(self)?;
+        let _iptables_guard = IptablesExecutor::setup(self).await?;
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;

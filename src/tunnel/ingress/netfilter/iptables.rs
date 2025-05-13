@@ -1,14 +1,16 @@
 use crate::{config::Endpoint, tunnel::utils::iptables::IptablesRuleGenerator};
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 
 use super::NetfilterIngress;
 
 const IPTABLES_FW_MARK_DEFAULT: u32 = 566;
 const IP_ROUTE_TABLE_NUM_DEFAULT: u32 = 239;
 
+#[async_trait]
 impl IptablesRuleGenerator for NetfilterIngress {
-    fn gen_script(&self) -> Result<(String, String)> {
+    async fn gen_script(&self) -> Result<(String, String)> {
         // Detect required external tools
         which::which("iptables")
             .context("The external tool \"iptables\" is not found, please install it")?;

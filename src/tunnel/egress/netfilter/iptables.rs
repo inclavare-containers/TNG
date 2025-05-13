@@ -1,9 +1,11 @@
 use crate::tunnel::utils::iptables::IptablesRuleGenerator;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 
 use super::NetfilterEgress;
 
+#[async_trait]
 impl IptablesRuleGenerator for NetfilterEgress {
     ///
     /// Example output:
@@ -23,7 +25,7 @@ impl IptablesRuleGenerator for NetfilterEgress {
     /// iptables -t nat -X TNG_EGRESS_0
     /// ```
     ///
-    fn gen_script(&self) -> Result<(String, String)> {
+    async fn gen_script(&self) -> Result<(String, String)> {
         // Detect required external tools
         which::which("iptables")
             .context("The external tool \"iptables\" is not found, please install it")?;
