@@ -61,9 +61,12 @@ impl StreamManager for TrustedStreamManager {
                     let security_layer = self.security_layer.clone();
                     let channel = sender.clone();
 
-                    shutdown_guard.spawn_task_fn_current_span(|shutdown_guard| async move {
-                        let (tls_stream, attestation_result) =
-                            match security_layer.from_stream(stream).await {
+                    shutdown_guard.spawn_supervised_task_fn_current_span(
+                        |shutdown_guard| async move {
+                            let (tls_stream, attestation_result) = match security_layer
+                                .from_stream(stream)
+                                .await
+                            {
                                 Ok(v) => v,
                                 Err(e) => {
                                     tracing::error!(%e, "Failed to enstablish security session");
@@ -71,14 +74,15 @@ impl StreamManager for TrustedStreamManager {
                                 }
                             };
 
-                        WrappingLayer::unwrap_stream(
-                            tls_stream,
-                            attestation_result,
-                            channel,
-                            shutdown_guard,
-                        )
-                        .await
-                    });
+                            WrappingLayer::unwrap_stream(
+                                tls_stream,
+                                attestation_result,
+                                channel,
+                                shutdown_guard,
+                            )
+                            .await
+                        },
+                    );
                 }
                 Ok(DecodeResult::DirectlyForward(stream)) => {
                     if let Err(e) =

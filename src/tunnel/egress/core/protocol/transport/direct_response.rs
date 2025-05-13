@@ -19,7 +19,7 @@ pub async fn send_http1_response_to_non_tng_client(
     shutdown_guard: ShutdownGuard,
     stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 ) -> Result<()> {
-    shutdown_guard.spawn_task_current_span(async move {
+    shutdown_guard.spawn_supervised_task_current_span(async move {
         if let Err(error) = hyper::server::conn::http1::Builder::new()
             .keep_alive(false)
             .timer(TokioTimer::new())

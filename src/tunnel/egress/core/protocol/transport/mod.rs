@@ -1,8 +1,12 @@
 use std::pin::Pin;
 
 use crate::{
-    config::egress::DecapFromHttp, observability::trace::shutdown_guard_ext::ShutdownGuardExt,
-    tunnel::utils::{h2_stream::H2Stream, http_inspector::{HttpRequestInspector, InspectionResult, RequestInfo}},
+    config::egress::DecapFromHttp,
+    observability::trace::shutdown_guard_ext::ShutdownGuardExt,
+    tunnel::utils::{
+        h2_stream::H2Stream,
+        http_inspector::{HttpRequestInspector, InspectionResult, RequestInfo},
+    },
 };
 
 use anyhow::{bail, Context as _, Result};
@@ -15,9 +19,8 @@ use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
-mod non_tng_traffic;
 mod direct_response;
-
+mod non_tng_traffic;
 
 pub enum TransportLayer {
     Tcp,
@@ -40,7 +43,15 @@ impl TransportLayer {
         &self,
         in_stream: TcpStream,
         shutdown_guard: ShutdownGuard,
-    ) -> Result<impl Stream<Item = Result<DecodeResult<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>>> + '_> {
+    ) -> Result<
+        impl Stream<
+                Item = Result<
+                    DecodeResult<
+                        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+                    >,
+                >,
+            > + '_,
+    > {
         let span = tracing::info_span!("transport", type={match self {
             TransportLayer::Tcp => "tcp",
             TransportLayer::Http(..) => "h2",
@@ -60,7 +71,7 @@ impl TransportLayer {
                     } = HttpRequestInspector::inspect_stream(in_stream).await;
                     let request_info =
                         result.context("Failed to inspect http request from downstream, maybe not a valid tng traffic")?;
-    
+
                     match request_info {
                         RequestInfo::Http1 {  path, .. } => { // It must not be a tng traffic, since tng traffic must be HTTP/2.
                             if directly_forward_traffic_detector.should_forward_directly(&path) {
@@ -201,18 +212,15 @@ impl TransportLayer {
 
 enum DecodeStreamState<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
     Tcp(TcpStream),
-    Http(
-        H2ConnectionGracefulShutdown<T, bytes::Bytes>
-    ),
+    Http(H2ConnectionGracefulShutdown<T, bytes::Bytes>),
     DirectlyForward(T),
     NoMoreStreams,
 }
 
-pub enum DecodeResult<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>{
+pub enum DecodeResult<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
     ContinueAsTngTraffic(TransportLayerStream),
-    DirectlyForward(T)
+    DirectlyForward(T),
 }
-
 
 /// This is a wrapper of h2::server::Connection, which is used to gracefully shutdown the connection.
 ///
@@ -259,7 +267,7 @@ impl<
         };
 
         self.shutdown_guard
-            .spawn_task_with_span(self.span.clone(), async move {
+            .spawn_supervised_task_with_span(self.span.clone(), async move {
                 conn.graceful_shutdown();
 
                 if let Err(error) = core::future::poll_fn(|cx| conn.poll_closed(cx)).await {

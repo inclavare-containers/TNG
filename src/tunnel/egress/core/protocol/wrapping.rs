@@ -85,7 +85,7 @@ impl WrappingLayer {
         let req = req.map(Body::new);
 
         if req.method() == Method::CONNECT {
-            shutdown_guard.spawn_task_current_span(async move {
+            shutdown_guard.spawn_supervised_task_current_span(async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
                         tracing::debug!("Trusted tunnel established");

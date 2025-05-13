@@ -214,19 +214,13 @@ impl TngRuntime {
         // Watch the ready signal from the tng runtime state object.
         {
             let mut receiver = self.state().ready.0.subscribe();
-            shutdown.spawn_task_fn(move |shutdown_guard| async move {
-                let fut = async move {
-                    loop {
-                        let _ = receiver.changed().await; // Ignore any error
-                        if *receiver.borrow_and_update() {
-                            let _ = ready.send(()); // Ignore any error occuring during send
-                            break;
-                        }
+            shutdown.guard().spawn_supervised_task(async move {
+                loop {
+                    let _ = receiver.changed().await; // Ignore any error
+                    if *receiver.borrow_and_update() {
+                        let _ = ready.send(()); // Ignore any error occuring during send
+                        break;
                     }
-                };
-                tokio::select! {
-                    _ = fut => {}
-                    _ = shutdown_guard.cancelled() => {}
                 }
             });
         }
@@ -254,12 +248,15 @@ impl TngRuntime {
             for (service, span) in self.services.drain(..) {
                 let ready_sender = ready_sender.clone();
                 let error_sender = error_sender.clone();
-                shutdown_guard.spawn_task_fn_with_span(span, |shutdown_guard| async move {
-                    if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
-                        tracing::error!(error=?e, "service failed");
-                        let _ = error_sender.send(e).await;
-                    }
-                });
+                shutdown_guard.spawn_supervised_task_fn_with_span(
+                    span,
+                    |shutdown_guard| async move {
+                        if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
+                            tracing::error!(error=?e, "service failed");
+                            let _ = error_sender.send(e).await;
+                        }
+                    },
+                );
             }
             (ready_receiver, error_receiver)
         };

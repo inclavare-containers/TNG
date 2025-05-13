@@ -95,93 +95,82 @@ impl RegistedService for MappingIngress {
 
         ready.send(()).await?;
 
-        let loop_task = async {
-            loop {
-                async {
-                        let (downstream, peer_addr) = listener.accept().await?;
+        loop {
+            async {
+                    let (downstream, peer_addr) = listener.accept().await?;
 
-                        let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
+                    let dst = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
 
-                        let trusted_stream_manager = self.trusted_stream_manager.clone();
+                    let trusted_stream_manager = self.trusted_stream_manager.clone();
 
-                        self.metrics.cx_total.add(1);
-                        let metrics = self.metrics.clone();
+                    self.metrics.cx_total.add(1);
+                    let metrics = self.metrics.clone();
 
-                        let task = shutdown_guard.spawn_task_fn_with_span(
-                            tracing::info_span!("serve", client=?peer_addr),
-                            move |shutdown_guard| async move {
-                                let fut = async move {
-                                    tracing::trace!("Start serving new connection from client");
+                    let task = shutdown_guard.spawn_supervised_task_fn_with_span(
+                        tracing::info_span!("serve", client=?peer_addr),
+                        move |shutdown_guard| async move {
+                            let fut = async move {
+                                tracing::trace!("Start serving new connection from client");
 
-                                    // Forward via trusted tunnel
-                                    match trusted_stream_manager
-                                        .forward_stream(&dst, downstream, shutdown_guard, metrics)
-                                        .await
-                                    {
-                                        Ok((forward_stream_task, attestation_result)) => {
-                                            // Print access log
-                                            let access_log = AccessLog::Ingress {
-                                                downstream: peer_addr,
-                                                upstream: dst.clone(),
-                                                to_trusted_tunnel: true,
-                                                peer_attested: attestation_result,
-                                            };
-                                            tracing::info!(?access_log);
+                                // Forward via trusted tunnel
+                                match trusted_stream_manager
+                                    .forward_stream(&dst, downstream, shutdown_guard, metrics)
+                                    .await
+                                {
+                                    Ok((forward_stream_task, attestation_result)) => {
+                                        // Print access log
+                                        let access_log = AccessLog::Ingress {
+                                            downstream: peer_addr,
+                                            upstream: dst.clone(),
+                                            to_trusted_tunnel: true,
+                                            peer_attested: attestation_result,
+                                        };
+                                        tracing::info!(?access_log);
 
-                                            if let Err(e) = forward_stream_task.await {
-                                                let error = format!("{e:#}");
-                                                tracing::error!(
-                                                    %dst,
-                                                    error,
-                                                    "Failed during forwarding to upstream via trusted tunnel"
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
+                                        if let Err(e) = forward_stream_task.await {
                                             let error = format!("{e:#}");
                                             tracing::error!(
                                                 %dst,
                                                 error,
-                                                "Failed to connect to upstream via trusted tunnel"
+                                                "Failed during forwarding to upstream via trusted tunnel"
                                             );
                                         }
-                                    };
-
-                                    Ok::<(), anyhow::Error>(())
+                                    }
+                                    Err(e) => {
+                                        let error = format!("{e:#}");
+                                        tracing::error!(
+                                            %dst,
+                                            error,
+                                            "Failed to connect to upstream via trusted tunnel"
+                                        );
+                                    }
                                 };
 
-                                if let Err(e) = fut.await {
-                                    tracing::error!(error=?e, "Failed to forward stream");
-                                }
-                            },
-                        );
+                                Ok::<(), anyhow::Error>(())
+                            };
 
-                        // Spawn a task to trace the connection status.
-                        shutdown_guard.spawn_task_current_span({
-                            let cx_active = self.metrics.cx_active.clone();
-                            let cx_failed = self.metrics.cx_failed.clone();
-                            async move {
-                                cx_active.add(1);
-                                if !matches!(task.await, Ok(())) {
-                                    cx_failed.add(1);
-                                }
-                                cx_active.add(-1);
+                            if let Err(e) = fut.await {
+                                tracing::error!(error=?e, "Failed to forward stream");
                             }
-                        });
-                        Ok::<_, anyhow::Error>(())
-                    }.await.unwrap_or_else(|e| {
-                        tracing::error!(error=?e, "Failed to serve incoming connection from client");
-                    })
-            }
-        };
+                        },
+                    );
 
-        tokio::select! {
-            () = loop_task => {/* should not be here */},
-            _ = shutdown_guard.cancelled() => {
-                tracing::debug!("Shutdown signal received, stop accepting new connections");
-            }
-        };
-
-        Ok(())
+                    // Spawn a task to trace the connection status.
+                    shutdown_guard.spawn_supervised_task_current_span({
+                        let cx_active = self.metrics.cx_active.clone();
+                        let cx_failed = self.metrics.cx_failed.clone();
+                        async move {
+                            cx_active.add(1);
+                            if !matches!(task.await, Ok(())) {
+                                cx_failed.add(1);
+                            }
+                            cx_active.add(-1);
+                        }
+                    });
+                    Ok::<_, anyhow::Error>(())
+                }.await.unwrap_or_else(|e| {
+                    tracing::error!(error=?e, "Failed to serve incoming connection from client");
+                })
+        }
     }
 }

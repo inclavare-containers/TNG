@@ -96,7 +96,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
                 let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
                 {
-                    shutdown_guard.spawn_task_current_span(async move {
+                    shutdown_guard.spawn_supervised_task_current_span(async move {
                         if let Err(e) = conn.await {
                             tracing::error!(?e, "The H2 connection is broken");
                         }

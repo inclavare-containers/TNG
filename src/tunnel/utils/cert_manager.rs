@@ -95,42 +95,36 @@ impl CertManager {
                 let aa_addr = self.aa_addr.clone();
                 let latest_cert = latest_cert.clone();
 
-                let join_handle =
-                    shutdown_guard.spawn_task_fn_current_span(move |shutdown_guard| async move {
-                        let fut = async {
-                            loop {
-                                // Update certs in loop
-                                let fut = async {
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                                        interval as u64,
-                                    ))
-                                    .await;
+                let join_handle = shutdown_guard.spawn_supervised_task_current_span(async move {
+                    let fut = async {
+                        loop {
+                            // Update certs in loop
+                            let fut = async {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(
+                                    interval as u64,
+                                ))
+                                .await;
 
-                                    let certed_key = Self::fetch_new_cert(&aa_addr).await?;
+                                let certed_key = Self::fetch_new_cert(&aa_addr).await?;
 
-                                    latest_cert
-                                        .0
-                                        .send(certed_key)
-                                        .context("Failed to set the latest cert")
-                                };
+                                latest_cert
+                                    .0
+                                    .send(certed_key)
+                                    .context("Failed to set the latest cert")
+                            };
 
-                                if let Err(e) = fut.await {
-                                    tracing::error!(error=?e,"Failed to update cert");
-                                }
-                            }
-                            #[allow(unreachable_code)]
-                            Ok::<(), anyhow::Error>(())
-                        };
-
-                        tokio::select! {
-                            _ = shutdown_guard.cancelled() => {}
-                            result = fut => {
-                                if let Err(e) = result {
-                                    tracing::error!(error=?e, "Failed to update cert");
-                                }
+                            if let Err(e) = fut.await {
+                                tracing::error!(error=?e,"Failed to update cert");
                             }
                         }
-                    });
+                        #[allow(unreachable_code)]
+                        Ok::<(), anyhow::Error>(())
+                    };
+
+                    if let Err(e) = fut.await {
+                        tracing::error!(error=?e, "Failed to update cert");
+                    }
+                });
                 *refresh_task = Some(RefreshTask { join_handle })
             }
             RefreshStrategy::WhenRequired => {
