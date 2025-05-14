@@ -2935,8 +2935,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "730944ca083c1c233a75c09f199e973ca499344a2b7ba9e755c457e86fb4a321"
+source = "git+https://github.com/inclavare-containers/rustls.git?branch=v/0.23.27-patched#c7a96cd777b6c0f668077f92fc30538ecc2f33da"
 dependencies = [
  "brotli",
  "brotli-decompressor",
@@ -2982,8 +2981,7 @@ dependencies = [
 [[package]]
 name = "rustls-webpki"
 version = "0.103.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4a72fe2bcf7a6ac6fd7d0b9e5cb68aeb7d4c0a0271730218b3e92d43b4eb435"
+source = "git+https://github.com/inclavare-containers/webpki.git?branch=v/0.103.3-patched#8d61b9680918bb7eb4ad8378adce1d589f582c82"
 dependencies = [
  "ring",
  "rustls-pki-types",

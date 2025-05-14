@@ -49,6 +49,8 @@ impl CoCoCommonCertVerifier {
             .verify_der(end_entity)
         });
 
+        tracing::debug!(result=?res, "rats-rs cert verify finished");
+
         match res {
             Ok(VerifyPolicyOutput::Passed) => Ok(()),
             Ok(VerifyPolicyOutput::Failed) => Err(Error::General(

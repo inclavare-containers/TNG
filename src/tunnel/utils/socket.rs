@@ -44,11 +44,10 @@ where
     for addr in addrs {
         let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
         socket.set_nonblocking(true)?;
+        #[cfg(target_os = "macos")]
+        let _ = so_mark;
         #[cfg(not(target_os = "macos"))]
-        {
-            let _ = so_mark;
-            socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
-        }
+        socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
         let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
 
         let result = socket.connect(addr).await.map_err(anyhow::Error::from);

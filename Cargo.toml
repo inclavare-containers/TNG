@@ -90,3 +90,7 @@ ctor = "=0.4.1"
 netns-rs = "0.1.0"
 opentelemetry-stdout = "0.29.0"
 rtnetlink = "0.16.0"
+
+[patch.crates-io]
+rustls = {git = "https://github.com/inclavare-containers/rustls.git", branch = "v/0.23.27-patched"}
+rustls-webpki = {git = "https://github.com/inclavare-containers/webpki.git", branch = "v/0.103.3-patched"}
