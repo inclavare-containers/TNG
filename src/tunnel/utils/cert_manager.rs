@@ -159,7 +159,7 @@ impl CertManager {
 
     fn fetch_new_cert_blocking(aa_addr: &str) -> Result<Arc<rustls::sign::CertifiedKey>> {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
-        tracing::trace!(aa_addr, timeout_sec, "Generate new cert with rats-rs");
+        tracing::debug!(aa_addr, timeout_sec, "Generate new cert with rats-rs");
         let coco_attester =
             CocoAttester::new_with_timeout_nano(aa_addr, timeout_sec * 1000 * 1000 * 1000)?;
         let cert = CertBuilder::new(coco_attester, HashAlgo::Sha256)
@@ -168,7 +168,7 @@ impl CertManager {
 
         let der_cert = cert.cert_to_der()?;
         let privkey = cert.private_key().to_pkcs8_pem()?;
-        tracing::trace!(
+        tracing::debug!(
             cert = cert.cert_to_pem()?,
             timeout_sec,
             "Generated new cert"

@@ -54,7 +54,7 @@ rand = "0.9.0"
 rats-cert = {path = "./deps/rats-rs/rats-cert", default-features = false, features = ["coco", "crypto-rustcrypto"]}
 regex = "1.11.1"
 reqwest = {version = "0.12.12", default-features = false, features = ["json", "h2", "rustls-tls-webpki-roots"]}
-rustls = {version = "0.23.22", default-features = false, features = ["logging", "std", "tls12", "ring"]}
+rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
 rustls-pemfile = "2.2.0"
 scopeguard = "1.2.0"
 serde = {version = "1.0", features = ["derive"]}
