@@ -8,7 +8,6 @@ Group: Applications/System
 License: ASL 2.0
 URL: www.alibaba.com
 Source0: https://github.com/inclavare-containers/tng/releases/download/v{version}/trusted-network-gateway-%{version}.tar.gz
-Source1: config
 
 Requires: curl iptables openssl iproute
 Recommends: attestation-agent
@@ -44,21 +43,13 @@ A tool for establishing secure communication tunnels in confidential computing.
 
 %prep
 %setup -q -n %{name}-%{version}
-# Add cargo source replacement configs
-mkdir -p ~/.cargo/
-cp %{SOURCE1} ~/.cargo/config
 
 
 %build
-ln -s `realpath %{_builddir}/%{name}-%{version}/vendor` ~/vendor
 # Build tng
 pushd src/
 cargo install --locked --path . --root %{_builddir}/%{name}-%{version}/install/tng/
 popd
-# Remove vendor
-rm -f ~/vendor
-# Remove cargo config
-rm -f ~/.cargo/config
 
 
 %install

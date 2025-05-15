@@ -34,7 +34,14 @@ VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr 
 create-tarball:
 	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/ && mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/
 
-	cargo vendor --manifest-path ./Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/
+	cargo vendor --locked --manifest-path ./Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ | tee /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml
+
+	sed -i 's;^.*directory = .*/vendor/.*$$;directory = "vendor";g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml
+
+	# sanity check on cargo vendor
+	@grep "source.crates-io" /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml >/dev/null || (echo "cargo vendor failed, please check /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml"; exit 1)
+
 	# remove unused files
 	find /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/src/ ! -name 'lib.rs' -type f -exec rm -f {} +
 	find /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/winapi*/src/ ! -name 'lib.rs' -type f -exec rm -f {} +
@@ -49,26 +56,6 @@ create-tarball:
 
 	@echo "Tarball generated:" /tmp/trusted-network-gateway-${VERSION}.tar.gz
 
-
-define CARGO_CONFIG
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source."git+https://github.com/intel/SGXDataCenterAttestationPrimitives?tag=DCAP_1.20"]
-git = "https://github.com/intel/SGXDataCenterAttestationPrimitives"
-tag = "DCAP_1.20"
-replace-with = "vendored-sources"
-
-[source."git+https://github.com/occlum/occlum?tag=v0.29.7"]
-git = "https://github.com/occlum/occlum"
-tag = "v0.29.7"
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-endef
-export CARGO_CONFIG
-
 .PHONE: rpm-build
 rpm-build:
 	# setup build tree
@@ -77,7 +64,6 @@ rpm-build:
 
 	# copy sources
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
-	@echo "$$CARGO_CONFIG" > ~/rpmbuild/SOURCES/config
 
 	# install build dependencies
 	which yum-builddep || { yum install -y yum-utils ; }
@@ -92,7 +78,6 @@ rpm-build-in-docker:
 	# copy sources
 	mkdir -p ~/rpmbuild/SOURCES/
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
-	@echo "$$CARGO_CONFIG" > ~/rpmbuild/SOURCES/config
 
 	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec"
 
