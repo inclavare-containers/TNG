@@ -93,15 +93,12 @@ impl RequestHelper {
         } else {
             match self.req.headers().get(http::header::HOST) {
                 Some(host) => {
-                    // Determine the host and port of endpoint
-                    let host = host
-                        .to_str()
-                        .context("No valid 'HOST' value in request header")?
-                        .to_owned();
-
                     let authority = host
-                        .parse::<Uri>()
-                        .map_err(|e| anyhow!(e))
+                        .to_str()
+                        .map_err(|e: http::header::ToStrError| anyhow!(e))
+                        .and_then(|host|{
+                            host.parse::<Uri>().map_err(|e| anyhow!(e))
+                        }                    )     
                         .and_then(|uri| {
                             uri.into_parts()
                                 .authority
@@ -128,7 +125,7 @@ impl RequestHelper {
     }
 
     pub async fn handle(
-        mut self,
+        self,
         stream_router: Arc<StreamRouter>,
         shutdown_guard: ShutdownGuard,
         metrics: ServiceMetrics,
@@ -188,7 +185,7 @@ impl RequestHelper {
                 "Setting up stream from http-proxy downstream"
             );
 
-            let forward_span = tracing::info_span!("http-proxy-forward");
+            let forward_span = tracing::info_span!("http-reverse-proxy-forward");
             async {
 
                 if self.req.headers().get(TNG_HTTP_FORWARD_HEADER).is_some() {
@@ -224,12 +221,26 @@ impl RequestHelper {
                         }
                     });
 
-                    self.req.headers_mut().remove(TNG_HTTP_FORWARD_HEADER);
-                    self.req.headers_mut().insert(TNG_HTTP_FORWARD_HEADER, HeaderValue::from_static("true"));
+                    let mut req = self.req;
+                    
+                    // Remove scheme and authority, but keep path and query in the request URI.
+                    let mut parts = req.uri().clone().into_parts();
+                    parts.authority = None;
+                    parts.scheme = None;
+                    *req.uri_mut() = http::Uri::from_parts(parts).with_context(|| {
+                        format!(
+                            "Failed convert uri {} for forwarding http request to upstream",
+                            req.uri()
+                        )
+                    })?;
+
+                    // Add a header to detect recursion
+                    req.headers_mut().remove(TNG_HTTP_FORWARD_HEADER);
+                    req.headers_mut().insert(TNG_HTTP_FORWARD_HEADER, HeaderValue::from_static("true"));
 
                     tracing::debug!("Forwarding HTTP request to upstream now");
                     sender
-                        .send_request(self.req)
+                        .send_request(req)
                         .await
                         .map(|res| res.into_response())
                         .context("Failed to send http request to upstream")

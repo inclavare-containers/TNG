@@ -247,6 +247,15 @@ pub async fn launch_http_server(
                     if hostname != expected_host_header {
                         bail!("Got hostname `{hostname}`, but `{expected_host_header}` is expected");
                     }
+
+                    if request.uri().scheme().is_some() {
+                        bail!("The request URI should not contain scheme, but got {:?}", request.uri().scheme())
+                    }
+
+                    if request.uri().authority().is_some() {
+                        bail!("The request URI should not contain authority, but got {:?}", request.uri().authority())
+                    }
+
                     let path_and_query = request.uri().path_and_query();
                     if path_and_query.map(|t| t.as_str()) != Some(&expected_path_and_query) {
                         bail!("Got path and query `{path_and_query:?}`, but `{expected_path_and_query}` is expected");

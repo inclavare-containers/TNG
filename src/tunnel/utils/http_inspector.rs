@@ -94,32 +94,38 @@ impl HttpRequestInspector {
                 let mut headers = [httparse::EMPTY_HEADER; 16];
                 let mut req = httparse::Request::new(&mut headers);
                 let status = req.parse(&buf).context("Failed to parse http1 request")?;
+
+                tracing::trace!(?req, "Got http1 request");
                 match (
                     req.path,
                     req.headers
                         .iter()
                         .find(|r| r.name.eq_ignore_ascii_case("Host")),
                 ) {
-                    (Some(path), host) => {
+                    (Some(req_path), host) => {
                         // Accroding to RFC 9112, we have to accept the absolute-form in requests, even when host header is missing.
                         // https://datatracker.ietf.org/doc/html/rfc9112#name-absolute-form
-                        let uri = path
+                        let uri = req_path
                             .parse::<Uri>()
                             .context("Invalid path in http1 request")?;
 
-                        let authority = if let Some(authority) = uri.authority() {
-                            authority.to_owned()
+                        if let Some(authority) = uri.authority() {
+                            return Ok(RequestInfo::Http1 {
+                                authority: authority.to_owned(),
+                                path: uri.path().to_owned(),
+                            });
                         } else if let Some(host) = host {
-                            Authority::try_from(host.value)
-                                .context("Invalid host header in http1 request")?
+                            return Ok(RequestInfo::Http1 {
+                                authority: Authority::try_from(host.value)
+                                    .context("Invalid host header in http1 request")?,
+                                path: uri.path().to_owned(),
+                            });
                         } else {
-                            bail!("Host header is missing in http1 request")
+                            // The missing of host header may be due to the incomplete request data, so we need to check here before returning an error.
+                            if status.is_complete() {
+                                bail!("Host header is missing in http1 request")
+                            }
                         };
-
-                        return Ok(RequestInfo::Http1 {
-                            authority,
-                            path: uri.path().to_owned(),
-                        });
                     }
                     _ => {
                         if status.is_complete() {
