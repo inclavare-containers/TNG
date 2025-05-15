@@ -33,6 +33,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Check pre-release
+        run: |
+          tag="${GITHUB_REF#refs/*/}"
+          echo "tag=tag"
+          if [[ ${tag} == *alpha* || ${tag} == *beta* ]]
+          then
+              prerelease=true
+          else
+              prerelease=false
+          fi
+          echo "prerelease=$prerelease"
+          echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -51,12 +63,12 @@ jobs:
           done
       - name: List Directory
         run: ls -R artifacts
-      - name: Upload Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           fail_on_unmatched_files: true
-          prerelease: false
+          prerelease: ${{ env.PRE_RELEASE }}
           # files: |
           #   ./artifacts/*.zip
           #   ./artifacts/*.tar.gz
