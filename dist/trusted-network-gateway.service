@@ -1,10 +1,10 @@
 [Unit]
-Description=Trusted Network Gateway Launch Service
-Documentation=tng
+Description=Trusted Network Gateway Daemon
+Documentation=https://github.com/inclavare-containers/tng/blob/master/docs/configuration.md
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/tng launch --config-file /etc/tng/config.json'
+ExecStart=/usr/bin/tng launch --config-file /etc/tng/config.json
 Restart=always
 
 [Install]

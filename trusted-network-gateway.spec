@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.0
+Version: 2.2.1
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,10 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Thu May 15 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.1-1
+- Fix broken trusted-network-gateway.service
+
+
 * Tue May 13 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.0-1
 - Add new ingress type "netfilter" with cgroup match support.
 - Add systemd service file.
@@ -84,7 +88,7 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 * Tue Apr 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.1.0-1
 - Fixed the issue of using incorrect spans in some async tasks during request handling.
-- Add traces exporter (otlp, stdout) for metrics reporting.
+- Add traces exporter (otlp, stdout) for traces reporting.
 - Add the "refresh_interval" field in the configuration to control the evidence caching strategy.
 - Add a RESTful control interface ("/readyz", "/livez") to check the status of tng instances.
 - Add metrics exporter (otlp, falcon, stdout) for metrics reporting.
