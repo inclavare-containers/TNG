@@ -5,8 +5,8 @@ Version: 2.2.1
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
-License: ASL 2.0
-URL: www.alibaba.com
+License: Apache-2.0
+URL: https://www.alibaba.com
 Source0: https://github.com/inclavare-containers/tng/releases/download/v{version}/trusted-network-gateway-%{version}.tar.gz
 
 Requires: curl iptables openssl iproute
