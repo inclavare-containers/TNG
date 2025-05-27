@@ -14,8 +14,8 @@ t-one:
   project: &PROJECT default_container_ci_test
   test_suite: &TEST_SUITE image-ci-test
   # 执行测试 case, 多个用数组表示
-  test_conf: &TEST_CONF group=baseos_container
-  test_case: &TEST_CASE baseos_container_default
+  test_conf: &TEST_CONF group=app_container
+  test_case: &TEST_CASE app_container_default
   cloud_server_tag: &CLOUD_SERVER_TAG [anolis-container-ci-x86]
 
 # 构建镜像配置
