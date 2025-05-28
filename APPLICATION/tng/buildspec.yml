@@ -10,20 +10,20 @@ repository_info:
 # 定义镜像测试信息
 t-one:
   # 配置测试信息 workspace 和模版
-  workspace: &WORKSPACE anolis
-  project: &PROJECT default_anolis
+  workspace: &WORKSPACE container_ci_test
+  project: &PROJECT default_container_ci_test
   test_suite: &TEST_SUITE image-ci-test
   # 执行测试 case, 多个用数组表示
-  test_conf: &TEST_CONF baseos_container
-  test_case: &TEST_CASE baseos_container_default
-  cloud_server_tag: &CLOUD_SERVER_TAG [alinux-image-ci-x86-ecs]
+  test_conf: &TEST_CONF group=app_container
+  test_case: &TEST_CASE app_container_default
+  cloud_server_tag: &CLOUD_SERVER_TAG [anolis-container-ci-x86]
 
 # 构建镜像配置
 images:
   # 分组名称，支持自定义
   Tng:
     build: true
-    test: false
+    test: true
     region: cn-hongkong
     platform: [linux/amd64]
     docker_file:
