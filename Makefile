@@ -92,7 +92,6 @@ update-rpm-tree:
 	rm -f ../rpm-tree-tng/trusted-network-gateway-*.tar.gz
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ../rpm-tree-tng/
 	cp ./trusted-network-gateway.spec ../rpm-tree-tng/
-	@echo "$$CARGO_CONFIG" > ../rpm-tree-tng/config
 
 .PHONE: docker-build
 docker-build:
