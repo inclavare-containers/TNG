@@ -26,9 +26,9 @@ run-test:
 	which ping || { yum install -y iputils ; }
 	which gcc || { yum install -y gcc ; }
 	which dig || { yum install -y bind-utils ; }
-	./scripts/run-test.sh
+	./tng-testsuite/run-test.sh
 
-VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
+VERSION 	:= $(shell grep '^version' ./tng/Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 
 .PHONE: create-tarball
 create-tarball:
@@ -92,7 +92,6 @@ update-rpm-tree:
 	rm -f ../rpm-tree-tng/trusted-network-gateway-*.tar.gz
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ../rpm-tree-tng/
 	cp ./trusted-network-gateway.spec ../rpm-tree-tng/
-	@echo "$$CARGO_CONFIG" > ../rpm-tree-tng/config
 
 .PHONE: docker-build
 docker-build:

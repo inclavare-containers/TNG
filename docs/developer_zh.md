@@ -88,7 +88,7 @@ EOF
 
 3. 编译并安装tng
 ```sh
-cargo install --locked --path . --root /usr/local/
+cargo install --locked --path ./tng/ --root /usr/local/
 ```
 
 现在，您可以直接使用tng命令来启动一个TNG实例了。

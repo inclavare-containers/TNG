@@ -1,12 +1,10 @@
-mod common;
-
 use anyhow::Result;
-use common::{
+use tng_testsuite::{
     run_test,
     task::{app::AppType, tng::TngInstance, Task as _},
 };
 
-/// tng client as attester and tng server as verifier
+/// tng client as verifier and tng server as attester
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
     run_test(
@@ -26,11 +24,8 @@ async fn test() -> Result<()> {
                                     "port": 30001
                                 }
                             },
-                            "verify": {
-                                "as_addr": "http://192.168.1.254:8080/",
-                                "policy_ids": [
-                                    "default"
-                                ]
+                            "attest": {
+                                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                             }
                         }
                     ]
@@ -51,8 +46,11 @@ async fn test() -> Result<()> {
                                     "port": 20001
                                 }
                             },
-                            "attest": {
-                                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            "verify": {
+                                "as_addr": "http://192.168.1.254:8080/",
+                                "policy_ids": [
+                                    "default"
+                                ]
                             }
                         }
                     ]
@@ -65,7 +63,7 @@ async fn test() -> Result<()> {
                 port: 10001,
                 http_proxy: None,
             }.boxed(),
-        ],
+        ]
     )
     .await?;
 

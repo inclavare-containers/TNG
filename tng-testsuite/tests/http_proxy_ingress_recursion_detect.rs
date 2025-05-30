@@ -1,7 +1,5 @@
-mod common;
-
 use anyhow::Result;
-use common::{
+use tng_testsuite::{
     run_test,
     task::{shell::ShellTask, tng::TngInstance, NodeType, Task as _},
 };
