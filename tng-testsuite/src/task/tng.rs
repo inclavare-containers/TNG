@@ -55,7 +55,7 @@ impl Task for TngInstance {
 
             TngRuntime::from_config_with_reload_handle(
                 config,
-                crate::common::BIN_TEST_LOG_RELOAD_HANDLE
+                crate::BIN_TEST_LOG_RELOAD_HANDLE
                     .get()
                     .expect("log reload handle not initialized"),
             )
