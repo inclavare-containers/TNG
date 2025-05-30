@@ -1,7 +1,5 @@
-mod common;
-
 use anyhow::Result;
-use common::{
+use tng_testsuite::{
     run_test,
     task::{app::AppType, tng::TngInstance, Task as _},
 };
@@ -52,6 +50,9 @@ async fn test() -> Result<()> {
                                 "as_addr": "http://192.168.1.254:8080/",
                                 "policy_ids": [
                                     "default"
+                                ],
+                                "trusted_certs_paths": [
+                                    "/tmp/as-ca.pem"
                                 ]
                             }
                         }
@@ -65,7 +66,7 @@ async fn test() -> Result<()> {
                 port: 10001,
                 http_proxy: None,
             }.boxed(),
-        ]
+        ],
     )
     .await?;
 

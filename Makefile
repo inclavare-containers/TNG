@@ -26,9 +26,9 @@ run-test:
 	which ping || { yum install -y iputils ; }
 	which gcc || { yum install -y gcc ; }
 	which dig || { yum install -y bind-utils ; }
-	./scripts/run-test.sh
+	./tng-testsuite/run-test.sh
 
-VERSION 	:= $(shell grep '^version' Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
+VERSION 	:= $(shell grep '^version' ./tng/Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 
 .PHONE: create-tarball
 create-tarball:

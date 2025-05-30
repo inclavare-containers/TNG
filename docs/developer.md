@@ -88,7 +88,7 @@ EOF
 
 3. Compile and Install tng
 ```sh
-cargo install --locked --path . --root /usr/local/
+cargo install --locked --path ./tng/ --root /usr/local/
 ```
 
 Now, you can directly use the `tng` command to start a TNG instance.

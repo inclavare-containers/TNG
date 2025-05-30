@@ -3519,11 +3519,9 @@ version = "2.2.1"
 dependencies = [
  "again",
  "anyhow",
- "async-http-proxy",
  "async-trait",
  "auto_enums",
  "axum 0.8.1",
- "axum-extra",
  "bytes",
  "clap",
  "console-subscriber",
@@ -3543,7 +3541,6 @@ dependencies = [
  "hyper-util",
  "indexmap 2.9.0",
  "itertools 0.14.0",
- "netns-rs",
  "nix 0.29.0",
  "once_cell",
  "opentelemetry",
@@ -3556,7 +3553,6 @@ dependencies = [
  "rats-cert",
  "regex",
  "reqwest",
- "rtnetlink",
  "rustls",
  "rustls-pemfile",
  "scopeguard",
@@ -3581,6 +3577,33 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "which 7.0.2",
+]
+
+[[package]]
+name = "tng-testsuite"
+version = "0.0.1"
+dependencies = [
+ "again",
+ "anyhow",
+ "async-http-proxy",
+ "async-trait",
+ "axum 0.8.1",
+ "axum-extra",
+ "ctor",
+ "futures",
+ "http",
+ "netns-rs",
+ "opentelemetry-stdout",
+ "rand 0.9.0",
+ "reqwest",
+ "rtnetlink",
+ "rustls",
+ "serde_json",
+ "tng",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
