@@ -13,12 +13,14 @@ on:
       - 'native'
 
 jobs:
-  docker:
+  build:
     runs-on: ubuntu-latest-16-cores
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Docker Setup Buildx # enable cache
+      - name: Docker Setup Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
         with:
@@ -41,20 +43,114 @@ jobs:
             type=sha,format=long
             # set latest tag for default branch
             type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build and export
+        uses: docker/build-push-action@v6.9.0
+        with:
+          target: tng-release
+          context: .
+          tags: |
+            tng:test
+            ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=docker,dest=${{ runner.temp }}/container-image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: ${{ runner.temp }}/container-image.tar
+
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    needs: build
+    container:
+      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      options: --privileged
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+
+          # replace the mirror
+          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+
+          yum install -y git make
+
+      - name: Install Podman
+        run: |
+          yum install -y podman
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: ${{ runner.temp }}
+
+      - name: List Directory
+        run: ls -R ${RUNNER_TEMP}
+
+      - name: Load image
+        run: |
+          podman load --input ${RUNNER_TEMP}/container-image.tar
+
+      - uses: dtolnay/rust-toolchain@1.75.0
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      - uses: ./.github/actions/run-aa-as
+
+
+      - name: Run integration tests
+        run: |
+          set -e
+          set -x
+
+          # Append dns server
+          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          # Run test
+          export TNG_TESTSUITE_TNG_IMAGE_URL="tng:test"
+          make run-test-on-podman
+
+  push:
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: ${{ runner.temp }}
+
+      - name: Load image
+        run: |
+          docker load --input ${RUNNER_TEMP}/container-image.tar
+
       - name: Login to GHCR Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
-        uses: docker/build-push-action@v6.9.0
-        with:
-          target: tng-release
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Push Image
+        env:
+          IMAGE_TAGS: ${{needs.build.outputs.tags}}
+        run: |
+          set -e
+          set -x
+
+          for tag in ${IMAGE_TAGS}; do
+              docker tag tng:test ${tag}
+              docker push ${tag}
+          done
+

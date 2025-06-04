@@ -81,6 +81,21 @@ jobs:
       image: ${{ matrix.distro_img }}
       options: --privileged
     steps:
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+
+          # replace the mirror
+          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+
+          if [[ "${{ matrix.distro }}" == anolis23 ]] ; then
+              yum install anolis-epao-release -y
+          fi
+
+          yum install -y git make
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -95,6 +110,24 @@ jobs:
           # test rpm package install
           yum install -y ./rpm-packages/RPMS/*/trusted-network-gateway-*.rpm
           tng --version
+
+      - uses: dtolnay/rust-toolchain@1.75.0
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      - uses: ./.github/actions/run-aa-as
+
+      - name: Run integration tests
+        run: |
+          set -e
+          set -x
+
+          # Append dns server
+          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          # Run test
+          make run-test-on-bin
 
   release:
     if: startsWith(github.ref, 'refs/tags/')

@@ -1,0 +1,48 @@
+name: 'Run Attestation Agent and Attestation Service'
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare attestation-agent
+      shell: bash
+      run: |
+        set -e
+        set -x
+
+        yum install -y attestation-agent
+        RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock &
+
+    - name: Prepare attestation-service
+      shell: bash
+      run: |
+        set -e
+        set -x
+
+        yum install -y trustee
+
+        # Prepare certificates
+        yum install -y jq openssl
+        openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -keyout /tmp/as-ca.key -out /tmp/as-ca.pem -nodes -subj "/O=Trustee CA" \
+            -addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature
+        openssl genrsa -out /tmp/as.key 2048
+        openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"
+        openssl x509 -req -in /tmp/as.csr -CA /tmp/as-ca.pem -CAkey /tmp/as-ca.key -CAcreateserial -out /tmp/as.pem -days 365 -extensions v3_req -extfile <(echo -e "[v3_req]\nsubjectKeyIdentifier = hash") -sha256
+
+        # Generate attestation-service config
+        # The config file is from https://github.com/openanolis/trustee/blob/fe74c919578813da3f80e43011676b169cfc8ef8/attestation-service/config.json
+        cat <<EOF | jq '.attestation_token_broker.signer.cert_path="/tmp/as.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key"' > /tmp/config_with_cert.json
+        {
+            "work_dir": "/var/lib/attestation-service/",
+            "rvps_config": {
+                "type": "BuiltIn",
+                "storage": {
+                    "type": "LocalFs"
+                }
+            },
+            "attestation_token_broker": {
+                "type": "Simple",
+                "duration_min": 5
+            }
+        }
+        EOF
+
+        RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json &

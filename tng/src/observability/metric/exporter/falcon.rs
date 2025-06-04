@@ -206,7 +206,7 @@ impl SimpleMetricExporter for FalconExporter {
                 Ok::<(), anyhow::Error>(())
             })
             .await
-            .with_context(|| format!("Failed after {MAX_PUSH_RETRY} attemptions."))?;
+            .with_context(|| format!("Failed after {MAX_PUSH_RETRY} attemptions"))?;
 
         Ok(())
     }

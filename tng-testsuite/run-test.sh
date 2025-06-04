@@ -9,7 +9,8 @@ catch() {
     echo "An error has occurred. Exit now"
 }
 
-script_dir=$(dirname $(realpath "$0"))
+project_root=$(dirname $(realpath "$0"))/../
+cd ${project_root}
 
 export RUST_BACKTRACE=1
 
@@ -19,17 +20,17 @@ test_result_msgs=""
 install_cargo_llvm_cov() {
     export PATH="$HOME/.cargo/bin:$PATH"
 
-    if ! command -v cargo-llvm-cov &> /dev/null; then
+    if ! command -v cargo-llvm-cov &>/dev/null; then
         echo "cargo-llvm-cov is not installed. Installing now..."
         # Get host target
         host=$(rustc -vV | grep '^host:' | cut -d' ' -f2)
         # Download binary and install to $HOME/.cargo/bin
-        curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-$host.tar.gz" \
-        | tar xzf - -C "$HOME/.cargo/bin"
+        curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-$host.tar.gz" |
+            tar xzf - -C "$HOME/.cargo/bin"
     fi
 
-    export LLVM_COV=`command -v llvm-cov`
-    export LLVM_PROFDATA=`command -v llvm-profdata`
+    export LLVM_COV=$(command -v llvm-cov)
+    export LLVM_PROFDATA=$(command -v llvm-profdata)
 }
 
 install_cargo_llvm_cov
@@ -49,7 +50,7 @@ else
 fi
 
 # Run bin tests under 'tng-testsuite/tests/' dir
-test_cases=$(ls ${script_dir}/../tng-testsuite/tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g')
+test_cases=$(ls tng-testsuite/tests/ | grep -E ".*\.rs$" | sed 's/\.rs//g')
 skipped_test_cases=""
 
 test_result_msgs="${test_result_msgs}\n============= Integration tests ============="
