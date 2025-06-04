@@ -135,7 +135,7 @@ async fn launch_tcp_server(token: CancellationToken, port: u16) -> Result<JoinHa
         loop {
             tokio::select! {
                 _ = token.cancelled() => {
-                    tracing::info!("The TCP server task cancelled.");
+                    tracing::info!("The TCP server task cancelled");
                     break
                 },
                 result = listener.accept() => {
@@ -197,7 +197,7 @@ async fn launch_tcp_client(
 
             let mut stream = tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                    Err(anyhow!("The TCP client task timed out."))
+                    Err(anyhow!("The TCP client task timed out"))
                 }
                 result = connect_task => result,
             }?;
@@ -217,11 +217,11 @@ async fn launch_tcp_client(
                     String::from_utf8_lossy(&response)
                 )
             } else {
-                tracing::info!("Success! The response matchs expected value.");
+                tracing::info!("Success! The response matchs expected value");
             }
         }
 
-        tracing::info!("The TCP client task normally exited.");
+        tracing::info!("The TCP client task normally exited");
         Ok(())
     }))
 }
@@ -371,7 +371,7 @@ pub async fn launch_http_client_common(
             if text != HTTP_RESPONSE_BODY {
                 bail!("The response body should be `{HTTP_RESPONSE_BODY}`, but got `{text}`.\n\tResponse: {resp_info}")
             } else {
-                tracing::info!("Success! The response matchs expected value.");
+                tracing::info!("Success! The response matchs expected value");
             }
         }
 

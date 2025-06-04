@@ -32,6 +32,7 @@ pub struct TngConfig {
     pub add_egress: Vec<AddEgressArgs>,
 
     /// The [address]:port where the envoy admin interface to bind on.
+    #[serde(default = "Option::default")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admin_bind: Option<Endpoint>,
 }

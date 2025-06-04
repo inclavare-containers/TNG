@@ -4,28 +4,23 @@ help:
 
 .PHONE: install-test-deps
 install-test-deps:
-	if ! command -v attestation-agent ; then \
-		cd /tmp/ ; \
-		git clone https://github.com/confidential-containers/guest-components ; \
-		cd guest-components/attestation-agent ; \
-		git checkout 8e6a45dbb6f9c06b66476d4a32a38ba5410f6bc8 ; \
-		make ATTESTER=tdx-attester && make install ATTESTER=tdx-attester ; \
-	fi
-
-	if ! command -v restful-as ; then \
-		cd /tmp/ ; \
-		git clone https://github.com/confidential-containers/trustee ; \
-		cd trustee/attestation-service ; \
-		git checkout 8af3ee5ef5401ccc5506a0954ce600c405c351f9 ; \
-		make && make install ; \
-	fi
+	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute
 
 .PHONE: run-test
-run-test:
-	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute
+run-test: install-test-deps
 	yum-builddep -y ./trusted-network-gateway.spec
 
 	./tng-testsuite/run-test.sh
+
+.PHONE: run-test-on-bin
+run-test-on-bin: install-test-deps
+	cargo test --no-default-features --features on-bin --package tng-testsuite --tests -- --nocapture
+
+
+.PHONE: run-test-on-podman
+run-test-on-podman: install-test-deps
+	cargo test --no-default-features --features on-podman --package tng-testsuite --tests -- --nocapture
+
 
 VERSION 	:= $(shell grep '^version' ./tng/Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 

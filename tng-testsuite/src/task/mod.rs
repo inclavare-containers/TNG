@@ -19,6 +19,7 @@ pub trait Task: Send + Sync + 'static {
 
     fn node_type(&self) -> NodeType;
 
+    /// Launch the task, wait until the task is ready and return a handle to the task.
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>>;
 
     fn boxed(self) -> Box<dyn Task>

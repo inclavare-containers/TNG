@@ -1,36 +1,15 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use tng::runtime::TngRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::{NodeType, Task};
+use super::TngInstance;
 
-pub enum TngInstance {
-    #[allow(unused)]
-    TngClient(&'static str),
-    #[allow(unused)]
-    TngServer(&'static str),
-}
-
-#[async_trait]
-impl Task for TngInstance {
-    fn name(&self) -> String {
-        match self {
-            TngInstance::TngClient(_) => "tng_client",
-            TngInstance::TngServer(_) => "tng_server",
-        }
-        .to_string()
-    }
-
-    fn node_type(&self) -> NodeType {
-        match self {
-            TngInstance::TngClient(_) => NodeType::Client,
-            TngInstance::TngServer(_) => NodeType::Server,
-        }
-    }
-
-    async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+impl TngInstance {
+    pub(super) async fn launch_inner(
+        &self,
+        token: CancellationToken,
+    ) -> Result<JoinHandle<Result<()>>> {
         let config_json = match self {
             TngInstance::TngClient(config_json) | TngInstance::TngServer(config_json) => {
                 config_json
