@@ -4,7 +4,7 @@ help:
 
 .PHONE: install-test-deps
 install-test-deps:
-	if ! which attestation-agent ; then \
+	if ! command -v attestation-agent ; then \
 		cd /tmp/ ; \
 		git clone https://github.com/confidential-containers/guest-components ; \
 		cd guest-components/attestation-agent ; \
@@ -12,7 +12,7 @@ install-test-deps:
 		make ATTESTER=tdx-attester && make install ATTESTER=tdx-attester ; \
 	fi
 
-	if ! which restful-as ; then \
+	if ! command -v restful-as ; then \
 		cd /tmp/ ; \
 		git clone https://github.com/confidential-containers/trustee ; \
 		cd trustee/attestation-service ; \
@@ -22,10 +22,9 @@ install-test-deps:
 
 .PHONE: run-test
 run-test:
-	which iptables || { yum install -y iptables ; }
-	which ping || { yum install -y iputils ; }
-	which gcc || { yum install -y gcc ; }
-	which dig || { yum install -y bind-utils ; }
+	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute
+	yum-builddep -y ./trusted-network-gateway.spec
+
 	./tng-testsuite/run-test.sh
 
 VERSION 	:= $(shell grep '^version' ./tng/Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
@@ -58,15 +57,13 @@ create-tarball:
 
 .PHONE: rpm-build
 rpm-build:
-	# setup build tree
-	which rpmdev-setuptree || { yum install -y rpmdevtools ; }
+	# setup build tree rpmdevtools
 	rpmdev-setuptree
 
 	# copy sources
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
 
-	# install build dependencies
-	which yum-builddep || { yum install -y yum-utils ; }
+	# install build dependencies yum-utils
 	yum-builddep -y ./trusted-network-gateway.spec
 	
 	# build

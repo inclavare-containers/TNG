@@ -63,87 +63,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: ["alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest", "registry.openanolis.cn/openanolis/anolisos:23"]
-        upstream: [ic, coco]
+        # distro: [anolis8, anolis23, alinux3]
+        distro: [alinux3]
         include:
-          - upstream: ic
-            aa: https://github.com/inclavare-containers/guest-components.git --branch main
-            as: https://github.com/openanolis/trustee.git --branch v1.1.3
-          - upstream: coco
-            aa: https://github.com/confidential-containers/guest-components.git --branch v0.12.0
-            as: https://github.com/confidential-containers/trustee.git --branch v0.12.0
+          # - distro: anolis8
+          #   distro_img: registry.openanolis.cn/openanolis/anolisos:8
+          # - distro: anolis23
+          #   distro_img: registry.openanolis.cn/openanolis/anolisos:23
+          - distro: alinux3
+            distro_img: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
     needs: build
     container:
-      image: ${{ matrix.distro }}
+      image: ${{ matrix.distro_img }}
       options: --privileged
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-
-          # install development tools
-          yum install -y autoconf automake binutils bison flex gcc gcc-c++ gdb glibc-devel libtool make pkgconf pkgconf-m4 pkgconf-pkg-config rpm-build rpm-sign strace asciidoc byacc ctags diffstat elfutils-libelf-devel git intltool patchutils perl-Fedora-VSP perl-Sys-Syslog perl-generators pesign source-highlight systemtap valgrind valgrind-devel cmake expect rpmdevtools rpmlint perl clang
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Prepare attestation-agent
-        run: |
-          set -e
-          set -x
-          git clone ${{ matrix.aa }}
-          cd guest-components/attestation-agent
-          make ATTESTER=none ttrpc=true
-          make install
-          RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock &
-
-      - name: Prepare attestation-service
-        run: |
-          set -e
-          set -x
-
-          yum install -y jq
-
-          cd /tmp ; \
-              curl https://download.01.org/intel-sgx/sgx-dcap/1.21/linux/distro/Anolis86/sgx_rpm_local_repo.tgz --output /tmp/sgx_rpm_local_repo.tgz ; \
-              tar zxvf /tmp/sgx_rpm_local_repo.tgz ; \
-              yum -y install yum-utils ; yum-config-manager --add-repo file:///tmp/sgx_rpm_local_repo ; \
-              yum install -y --setopt=install_weak_deps=False --nogpgcheck libsgx-dcap-quote-verify-devel perl wget curl clang openssl-devel protobuf-devel git tpm2-tss tpm2-tss-devel libudev-devel
-
-          # Fix missing FindBin.pm in anolis23
-          if yum info perl-FindBin ; then yum install -y perl-FindBin ; fi
-
-          git clone ${{ matrix.as }}
-          cd trustee/attestation-service
-          cargo install --path . --bin restful-as --features restful-bin --locked
-
-          # Prepare certificates
-          yum install -y jq openssl
-          openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -keyout /tmp/as-ca.key -out /tmp/as-ca.pem -nodes -subj "/O=Trustee CA" \
-              -addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature
-          openssl genrsa -out /tmp/as.key 2048
-          openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"
-          openssl x509 -req -in /tmp/as.csr -CA /tmp/as-ca.pem -CAkey /tmp/as-ca.key -CAcreateserial -out /tmp/as.pem -days 365 -extensions v3_req -extfile <(echo -e "[v3_req]\nsubjectKeyIdentifier = hash") -sha256
-
-          # Generate attestation-service config
-          cat config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key"' > /tmp/config_with_cert.json
-
-          RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json &
-
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./
           merge-multiple: false
+
       - name: Install RPM packages
         run: |
           set -e
@@ -152,19 +95,6 @@ jobs:
           # test rpm package install
           yum install -y ./rpm-packages/RPMS/*/trusted-network-gateway-*.rpm
           tng --version
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: 'true'
-      - name: Run test script from repo
-        run: |
-          set -e
-          set -x
-
-          # Append dns server
-          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-          # Run test
-          make run-test
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -176,6 +106,7 @@ jobs:
         with:
           path: ./
           merge-multiple: false
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
