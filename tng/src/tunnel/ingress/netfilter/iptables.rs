@@ -1,12 +1,19 @@
+use std::path::Path;
+
 use crate::{config::Endpoint, tunnel::utils::iptables::IptablesRuleGenerator};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 
 use super::NetfilterIngress;
 
 const IPTABLES_FW_MARK_DEFAULT: u32 = 566;
 const IP_ROUTE_TABLE_NUM_DEFAULT: u32 = 239;
+
+fn is_cgroup_v2() -> bool {
+    // https://rootlesscontaine.rs/getting-started/common/cgroup2/#checking-whether-cgroup-v2-is-already-enabled
+    Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
+}
 
 #[async_trait]
 impl IptablesRuleGenerator for NetfilterIngress {
@@ -20,12 +27,6 @@ impl IptablesRuleGenerator for NetfilterIngress {
         let fw_mark = IPTABLES_FW_MARK_DEFAULT;
         let route_table = IP_ROUTE_TABLE_NUM_DEFAULT;
         let listen_port = self.listen_port;
-
-        if self.capture_cgroup.is_empty() {
-            tracing::info!(
-                "capture_cgroup is empty, will capture all traffic from all cgroups (\"/\")"
-            );
-        }
 
         if self.capture_dst.is_empty() {
             tracing::info!("capture_dst is empty, will capture all TCP traffic")
@@ -106,24 +107,30 @@ impl IptablesRuleGenerator for NetfilterIngress {
             self.so_mark
         );
 
-        // In the first stage, if the packet match any capture_cgroup, then jump to the next stage.
-        if self.capture_cgroup.is_empty() {
-            tproxy_invoke_script += &format!(
-                "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_1 -m cgroup --path / -j TNG_INGRESS_{id}_OUTPUT_STAGE_2 ;"
-            );
+        if (!is_cgroup_v2())
+            && (!self.capture_cgroup.is_empty() || !self.nocapture_cgroup.is_empty())
+        {
+            bail!("It seems that you are not running in cgroup v2, but`capture_cgroup` and `nocapture_cgroup` are supported on cgroup v2 only")
         } else {
-            for cgroup in &self.capture_cgroup {
+            // In the first stage, if the packet match any capture_cgroup, then jump to the next stage.
+            if self.capture_cgroup.is_empty() {
                 tproxy_invoke_script += &format!(
-                    "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_1 -m cgroup --path {cgroup} -j TNG_INGRESS_{id}_OUTPUT_STAGE_2 ;"
+                    "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_1 -j TNG_INGRESS_{id}_OUTPUT_STAGE_2 ;"
+                );
+            } else {
+                for cgroup in &self.capture_cgroup {
+                    tproxy_invoke_script += &format!(
+                        "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_1 -m cgroup --path {cgroup} -j TNG_INGRESS_{id}_OUTPUT_STAGE_2 ;"
+                    );
+                }
+            }
+
+            // In the second stage, if the packet match any nocapture_cgroup, then we skip it.
+            for cgroup in &self.nocapture_cgroup {
+                tproxy_invoke_script += &format!(
+                    "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -m cgroup --path {cgroup} -j RETURN ;"
                 );
             }
-        }
-
-        // In the second stage, if the packet match any nocapture_cgroup, then we skip it.
-        for cgroup in &self.nocapture_cgroup {
-            tproxy_invoke_script += &format!(
-                "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -m cgroup --path {cgroup} -j RETURN ;"
-            );
         }
 
         // In the second stage, if the packet match any capture_dst, then we set the netfilter mark on the packet it so that it can be re-routed to local with rule based route rule, and we can handle them in the prerouting chain

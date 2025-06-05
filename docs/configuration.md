@@ -117,19 +117,24 @@ Precise control over the traffic to be captured can be achieved by configuring o
 #### Field Descriptions
 
 - **`capture_dst`** (array [Endpoint], optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic will be captured by the tng tunnel.
-- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic under all cgroups will be captured, equivalent to configuring `capture_cgroup: ["/"]`.
+- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
 - **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
+    > [!NOTE]
+    > - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
+    > - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
 - **`listen_port`** (integer, optional): Specifies the port number that tng listens on to receive captured requests, usually no manual specification is required. If this field is not specified, tng will randomly assign a port number.
 
 Traffic capture follows the rules below:
 
 ```mermaid
 flowchart TD
-    A[Start] --> B{Does it match any `capture_cgroup` rule?}
+    A[Start] --> G{capture_cgroup is empty?}
+    G --是--> D
+    G --否--> B{Does it match any capture_cgroup rule?}
     B --No--> C[Ignore traffic]
-    B --Yes--> D{Does it match any `nocapture_cgroup` rule?}
+    B --Yes--> D{Does it match any nocapture_cgroup rule?}
     D --Yes--> C
-    D --No--> E{Does it match any `capture_dst` rule?}
+    D --No--> E{Does it match any capture_dst rule?}
     E --Yes--> F[Capture traffic]
     E --No--> C
 ```

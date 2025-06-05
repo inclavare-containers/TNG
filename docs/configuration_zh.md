@@ -120,15 +120,20 @@
 #### 字段说明
 
 - **`capture_dst`** (array [Endpoint], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的目标地址和端口。如果未指定该字段或者指定为空数组，则所有流量都将被tng隧道捕获。
-- **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将捕获所有cgroup下的流量，等同于配置`capture_cgroup: ["/"]`。
+- **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将忽略capture_cgroup 规则。
 - **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng隧道捕获的流量的cgroup。
+    > [!NOTE]
+    > - `capture_cgroup`和`nocapture_cgroup`字段仅在您的系统使用cgroup v2时受支持。
+    > - 与[cgroup namespace](https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html)的关系：由于netfilter的实现限制[\[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105)[\[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996)，此处指定的cgroup路径于tng进程本身所在cgroup namespace的视角而言的。因此当使用容器单独运行tng时，如您需要配置`capture_cgroup`和`nocapture_cgroup`字段，请配合docker的`--cgroupns=host`选项使用。
 - **`listen_port`** (integer, 可选)：指定tng监听的端口号，用于接收捕获后的请求，通常不需要手动指定。如果未指定该字段，则tng将随机分配一个端口号。
 
 对流量的捕获使用如下规则进行
 
 ```mermaid
 flowchart TD
-    A[开始] --> B{是否匹配任意一条 capture_cgroup 规则?}
+    A[开始] --> G{capture_cgroup 规则为空?}
+    G --是--> D
+    G --否--> B{是否匹配任意一条 capture_cgroup 规则?}
     B --否--> C[忽略流量]
     B --是--> D{是否匹配任意一条 nocapture_cgroup 规则?}
     D --是--> C
