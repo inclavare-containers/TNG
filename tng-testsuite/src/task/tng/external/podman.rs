@@ -11,8 +11,9 @@ impl TngInstance {
         let mut cmd = tokio::process::Command::new("podman");
         cmd.arg("run")
             .arg("--rm")
-            .arg("--network=host")
             .arg("--privileged")
+            .arg("--network=host")
+            .arg("--cgroupns=host")
             .args([
                 "-v", "/run/confidential-containers/attestation-agent/:/run/confidential-containers/attestation-agent/"
             ])

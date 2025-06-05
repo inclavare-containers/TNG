@@ -27,7 +27,7 @@ You have to provide a JSON config file, or provide configuration content in JSON
 The simplest way to launch a TNG instance is using our pre-built Docker image:
 
 ```sh
-docker run -it --rm --network host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
+docker run -it --rm --privileged --network host --cgroupns=host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
 ```
 
 Check the [reference document](docs/configuration.md) for the configuration. 
@@ -61,7 +61,7 @@ Now we have got the Docker image `tng:latest`, which you can directly deploy and
 3. Run TNG as a container
 
 ```sh
-docker run -it --rm --network host tng:latest tng launch --config-content='<your config json string>'
+docker run -it --rm --privileged --network host --cgroupns=host tng:latest tng launch --config-content='<your config json string>'
 ```
 
 ### Build and run as an RPM package

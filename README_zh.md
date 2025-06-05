@@ -26,7 +26,7 @@ Options:
 启动 TNG 实例最简单的方法是使用我们预构建好的Docker镜像：
 
 ```sh
-docker run -it --rm --network host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
+docker run -it --rm --privileged --network host --cgroupns=host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
 ```
 
 请参考[配置文档](docs/configuration_zh.md)获取详细的配置说明。
@@ -62,7 +62,7 @@ docker build -t tng:latest --target tng-release -f Dockerfile .
 3. 以容器形式运行 tng
 
 ```sh
-docker run -it --rm --network host tng:latest tng launch --config-content='<your config json string>'
+docker run -it --rm --privileged --network host --cgroupns=host tng:latest tng launch --config-content='<your config json string>'
 ```
 
 
