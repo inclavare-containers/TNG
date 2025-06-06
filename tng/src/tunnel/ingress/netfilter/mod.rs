@@ -100,6 +100,8 @@ impl RegistedService for NetfilterIngress {
 
         loop {
             async {
+                // TODO: stop all task when downstream is already closed
+
                 let (downstream, peer_addr) = listener.accept().await?;
 
                 let socket_ref = SockRef::from(&downstream);

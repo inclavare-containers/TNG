@@ -55,7 +55,7 @@ impl PoolKeyExtraDataInserter for TcpTransportLayerCreator {
         _request_info: &RequestInfo,
         _target_pool_key: &mut PoolKey,
     ) -> Result<()> {
-        bail!("TCP Transport layer creator does not need to insert extra data to the pool key.")
+        bail!("TCP Transport layer creator does not need to insert extra data to the pool key")
     }
 }
 

@@ -1,16 +1,22 @@
 pub mod netns;
 pub mod task;
 
+use std::time::Duration;
+
 use anyhow::{bail, Context, Result};
 use futures::StreamExt as _;
 use netns::BridgeNetwork;
 use task::Task;
-use tng::runtime::TracingReloadHandle;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<TracingReloadHandle> = OnceCell::const_new();
+static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<
+    tracing_subscriber::reload::Handle<
+        Vec<Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>>,
+        tracing_subscriber::Registry,
+    >,
+> = OnceCell::const_new();
 
 /// This is a common function to run bin tests. For each test, it will create two virtual nodes under
 /// a bridge network (192.168.1.0/24), one act as the server side (192.168.1.1), the other act as
@@ -67,15 +73,27 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
                 let task_name = task.name();
 
                 let task_result = {
+                    let task_name = task_name.clone();
+
                     let node = match task.node_type() {
                         task::NodeType::Client => &client_node,
                         task::NodeType::Server => &server_node,
                     };
 
                     let token = token.clone();
-                    node.run(async move { task.launch(token).await })
-                        .await
-                        .and_then(|r| r)?
+                    node.run(async move {
+                        // Timeout is 1 minute.
+                        let timeout = tokio::time::sleep(Duration::from_secs(60));
+
+                        tokio::select! {
+                            _ = timeout => {
+                                bail!("Timeout waiting for task {task_name} to be ready");
+                            },
+                            res = task.launch(token) => res
+                        }
+                    })
+                    .await
+                    .and_then(|r| r)?
                 };
 
                 async {
@@ -90,15 +108,26 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
             });
         }
 
+        let mut first_error = None;
+
         loop {
             match sub_tasks.next().await {
                 Some((task_name, res)) => {
-                    res.with_context(|| format!("Error in the {task_name} task"))?;
+                    if let Err(e) = res.with_context(|| format!("Error in the {task_name} task")) {
+                        tracing::error!(error=?e, "Got error in task");
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
+                    }
                 }
                 None => {
                     break;
                 }
             }
+        }
+
+        if let Some(e) = first_error {
+            return Err(e);
         }
 
         Ok::<_, anyhow::Error>(())
