@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.1
+Version: 2.2.2
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,12 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Tue Jun 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.2-1
+- egress/netfilter: Fix tng traffic not captured when tng client server run on same node.
+- egress/netfilter: Fix behavior when capture_cgroup is empty and add check for cgroup v2.
+- ingress/http_proxy: fix error when both domain and domain_regex are not set
+
+
 * Thu May 15 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.1-1
 - Fix broken trusted-network-gateway.service
 
