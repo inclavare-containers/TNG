@@ -34,7 +34,7 @@ use crate::tunnel::ingress::core::stream_manager::StreamManager as _;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
-use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
+use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 const TNG_HTTP_FORWARD_HEADER: &str = "X-Tng-Http-Forward";
 
@@ -390,7 +390,7 @@ impl HttpProxyIngress {
         let stream_router = Arc::new(StreamRouter {
             trusted_stream_manager: TrustedStreamManager::new(
                 common_args,
-                TCP_CONNECT_SO_MARK_DEFAULT,
+                None,
             )
             .await?,
             unprotected_stream_manager: UnprotectedStreamManager::new(),

@@ -27,12 +27,12 @@ mod extra_data;
 mod path_rewrite;
 
 pub struct HttpTransportLayerCreator {
-    so_mark: u32,
+    so_mark: Option<u32>,
     path_rewrite_group: PathRewriteGroup,
 }
 
 impl HttpTransportLayerCreator {
-    pub fn new(so_mark: u32, encap_in_http: EncapInHttp) -> Result<Self> {
+    pub fn new(so_mark: Option<u32>, encap_in_http: EncapInHttp) -> Result<Self> {
         Ok(Self {
             so_mark,
             path_rewrite_group: PathRewriteGroup::new(encap_in_http.path_rewrites)?,
@@ -66,7 +66,7 @@ impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
 pub struct HttpTransportLayer {
     dst: TngEndpoint,
     extra_data: HttpPoolKeyExtraData,
-    so_mark: u32,
+    so_mark: Option<u32>,
     shutdown_guard: ShutdownGuard,
     transport_layer_span: Span,
 }

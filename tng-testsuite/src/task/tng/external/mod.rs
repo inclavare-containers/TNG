@@ -48,7 +48,9 @@ impl TngInstance {
         }
         .to_string();
 
-        let config_json = Self::patch_config_with_control_interface(&config_json, 60000)?;
+        let free_port = portpicker::pick_unused_port().context("Failed to pick a free port")?;
+
+        let config_json = Self::patch_config_with_control_interface(&config_json, free_port)?;
 
         tracing::info!("Run tng with {config_json}");
 
@@ -61,7 +63,7 @@ impl TngInstance {
 
         // Wait for the tng process to be ready by polling the ready signal from 127.0.0.1:50000/readyz.
         loop {
-            if let Ok(resp) = reqwest::get("http://127.0.0.1:60000/readyz").await {
+            if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{free_port}/readyz")).await {
                 if resp.status() == reqwest::StatusCode::OK {
                     break;
                 }

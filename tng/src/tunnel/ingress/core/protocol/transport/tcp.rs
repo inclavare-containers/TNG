@@ -19,11 +19,11 @@ use super::{
 };
 
 pub struct TcpTransportLayerCreator {
-    so_mark: u32,
+    so_mark: Option<u32>,
 }
 
 impl TcpTransportLayerCreator {
-    pub fn new(so_mark: u32) -> Self {
+    pub fn new(so_mark: Option<u32>) -> Self {
         Self { so_mark }
     }
 }
@@ -62,7 +62,7 @@ impl PoolKeyExtraDataInserter for TcpTransportLayerCreator {
 #[derive(Debug, Clone)]
 pub struct TcpTransportLayer {
     pub pool_key: PoolKey,
-    pub so_mark: u32,
+    pub so_mark: Option<u32>,
     pub transport_layer_span: Span,
 }
 

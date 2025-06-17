@@ -3639,6 +3639,7 @@ dependencies = [
  "netns-rs",
  "nix 0.30.1",
  "opentelemetry-stdout",
+ "portpicker",
  "rand 0.9.1",
  "reqwest",
  "rtnetlink",

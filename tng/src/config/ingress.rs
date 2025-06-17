@@ -74,6 +74,9 @@ pub struct IngressNetfilterArgs {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listen_port: Option<u16>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub so_mark: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

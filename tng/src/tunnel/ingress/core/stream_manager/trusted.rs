@@ -33,7 +33,7 @@ pub struct TrustedStreamManager {
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs, transport_so_mark: u32) -> Result<Self> {
+    pub async fn new(common_args: &CommonArgs, transport_so_mark: Option<u32>) -> Result<Self> {
         if common_args.web_page_inject {
             bail!("The `web_page_inject` field is not supported")
         }

@@ -126,6 +126,8 @@
     > - `capture_cgroup`和`nocapture_cgroup`字段仅在您的系统使用cgroup v2时受支持。
     > - 与[cgroup namespace](https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html)的关系：由于netfilter的实现限制[\[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105)[\[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996)，此处指定的cgroup路径于tng进程本身所在cgroup namespace的视角而言的。因此当使用容器单独运行tng时，如您需要配置`capture_cgroup`和`nocapture_cgroup`字段，请配合docker的`--cgroupns=host`选项使用。
 - **`listen_port`** (integer, 可选)：指定tng监听的端口号，用于接收捕获后的请求，通常不需要手动指定。如果未指定该字段，则tng将随机分配一个端口号。
+- **`so_mark`** (integer, 可选，默认值为565)：由tng加密后，承载密文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量再次被netfilter转发到当前的ingress。
+
 
 对流量的捕获使用如下规则进行
 
@@ -220,15 +222,15 @@ flowchart TD
 ```
 
 ### netfilter：端口劫持方式
-在该场景中，用户的server程序已监听在本机某一端口，且因业务原因不便变更端口号或为tng server新增开放端口。为了让tng server能够解密发往server程序端口（`capture_dst.host`, `capture_dst.port`）上的TCP流量，需要结合内核netfilter提供的能力，将流量重定向到tng server监听的`listen_port`上。tng server在解密完流量后，将TCP流量按照原先的目标（`capture_dst.host`, `capture_dst.port`）发出。
+在该场景中，用户的server程序已监听在本机某一端口，且因业务原因不便变更端口号或为tng新增开放端口。为了让tng能够解密发往server程序端口（`capture_dst.host`, `capture_dst.port`）上的TCP流量，需要结合内核netfilter提供的能力，将流量重定向到tng监听的`listen_port`上。tng在解密完流量后，将TCP流量按照原先的目标（`capture_dst.host`, `capture_dst.port`）发出。
 
 #### 字段说明
-- **`capture_dst`** (Endpoint)：指定需要被tng server捕获的目标端点。
+- **`capture_dst`** (Endpoint)：指定需要被tng捕获的目标端点。
     - **`host`** (string, 可选，默认匹配本机上所有端口的本地ip地址)：目标地址。若不填，则默认匹配本机上所有端口的本地ip地址（见iptables的 `-m addrtype --dst-type LOCAL` 选项：[iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)）。
     - **`port`** (integer)：目标端口号。
 - **`capture_local_traffic`** (boolean, 可选，默认为`false`)：若值为`false`则在捕获时会忽略源ip为本机ip的请求，不会将它们重定向到`listen_port`。若值为`true`，则会连带捕获源ip为本机ip的请求。
-- **`listen_port`** (integer, 可选，默认从40000端口开始递增取值)：tng server监听的端口号，用于接收由netfilter重定向的流量。
-- **`so_mark`** (integer, 可选，默认值为565)：tng server解密后，承载明文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量再次被netfilter转发到tng server。
+- **`listen_port`** (integer, 可选，默认从40000端口开始递增取值)：tng监听的端口号，用于接收由netfilter重定向的流量。
+- **`so_mark`** (integer, 可选，默认值为565)：tng解密后，承载明文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量再次被netfilter转发到这一egress。
 
 示例：
 

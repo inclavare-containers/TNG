@@ -34,7 +34,7 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
     }
 }
 
-pub async fn tcp_connect_with_so_mark<T>(host: T, so_mark: u32) -> Result<TcpStream>
+pub async fn tcp_connect_with_so_mark<T>(host: T, so_mark: Option<u32>) -> Result<TcpStream>
 where
     T: tokio::net::ToSocketAddrs,
 {
@@ -47,7 +47,11 @@ where
         #[cfg(target_os = "macos")]
         let _ = so_mark;
         #[cfg(not(target_os = "macos"))]
-        socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
+        {
+            if let Some(so_mark) = so_mark {
+                socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
+            }
+        }
         let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
 
         let result = socket.connect(addr).await.map_err(anyhow::Error::from);

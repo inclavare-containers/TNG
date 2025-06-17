@@ -45,7 +45,7 @@ pub enum TransportLayerCreator {
 }
 
 impl TransportLayerCreator {
-    pub fn new(so_mark: u32, encap_in_http: Option<EncapInHttp>) -> Result<Self> {
+    pub fn new(so_mark: Option<u32>, encap_in_http: Option<EncapInHttp>) -> Result<Self> {
         Ok(match encap_in_http {
             Some(encap_in_http) => {
                 Self::Http(HttpTransportLayerCreator::new(so_mark, encap_in_http)?)

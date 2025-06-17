@@ -61,10 +61,12 @@ impl NetfilterIngress {
             ],
         );
 
-        let so_mark = TCP_CONNECT_SO_MARK_DEFAULT;
+        let so_mark = netfilter_args
+            .so_mark
+            .unwrap_or(TCP_CONNECT_SO_MARK_DEFAULT);
 
         let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(common_args, so_mark).await?);
+            Arc::new(TrustedStreamManager::new(common_args, Some(so_mark)).await?);
 
         Ok(Self {
             id,

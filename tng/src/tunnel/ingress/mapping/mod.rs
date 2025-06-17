@@ -15,7 +15,7 @@ use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::ingress::core::stream_manager::StreamManager;
 use crate::tunnel::ingress::core::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
-use crate::tunnel::utils::socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT};
+use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 pub struct MappingIngress {
     listen_addr: String,
@@ -66,8 +66,7 @@ impl MappingIngress {
             ],
         );
 
-        let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(common_args, TCP_CONNECT_SO_MARK_DEFAULT).await?);
+        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args, None).await?);
 
         Ok(Self {
             listen_addr,
