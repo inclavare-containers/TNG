@@ -22,7 +22,7 @@ jobs:
           - "aarch64-unknown-linux-gnu"
           # - "x86_64-pc-windows-msvc"
     name: Build For ${{ matrix.target }}
-    uses: ./.github/workflows/reusable/zigbuild.yml
+    uses: ./.github/workflows/zigbuild.yml
     with:
       target: ${{ matrix.target }}
   release:
