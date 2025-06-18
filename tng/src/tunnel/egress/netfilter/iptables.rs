@@ -76,8 +76,8 @@ impl IptablesRuleGenerator for NetfilterEgress {
 
         redirect_invoke_script += &format!(
             "\
-            iptables -t nat -A PREROUTING -p tcp -j TNG_EGRESS_{id} ; \
-            iptables -t nat -A OUTPUT -p tcp -j TNG_EGRESS_{id} ; \
+            iptables -t nat -I PREROUTING 1 -p tcp -j TNG_EGRESS_{id} ; \
+            iptables -t nat -I OUTPUT 1 -p tcp -j TNG_EGRESS_{id} ; \
             "
         );
 

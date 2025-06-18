@@ -42,7 +42,6 @@ impl IptablesRuleGenerator for NetfilterIngress {
             "\
             iptables -t mangle -D PREROUTING -p tcp -j TNG_INGRESS_{id}_PREROUTING 2>/dev/null || true ; \
             iptables -t mangle -D OUTPUT -p tcp -j TNG_INGRESS_{id}_OUTPUT_STAGE_1 2>/dev/null || true ; \
-            iptables -t mangle -D OUTPUT -p tcp -j TNG_INGRESS_{id}_OUTPUT_STAGE_2 2>/dev/null || true ; \
             iptables -t mangle -F TNG_INGRESS_{id}_PREROUTING 2>/dev/null || true ; \
             iptables -t mangle -X TNG_INGRESS_{id}_PREROUTING 2>/dev/null || true ; \
             iptables -t mangle -F TNG_INGRESS_{id}_OUTPUT_STAGE_1 2>/dev/null || true ; \
@@ -80,7 +79,7 @@ impl IptablesRuleGenerator for NetfilterIngress {
         );
 
         tproxy_invoke_script +=
-            &format!("iptables -t mangle -A PREROUTING -p tcp -j TNG_INGRESS_{id}_PREROUTING ;");
+            &format!("iptables -t mangle -I PREROUTING 1 -p tcp -j TNG_INGRESS_{id}_PREROUTING ;");
 
         // OUTPUT rules
         tproxy_invoke_script += &format!(
@@ -153,7 +152,7 @@ impl IptablesRuleGenerator for NetfilterIngress {
 
         // Insert the first stage rule into the OUTPUT chain
         tproxy_invoke_script +=
-            &format!("iptables -t mangle -A OUTPUT -p tcp -j TNG_INGRESS_{id}_OUTPUT_STAGE_1 ;");
+            &format!("iptables -t mangle -I OUTPUT 1 -p tcp -j TNG_INGRESS_{id}_OUTPUT_STAGE_1 ;");
 
         invoke_script += &tproxy_invoke_script;
         revoke_script += &clean_up_iptables_script;
