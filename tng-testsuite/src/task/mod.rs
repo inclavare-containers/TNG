@@ -4,6 +4,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub mod app;
+pub mod function;
 pub mod shell;
 pub mod tng;
 
