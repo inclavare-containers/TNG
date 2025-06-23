@@ -15,13 +15,14 @@ use http::{HeaderValue, Response, StatusCode};
 use non_tng_traffic::DirectlyForwardTrafficDetector;
 use pin_project::pin_project;
 use std::task::{Context, Poll};
+use timeout::FirstByteReadTimeoutStream;
 use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
-use tokio_io_timeout::TimeoutStream;
 use tracing::{Instrument, Span};
 
 mod direct_response;
 mod non_tng_traffic;
+mod timeout;
 
 /// Timeout before we receive first byte from peer, This is essential to make it fasts fail quickly when a none tng client is connected to tng server unexpectedly.
 const TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -63,9 +64,10 @@ impl TransportLayer {
 
         // Set timeout for underly tcp stream
         let in_stream = {
-            let mut timeout_stream = TimeoutStream::new(in_stream);
-            timeout_stream.set_read_timeout(Some(TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT));
-            Box::pin(timeout_stream)
+            Box::pin(FirstByteReadTimeoutStream::new(
+                in_stream,
+                TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT,
+            ))
         };
 
         async {
@@ -222,7 +224,7 @@ impl TransportLayer {
 }
 
 enum DecodeStreamState<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
-    Tcp(Pin<Box<TimeoutStream<TcpStream>>>),
+    Tcp(Pin<Box<FirstByteReadTimeoutStream<TcpStream>>>),
     Http(H2ConnectionGracefulShutdown<T, bytes::Bytes>),
     DirectlyForward(T),
     NoMoreStreams,
@@ -290,7 +292,7 @@ impl<
 
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
-    Tcp(#[pin] Pin<Box<TimeoutStream<TcpStream>>>),
+    Tcp(#[pin] Pin<Box<FirstByteReadTimeoutStream<TcpStream>>>),
     Http(#[pin] H2Stream),
 }
 
