@@ -48,7 +48,7 @@ A tool for establishing secure communication tunnels in confidential computing.
 %build
 # Build tng
 pushd src/
-cargo install --locked --path ./tng/ --root %{_builddir}/%{name}-%{version}/install/tng/
+RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root %{_builddir}/%{name}-%{version}/install/tng/
 popd
 
 

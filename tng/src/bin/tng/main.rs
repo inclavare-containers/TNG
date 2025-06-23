@@ -2,7 +2,7 @@ use std::{fs::File, io::BufReader};
 
 use anyhow::{bail, Context};
 use clap::Parser as _;
-use cli::Args;
+use cli::{Cli, GlobalSubcommand};
 use tng::runtime::TngRuntime;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -15,6 +15,8 @@ mod cli;
 #[tokio::main]
 
 async fn main() {
+    let cli = Cli::parse();
+
     // Initialize rustls crypto provider
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -24,7 +26,7 @@ async fn main() {
     let pending_tracing_layers = vec![];
     let (pending_tracing_layers, reload_handle) =
         tracing_subscriber::reload::Layer::new(pending_tracing_layers);
-    tracing_subscriber::registry()
+    let subscriber_init = tracing_subscriber::registry()
         // Here we add two layer each has it's own filter (per-layer filter), and the first layer is
         // a vector which can be updated dynamically later(e.g. to append a layer like otlp exporter).
         .with(
@@ -38,10 +40,13 @@ async fn main() {
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=info,tng=info".into()),
             ),
-        )
-        .init();
-
-    let cmd = Args::parse();
+        );
+    if cli.tokio_console {
+        // Initialize tokio console
+        subscriber_init.with(console_subscriber::spawn()).init();
+    } else {
+        subscriber_init.init();
+    }
 
     tracing::info!(
         r#"
@@ -56,8 +61,8 @@ async fn main() {
     );
 
     let fut = async {
-        match cmd {
-            Args::Launch(options) => {
+        match cli.command {
+            GlobalSubcommand::Launch(options) => {
                 // Load config
                 let config: TngConfig = async {
                     Ok::<_, anyhow::Error>(match (options.config_file, options.config_content) {

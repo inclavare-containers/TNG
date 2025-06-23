@@ -50,6 +50,11 @@ create-tarball:
 
 	@echo "Tarball generated:" /tmp/trusted-network-gateway-${VERSION}.tar.gz
 
+
+.PHONE: bin-build
+bin-build:
+	RUSTFLAGS="--cfg tokio_unstable" cargo build --release
+
 .PHONE: rpm-build
 rpm-build:
 	# setup build tree rpmdevtools

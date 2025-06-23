@@ -14,6 +14,7 @@ auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = "0.8.4"
 bytes = "1.10.1"
 clap = {version = "4.5.39", features = ["derive"]}
+console-subscriber = {version = "0.4.1", optional = true}
 const_format = "0.2.34"
 ctrlc = {version = "3.4.7", features = ["termination"]}
 derivative = "2.2.0"
@@ -88,5 +89,8 @@ which = "7.0.3"
 shadow-rs = {version = "=1.0.0", default-features = false, features = ["tzdb", "build"]}
 
 [dev-dependencies]
-console-subscriber = "0.4.1"
 ctor = "=0.4.1"
+
+[features]
+default = ["tokio-console"]
+tokio-console = ["tokio/tracing", "dep:console-subscriber"]

@@ -37,7 +37,7 @@ jobs:
         run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild --version 0.19.8
       - name: cargo compile
         run: |
-          ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/"' || ''  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
+          ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/ --cfg tokio_unstable"' || 'RUSTFLAGS="--cfg tokio_unstable"'  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
       - name: Get binary path
         if: ${{ runner.os != 'Windows' }}
         run: echo "executable=$(find . -maxdepth 4 -type f -exec file {} \; | grep 'executable' | grep 'target' | grep -o '^[^:]*')" >> "$GITHUB_ENV"
