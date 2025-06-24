@@ -527,9 +527,6 @@ mod tests {
                         ping 192.168.1.2 -c 1 -W 5 ;
                         ping 192.168.1.254 -c 1 -W 5 ;
                         cat /etc/resolv.conf
-                        dig @8.8.8.8 connectivitycheck.gstatic.com
-                        dig connectivitycheck.gstatic.com
-                        curl http://connectivitycheck.gstatic.com/generate_204 --connect-timeout 5;
                         ",
                     ])
                     .output()
