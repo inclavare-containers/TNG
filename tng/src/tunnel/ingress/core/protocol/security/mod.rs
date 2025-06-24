@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use http::Uri;
-use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+use hyper_util::client::legacy::Client;
 use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls_config::OnetimeTlsClientConfig;
@@ -25,6 +25,7 @@ use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
+    observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
 };
 
@@ -132,13 +133,18 @@ impl SecurityLayer {
 
                         // Prepare the security connector
                         let connector = self
-                            .create_security_connector(pool_key, shutdown_guard, parent_span)
+                            .create_security_connector(
+                                pool_key,
+                                shutdown_guard.clone(),
+                                parent_span,
+                            )
                             .await?;
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
                             id,
-                            hyper: Client::builder(TokioExecutor::new()).build(connector),
+                            hyper: Client::builder(shutdown_guard.as_hyper_executor())
+                                .build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
                         client

@@ -71,7 +71,7 @@ socket2 = "0.5.10"
 strum = "0.27.1"
 strum_macros = "0.27.1"
 tempfile = "3.20.0"
-tokio = {version = "1.45.1", features = ["rt-multi-thread", "sync"]}
+tokio = {version = "1.45.1", features = ["rt-multi-thread", "sync", "tracing"]}
 tokio-graceful = "0.2.2"
 tokio-rustls = {version = "0.26.2", default-features = false, features = ["logging", "tls12", "ring"]}
 tokio-util = "0.7.15"
@@ -92,4 +92,4 @@ ctor = "=0.4.1"
 
 [features]
 default = ["tokio-console"]
-tokio-console = ["tokio/tracing", "dep:console-subscriber"]
+tokio-console = ["dep:console-subscriber"]

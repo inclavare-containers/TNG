@@ -5,10 +5,7 @@ use axum::{
 };
 use http::{HeaderValue, Method, Request, StatusCode};
 use hyper::body::Incoming;
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
-    service::TowerToHyperService,
-};
+use hyper_util::{rt::TokioIo, service::TowerToHyperService};
 use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -36,6 +33,8 @@ impl WrappingLayer {
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
     ) {
+        let shutdown_guard_cloned = shutdown_guard.clone();
+
         let span = tracing::info_span!("wrapping");
         let svc = {
             let span = span.clone();
@@ -65,10 +64,11 @@ impl WrappingLayer {
 
         let svc = TowerToHyperService::new(svc);
 
-        if let Err(error) = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(tls_stream), svc)
-            .instrument(span)
-            .await
+        if let Err(error) =
+            hyper::server::conn::http2::Builder::new(shutdown_guard_cloned.as_hyper_executor())
+                .serve_connection(TokioIo::new(tls_stream), svc)
+                .instrument(span)
+                .await
         {
             tracing::error!(?error, "Failed to serve connection");
         }

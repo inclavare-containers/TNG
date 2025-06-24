@@ -13,7 +13,7 @@ use axum::{
 use http::{uri::Scheme, HeaderValue, Request, Uri};
 use hyper::body::Incoming;
 use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
+    rt::TokioIo,
     service::TowerToHyperService,
 };
 use opentelemetry::metrics::MeterProvider;
@@ -431,6 +431,8 @@ impl RegistedService for HttpProxyIngress {
                     move |shutdown_guard| async move {
                         tracing::debug!("Start serving new connection from client");
 
+                        let shutdown_guard_cloned = shutdown_guard.clone();
+
                         let svc = {
                             ServiceBuilder::new()
                                 .layer(SetResponseHeaderLayer::overriding(
@@ -476,7 +478,7 @@ impl RegistedService for HttpProxyIngress {
                         let io = TokioIo::new(downstream);
 
                         if let Err(error) =
-                            hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                            hyper_util::server::conn::auto::Builder::new(shutdown_guard_cloned.as_hyper_executor())
                                 .serve_connection_with_upgrades(io, svc)
                                 .await
                         {
