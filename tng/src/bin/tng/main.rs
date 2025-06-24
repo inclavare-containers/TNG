@@ -60,6 +60,8 @@ async fn main() {
         build::BUILD_TIME
     );
 
+    tracing::info!("Current process PID: {}", std::process::id());
+
     let fut = async {
         match cli.command {
             GlobalSubcommand::Launch(options) => {
