@@ -32,6 +32,7 @@ impl WrappingLayer {
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
+        rt_handle: tokio::runtime::Handle,
     ) {
         let shutdown_guard_cloned = shutdown_guard.clone();
 
@@ -64,11 +65,12 @@ impl WrappingLayer {
 
         let svc = TowerToHyperService::new(svc);
 
-        if let Err(error) =
-            hyper::server::conn::http2::Builder::new(shutdown_guard_cloned.as_hyper_executor())
-                .serve_connection(TokioIo::new(tls_stream), svc)
-                .instrument(span)
-                .await
+        if let Err(error) = hyper::server::conn::http2::Builder::new(
+            shutdown_guard_cloned.as_hyper_executor(rt_handle),
+        )
+        .serve_connection(TokioIo::new(tls_stream), svc)
+        .instrument(span)
+        .await
         {
             tracing::error!(?error, "Failed to serve connection");
         }

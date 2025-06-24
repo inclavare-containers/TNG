@@ -44,12 +44,14 @@ pub struct SecurityLayer {
     pool: RwLock<ClientPool>,
     transport_layer_creator: TransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
+    rt_handle: tokio::runtime::Handle,
 }
 
 impl SecurityLayer {
     pub async fn new(
         transport_layer_creator: TransportLayerCreator,
         ra_args: &RaArgs,
+        rt_handle: tokio::runtime::Handle,
     ) -> Result<Self> {
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
@@ -58,6 +60,7 @@ impl SecurityLayer {
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
+            rt_handle,
         })
     }
 
@@ -143,8 +146,10 @@ impl SecurityLayer {
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
                             id,
-                            hyper: Client::builder(shutdown_guard.as_hyper_executor())
-                                .build(connector),
+                            hyper: Client::builder(
+                                shutdown_guard.as_hyper_executor(self.rt_handle.clone()),
+                            )
+                            .build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
                         client

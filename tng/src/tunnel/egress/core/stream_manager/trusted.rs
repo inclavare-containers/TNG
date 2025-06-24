@@ -10,8 +10,10 @@ use crate::{
             transport::{DecodeResult, TransportLayer},
             wrapping::WrappingLayer,
         },
+        utils::runtime::TokioRuntime,
     },
 };
+use anyhow::Context;
 use anyhow::{bail, Result};
 use futures::StreamExt;
 use tokio::{net::TcpStream, sync::mpsc};
@@ -22,6 +24,8 @@ use super::StreamManager;
 pub struct TrustedStreamManager {
     transport_layer: TransportLayer,
     security_layer: Arc<SecurityLayer>,
+    // A standalone tokio runtime to run tasks related to the protocol module
+    rt: TokioRuntime,
 }
 
 impl TrustedStreamManager {
@@ -29,6 +33,12 @@ impl TrustedStreamManager {
         Ok(Self {
             transport_layer: TransportLayer::new(common_args.decap_from_http.clone())?,
             security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
+            rt: TokioRuntime::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .context("Failed to create tokio runtime")?,
+            ),
         })
     }
 }
@@ -61,28 +71,33 @@ impl StreamManager for TrustedStreamManager {
                     let security_layer = self.security_layer.clone();
                     let channel = sender.clone();
 
-                    shutdown_guard.spawn_supervised_task_fn_current_span(
-                        |shutdown_guard| async move {
-                            let (tls_stream, attestation_result) = match security_layer
-                                .handshake(stream)
-                                .await
-                            {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    tracing::error!(%e, "Failed to enstablish security session");
-                                    return;
-                                }
-                            };
+                    {
+                        // Run in the standalone tokio runtime
+                        let _guard = self.rt.handle().enter();
+                        shutdown_guard.spawn_supervised_task_fn_current_span(
+                            |shutdown_guard| async move {
+                                let (tls_stream, attestation_result) = match security_layer
+                                    .handshake(stream)
+                                    .await
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        tracing::error!(%e, "Failed to enstablish security session");
+                                        return;
+                                    }
+                                };
 
-                            WrappingLayer::unwrap_stream(
-                                tls_stream,
-                                attestation_result,
-                                channel,
-                                shutdown_guard,
-                            )
-                            .await
-                        },
-                    );
+                                WrappingLayer::unwrap_stream(
+                                    tls_stream,
+                                    attestation_result,
+                                    channel,
+                                    shutdown_guard,
+                                    tokio::runtime::Handle::current(),
+                                )
+                                .await
+                            },
+                        );
+                    }
                 }
                 Ok(DecodeResult::DirectlyForward(stream)) => {
                     if let Err(e) =

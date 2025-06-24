@@ -6,5 +6,6 @@ pub mod h2_stream;
 pub mod http_inspector;
 #[cfg(target_os = "linux")]
 pub mod iptables;
+pub mod runtime;
 pub mod rustls_config;
 pub mod socket;

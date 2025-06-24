@@ -478,7 +478,7 @@ impl RegistedService for HttpProxyIngress {
                         let io = TokioIo::new(downstream);
 
                         if let Err(error) =
-                            hyper_util::server::conn::auto::Builder::new(shutdown_guard_cloned.as_hyper_executor())
+                            hyper_util::server::conn::auto::Builder::new(shutdown_guard_cloned.as_hyper_executor(tokio::runtime::Handle::current()))
                                 .serve_connection_with_upgrades(io, svc)
                                 .await
                         {

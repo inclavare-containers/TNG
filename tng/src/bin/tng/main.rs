@@ -13,7 +13,6 @@ use tng::config::TngConfig;
 mod cli;
 
 #[tokio::main]
-
 async fn main() {
     let cli = Cli::parse();
 

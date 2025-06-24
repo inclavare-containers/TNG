@@ -22,6 +22,7 @@ use crate::{
         utils::{
             self,
             http_inspector::{HttpRequestInspector, InspectionResult},
+            runtime::TokioRuntime,
         },
     },
 };
@@ -30,6 +31,9 @@ use super::StreamManager;
 
 pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
+    // A standalone tokio runtime to run tasks related to the protocol module
+    #[allow(unused)]
+    rt: TokioRuntime,
 }
 
 impl TrustedStreamManager {
@@ -41,9 +45,21 @@ impl TrustedStreamManager {
         let transport_layer_creator =
             TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
 
+        let rt = TokioRuntime::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("Failed to create tokio runtime")?,
+        );
+
         Ok(Self {
-            security_layer: SecurityLayer::new(transport_layer_creator, &common_args.ra_args)
-                .await?,
+            security_layer: SecurityLayer::new(
+                transport_layer_creator,
+                &common_args.ra_args,
+                rt.handle(),
+            )
+            .await?,
+            rt,
         })
     }
 }

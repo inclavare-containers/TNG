@@ -11,11 +11,17 @@ use tracing::{Instrument, Span};
 #[allow(dead_code)]
 pub trait ShutdownGuardExt {
     #[inline]
-    fn as_hyper_executor(self) -> ShutdownGuardHyperExecutor<Self>
+    fn as_hyper_executor(
+        self,
+        rt_handle: tokio::runtime::Handle,
+    ) -> ShutdownGuardHyperExecutor<Self>
     where
         Self: Sized,
     {
-        ShutdownGuardHyperExecutor { inner: self }
+        ShutdownGuardHyperExecutor {
+            inner: self,
+            rt_handle,
+        }
     }
 
     #[inline]
@@ -166,9 +172,10 @@ where
 }
 
 #[non_exhaustive]
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShutdownGuardHyperExecutor<T: ShutdownGuardExt> {
     inner: T,
+    rt_handle: tokio::runtime::Handle,
 }
 
 impl<Fut, T: ShutdownGuardExt> hyper::rt::Executor<Fut> for ShutdownGuardHyperExecutor<T>
@@ -179,6 +186,7 @@ where
     #[inline(always)]
     #[track_caller]
     fn execute(&self, fut: Fut) {
+        let _guard = self.rt_handle.enter();
         self.inner.spawn_supervised_task_current_span(async {
             fut.await;
         });
