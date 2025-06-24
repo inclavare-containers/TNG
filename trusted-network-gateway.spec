@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.2
+Version: 2.2.3
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,14 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Tue Jun 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.3-1
+- ingress/netfilter: add matching dst ip address with ip rannge or ipset
+- optimize network throughput
+- cli: add --tokio-console option
+- egress/transport: add timeout for waiting client tcp connection
+- iptables: fix capturing traffics target to docker -p mapping port
+
+
 * Tue Jun 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.2-1
 - egress/netfilter: Fix tng traffic not captured when tng client server run on same node.
 - egress/netfilter: Fix behavior when capture_cgroup is empty and add check for cgroup v2.
