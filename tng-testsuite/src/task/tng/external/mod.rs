@@ -19,7 +19,8 @@ impl TngInstance {
     pub fn patch_config_with_control_interface(config_json: &str, port: u16) -> Result<String> {
         // Patch the config json to add the control_interface config.
         let mut tng_config: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(config_json)?;
+            serde_json::from_str(config_json)
+                .with_context(|| format!("Failed to parse config json: {config_json}"))?;
         if let Some(value) = tng_config.get("control_interface") {
             bail!("control_interface config already exists in the config json: {value}")
         }

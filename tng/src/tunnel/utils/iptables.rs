@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use tokio::{net::UnixListener, process::Command, sync::OnceCell};
 use tracing::{Instrument, Span};
@@ -36,7 +36,9 @@ impl IptablesExecutor {
             span: Span::current(),
         };
 
-        IptablesExecutor::execute_script(&iptables_invoke_script).await?;
+        IptablesExecutor::execute_script(&iptables_invoke_script)
+            .await
+            .context("Failed to setup iptables rules")?;
 
         Ok(guard)
     }
@@ -44,27 +46,47 @@ impl IptablesExecutor {
     async fn execute_script(script: &str) -> Result<()> {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(&format!("set -e ; true ; {}", script));
-        let output = cmd.output().await;
+        let output = cmd
+            .output()
+            .await
+            .with_context(|| format!("Failed to execute command: {:?}", cmd.as_std()))?;
 
-        match output {
-            Ok(output) => {
-                tracing::debug!(
-                    "execute iptable script:\n{cmd:?}\nstdout:\n{}\nstderr:\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
+        // Handle the output
+        let stdout = output.stdout;
+        let stderr = output.stderr;
+        let code = output.status.code();
 
-                if !output.status.success() {
-                    bail!(
-                        "failed to execute iptables script, stderr: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+        match code {
+            Some(code) => {
+                if code != 0 {
+                    Err(anyhow!("Bad exit code"))
+                } else {
+                    Ok(())
                 }
             }
-            Err(e) => {
-                bail!("Failed to execute command: {e}");
-            }
+            None => Err(anyhow!("killed by signal")),
         }
+        .with_context(|| {
+            let stdout = String::from_utf8_lossy(&stdout);
+            let stderr = String::from_utf8_lossy(&stderr);
+            format!(
+                "\ncmd: {:?}\nexit code: {}\nstdout: {}\nstderr: {}",
+                cmd.as_std(),
+                code.map(|code| code.to_string())
+                    .unwrap_or("unknown".to_string()),
+                if stdout.contains('\n') {
+                    format!("(multi-line)\n\t{}", stdout.replace("\n", "\n\t"))
+                } else {
+                    stdout.into()
+                },
+                if stderr.contains('\n') {
+                    format!("(multi-line)\n\t{}", stderr.replace("\n", "\n\t"))
+                } else {
+                    stderr.into()
+                },
+            )
+        })?;
+
         Ok(())
     }
 }
@@ -77,7 +99,7 @@ impl Drop for IptablesGuard {
                     if let Err(e) =
                         IptablesExecutor::execute_script(&self.iptables_revoke_script).await
                     {
-                        tracing::error!("Failed to revoke iptables rules: {e:#}");
+                        tracing::error!("Failed to clean up iptables rules: {e:#}");
                     }
                 }
                 .instrument(self.span.clone()),

@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::{config::Endpoint, tunnel::utils::iptables::IptablesRuleGenerator};
+use crate::{
+    config::ingress::IngressNetfilterCaptureDst, tunnel::utils::iptables::IptablesRuleGenerator,
+};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -137,15 +139,35 @@ impl IptablesRuleGenerator for NetfilterIngress {
             tproxy_invoke_script +=
                 &format!("iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp -j MARK --set-mark {fw_mark}/0xffffff ;");
         } else {
-            for Endpoint { host, port } in &self.capture_dst {
-                if let Some(addr) = &host {
-                    tproxy_invoke_script += &format!(
-                        "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dst {addr}/32 --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;"
-                    );
-                } else {
-                    tproxy_invoke_script += &format!(
-                        "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;"
-                    );
+            for capture_dst in &self.capture_dst {
+                match capture_dst {
+                    IngressNetfilterCaptureDst::HostOnly { host } => {
+                        tproxy_invoke_script += &format!(
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dst {}/{} -j MARK --set-mark {fw_mark}/0xffffff ;",
+                            host.first_address(), host.network_length()
+                        );
+                    }
+                    IngressNetfilterCaptureDst::IpSetOnly { ipset } => {
+                        tproxy_invoke_script += &format!(
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp -m set --match-set {ipset} dst -j MARK --set-mark {fw_mark}/0xffffff ;"
+                        );
+                    }
+                    IngressNetfilterCaptureDst::PortOnly { port } => {
+                        tproxy_invoke_script += &format!(
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;"
+                        );
+                    }
+                    IngressNetfilterCaptureDst::HostAndPort { host, port } => {
+                        tproxy_invoke_script += &format!(
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dst {}/{} --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;",
+                            host.first_address(), host.network_length()
+                        );
+                    }
+                    IngressNetfilterCaptureDst::IpSetAndPort { ipset, port } => {
+                        tproxy_invoke_script += &format!(
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {port} -m set --match-set {ipset} dst -j MARK --set-mark {fw_mark}/0xffffff ;"
+                        );
+                    }
                 }
             }
         }

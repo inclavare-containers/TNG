@@ -119,7 +119,15 @@
 
 #### 字段说明
 
-- **`capture_dst`** (array [Endpoint], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的目标地址和端口。如果未指定该字段或者指定为空数组，则所有流量都将被tng隧道捕获。
+- **`capture_dst`** (array, 可选，默认为空数组)：指定需要被tng隧道捕获的流量的目标地址和端口。如果未指定该字段或者指定为空数组，则所有流量都将被tng隧道捕获。
+    该字段以数组形式包含多个对象，每个对象表示一条匹配规则，用于匹配出站TCP请求的目标地址和端口信息。具体规则字段如下：
+    - 目标IP地址：可以通过以下两种方式之一进行指定，如未指定，则表示匹配所有目标IP地址：
+        - 指定目标IP地址或者IP地址段：
+            - **`host`** (string)：需要匹配的目标IP地址或者IP地址段，支持CIDR格式。例如：`192.168.1.1`，`192.168.1.1/32`，`192.168.1.0/24`。
+        - 指定目标IP所在的ipset：
+            - **`ipset`** (string)：需要匹配的ipset组名称。
+    - 目标端口号：可选，如未指定，则表示匹配所有目标端口号
+        - **`port`** (integer)：目标端口号。
 - **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将忽略capture_cgroup 规则。
 - **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng隧道捕获的流量的cgroup。
     > [!NOTE]
@@ -156,6 +164,62 @@ flowchart TD
                 "capture_dst": [
                     {
                         "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "host": "192.168.1.0/24",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "ipset": "myset1",
+                        "port": 30001
+                    },
+                    {
+                        "ipset": "myset2",
                         "port": 30001
                     }
                 ],

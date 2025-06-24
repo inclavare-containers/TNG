@@ -10,15 +10,18 @@ install-test-deps:
 run-test: install-test-deps
 	yum-builddep -y ./trusted-network-gateway.spec
 
+	yum install -y ipset
 	./tng-testsuite/run-test.sh
 
 .PHONE: run-test-on-bin
 run-test-on-bin: install-test-deps
+	yum install -y ipset
 	cargo test --no-default-features --features on-bin --package tng-testsuite --tests -- --nocapture
 
 
 .PHONE: run-test-on-podman
 run-test-on-podman: install-test-deps
+	yum install -y ipset
 	cargo test --no-default-features --features on-podman --package tng-testsuite --tests -- --nocapture
 
 

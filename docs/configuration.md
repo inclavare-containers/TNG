@@ -116,7 +116,18 @@ Precise control over the traffic to be captured can be achieved by configuring o
 
 #### Field Descriptions
 
-- **`capture_dst`** (array [Endpoint], optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic will be captured by the tng tunnel.
+- **`capture_dst`** (array, optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic will be captured by the tng tunnel.
+
+  This field contains multiple objects in the form of an array, each representing a matching rule used to match the destination address and port information of outbound TCP requests. The specific rule fields are as follows:
+
+  - **Destination IP Address**: Can be specified in one of the following two ways. If not specified, it indicates a match for all destination IP addresses:
+    - Specify a target IP address or CIDR block:
+      - **`host`** (string): The target IP address or CIDR block to match. CIDR notation is supported. Examples include: `192.168.1.1`, `192.168.1.1/32`, `192.168.1.0/24`.
+    - Specify an ipset group containing the target IPs:
+      - **`ipset`** (string): The name of the ipset group to match.
+
+  - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
+    - **`port`** (integer): The target port number.
 - **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
 - **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
     > [!NOTE]
@@ -130,8 +141,8 @@ Traffic capture follows the rules below:
 ```mermaid
 flowchart TD
     A[Start] --> G{capture_cgroup is empty?}
-    G --是--> D
-    G --否--> B{Does it match any capture_cgroup rule?}
+    G --Yes--> D
+    G --No--> B{Does it match any capture_cgroup rule?}
     B --No--> C[Ignore traffic]
     B --Yes--> D{Does it match any nocapture_cgroup rule?}
     D --Yes--> C
@@ -152,6 +163,62 @@ Example:
                 "capture_dst": [
                     {
                         "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "host": "192.168.1.0/24",
+                        "port": 30001
+                    }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "ipset": "myset1",
+                        "port": 30001
+                    },
+                    {
+                        "ipset": "myset2",
                         "port": 30001
                     }
                 ],

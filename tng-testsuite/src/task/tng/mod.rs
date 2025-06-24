@@ -11,6 +11,7 @@ mod source_code;
 #[cfg(any(feature = "on-bin", feature = "on-podman"))]
 mod external;
 
+#[derive(Debug, Clone, Copy)]
 pub enum TngInstance {
     #[allow(unused)]
     TngClient(&'static str),

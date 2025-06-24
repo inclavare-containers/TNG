@@ -1,3 +1,5 @@
+use anyhow::bail;
+use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
@@ -64,7 +66,7 @@ pub struct IngressHttpProxyArgs {
 pub struct IngressNetfilterArgs {
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
-    pub capture_dst: Vec<Endpoint>,
+    pub capture_dst: Vec<IngressNetfilterCaptureDstArgs>,
 
     #[serde(default = "Vec::new")]
     pub capture_cgroup: Vec<String>,
@@ -77,6 +79,44 @@ pub struct IngressNetfilterArgs {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub so_mark: Option<u32>,
+}
+
+/// Instead of using the IngressNetfilterCaptureDst directly, here we define a common struct for json parsing to get better deserialization error message.
+/// See https://github.com/serde-rs/serde/issues/2157
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IngressNetfilterCaptureDstArgs {
+    host: Option<Ipv4Cidr>,
+    ipset: Option<String>,
+    port: Option<u16>,
+}
+
+impl TryFrom<IngressNetfilterCaptureDstArgs> for IngressNetfilterCaptureDst {
+    type Error = anyhow::Error;
+
+    fn try_from(value: IngressNetfilterCaptureDstArgs) -> Result<Self, Self::Error> {
+        Ok(match (value.host, value.ipset, value.port) {
+            (None, None, None) => bail!("one of host, ipset, port must be specified"),
+            (None, None, Some(port)) => IngressNetfilterCaptureDst::PortOnly { port },
+            (None, Some(ipset), None) => IngressNetfilterCaptureDst::IpSetOnly { ipset },
+            (None, Some(ipset), Some(port)) => {
+                IngressNetfilterCaptureDst::IpSetAndPort { ipset, port }
+            }
+            (Some(host), None, None) => IngressNetfilterCaptureDst::HostOnly { host },
+            (Some(host), None, Some(port)) => {
+                IngressNetfilterCaptureDst::HostAndPort { host, port }
+            }
+            (Some(_), Some(_), _) => bail!("Only one of host or ipset can be specified"),
+        })
+    }
+}
+
+pub enum IngressNetfilterCaptureDst {
+    HostOnly { host: Ipv4Cidr },
+    IpSetOnly { ipset: String },
+    PortOnly { port: u16 },
+    HostAndPort { host: Ipv4Cidr, port: u16 },
+    IpSetAndPort { ipset: String, port: u16 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -107,4 +147,143 @@ pub struct EndpointFilter {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use serde_json::json;
+
+    use crate::config::TngConfig;
+
+    use super::{IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs};
+
+    fn test_deserialize_netfilter_common(value: serde_json::Value) -> Result<()> {
+        let config: TngConfig = serde_json::from_value(value)?;
+
+        let config_json = serde_json::to_string_pretty(&config)?;
+
+        let config2 = serde_json::from_str(&config_json)?;
+
+        assert_eq!(config, config2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_netfilter() -> Result<()> {
+        test_deserialize_netfilter_common(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": [
+                                {
+                                    "port": 30001
+                                },
+                                {
+                                    "host": "127.0.0.1"
+                                },
+                                {
+                                    "host": "127.0.0.1",
+                                    "port": 30002
+                                },
+                                {
+                                    "host": "10.1.1.0/24",
+                                    "port": 30002
+                                },
+                                {
+                                    "host": "127.0.0.1/32",
+                                    "port": 30002
+                                },
+                            ],
+                            "listen_port": 50000
+                        },
+                        "verify": {
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }
+        ))?;
+
+        assert!(test_deserialize_netfilter_common(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": [
+                                {
+                                    "host": "10.1.1.1/24", // Invalid CIDR
+                                    "port": 30002
+                                },
+                            ],
+                            "listen_port": 50000
+                        },
+                        "verify": {
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }
+        ))
+        .is_err());
+
+        Ok(())
+    }
+
+    fn test_deserialize_netfilter_capture_dst_common(value: serde_json::Value) -> Result<()> {
+        IngressNetfilterCaptureDst::try_from(serde_json::from_value::<
+            IngressNetfilterCaptureDstArgs,
+        >(value)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_netfilter_capture_dst() -> Result<()> {
+        test_deserialize_netfilter_capture_dst_common(serde_json::json!(
+        {
+            "host": "10.1.1.0/24",
+            "port": 30002
+        }))?;
+
+        test_deserialize_netfilter_capture_dst_common(serde_json::json!(
+        {
+            "ipset": "ipset_name",
+            "port": 30002
+        }))?;
+
+        test_deserialize_netfilter_capture_dst_common(serde_json::json!(
+        {
+            "port": 30002
+        }))?;
+
+        assert!(
+            test_deserialize_netfilter_capture_dst_common(serde_json::json!(
+            {
+                "host": "10.1.1.0/24",
+                "ipset": "ipset_name",
+                "port": 30002
+            }))
+            .is_err()
+        );
+
+        assert!(
+            test_deserialize_netfilter_capture_dst_common(serde_json::json!(
+            {
+                "host": "10.1.1.0/24",
+                "ipset": "ipset_name",
+            }))
+            .is_err()
+        );
+
+        assert!(test_deserialize_netfilter_capture_dst_common(serde_json::json!({})).is_err());
+
+        Ok(())
+    }
 }

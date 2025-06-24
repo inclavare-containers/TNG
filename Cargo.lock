@@ -492,6 +492,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cidr"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bdf600c45bd958cf2945c445264471cca8b6c8e67bc87b71affd6d7e5682621"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3566,6 +3575,7 @@ dependencies = [
  "auto_enums",
  "axum 0.8.4",
  "bytes",
+ "cidr",
  "clap",
  "console-subscriber",
  "const_format",

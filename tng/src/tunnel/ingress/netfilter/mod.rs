@@ -10,7 +10,7 @@ use tokio_graceful::ShutdownGuard;
 
 use crate::config::ingress::CommonArgs;
 use crate::config::ingress::IngressNetfilterArgs;
-use crate::config::Endpoint;
+use crate::config::ingress::IngressNetfilterCaptureDst;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::tunnel::access_log::AccessLog;
@@ -26,7 +26,7 @@ mod iptables;
 
 pub struct NetfilterIngress {
     id: usize,
-    capture_dst: Vec<Endpoint>,
+    capture_dst: Vec<IngressNetfilterCaptureDst>,
     capture_cgroup: Vec<String>,
     nocapture_cgroup: Vec<String>,
     listen_port: u16,
@@ -51,6 +51,13 @@ impl NetfilterIngress {
             bail!("At least one of capture_dst, capture_cgroup must be set and not empty");
         }
 
+        let capture_dst = netfilter_args
+            .capture_dst
+            .iter()
+            .map(Clone::clone)
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+
         // ingress_type=netfilter,ingress_id={id},ingress_listen_port={listen_port}
         let metrics = ServiceMetrics::new(
             meter_provider,
@@ -70,7 +77,7 @@ impl NetfilterIngress {
 
         Ok(Self {
             id,
-            capture_dst: netfilter_args.capture_dst.clone(),
+            capture_dst,
             capture_cgroup: netfilter_args.capture_cgroup.clone(),
             nocapture_cgroup: netfilter_args.nocapture_cgroup.clone(),
             listen_port,
