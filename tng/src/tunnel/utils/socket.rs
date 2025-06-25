@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use nix::sys::socket::setsockopt;
 use tokio::net::TcpStream;
 
+#[allow(dead_code)]
 pub const TCP_CONNECT_SO_MARK_DEFAULT: u32 = 0x235; // 565
 
 pub trait SetListenerSockOpts {
