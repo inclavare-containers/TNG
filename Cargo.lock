@@ -964,6 +964,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-socks5"
+version = "0.10.0"
+source = "git+https://github.com/dizda/fast-socks5.git?rev=4c8985c#4c8985cf686e7a86348f14c0892a17783dde878f"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "log",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3583,6 +3596,7 @@ dependencies = [
  "ctrlc",
  "derivative",
  "either",
+ "fast-socks5",
  "futures",
  "getrandom 0.3.1",
  "h2",

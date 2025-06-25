@@ -111,6 +111,68 @@
 ```
 
 
+### socks5：Socks5代理方式
+
+在本场景中，tng创建一个本地sock5代理服务器端口，用户程序可以连接到该socks5代理服务器，从而将请求代理到tng中，后者负责将所有用户tcp请求加密后发送到原目标地址。在该过程中，用户的client程序除了需要配置一个socks5代理选项，无需修改其tcp请求的目标。
+
+#### 字段说明
+
+- **`proxy_listen`** (Endpoint)：指定tng暴露的`socks5`协议监听端口的监听地址(`host`)和端口(`port`)值
+    - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的本地地址。
+    - **`port`** (integer)：监听的端口号。
+- **`auth`** (Socks5Auth，可选)：指定本地监听的socks5端口所需要的访问认证方式，您可以使用该选项来限制只有知道密码的程序能够访问该socks5代理端口。
+    - **`username`** (string)：socks5代理认证所需的用户名。
+    - **`password`** (string)：socks5代理认证所需的密码。
+
+
+示例：
+
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                }
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
+                "auth": {
+                    "username": "user",
+                    "password": "ppppppwd"
+                }
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
 ### netfilter：透明代理方式
 
 在该场景中，tng将会监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。

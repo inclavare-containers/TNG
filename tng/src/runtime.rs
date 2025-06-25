@@ -5,6 +5,7 @@ use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
 use crate::tunnel::egress::mapping::MappingEgress;
+use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
@@ -113,6 +114,20 @@ impl TngRuntime {
                             tracing::info_span!("ingress", id),
                         ));
                     }
+                }
+                IngressMode::Socks5(socks5_args) => {
+                    services.push((
+                        Box::new(
+                            Socks5Ingress::new(
+                                id,
+                                socks5_args,
+                                &add_ingress.common,
+                                meter_provider.clone(),
+                            )
+                            .await?,
+                        ),
+                        tracing::info_span!("ingress", id),
+                    ));
                 }
             }
         }

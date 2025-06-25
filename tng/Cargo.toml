@@ -20,6 +20,7 @@ const_format = "0.2.34"
 ctrlc = {version = "3.4.7", features = ["termination"]}
 derivative = "2.2.0"
 either = "1.15.0"
+fast-socks5 = {git = "https://github.com/dizda/fast-socks5.git", rev = "4c8985c"}
 futures = "0.3.31"
 getrandom = {version = "0.3"}
 h2 = {version = "0.4.10", features = ["stream"]}

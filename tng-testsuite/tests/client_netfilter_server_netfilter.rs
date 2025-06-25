@@ -223,7 +223,7 @@ async fn test() -> Result<()> {
     run_test(vec![
         // Prepare ipset in client node
         ShellTask {
-            name: "bad_client".to_owned(),
+            name: "prepare_ipset".to_owned(),
             node_type: NodeType::Client,
             script: r#"
                     ipset create myset hash:ip
@@ -274,7 +274,7 @@ async fn test() -> Result<()> {
     // IpSet and Port (Bad case)
     assert!(run_test(vec![
         ShellTask {
-            name: "bad_client".to_owned(),
+            name: "prepare_ipset".to_owned(),
             node_type: NodeType::Client,
             script: r#"
                     ipset create myset hash:ip
@@ -327,7 +327,7 @@ async fn test() -> Result<()> {
     run_test(vec![
         // Prepare ipset in client node
         ShellTask {
-            name: "bad_client".to_owned(),
+            name: "prepare_ipset".to_owned(),
             node_type: NodeType::Client,
             script: r#"
                     ipset create myset hash:ip

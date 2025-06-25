@@ -108,6 +108,67 @@ Example:
 }
 ```
 
+### socks5: Socks5 Proxy Mode
+
+In this scenario, TNG creates a local SOCKS5 proxy server port. User applications can connect to this SOCKS5 proxy server, thereby proxying requests to TNG, which is responsible for encrypting all user TCP requests and sending them to the original destination address. In this process, the user's client program only needs to configure a SOCKS5 proxy option and does not need to modify the target of its TCP requests.
+
+#### Field Descriptions
+
+- **`proxy_listen`** (Endpoint): Specifies the listening address (`host`) and port (`port`) values for the `socks5` protocol port exposed by TNG.
+  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
+  - **`port`** (integer): The port number to listen on.
+- **`auth`** (Socks5Auth, optional): Specifies the authentication method required for accessing the locally listened SOCKS5 port. You can use this option to restrict access to the SOCKS5 proxy port to only those programs that know the password.
+  - **`username`** (string): The username required for SOCKS5 proxy authentication.
+  - **`password`** (string): The password required for SOCKS5 proxy authentication.
+
+Examples:
+
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                }
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
+                "auth": {
+                    "username": "user",
+                    "password": "ppppppwd"
+                }
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
 ### netfilter: Transparent Proxy Mode
 
 In this mode, tng will listen on a local TCP port and forward user traffic to the port listened to by the tng client by configuring iptables rules. The latter is responsible for encrypting all user TCP requests and sending them to the original destination address. Therefore, the user's client program does not need to modify its TCP request target.

@@ -27,7 +27,6 @@ pub struct CommonArgs {
     pub ra_args: RaArgs,
 }
 
-#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
@@ -39,9 +38,11 @@ pub enum IngressMode {
 
     #[serde(rename = "netfilter")]
     Netfilter(IngressNetfilterArgs),
+
+    #[serde(rename = "socks5")]
+    Socks5(IngressSocks5Args),
 }
 
-#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IngressMappingArgs {
     #[serde(rename = "in")]
@@ -117,6 +118,20 @@ pub enum IngressNetfilterCaptureDst {
     PortOnly { port: u16 },
     HostAndPort { host: Ipv4Cidr, port: u16 },
     IpSetAndPort { ipset: String, port: u16 },
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IngressSocks5Args {
+    pub proxy_listen: Endpoint,
+
+    pub auth: Option<Socks5AuthArgs>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Socks5AuthArgs {
+    pub username: String,
+
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
