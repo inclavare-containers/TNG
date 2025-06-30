@@ -10,13 +10,14 @@ use crate::{
             transport::{DecodeResult, TransportLayer},
             wrapping::WrappingLayer,
         },
+        stream::CommonStreamTrait,
         utils::runtime::TokioRuntime,
     },
 };
 use anyhow::Context;
 use anyhow::{bail, Result};
 use futures::StreamExt;
-use tokio::{net::TcpStream, sync::mpsc};
+use tokio::sync::mpsc;
 use tokio_graceful::ShutdownGuard;
 
 use super::StreamManager;
@@ -52,7 +53,7 @@ impl StreamManager for TrustedStreamManager {
 
     async fn consume_stream(
         &self,
-        in_stream: TcpStream,
+        in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
         sender: Self::Sender,
         shutdown_guard: ShutdownGuard,
     ) -> Result<()> {
@@ -134,14 +135,4 @@ impl StreamType {
             StreamType::DirectlyForwardStream(stream) => stream,
         }
     }
-}
-
-pub trait CommonStreamTrait:
-    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{
-}
-
-impl<T> CommonStreamTrait for T where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{
 }

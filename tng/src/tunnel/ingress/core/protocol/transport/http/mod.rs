@@ -16,7 +16,8 @@ use crate::{
     config::ingress::EncapInHttp,
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
-        ingress::core::{protocol::security::pool::PoolKey, TngEndpoint},
+        endpoint::TngEndpoint,
+        ingress::core::protocol::security::pool::PoolKey,
         utils::{h2_stream::H2Stream, socket::tcp_connect_with_so_mark},
     },
 };

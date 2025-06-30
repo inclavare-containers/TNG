@@ -4,7 +4,9 @@ use crate::observability::metric::exporter::noop::NoopMeterProvider;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
+use crate::tunnel::egress::flow::EgressFlow;
 use crate::tunnel::egress::mapping::MappingEgress;
+use crate::tunnel::ingress::flow::IngressFlow;
 use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use crate::{
@@ -67,9 +69,8 @@ impl TngRuntime {
                 IngressMode::Mapping(mapping_args) => {
                     services.push((
                         Box::new(
-                            MappingIngress::new(
-                                id,
-                                mapping_args,
+                            IngressFlow::new(
+                                MappingIngress::new(id, mapping_args).await?,
                                 &add_ingress.common,
                                 meter_provider.clone(),
                             )
@@ -81,9 +82,8 @@ impl TngRuntime {
                 IngressMode::HttpProxy(http_proxy_args) => {
                     services.push((
                         Box::new(
-                            HttpProxyIngress::new(
-                                id,
-                                http_proxy_args,
+                            IngressFlow::new(
+                                HttpProxyIngress::new(id, http_proxy_args).await?,
                                 &add_ingress.common,
                                 meter_provider.clone(),
                             )
@@ -103,9 +103,8 @@ impl TngRuntime {
                         use crate::tunnel::ingress::netfilter::NetfilterIngress;
                         services.push((
                             Box::new(
-                                NetfilterIngress::new(
-                                    id,
-                                    netfilter_args,
+                                IngressFlow::new(
+                                    NetfilterIngress::new(id, netfilter_args).await?,
                                     &add_ingress.common,
                                     meter_provider.clone(),
                                 )
@@ -118,9 +117,8 @@ impl TngRuntime {
                 IngressMode::Socks5(socks5_args) => {
                     services.push((
                         Box::new(
-                            Socks5Ingress::new(
-                                id,
-                                socks5_args,
+                            IngressFlow::new(
+                                Socks5Ingress::new(id, socks5_args).await?,
                                 &add_ingress.common,
                                 meter_provider.clone(),
                             )
@@ -136,14 +134,17 @@ impl TngRuntime {
             let add_egress = add_egress.clone();
             match &add_egress.egress_mode {
                 EgressMode::Mapping(mapping_args) => {
-                    let egress = MappingEgress::new(
-                        id,
-                        mapping_args,
-                        &add_egress.common,
-                        meter_provider.clone(),
-                    )
-                    .await?;
-                    services.push((Box::new(egress), tracing::info_span!("egress", id)));
+                    services.push((
+                        Box::new(
+                            EgressFlow::new(
+                                MappingEgress::new(id, mapping_args).await?,
+                                &add_egress.common,
+                                meter_provider.clone(),
+                            )
+                            .await?,
+                        ),
+                        tracing::info_span!("egress", id),
+                    ));
                 }
                 EgressMode::Netfilter(netfilter_args) => {
                     if !cfg!(target_os = "linux") {
@@ -154,14 +155,17 @@ impl TngRuntime {
                     #[cfg(target_os = "linux")]
                     {
                         use crate::tunnel::egress::netfilter::NetfilterEgress;
-                        let egress = NetfilterEgress::new(
-                            id,
-                            netfilter_args,
-                            &add_egress.common,
-                            meter_provider.clone(),
-                        )
-                        .await?;
-                        services.push((Box::new(egress), tracing::info_span!("egress", id)));
+                        services.push((
+                            Box::new(
+                                EgressFlow::new(
+                                    NetfilterEgress::new(id, netfilter_args).await?,
+                                    &add_egress.common,
+                                    meter_provider.clone(),
+                                )
+                                .await?,
+                            ),
+                            tracing::info_span!("egress", id),
+                        ));
                     }
                 }
             }

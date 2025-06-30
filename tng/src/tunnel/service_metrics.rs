@@ -3,18 +3,21 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use opentelemetry::metrics::{Counter, MeterProvider, UpDownCounter};
 
-use crate::observability::metric::counter::{AttributedCounter, WithAttributes};
+use crate::observability::metric::{
+    counter::{AttributedCounter, WithAttributes},
+    stream::StreamWithCounter,
+};
 
 /// ServiceMetrics is a set of metrics for a service.
 ///
 /// This struct is free be cloned and used anywhere.
 #[derive(Debug, Clone)]
 pub struct ServiceMetrics {
-    pub cx_total: AttributedCounter<Counter<u64>, u64>,
-    pub cx_active: AttributedCounter<UpDownCounter<i64>, i64>,
-    pub cx_failed: AttributedCounter<Counter<u64>, u64>,
-    pub tx_bytes_total: AttributedCounter<Counter<u64>, u64>,
-    pub rx_bytes_total: AttributedCounter<Counter<u64>, u64>,
+    cx_total: AttributedCounter<Counter<u64>, u64>,
+    cx_active: AttributedCounter<UpDownCounter<i64>, i64>,
+    cx_failed: AttributedCounter<Counter<u64>, u64>,
+    tx_bytes_total: AttributedCounter<Counter<u64>, u64>,
+    rx_bytes_total: AttributedCounter<Counter<u64>, u64>,
 }
 
 impl ServiceMetrics {
@@ -69,5 +72,63 @@ impl ServiceMetrics {
             tx_bytes_total,
             rx_bytes_total,
         }
+    }
+
+    pub fn new_cx(&self) -> ActiveConnectionCounter {
+        ActiveConnectionCounter::new(
+            self.cx_total.clone(),
+            self.cx_active.clone(),
+            self.cx_failed.clone(),
+        )
+    }
+
+    pub fn new_wrapped_stream<
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+    >(
+        &self,
+        stream: T,
+    ) -> StreamWithCounter<T> {
+        StreamWithCounter {
+            inner: stream,
+            tx_bytes_total: self.tx_bytes_total.clone(),
+            rx_bytes_total: self.rx_bytes_total.clone(),
+        }
+    }
+}
+
+pub struct ActiveConnectionCounter {
+    cx_active: AttributedCounter<UpDownCounter<i64>, i64>,
+    cx_failed: AttributedCounter<Counter<u64>, u64>,
+    finished_successfully: bool,
+}
+
+impl ActiveConnectionCounter {
+    pub fn new(
+        cx_total: AttributedCounter<Counter<u64>, u64>,
+        cx_active: AttributedCounter<UpDownCounter<i64>, i64>,
+        cx_failed: AttributedCounter<Counter<u64>, u64>,
+    ) -> Self {
+        cx_total.add(1);
+        cx_active.add(1);
+
+        Self {
+            cx_active,
+            cx_failed,
+            finished_successfully: false,
+        }
+    }
+
+    /// Call this function when the stream is finished successfully, or it will report an failed connection when it is droppeds.
+    pub fn mark_finished_successfully(mut self) {
+        self.finished_successfully = true;
+    }
+}
+
+impl Drop for ActiveConnectionCounter {
+    fn drop(&mut self) {
+        if !self.finished_successfully {
+            self.cx_failed.add(1);
+        }
+        self.cx_active.add(-1);
     }
 }

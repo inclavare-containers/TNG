@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 again = "0.1.2"
 anyhow = "1.0.98"
+async-stream = "0.3.6"
 async-trait = "0.1.88"
 auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = "0.8.4"

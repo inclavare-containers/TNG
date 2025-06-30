@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use either::Either;
 use regex::Regex;
 
-use crate::{config::ingress::EndpointFilter, tunnel::ingress::core::TngEndpoint};
+use crate::{config::ingress::EndpointFilter, tunnel::endpoint::TngEndpoint};
 
 #[derive(Debug)]
 pub struct EndpointMatcher {

@@ -10,8 +10,10 @@ use std::{path::Path, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_graceful::ShutdownGuard;
 
-use crate::config::ra::AttestArgs;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
+use crate::{
+    config::ra::AttestArgs, observability::trace::shutdown_guard_ext::SupervisedTaskResult,
+};
 
 const CERT_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 const CREATE_CERT_TIMEOUT_SECOND: u64 = 120; // 2 min
@@ -37,7 +39,7 @@ pub enum RefreshStrategy {
 
 #[derive(Debug)]
 pub struct RefreshTask {
-    join_handle: JoinHandle<()>,
+    join_handle: JoinHandle<SupervisedTaskResult<()>>,
 }
 
 impl CertManager {

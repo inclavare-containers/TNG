@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
-use crate::tunnel::ingress::core::TngEndpoint;
+use crate::tunnel::endpoint::TngEndpoint;
 
 use super::{RatsTlsClient, SecurityConnector};
 

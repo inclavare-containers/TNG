@@ -1,84 +1,31 @@
-use std::sync::Arc;
-
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use async_stream::stream;
 use async_trait::async_trait;
-use opentelemetry::metrics::MeterProvider;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::mpsc::{self, Sender},
-};
+use indexmap::IndexMap;
+use tokio::net::TcpListener;
 use tokio_graceful::ShutdownGuard;
 
 use crate::{
-    config::egress::{CommonArgs, EgressMappingArgs},
-    observability::{
-        metric::stream::StreamWithCounter, trace::shutdown_guard_ext::ShutdownGuardExt as _,
-    },
-    service::RegistedService,
+    config::egress::EgressMappingArgs,
     tunnel::{
-        access_log::AccessLog,
-        egress::core::stream_manager::{
-            trusted::{StreamType, TrustedStreamManager},
-            StreamManager,
-        },
-        ingress::core::TngEndpoint,
-        service_metrics::ServiceMetrics,
-        utils::{self, socket::SetListenerSockOpts},
+        egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::socket::SetListenerSockOpts,
     },
 };
 
+use super::flow::{EgressTrait, Incomming};
+
 pub struct MappingEgress {
+    id: usize,
     listen_addr: String,
     listen_port: u16,
     upstream_addr: String,
     upstream_port: u16,
-    metrics: ServiceMetrics,
-    trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
 impl MappingEgress {
-    pub async fn new(
-        id: usize,
-        mapping_args: &EgressMappingArgs,
-        common_args: &CommonArgs,
-        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
-    ) -> Result<Self> {
-        let listen_addr = mapping_args
-            .r#in
-            .host
-            .as_deref()
-            .unwrap_or("0.0.0.0")
-            .to_owned();
-        let listen_port = mapping_args.r#in.port;
-
-        let upstream_addr = mapping_args
-            .out
-            .host
-            .as_deref()
-            .context("'host' of 'out' field must be set")?
-            .to_owned();
-        let upstream_port = mapping_args.out.port;
-
-        // egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}
-        let metrics = ServiceMetrics::new(
-            meter_provider,
-            [
-                ("egress_type".to_owned(), "mapping".to_owned()),
-                ("egress_id".to_owned(), id.to_string()),
-                (
-                    "egress_in".to_owned(),
-                    format!("{}:{}", listen_addr, listen_port),
-                ),
-                (
-                    "egress_out".to_owned(),
-                    format!("{}:{}", upstream_addr, upstream_port),
-                ),
-            ],
-        );
-
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args).await?);
-
+    pub async fn new(id: usize, mapping_args: &EgressMappingArgs) -> Result<Self> {
         Ok(Self {
+            id,
             listen_addr: mapping_args
                 .r#in
                 .host
@@ -94,134 +41,51 @@ impl MappingEgress {
                 .context("'host' of 'out' field must be set")?
                 .to_owned(),
             upstream_port: mapping_args.out.port,
-            metrics,
-            trusted_stream_manager,
         })
     }
 }
 
 #[async_trait]
-impl RegistedService for MappingEgress {
-    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        self.trusted_stream_manager
-            .prepare(shutdown_guard.clone())
-            .await?;
+impl EgressTrait for MappingEgress {
+    /// egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}
+    fn metric_attributes(&self) -> IndexMap<String, String> {
+        [
+            ("egress_type".to_owned(), "mapping".to_owned()),
+            ("egress_id".to_owned(), self.id.to_string()),
+            (
+                "egress_in".to_owned(),
+                format!("{}:{}", self.listen_addr, self.listen_port),
+            ),
+            (
+                "egress_out".to_owned(),
+                format!("{}:{}", self.upstream_addr, self.upstream_port),
+            ),
+        ]
+        .into()
+    }
 
+    fn transport_so_mark(&self) -> Option<u32> {
+        None
+    }
+
+    async fn accept(&self, _shutdown_guard: ShutdownGuard) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
 
-        ready.send(()).await?;
-
-        loop {
-            async {
-                let (downstream, peer_addr) = listener.accept().await?;
-
-                let upstream_addr = self.upstream_addr.clone();
-                let upstream_port = self.upstream_port;
-
-                let trusted_stream_manager = self.trusted_stream_manager.clone();
-
-                let cx_total = self.metrics.cx_total.clone();
-                let cx_active = self.metrics.cx_active.clone();
-                let cx_failed = self.metrics.cx_failed.clone();
-                let tx_bytes_total = self.metrics.tx_bytes_total.clone();
-                let rx_bytes_total = self.metrics.rx_bytes_total.clone();
-
-                shutdown_guard.spawn_supervised_task_fn_with_span(
-                    tracing::info_span!("serve", client=?peer_addr),
-                    move |shutdown_guard| {
-                        async move {
-                            tracing::debug!("Start serving new connection from client");
-
-                            let (sender, mut receiver) = mpsc::unbounded_channel::<(StreamType,_)>();
-
-                            shutdown_guard.spawn_supervised_task_fn_current_span(move |shutdown_guard| {
-                                async move {
-                                    while let Some((stream_type, attestation_result)) =
-                                        receiver.recv().await
-                                    {
-                                        cx_total.add(1);
-
-                                        let tx_bytes_total = tx_bytes_total.clone();
-                                        let rx_bytes_total = rx_bytes_total.clone();
-
-                                        // Spawn a task to handle the connection
-                                        let task = shutdown_guard.spawn_supervised_task_current_span({
-                                            let upstream_addr = upstream_addr.clone();
-
-                                            async move {
-                                                let fut = async {
-                                                    // Print access log
-                                                    let access_log = AccessLog::Egress {
-                                                        downstream: peer_addr,
-                                                        upstream: TngEndpoint::new(
-                                                            &upstream_addr,
-                                                            upstream_port,
-                                                        ),
-                                                        from_trusted_tunnel: stream_type.is_secured(),
-                                                        peer_attested: attestation_result,
-                                                    };
-                                                    tracing::info!(?access_log);
-
-                                                    let downstream = stream_type.into_stream();
-
-                                                    let upstream = TcpStream::connect((
-                                                        upstream_addr.as_str(),
-                                                        upstream_port,
-                                                    ))
-                                                    .await
-                                                    .context("Failed to connect to upstream")?;
-
-                                                    let downstream = StreamWithCounter {
-                                                        inner: downstream,
-                                                        tx_bytes_total,
-                                                        rx_bytes_total,
-                                                    };
-                                                    utils::forward::forward_stream(upstream, downstream).await
-                                                };
-
-                                                if let Err(e) = fut.await {
-                                                    tracing::error!(error=?e, "Failed to forward stream");
-                                                }
-                                            }
-                                        });
-
-                                        // Spawn a task to trace the connection status.
-                                        shutdown_guard.spawn_supervised_task_current_span({
-                                            let cx_active = cx_active.clone();
-                                            let cx_failed = cx_failed.clone();
-                                            async move {
-                                                cx_active.add(1);
-                                                if !matches!(task.await, Ok(())) {
-                                                    cx_failed.add(1);
-                                                }
-                                                cx_active.add(-1);
-                                            }
-                                        });
-                                    }
-                                }
-                            });
-
-                            // Consume streams come from downstream
-                            match trusted_stream_manager
-                                .consume_stream(downstream, sender, shutdown_guard)
-                                .await
-                            {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    tracing::error!(error=?e, "Failed to consume stream from client");
-                                }
-                            }
-                        }
-                    },
-                );
-                Ok::<_, anyhow::Error>(())
-            }.await.unwrap_or_else(|e| {
-                tracing::error!(error=?e, "Failed to serve incoming connection from client");
-            })
-        }
+        Ok(Box::new(stream! {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, peer_addr)) => yield Ok(AcceptedStream{
+                        stream: Box::new(stream),
+                        src: peer_addr,
+                        dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
+                    }),
+                    Err(e) => yield Err(anyhow!(e)),
+                }
+            }
+        }))
     }
 }

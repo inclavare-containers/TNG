@@ -1,39 +1,32 @@
-use std::sync::Arc;
-
 use anyhow::{bail, Context, Result};
+use async_stream::stream;
 use async_trait::async_trait;
 use fast_socks5::server::Socks5ServerProtocol;
-use opentelemetry::metrics::MeterProvider;
+use futures::StreamExt;
+use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
-use crate::config::ingress::CommonArgs;
 use crate::config::ingress::{IngressSocks5Args, Socks5AuthArgs};
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
-use crate::service::RegistedService;
-use crate::tunnel::access_log::AccessLog;
-use crate::tunnel::ingress::core::stream_manager::trusted::TrustedStreamManager;
-use crate::tunnel::ingress::core::stream_manager::StreamManager;
-use crate::tunnel::ingress::core::TngEndpoint;
-use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::tunnel::endpoint::TngEndpoint;
+use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 
+use super::flow::{Incomming, IngressTrait};
+
+/// Define the maximum concurrency of socks5 session which is in handshake stage.
+const MAX_CONCURRENCY_HANDSHAKE_SOCKS5_SESSION: usize = 1024;
+
 pub struct Socks5Ingress {
+    id: usize,
     listen_addr: String,
     listen_port: u16,
     auth: Option<Socks5AuthArgs>,
-    metrics: ServiceMetrics,
-    trusted_stream_manager: Arc<TrustedStreamManager>,
 }
 
 impl Socks5Ingress {
-    pub async fn new(
-        id: usize,
-        socks5_args: &IngressSocks5Args,
-        common_args: &CommonArgs,
-        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
-    ) -> Result<Self> {
+    pub async fn new(id: usize, socks5_args: &IngressSocks5Args) -> Result<Self> {
         let listen_addr = socks5_args
             .proxy_listen
             .host
@@ -42,27 +35,11 @@ impl Socks5Ingress {
             .to_owned();
         let listen_port = socks5_args.proxy_listen.port;
 
-        // ingress_type=socks5,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}
-        let metrics = ServiceMetrics::new(
-            meter_provider,
-            [
-                ("ingress_type".to_owned(), "socks5".to_owned()),
-                ("ingress_id".to_owned(), id.to_string()),
-                (
-                    "ingress_proxy_listen".to_owned(),
-                    format!("{}:{}", listen_addr, listen_port),
-                ),
-            ],
-        );
-
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args, None).await?);
-
         Ok(Self {
+            id,
             listen_addr,
             listen_port,
             auth: socks5_args.auth.clone(),
-            metrics,
-            trusted_stream_manager,
         })
     }
 }
@@ -119,99 +96,62 @@ async fn serve_socks5(
 }
 
 #[async_trait]
-impl RegistedService for Socks5Ingress {
-    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
-        self.trusted_stream_manager
-            .prepare(shutdown_guard.clone())
-            .await?;
+impl IngressTrait for Socks5Ingress {
+    /// ingress_type=socks5,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}
+    fn metric_attributes(&self) -> IndexMap<String, String> {
+        [
+            ("ingress_type".to_owned(), "socks5".to_owned()),
+            ("ingress_id".to_owned(), self.id.to_string()),
+            (
+                "ingress_proxy_listen".to_owned(),
+                format!("{}:{}", self.listen_addr, self.listen_port),
+            ),
+        ]
+        .into()
+    }
 
+    fn transport_so_mark(&self) -> Option<u32> {
+        None
+    }
+
+    async fn accept(&self, shutdown_guard: ShutdownGuard) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
 
-        ready.send(()).await?;
-
-        loop {
-            async {
-                    let (downstream, peer_addr) = listener.accept().await?;
-
-
-                    let trusted_stream_manager = self.trusted_stream_manager.clone();
-
-                    self.metrics.cx_total.add(1);
-                    let metrics = self.metrics.clone();
+        Ok(Box::new(
+            stream! {
+                loop {
+                    yield listener.accept().await
+                }
+            }
+            .map(move |res| {
+                let shutdown_guard = shutdown_guard.clone();
+                async move {
+                    let (stream, peer_addr) = res?;
 
                     let auth = self.auth.clone();
 
-                    let task = shutdown_guard.spawn_supervised_task_fn_with_span(
-                        tracing::info_span!("serve", client=?peer_addr),
-                        move |shutdown_guard| async move {
-                            let fut = async move {
-                                tracing::trace!("Start serving new connection from client");
-
-                                let (downstream, dst) = serve_socks5(downstream, &auth).await.context("Failed to serve socks5 connection")?;
-
-                                // Forward via trusted tunnel
-                                match trusted_stream_manager
-                                    .forward_stream(&dst, downstream, shutdown_guard, metrics)
-                                    .await
-                                {
-                                    Ok((forward_stream_task, attestation_result)) => {
-                                        // Print access log
-                                        let access_log = AccessLog::Ingress {
-                                            downstream: peer_addr,
-                                            upstream: dst.clone(),
-                                            to_trusted_tunnel: true,
-                                            peer_attested: attestation_result,
-                                        };
-                                        tracing::info!(?access_log);
-
-                                        if let Err(e) = forward_stream_task.await {
-                                            let error = format!("{e:#}");
-                                            tracing::error!(
-                                                %dst,
-                                                error,
-                                                "Failed during forwarding to upstream via trusted tunnel"
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let error = format!("{e:#}");
-                                        tracing::error!(
-                                            %dst,
-                                            error,
-                                            "Failed to connect to upstream via trusted tunnel"
-                                        );
-                                    }
-                                };
-
-                                Ok::<(), anyhow::Error>(())
-                            };
-
-                            if let Err(e) = fut.await {
-                                tracing::error!(error=?e, "Failed to forward stream");
-                            }
-                        },
-                    );
-
-                    // Spawn a task to trace the connection status.
-                    shutdown_guard.spawn_supervised_task_current_span({
-                        let cx_active = self.metrics.cx_active.clone();
-                        let cx_failed = self.metrics.cx_failed.clone();
-                        async move {
-                            cx_active.add(1);
-                            if !matches!(task.await, Ok(())) {
-                                cx_failed.add(1);
-                            }
-                            cx_active.add(-1);
-                        }
-                    });
-                    Ok::<_, anyhow::Error>(())
-                }.await.unwrap_or_else(|e| {
-                    tracing::error!(error=?e, "Failed to serve incoming connection from client");
-                })
-        }
+                    // Run socks5 protocol in a separate task to add parallelism with multi-cpu
+                    let (stream, dst) = shutdown_guard
+                        .spawn_supervised_task_current_span(async move {
+                            serve_socks5(stream, &auth)
+                                .await
+                                .context("Failed to serve socks5 connection")
+                        })
+                        .await?
+                        .assume_finished()??;
+                    Ok(AcceptedStream {
+                        stream: Box::new(stream),
+                        src: peer_addr,
+                        dst,
+                        via_tunnel: true,
+                    })
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENCY_HANDSHAKE_SOCKS5_SESSION), // To parallelism the tcp accept and socks5 handshake process
+        ))
     }
 }

@@ -5,18 +5,15 @@ use auto_enums::auto_enum;
 use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
+use crate::tunnel::ingress::core::stream_manager::TngEndpoint;
 use crate::{
     config::ingress::CommonArgs,
-    observability::metric::stream::StreamWithCounter,
     tunnel::{
         attestation_result::AttestationResult,
-        ingress::core::{
-            protocol::{
-                security::{pool::PoolKey, SecurityLayer},
-                transport::{extra_data::PoolKeyExtraDataInserter, TransportLayerCreator},
-                wrapping,
-            },
-            TngEndpoint,
+        ingress::core::protocol::{
+            security::{pool::PoolKey, SecurityLayer},
+            transport::{extra_data::PoolKeyExtraDataInserter, TransportLayerCreator},
+            wrapping,
         },
         service_metrics::ServiceMetrics,
         utils::{
@@ -114,11 +111,7 @@ impl StreamManager for TrustedStreamManager {
             }
         };
 
-        let downstream = StreamWithCounter {
-            inner: downstream,
-            tx_bytes_total: metrics.tx_bytes_total,
-            rx_bytes_total: metrics.rx_bytes_total,
-        };
+        let downstream = metrics.new_wrapped_stream(downstream);
 
         let client = self
             .security_layer

@@ -1,24 +1,24 @@
 use std::future::Future;
 
 use anyhow::{Context as _, Result};
-use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 
-use crate::{
-    observability::metric::stream::StreamWithCounter,
-    tunnel::{
-        attestation_result::AttestationResult, ingress::core::TngEndpoint,
-        service_metrics::ServiceMetrics, utils,
-    },
+use crate::tunnel::{
+    attestation_result::AttestationResult,
+    endpoint::TngEndpoint,
+    service_metrics::ServiceMetrics,
+    utils::{self, socket::tcp_connect_with_so_mark},
 };
 
 use super::StreamManager;
 
-pub struct UnprotectedStreamManager {}
+pub struct UnprotectedStreamManager {
+    transport_so_mark: Option<u32>,
+}
 
 impl UnprotectedStreamManager {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(transport_so_mark: Option<u32>) -> Self {
+        Self { transport_so_mark }
     }
 }
 
@@ -42,17 +42,14 @@ impl StreamManager for UnprotectedStreamManager {
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,
     )> {
-        let upstream = TcpStream::connect((endpoint.host(), endpoint.port()))
-            .await
-            .with_context(|| {
-                format!("Failed to establish TCP connection with upstream '{endpoint}'")
-            })?;
+        let upstream =
+            tcp_connect_with_so_mark((endpoint.host(), endpoint.port()), self.transport_so_mark)
+                .await
+                .with_context(|| {
+                    format!("Failed to establish TCP connection with upstream '{endpoint}'")
+                })?;
 
-        let downstream = StreamWithCounter {
-            inner: downstream,
-            tx_bytes_total: metrics.tx_bytes_total,
-            rx_bytes_total: metrics.rx_bytes_total,
-        };
+        let downstream = metrics.new_wrapped_stream(downstream);
 
         Ok((
             async { utils::forward::forward_stream(upstream, downstream).await },

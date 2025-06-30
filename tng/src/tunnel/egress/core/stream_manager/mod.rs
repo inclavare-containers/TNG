@@ -1,6 +1,7 @@
 use anyhow::Result;
-use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
+
+use crate::tunnel::stream::CommonStreamTrait;
 
 pub mod trusted;
 
@@ -12,7 +13,7 @@ pub trait StreamManager {
 
     async fn consume_stream(
         &self,
-        stream: TcpStream,
+        stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
         sender: Self::Sender,
         shutdown_guard: ShutdownGuard,
     ) -> Result<()>;

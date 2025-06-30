@@ -1,7 +1,25 @@
 use std::future::Future;
 
+use anyhow::{bail, Result};
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
+
+#[derive(Debug)]
+pub enum SupervisedTaskResult<O> {
+    /// The task finished successfully.
+    Finished(O),
+    /// The task was cancelled.
+    Cancelled,
+}
+
+impl<O> SupervisedTaskResult<O> {
+    pub fn assume_finished(self) -> Result<O> {
+        match self {
+            Self::Finished(o) => Ok(o),
+            Self::Cancelled => bail!("task was cancelled"),
+        }
+    }
+}
 
 /// This trait is used to spawn supervised tasks with a shutdown guard.
 ///
@@ -26,10 +44,13 @@ pub trait ShutdownGuardExt {
 
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task_fn_current_span<F, T>(&self, task: F) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task_fn_current_span<F, T, O: std::marker::Send + 'static>(
+        &self,
+        task: F,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(tokio_graceful::ShutdownGuard) -> T + Send + 'static,
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let span = Span::current();
         self.spawn_supervised_task_fn_with_span(span, task)
@@ -37,56 +58,65 @@ pub trait ShutdownGuardExt {
 
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task_current_span<T>(&self, task: T) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task_current_span<T, O: std::marker::Send + 'static>(
+        &self,
+        task: T,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let span = Span::current();
         self.spawn_supervised_task_with_span(span, task)
     }
 
     #[track_caller]
-    fn spawn_supervised_task_fn_with_span<F, T>(
+    fn spawn_supervised_task_fn_with_span<F, T, O: std::marker::Send + 'static>(
         &self,
         span: Span,
         task: F,
-    ) -> tokio::task::JoinHandle<()>
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(tokio_graceful::ShutdownGuard) -> T + Send + 'static,
-        T: std::future::Future<Output = ()> + Send + 'static;
+        T: std::future::Future<Output = O> + Send + 'static;
 
     #[track_caller]
-    fn spawn_supervised_task_with_span<T>(
+    fn spawn_supervised_task_with_span<T, O: std::marker::Send + 'static>(
         &self,
         span: Span,
         task: T,
-    ) -> tokio::task::JoinHandle<()>
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = ()> + Send + 'static;
+        T: std::future::Future<Output = O> + Send + 'static;
 
     #[track_caller]
-    fn spawn_supervised_task_fn<F, T>(&self, task: F) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task_fn<F, T, O: std::marker::Send + 'static>(
+        &self,
+        task: F,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(tokio_graceful::ShutdownGuard) -> T + Send + 'static,
-        T: std::future::Future<Output = ()> + Send + 'static;
+        T: std::future::Future<Output = O> + Send + 'static;
 
     #[track_caller]
-    fn spawn_supervised_task<T>(&self, task: T) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task<T, O: std::marker::Send + 'static>(
+        &self,
+        task: T,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = ()> + Send + 'static;
+        T: std::future::Future<Output = O> + Send + 'static;
 }
 
 impl ShutdownGuardExt for ShutdownGuard {
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task_fn_with_span<F, T>(
+    fn spawn_supervised_task_fn_with_span<F, T, O: std::marker::Send + 'static>(
         &self,
         span: Span,
         task: F,
-    ) -> tokio::task::JoinHandle<()>
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(tokio_graceful::ShutdownGuard) -> T + Send + 'static,
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let guard = self.clone();
         self.spawn_supervised_task_with_span(span, async move { task(guard).await })
@@ -94,26 +124,39 @@ impl ShutdownGuardExt for ShutdownGuard {
 
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task_with_span<T>(&self, span: Span, task: T) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task_with_span<T, O: std::marker::Send + 'static>(
+        &self,
+        span: Span,
+        task: T,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let guard_cloned = self.clone();
 
         spawn_task_named(self, &format!("{span:?}"), async move {
             tokio::select! {
-                _ = guard_cloned.cancelled() => {/* cancelled, so we just exit here and drop the another future */}
-                () = task.instrument(span) => {/* finished */}
-            };
+                _ = guard_cloned.cancelled() => {
+                    /* cancelled, so we just exit here and drop the another future */
+                    SupervisedTaskResult::Cancelled
+                }
+                output = task.instrument(span) => {
+                    /* finished */
+                    SupervisedTaskResult::Finished(output)
+                }
+            }
         })
     }
 
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task_fn<F, T>(&self, task: F) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task_fn<F, T, O: std::marker::Send + 'static>(
+        &self,
+        task: F,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(tokio_graceful::ShutdownGuard) -> T + Send + 'static,
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let guard = self.clone();
         self.spawn_supervised_task(async move { task(guard).await })
@@ -121,17 +164,26 @@ impl ShutdownGuardExt for ShutdownGuard {
 
     #[inline]
     #[track_caller]
-    fn spawn_supervised_task<T>(&self, task: T) -> tokio::task::JoinHandle<()>
+    fn spawn_supervised_task<T, O: std::marker::Send + 'static>(
+        &self,
+        task: T,
+    ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = ()> + Send + 'static,
+        T: std::future::Future<Output = O> + Send + 'static,
     {
         let guard_cloned = self.clone();
 
         spawn_task_named(self, "unnamed", async move {
             tokio::select! {
-                _ = guard_cloned.cancelled() => {/* cancelled, so we just exit here and drop the another future */}
-                () = task => {/* finished */}
-            };
+                _ = guard_cloned.cancelled() => {
+                    /* cancelled, so we just exit here and drop the another future */
+                    SupervisedTaskResult::Cancelled
+                }
+                output = task => {
+                    /* finished */
+                    SupervisedTaskResult::Finished(output)
+                }
+            }
         })
     }
 }
@@ -148,6 +200,7 @@ where
 {
     let guard = guard.clone();
 
+    // Spawn a task with a name is a unstable feature
     #[cfg(tokio_unstable)]
     let handle = tokio::task::Builder::new()
         .name(name)

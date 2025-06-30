@@ -3,9 +3,12 @@ use std::{pin::Pin, time::Duration};
 use crate::{
     config::egress::DecapFromHttp,
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
-    tunnel::utils::{
-        h2_stream::H2Stream,
-        http_inspector::{HttpRequestInspector, InspectionResult, RequestInfo},
+    tunnel::{
+        stream::CommonStreamTrait,
+        utils::{
+            h2_stream::H2Stream,
+            http_inspector::{HttpRequestInspector, InspectionResult, RequestInfo},
+        },
     },
 };
 
@@ -16,7 +19,6 @@ use non_tng_traffic::DirectlyForwardTrafficDetector;
 use pin_project::pin_project;
 use std::task::{Context, Poll};
 use timeout::FirstByteReadTimeoutStream;
-use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
@@ -46,7 +48,7 @@ impl TransportLayer {
 impl TransportLayer {
     pub async fn decode(
         &self,
-        in_stream: TcpStream,
+        in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
         shutdown_guard: ShutdownGuard,
     ) -> Result<
         impl Stream<
@@ -224,7 +226,15 @@ impl TransportLayer {
 }
 
 enum DecodeStreamState<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
-    Tcp(Pin<Box<FirstByteReadTimeoutStream<TcpStream>>>),
+    Tcp(
+        Pin<
+            Box<
+                FirstByteReadTimeoutStream<
+                    Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
+                >,
+            >,
+        >,
+    ),
     Http(H2ConnectionGracefulShutdown<T, bytes::Bytes>),
     DirectlyForward(T),
     NoMoreStreams,
@@ -292,7 +302,16 @@ impl<
 
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
-    Tcp(#[pin] Pin<Box<FirstByteReadTimeoutStream<TcpStream>>>),
+    Tcp(
+        #[pin]
+        Pin<
+            Box<
+                FirstByteReadTimeoutStream<
+                    Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
+                >,
+            >,
+        >,
+    ),
     Http(#[pin] H2Stream),
 }
 

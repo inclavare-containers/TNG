@@ -4,8 +4,7 @@ pub mod unprotected;
 use std::future::Future;
 
 use crate::tunnel::{
-    attestation_result::AttestationResult, ingress::core::TngEndpoint,
-    service_metrics::ServiceMetrics,
+    attestation_result::AttestationResult, endpoint::TngEndpoint, service_metrics::ServiceMetrics,
 };
 use anyhow::Result;
 use tokio_graceful::ShutdownGuard;

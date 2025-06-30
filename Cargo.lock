@@ -3584,6 +3584,7 @@ version = "2.2.3"
 dependencies = [
  "again",
  "anyhow",
+ "async-stream",
  "async-trait",
  "auto_enums",
  "axum 0.8.4",
