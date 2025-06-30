@@ -78,6 +78,7 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 - cli: add --tokio-console option
 - egress/transport: add timeout for waiting client tcp connection
 - iptables: fix capturing traffics target to docker -p mapping port
+- ingress/socks5: add "socks5" ingress type which expose a socks5 server to client
 
 
 * Tue Jun 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.2-1
