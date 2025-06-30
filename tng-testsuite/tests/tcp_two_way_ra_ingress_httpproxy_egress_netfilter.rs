@@ -66,10 +66,12 @@ async fn test() -> Result<()> {
                                     "host": "0.0.0.0",
                                     "port": 41000
                                 },
-                                "dst_filters": {
-                                    "domain": "*",
-                                    "port": 9991
-                                }
+                                "dst_filters": [
+                                    {
+                                        "domain": "*",
+                                        "port": 9991
+                                    }
+                                ]
                             },
                             "attest": {
                                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"

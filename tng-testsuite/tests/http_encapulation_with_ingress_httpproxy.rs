@@ -64,10 +64,12 @@ async fn test() -> Result<()> {
                                 "host": "0.0.0.0",
                                 "port": 41000
                             },
-                            "dst_filters": {
-                                "domain": "*",
-                                "port": 30001
-                            }
+                            "dst_filters": [
+                                {
+                                    "domain": "*",
+                                    "port": 30001
+                                }
+                            ]
                         },
                         "encap_in_http": {
                             "path_rewrites": [

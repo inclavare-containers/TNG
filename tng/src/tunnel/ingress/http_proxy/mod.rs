@@ -25,6 +25,7 @@ use tracing::Instrument;
 use crate::config::ingress::IngressHttpProxyArgs;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::tunnel::endpoint::TngEndpoint;
+use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 
@@ -237,16 +238,6 @@ impl RequestHelper {
     }
 }
 
-struct StreamRouter {
-    endpoint_matcher: EndpointMatcher,
-}
-
-impl StreamRouter {
-    pub fn should_forward_via_tunnel(&self, endpoint: &TngEndpoint) -> bool {
-        self.endpoint_matcher.matches(&endpoint)
-    }
-}
-
 pub struct HttpProxyIngress {
     id: usize,
     listen_addr: String,
@@ -264,9 +255,9 @@ impl HttpProxyIngress {
             .to_owned();
         let listen_port = http_proxy_args.proxy_listen.port;
 
-        let stream_router = Arc::new(StreamRouter {
-            endpoint_matcher: EndpointMatcher::new(&http_proxy_args.dst_filters)?,
-        });
+        let stream_router = Arc::new(StreamRouter::with_endpoint_matcher(EndpointMatcher::new(
+            &http_proxy_args.dst_filters,
+        )?));
 
         Ok(Self {
             id,

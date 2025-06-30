@@ -1,6 +1,6 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct TngEndpoint {
     host: String,
     port: u16,
@@ -25,6 +25,12 @@ impl TngEndpoint {
 
 impl Display for TngEndpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("tcp://{}:{}", self.host, self.port))
+        f.write_fmt(format_args!("{}:{}", self.host, self.port))
+    }
+}
+
+impl Debug for TngEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}:{}", self.host, self.port))
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 use async_stream::stream;
 use async_trait::async_trait;
@@ -11,8 +13,10 @@ use crate::config::ingress::{IngressSocks5Args, Socks5AuthArgs};
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
+use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 
+use super::flow::stream_router::StreamRouter;
 use super::flow::{Incomming, IngressTrait};
 
 /// Define the maximum concurrency of socks5 session which is in handshake stage.
@@ -22,7 +26,8 @@ pub struct Socks5Ingress {
     id: usize,
     listen_addr: String,
     listen_port: u16,
-    auth: Option<Socks5AuthArgs>,
+    auth: Arc<Option<Socks5AuthArgs>>,
+    stream_router: Arc<StreamRouter>,
 }
 
 impl Socks5Ingress {
@@ -35,22 +40,27 @@ impl Socks5Ingress {
             .to_owned();
         let listen_port = socks5_args.proxy_listen.port;
 
+        let stream_router = Arc::new(StreamRouter::with_endpoint_matcher(EndpointMatcher::new(
+            &socks5_args.dst_filters,
+        )?));
+
         Ok(Self {
             id,
             listen_addr,
             listen_port,
-            auth: socks5_args.auth.clone(),
+            auth: Arc::new(socks5_args.auth.clone()),
+            stream_router,
         })
     }
 }
 
 async fn serve_socks5(
     in_stream: TcpStream,
-    auth: &Option<Socks5AuthArgs>,
+    auth: Arc<Option<Socks5AuthArgs>>,
 ) -> Result<(TcpStream, TngEndpoint)> {
     tracing::trace!("Start serving stream as socks5 connection");
 
-    let proto = match auth {
+    let proto = match auth.as_ref() {
         Some(Socks5AuthArgs { username, password }) => {
             let (proto, check_result) =
                 Socks5ServerProtocol::accept_password_auth(in_stream, |user, pass| {
@@ -137,17 +147,22 @@ impl IngressTrait for Socks5Ingress {
                     // Run socks5 protocol in a separate task to add parallelism with multi-cpu
                     let (stream, dst) = shutdown_guard
                         .spawn_supervised_task_current_span(async move {
-                            serve_socks5(stream, &auth)
+                            serve_socks5(stream, auth)
                                 .await
                                 .context("Failed to serve socks5 connection")
                         })
                         .await?
                         .assume_finished()??;
+
+                    tracing::debug!(src = ?peer_addr, %dst, "Accepted socks5 connection");
+
+                    let via_tunnel = self.stream_router.should_forward_via_tunnel(&dst);
+
                     Ok(AcceptedStream {
                         stream: Box::new(stream),
                         src: peer_addr,
                         dst,
-                        via_tunnel: true,
+                        via_tunnel,
                     })
                 }
             })

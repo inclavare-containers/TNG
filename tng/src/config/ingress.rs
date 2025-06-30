@@ -59,6 +59,7 @@ pub struct IngressHttpProxyArgs {
     #[serde(default = "Vec::new")]
     // In TNG version <= 1.0.1, this field is named as `dst_filter`
     #[serde(alias = "dst_filter")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dst_filters: Vec<EndpointFilter>,
 }
 
@@ -67,12 +68,15 @@ pub struct IngressHttpProxyArgs {
 pub struct IngressNetfilterArgs {
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub capture_dst: Vec<IngressNetfilterCaptureDstArgs>,
 
     #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub capture_cgroup: Vec<String>,
 
     #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nocapture_cgroup: Vec<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +128,10 @@ pub enum IngressNetfilterCaptureDst {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IngressSocks5Args {
     pub proxy_listen: Endpoint,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dst_filters: Vec<EndpointFilter>,
 
     pub auth: Option<Socks5AuthArgs>,
 }

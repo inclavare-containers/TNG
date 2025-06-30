@@ -17,10 +17,12 @@ async fn test() -> Result<()> {
                                     "host": "0.0.0.0",
                                     "port": 41000
                                 },
-                                "dst_filter": {
-                                    "domain": "*",
-                                    "port": 7711
-                                }
+                                "dst_filters": [
+                                    {
+                                        "domain": "*",
+                                        "port": 7711
+                                    }
+                                ]
                             },
                             "verify": {
                                 "as_addr": "http://192.168.1.254:8080/",

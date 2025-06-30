@@ -120,6 +120,16 @@ In this scenario, TNG creates a local SOCKS5 proxy server port. User application
 - **`auth`** (Socks5Auth, optional): Specifies the authentication method required for accessing the locally listened SOCKS5 port. You can use this option to restrict access to the SOCKS5 proxy port to only those programs that know the password.
   - **`username`** (string): The username required for SOCKS5 proxy authentication.
   - **`password`** (string): The password required for SOCKS5 proxy authentication.
+- **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
+    - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
+    - **`domain_regex`** (string, optional, default is `.*`): This field specifies a regular expression for matching target domains. It supports full regular expression syntax. The `domain_regex` field and the `domain` field are mutually exclusive; only one of them can be specified simultaneously.
+    - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
+
+> [!NOTE]
+> There are two versions of the SOCKS5 protocol, which are referred to as:
+> - `socks5`: SOCKS5 protocol where domain name resolution is performed on the client side.
+> - `socks5h`: SOCKS5 protocol where domain name resolution is performed on the proxy server side.
+> If your client uses `socks5` instead of `socks5h`, the SOCKS5 proxy server in tng will not be able to obtain the original domain name of the client request, but only the destination IP address. This may cause your `dst_filters` rules to be ineffective. Fortunately, most modern clients implement the `socks5h` version, or provide both options (e.g., curl). If your client does not support `socks5h`, please add matching rules based on IP addresses, or switch to another type of ingress such as `http_proxy`.
 
 Examples:
 
@@ -169,6 +179,33 @@ Examples:
 }
 ```
 
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
+                "dst_filters": [
+                    {
+                        "domain": "*.example.com",
+                        "port": 30001
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
 ### netfilter: Transparent Proxy Mode
 
 In this mode, tng will listen on a local TCP port and forward user traffic to the port listened to by the tng client by configuring iptables rules. The latter is responsible for encrypting all user TCP requests and sending them to the original destination address. Therefore, the user's client program does not need to modify its TCP request target.
@@ -191,9 +228,11 @@ Precise control over the traffic to be captured can be achieved by configuring o
     - **`port`** (integer): The target port number.
 - **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
 - **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
-    > [!NOTE]
-    > - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
-    > - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
+
+> [!NOTE]
+> - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
+> - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
+
 - **`listen_port`** (integer, optional): Specifies the port number that tng listens on to receive captured requests, usually no manual specification is required. If this field is not specified, tng will randomly assign a port number.
 - **`so_mark`** (integer, optional, default value is 565): The SO_MARK value of the socket corresponding to the TCP request carrying the cyphertext traffic after encryption by the tng, used to prevent the encrypted traffic from being redirected to this ingress again by netfilter.
 
@@ -499,14 +538,14 @@ The disguising capability can be enabled by specifying the `encap_in_http` field
 
     - **`match_regex`** (string): A regular expression used to match the path of the inner protected HTTP request. The value of this field will be used to match the entire path string, not just a part of it.
 
-        > Note:
-        > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
-
     - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the encapsulated HTTP traffic will be replaced entirely with the value of `substitution`.
 
-        > Note:
-        > - Prior to version 2.0.0, the `substitution` field supported referencing captured groups using `\integer` (where `integer` starts from 1). For example, `\1` would be replaced by the content of the first captured group. Refer to the corresponding `substitution` field description in Envoy [here](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute).
-        > - Starting from version 2.0.0, the above referencing rule has been deprecated. Instead, `$ref` syntax is supported to reference captured groups, where `ref` can be an integer (index of the capturing group) or a name (for named groups). Refer to [this documentation](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace). Additionally, the `\integer` referencing rule is still supported for backward compatibility.
+> [!NOTE]
+> For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
+
+> [!NOTE]
+> - Prior to version 2.0.0, the `substitution` field supported referencing captured groups using `\integer` (where `integer` starts from 1). For example, `\1` would be replaced by the content of the first captured group. Refer to the corresponding `substitution` field description in Envoy [here](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute).
+> - Starting from version 2.0.0, the above referencing rule has been deprecated. Instead, `$ref` syntax is supported to reference captured groups, where `ref` can be an integer (index of the capturing group) or a name (for named groups). Refer to [this documentation](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace). Additionally, the `\integer` referencing rule is still supported for backward compatibility.
 
 Example:
 
@@ -555,8 +594,8 @@ Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you c
 
 - **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
 
-    > Note:
-    > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
+> [!NOTE]
+> For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
 
 Example:
 

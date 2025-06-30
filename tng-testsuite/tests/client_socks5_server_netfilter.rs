@@ -174,5 +174,62 @@ async fn test() -> Result<()> {
     ])
     .await?;
 
+    // Test socks5 with dst_filters
+    run_test(vec![
+        tng_server.clone().boxed(),
+        TngInstance::TngClient(
+            r#"
+                {
+                    "add_ingress": [
+                        {
+                            "socks5": {
+                                "proxy_listen": {
+                                    "host": "0.0.0.0",
+                                    "port": 1080
+                                },
+                                "dst_filters": [
+                                    {
+                                        "domain": "192.168.1.1",
+                                        "port": 30001
+                                    }
+                                ]
+                            },
+                            "verify": {
+                                "as_addr": "http://192.168.1.254:8080/",
+                                "policy_ids": [
+                                    "default"
+                                ]
+                            }
+                        }
+                    ]
+                }
+                "#,
+        )
+        .boxed(),
+        AppType::HttpServer {
+            port: 30001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/foo/bar/www?type=1&case=1",
+        }
+        .boxed(),
+        AppType::HttpServer {
+            port: 40001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/foo/bar/www?type=1&case=1",
+        }
+        .boxed(),
+        ShellTask {
+            name: "curl_via_socks5".to_owned(),
+            node_type: NodeType::Client,
+            script: r#"
+                curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
+                curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:40001/foo/bar/www?type=1&case=1"
+            "#
+            .to_owned(),
+            stop_test_on_finish: true,
+        }
+        .boxed(),
+    ])
+    .await?;
     Ok(())
 }

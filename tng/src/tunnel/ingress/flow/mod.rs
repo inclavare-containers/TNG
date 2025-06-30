@@ -22,6 +22,8 @@ use super::core::stream_manager::{
     trusted::TrustedStreamManager, unprotected::UnprotectedStreamManager, StreamManager,
 };
 
+pub mod stream_router;
+
 pub struct IngressFlow {
     ingress: Box<dyn IngressTrait>,
     trusted_stream_manager: Arc<TrustedStreamManager>,

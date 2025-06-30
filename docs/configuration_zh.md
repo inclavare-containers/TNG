@@ -123,6 +123,16 @@
 - **`auth`** (Socks5Auth，可选)：指定本地监听的socks5端口所需要的访问认证方式，您可以使用该选项来限制只有知道密码的程序能够访问该socks5代理端口。
     - **`username`** (string)：socks5代理认证所需的用户名。
     - **`password`** (string)：socks5代理认证所需的密码。
+- **`dst_filters`** (array [EndpointFilter], 可选，默认为空数组)：该项指定了一个过滤规则，指示需要被tng隧道保护的目标域名（或ip）和端口的组合。除了被该过滤规则匹配的流量外，其余流量将不会进入tng隧道，而是以明文形式转发出去（这样能够确保不需要保护的普通流量请求正常发出）。当未指定该字段或者指定为空数组时，所有流量都会进入tng隧道。
+    - **`domain`** (string, 可选，默认为`*`)：匹配的目标域名。该字段并不支持正则表达式，但是支持部分类型的通配符（*）。具体语法，请参考envoy文档中`config.route.v3.VirtualHost`类型的`domains`字段的[表述文档](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost)
+    - **`domain_regex`** (string, 可选，默认为`.*`)：匹配的目标域名的正则表达式，该字段支持完整的正则表达式语法。`domain_regex`字段和`domain`只能同时指定其中之一。
+    - **`port`** (integer, 可选，默认为`80`)：匹配的目标端口。如不指定则默认为80端口
+
+> [!NOTE]
+> socks5协议有两种版本，分别称为：
+> - `socks5`: SOCKS5协议，在客户端侧完成解析域名。
+> - `socks5h`: SOCKS5协议，在代理服务器侧完成解析域名。
+> 如果您的客户端使用`socks5`而不是`socks5h`，那么tng中SOCKS5代理服务器将无法获得客户端请求的原始域名，而只能获得请求的目标IP地址，这可能导致您的`dst_filters`规则无法生效。幸运的是，大部分现代客户端实现的是`socks5h`版本，或者同时提供两种选择（例如curl）。如果你的客户端不是这样，请增加对IP地址的匹配，或者改用其它类型的ingress比如`http_proxy`。 
 
 
 示例：
@@ -173,6 +183,33 @@
 }
 ```
 
+```json
+{
+    "add_ingress": [
+        {
+            "socks5": {
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
+                "dst_filters": [
+                    {
+                        "domain": "*.example.com",
+                        "port": 30001
+                    }
+                ]
+            },
+            "verify": {
+                "as_addr": "http://192.168.1.254:8080/",
+                "policy_ids": [
+                    "default"
+                ]
+            }
+        }
+    ]
+}
+```
+
 ### netfilter：透明代理方式
 
 在该场景中，tng将会监听一个本地tcp端口，并通过配置iptables规则，将用户流量转发到tng client监听的该端口。后者负责将所有用户tcp请求加密后发送到原目标地址。因此用户的client程序无需修改其tcp请求的目标。
@@ -192,9 +229,11 @@
         - **`port`** (integer)：目标端口号。
 - **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将忽略capture_cgroup 规则。
 - **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng隧道捕获的流量的cgroup。
-    > [!NOTE]
-    > - `capture_cgroup`和`nocapture_cgroup`字段仅在您的系统使用cgroup v2时受支持。
-    > - 与[cgroup namespace](https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html)的关系：由于netfilter的实现限制[\[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105)[\[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996)，此处指定的cgroup路径于tng进程本身所在cgroup namespace的视角而言的。因此当使用容器单独运行tng时，如您需要配置`capture_cgroup`和`nocapture_cgroup`字段，请配合docker的`--cgroupns=host`选项使用。
+
+> [!NOTE]
+> - `capture_cgroup`和`nocapture_cgroup`字段仅在您的系统使用cgroup v2时受支持。
+> - 与[cgroup namespace](https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html)的关系：由于netfilter的实现限制[\[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105)[\[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996)，此处指定的cgroup路径于tng进程本身所在cgroup namespace的视角而言的。因此当使用容器单独运行tng时，如您需要配置`capture_cgroup`和`nocapture_cgroup`字段，请配合docker的`--cgroupns=host`选项使用。
+
 - **`listen_port`** (integer, 可选)：指定tng监听的端口号，用于接收捕获后的请求，通常不需要手动指定。如果未指定该字段，则tng将随机分配一个端口号。
 - **`so_mark`** (integer, 可选，默认值为565)：由tng加密后，承载密文流量的TCP请求对应socket的SO_MARK标记值，用于避免解密后的流量再次被netfilter转发到当前的ingress。
 
@@ -491,13 +530,14 @@ flowchart TD
 - **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，这将默认设置伪装后http流量的path为`/`。
     - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式，该字段的值将被用于针对整个path字符串进行匹配，而不是部分匹配。
 
-        > Note:
-        > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
-
     - **`substitution`** (string)：当http请求的原始path与`match_regex`匹配时，伪装后http流量的path将被整个替换为`substitution`的值。
-        > Note:
-        > - 在2.0.0之前的版本中，`substitution`字段在该字段中，支持使用`\整数`（整数从1开始）的方式来引用`match_regex`字段中的正则表达式所匹配到的组中的内容。例如该字段中的`\1`将被替换为匹配到的第一个组中的内容。具体规则请参考envoy中对应的`substitution`字段的[描述](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute)。
-        > - 在2.0.0版本及之后的版本中，上述引用规则已被淘汰，支持以`$ref`语法来引用匹配到的组，其中`ref`可以是一个整数，对应于捕获组的索引，或者它可以是一个名称，用于引用被命名的组。具体规则请参考[此处](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace)。此外，`substitution`字段仍然支持上述`\整数`引用规则，以提供后向兼容性。
+
+> [!NOTE]
+> 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
+
+> [!NOTE]
+> - 在2.0.0之前的版本中，`substitution`字段在该字段中，支持使用`\整数`（整数从1开始）的方式来引用`match_regex`字段中的正则表达式所匹配到的组中的内容。例如该字段中的`\1`将被替换为匹配到的第一个组中的内容。具体规则请参考envoy中对应的`substitution`字段的[描述](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute)。
+> - 在2.0.0版本及之后的版本中，上述引用规则已被淘汰，支持以`$ref`语法来引用匹配到的组，其中`ref`可以是一个整数，对应于捕获组的索引，或者它可以是一个名称，用于引用被命名的组。具体规则请参考[此处](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace)。此外，`substitution`字段仍然支持上述`\整数`引用规则，以提供后向兼容性。
 
 
 示例：
@@ -545,8 +585,8 @@ flowchart TD
 #### 字段说明
 - **`allow_non_tng_traffic_regexes`** (array [string], 可选，默认为空数组)：该字段指定了允许非加密http请求流量传入的正则表达式列表。每个元素是一个正则表达式字符串，只有当http请求路径与这些正则表达式匹配时，非加密http请求流量才会被放行。
 
-    > Note:
-    > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
+> [!NOTE]
+> 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
 
 
 示例：
