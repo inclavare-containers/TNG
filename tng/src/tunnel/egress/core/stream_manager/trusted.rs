@@ -32,7 +32,10 @@ pub struct TrustedStreamManager {
 impl TrustedStreamManager {
     pub async fn new(common_args: &CommonArgs) -> Result<Self> {
         Ok(Self {
-            transport_layer: TransportLayer::new(common_args.decap_from_http.clone())?,
+            transport_layer: TransportLayer::new(
+                common_args.direct_forward.clone(),
+                common_args.decap_from_http.clone(),
+            )?,
             security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
             rt: TokioRuntime::new(
                 tokio::runtime::Builder::new_multi_thread()

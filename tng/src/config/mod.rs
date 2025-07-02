@@ -105,6 +105,7 @@ mod tests {
                     },
                 }),
                 common:egress::CommonArgs{
+                    direct_forward: None,
                     decap_from_http: Some(DecapFromHttp {
                         allow_non_tng_traffic_regexes: None,
                     }),

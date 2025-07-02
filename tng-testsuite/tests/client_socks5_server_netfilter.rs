@@ -1,9 +1,11 @@
 use anyhow::Result;
+use serial_test::serial;
 use tng_testsuite::{
     run_test,
     task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
 };
 
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
     let tng_server = TngInstance::TngServer(

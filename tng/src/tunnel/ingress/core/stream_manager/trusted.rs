@@ -6,6 +6,7 @@ use tokio_graceful::ShutdownGuard;
 use tracing::Instrument;
 
 use crate::tunnel::ingress::core::stream_manager::TngEndpoint;
+use crate::tunnel::utils::http_inspector::RequestInfo;
 use crate::{
     config::ingress::CommonArgs,
     tunnel::{
@@ -96,9 +97,16 @@ impl StreamManager for TrustedStreamManager {
                 } = HttpRequestInspector::inspect_stream(downstream).await;
 
                 let request_info =
-                    result.context("Failed to inspect http request from downstream")?;
+                    result.context("Failed to check the protocol from the request")?;
 
-                tracing::debug!(?request_info, "A http request has been inspected");
+                tracing::debug!(?request_info, "Got request protocol info");
+
+                if !matches!(
+                    request_info,
+                    RequestInfo::Http1 { .. } | RequestInfo::Http2 { .. }
+                ) {
+                    bail!("The incomming stream should be either HTTP1 or HTTP2 request when `encap_in_http = true`")
+                }
 
                 // Call the transport_layer_creator to insert extra data into the pool key.
                 transport_layer_creator

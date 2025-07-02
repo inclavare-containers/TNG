@@ -16,8 +16,21 @@ pub struct AddEgressArgs {
 pub struct CommonArgs {
     pub decap_from_http: Option<DecapFromHttp>,
 
+    #[serde(default = "Option::default")]
+    pub direct_forward: Option<DirectForwardRules>,
+
     #[serde(flatten)]
     pub ra_args: RaArgs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DirectForwardRules(pub Vec<DirectForwardRule>);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DirectForwardRule {
+    pub http_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -56,5 +69,21 @@ pub enum EgressMode {
 #[serde(deny_unknown_fields)]
 pub struct DecapFromHttp {
     #[serde(default = "Option::default")]
-    pub allow_non_tng_traffic_regexes: Option<Vec<String>>,
+    pub allow_non_tng_traffic_regexes: Option<AllowNonTngTrafficRegexes>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AllowNonTngTrafficRegexes(Vec<String>);
+
+impl From<AllowNonTngTrafficRegexes> for DirectForwardRules {
+    fn from(value: AllowNonTngTrafficRegexes) -> Self {
+        Self(
+            value
+                .0
+                .into_iter()
+                .map(|s| DirectForwardRule { http_path: s })
+                .collect(),
+        )
+    }
 }

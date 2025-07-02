@@ -1,7 +1,7 @@
 use std::{pin::Pin, time::Duration};
 
 use crate::{
-    config::egress::DecapFromHttp,
+    config::egress::{DecapFromHttp, DirectForwardRules},
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         stream::CommonStreamTrait,
@@ -13,34 +13,69 @@ use crate::{
 };
 
 use anyhow::{bail, Context as _, Result};
+use direct_forward::DirectForwardTrafficDetector;
 use futures::Stream;
 use http::{HeaderValue, Response, StatusCode};
-use non_tng_traffic::DirectlyForwardTrafficDetector;
 use pin_project::pin_project;
 use std::task::{Context, Poll};
 use timeout::FirstByteReadTimeoutStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
+mod direct_forward;
 mod direct_response;
-mod non_tng_traffic;
 mod timeout;
 
 /// Timeout before we receive first byte from peer, This is essential to make it fasts fail quickly when a none tng client is connected to tng server unexpectedly.
 const TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub enum TransportLayer {
+pub struct TransportLayer {
+    typ: TransportLayerType,
+    direct_forward_traffic_detector: Option<DirectForwardTrafficDetector>,
+}
+
+pub enum TransportLayerType {
     Tcp,
-    Http(DirectlyForwardTrafficDetector),
+    Http,
 }
 
 impl TransportLayer {
-    pub fn new(decap_from_http: Option<DecapFromHttp>) -> Result<Self> {
-        Ok(match decap_from_http {
-            Some(decap_from_http) => {
-                TransportLayer::Http(DirectlyForwardTrafficDetector::new(&decap_from_http)?)
+    pub fn new(
+        direct_forward: Option<DirectForwardRules>,
+        decap_from_http: Option<DecapFromHttp>,
+    ) -> Result<Self> {
+        let typ = match &decap_from_http {
+            Some(_) => TransportLayerType::Http,
+            None => TransportLayerType::Tcp,
+        };
+
+        // For compatibility with older versions
+        let direct_forward = if let Some(decap_from_http) = decap_from_http {
+            match (
+                direct_forward,
+                decap_from_http.allow_non_tng_traffic_regexes,
+            ) {
+                (Some(_), Some(_)) => {
+                    bail!("Cannot specify both `direct_forward` and `decap_from_http.allow_non_tng_traffic_regexes`. The later is deprecated, please use `direct_forward` instead.");
+                }
+                (None, Some(allow_non_tng_traffic_regexes)) => {
+                    tracing::warn!("`allow_non_tng_traffic_regexes` is deprecated, please use `direct_forward` instead.");
+                    Some(DirectForwardRules::from(allow_non_tng_traffic_regexes))
+                }
+                (direct_forward, None) => direct_forward,
             }
-            None => TransportLayer::Tcp,
+        } else {
+            direct_forward
+        };
+
+        let direct_forward_traffic_detector = match direct_forward {
+            Some(direct_forward) => Some(DirectForwardTrafficDetector::new(direct_forward)?),
+            None => None,
+        };
+
+        Ok(Self {
+            typ,
+            direct_forward_traffic_detector,
         })
     }
 }
@@ -48,20 +83,12 @@ impl TransportLayer {
 impl TransportLayer {
     pub async fn decode(
         &self,
-        in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
+        in_stream: Box<dyn CommonStreamTrait>,
         shutdown_guard: ShutdownGuard,
-    ) -> Result<
-        impl Stream<
-                Item = Result<
-                    DecodeResult<
-                        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-                    >,
-                >,
-            > + '_,
-    > {
-        let span = tracing::info_span!("transport", type={match self {
-            TransportLayer::Tcp => "tcp",
-            TransportLayer::Http(..) => "h2",
+    ) -> Result<impl Stream<Item = Result<DecodeResult>> + '_> {
+        let span = tracing::info_span!("transport", type={match self.typ {
+            TransportLayerType::Tcp => "tcp",
+            TransportLayerType::Http => "h2",
         }});
 
         // Set timeout for underly tcp stream
@@ -75,42 +102,78 @@ impl TransportLayer {
         async {
             let span = span.clone();
 
-            tracing::debug!("Decode the underlying connection from downstream");
-            let state = match self {
-                TransportLayer::Tcp => DecodeStreamState::Tcp(in_stream),
-                TransportLayer::Http(directly_forward_traffic_detector) => {
-                    // First, we need to detect if it is a HTTP connection or a HTTP/2 connection.
-                    let InspectionResult {
-                        unmodified_stream,
-                        result,
-                    } = HttpRequestInspector::inspect_stream(in_stream).await;
-                    let request_info =
-                        result.context("Failed to inspect http request from downstream, maybe not a valid tng traffic")?;
+            tracing::debug!(
+                direct_forward_detect_enabled = self.direct_forward_traffic_detector.is_some(),
+                "Decoding the underlying connection from downstream"
+            );
 
-                    match request_info {
-                        RequestInfo::Http1 {  path, .. } => { // It must not be a tng traffic, since tng traffic must be HTTP/2.
-                            if directly_forward_traffic_detector.should_forward_directly(&path) {
-                                // Bypass the security layer and wrapping layer, forward the stream to upstream directly.
-                                DecodeStreamState::DirectlyForward(unmodified_stream)
-                            }else{
-                                // Send a notice message as response to downstream
-                                direct_response::send_http1_response_to_non_tng_client(shutdown_guard, unmodified_stream).await?;
-                                DecodeStreamState::NoMoreStreams
+            let state = if let Some(direct_forward_traffic_detector) =
+                &self.direct_forward_traffic_detector
+            {
+                // First, we need to detect if it is a HTTP connection or a HTTP/2 connection.
+                let InspectionResult {
+                    unmodified_stream,
+                    result,
+                } = HttpRequestInspector::inspect_stream(in_stream).await;
+                let request_info =
+                    result.context("Failed during inspecting http request from downstream")?;
+
+                let unmodified_stream = Box::new(unmodified_stream) as Box<dyn CommonStreamTrait>;
+
+                // If it should be forwarded directly, we just do that.
+                if direct_forward_traffic_detector.should_forward_directly(&request_info) {
+                    // Bypass the security layer and wrapping layer, forward the stream to upstream directly.
+                    tracing::debug!("Forwarding directly");
+                    DecodeStreamState::DirectlyForward(unmodified_stream)
+                } else {
+                    tracing::debug!("Try to decode as TNG traffic");
+                    // If not, we try to treat it as tng traffic, it is determined by the configuration of transport layer.
+                    match self.typ {
+                        // If the transport layer is configured to tcp, we just use it.
+                        TransportLayerType::Tcp => DecodeStreamState::Tcp(unmodified_stream),
+                        // If the transport layer is configured to h2, we need to check the http request.
+                        TransportLayerType::Http => {
+                            match request_info {
+                                RequestInfo::Http1 { .. } => {
+                                    // It must not be a tng traffic, since tng traffic must be HTTP/2 when the transport layer is configured to h2. Here we send a notice message as response to downstream
+                                    direct_response::send_http1_response_to_non_tng_client(
+                                        shutdown_guard,
+                                        unmodified_stream,
+                                    )
+                                    .await?;
+                                    DecodeStreamState::NoMoreStreams
+                                }
+                                RequestInfo::Http2 { .. } => {
+                                    // It may be a tng traffic, so we treat it as a valid tng traffic and try to decode from it.
+                                    let connection =
+                                        h2::server::handshake(unmodified_stream).await?;
+                                    DecodeStreamState::Http(H2ConnectionGracefulShutdown::new(
+                                        connection,
+                                        shutdown_guard,
+                                        span.clone(),
+                                    ))
+                                }
+                                RequestInfo::UnknownProtocol => {
+                                    // The transport layer is configured to h2 but it is a UnknownProtocol.
+                                    bail!("Not valid TNG protocol")
+                                }
                             }
-                        },
-                        RequestInfo::Http2 {  path, ..  } => {
-                            // It may be a tng traffic, but we still need to check if it with NonTngTrafficDetector
-                            if directly_forward_traffic_detector.should_forward_directly(&path) {
-                                // Though it is a HTTP2, we have to bypass the security layer and wrapping layer, forward the stream to upstream directly.
-                                DecodeStreamState::DirectlyForward(unmodified_stream)
-                            }else{
-                                // Treat it as a valid tng traffic and try to decode from it.
-                                let connection = h2::server::handshake(unmodified_stream).await?;
-                                DecodeStreamState::Http(
-                                    H2ConnectionGracefulShutdown::new(connection, shutdown_guard, span.clone()),
-                                )
-                            }
-                        },
+                        }
+                    }
+                }
+            } else {
+                let in_stream = Box::new(in_stream) as Box<dyn CommonStreamTrait>;
+
+                match self.typ {
+                    TransportLayerType::Tcp => DecodeStreamState::Tcp(in_stream),
+                    TransportLayerType::Http => {
+                        // Treat it as a valid tng traffic and try to decode from it.
+                        let connection = h2::server::handshake(in_stream).await?;
+                        DecodeStreamState::Http(H2ConnectionGracefulShutdown::new(
+                            connection,
+                            shutdown_guard,
+                            span.clone(),
+                        ))
                     }
                 }
             };
@@ -120,7 +183,12 @@ impl TransportLayer {
                     match state {
                         DecodeStreamState::Tcp(tcp_stream) => {
                             tracing::debug!("New tcp stream established with downstream");
-                            Some((Ok(DecodeResult::ContinueAsTngTraffic(TransportLayerStream::Tcp(tcp_stream))), DecodeStreamState::NoMoreStreams))
+                            Some((
+                                Ok(DecodeResult::ContinueAsTngTraffic(
+                                    TransportLayerStream::Tcp(tcp_stream),
+                                )),
+                                DecodeStreamState::NoMoreStreams,
+                            ))
                         }
                         DecodeStreamState::Http(mut connection) => {
                             let Some(h2_connection) = connection.h2_connection_mut() else {
@@ -155,18 +223,18 @@ impl TransportLayer {
                                             "New h2 stream established with downstream"
                                         );
 
-                                        Ok(DecodeResult::ContinueAsTngTraffic(TransportLayerStream::Http(H2Stream::new(
-                                            send_stream,
-                                            recv_stream,
-                                            Span::current(),
-                                        ))))
+                                        Ok(DecodeResult::ContinueAsTngTraffic(
+                                            TransportLayerStream::Http(H2Stream::new(
+                                                send_stream,
+                                                recv_stream,
+                                                Span::current(),
+                                            )),
+                                        ))
                                     }
                                     .await
                                     .context("failed to handle h2 request");
 
-                                    let next_state = DecodeStreamState::Http(
-                                        connection,
-                                    );
+                                    let next_state = DecodeStreamState::Http(connection);
                                     Some((result, next_state))
                                 }
                                 Some(Err(err)) => {
@@ -206,9 +274,10 @@ impl TransportLayer {
                                 }
                             }
                         }
-                        DecodeStreamState::DirectlyForward(stream) => {
-                            Some((Ok(DecodeResult::DirectlyForward(stream)), DecodeStreamState::NoMoreStreams))
-                        },
+                        DecodeStreamState::DirectlyForward(stream) => Some((
+                            Ok(DecodeResult::DirectlyForward(stream)),
+                            DecodeStreamState::NoMoreStreams,
+                        )),
                         DecodeStreamState::NoMoreStreams => {
                             // The state is consumed and no more streams will be generated
                             None
@@ -225,24 +294,16 @@ impl TransportLayer {
     }
 }
 
-enum DecodeStreamState<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
-    Tcp(
-        Pin<
-            Box<
-                FirstByteReadTimeoutStream<
-                    Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
-                >,
-            >,
-        >,
-    ),
-    Http(H2ConnectionGracefulShutdown<T, bytes::Bytes>),
-    DirectlyForward(T),
+enum DecodeStreamState {
+    Tcp(Box<dyn CommonStreamTrait>),
+    Http(H2ConnectionGracefulShutdown<Box<dyn CommonStreamTrait>, bytes::Bytes>),
+    DirectlyForward(Box<dyn CommonStreamTrait>),
     NoMoreStreams,
 }
 
-pub enum DecodeResult<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
+pub enum DecodeResult {
     ContinueAsTngTraffic(TransportLayerStream),
-    DirectlyForward(T),
+    DirectlyForward(Box<dyn CommonStreamTrait>),
 }
 
 /// This is a wrapper of h2::server::Connection, which is used to gracefully shutdown the connection.
@@ -302,16 +363,7 @@ impl<
 
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
-    Tcp(
-        #[pin]
-        Pin<
-            Box<
-                FirstByteReadTimeoutStream<
-                    Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
-                >,
-            >,
-        >,
-    ),
+    Tcp(#[pin] Box<dyn CommonStreamTrait>),
     Http(#[pin] H2Stream),
 }
 

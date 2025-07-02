@@ -10,8 +10,12 @@ const HTTP_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[derive(Debug, PartialEq)]
 pub enum RequestInfo {
+    /// There is a HTTP1 request in the stream
     Http1 { authority: Authority, path: String },
+    /// There is a HTTP2 request in the stream
     Http2 { authority: Authority, path: String },
+    /// There is no HTTP request in the stream, and we got no error during the inspection, so we assume it's some protocol other than HTTP
+    UnknownProtocol,
 }
 
 pub struct InspectionResult<T> {
@@ -167,15 +171,17 @@ impl HttpRequestInspector {
             tokio::select! {
                 http1_or_http2 = async { tokio::join!(try_http1, try_http2) } => {
                     match http1_or_http2 {
-                        (Ok(h1), _) => Ok(h1),
-                        (Err(_), Ok(h2)) => Ok(h2),
+                        (Ok(h1), _) => h1,
+                        (Err(_), Ok(h2)) => h2,
                         (Err(h1_err), Err(h2_err)) => {
-                            bail!("Failed to parse as both http1 and http2 request. HTTP1 error: {h1_err:#}, HTTP2 error: {h2_err:#}");
+                            tracing::debug!("Failed to inspect tcp stream as both http1 and http2 request. HTTP1 error: {h1_err:#}, HTTP2 error: {h2_err:#}");
+                            RequestInfo::UnknownProtocol
                         }
                     }
                 },
                 _ = tokio::time::sleep(HTTP_INSPECT_TIMEOUT) => {
-                    bail!("Timeout waiting for http1 or http2 request");
+                    tracing::debug!("Timeout waiting for inspecting http1 or http2 request from tcp stream");
+                    RequestInfo::UnknownProtocol
                 }
             }
         };
@@ -187,9 +193,9 @@ impl HttpRequestInspector {
                 result: Err(e),
             },
             // Else, we return the result generated during http1 or http2 inspection.
-            ((stream, Ok(_)), res) => InspectionResult {
+            ((stream, Ok(_)), request_info) => InspectionResult {
                 unmodified_stream: stream,
-                result: res,
+                result: Ok(request_info),
             },
         }
     }
@@ -419,11 +425,19 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_normal_tcp() -> Result<()> {
-        test_http_inspect_on_normal_tcp_common(Bytes::from("Hello world\n"), None).await?;
+        test_http_inspect_on_normal_tcp_common(
+            Bytes::from("Hello world\n"),
+            Some(RequestInfo::UnknownProtocol),
+        )
+        .await?;
 
         let mut buffer = vec![0; 4096 * 10];
         tokio::io::repeat(0b101).read_exact(&mut buffer).await?;
-        test_http_inspect_on_normal_tcp_common(Bytes::from_owner(buffer), None).await
+        test_http_inspect_on_normal_tcp_common(
+            Bytes::from_owner(buffer),
+            Some(RequestInfo::UnknownProtocol),
+        )
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]

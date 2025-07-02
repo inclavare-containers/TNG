@@ -28,6 +28,9 @@ tokio-util = "0.7.15"
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 
+[dev-dependencies]
+serial_test = "3.2.0"
+
 [features]
 default = ["on-source-code"]
 on-bin = []

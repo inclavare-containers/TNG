@@ -344,10 +344,48 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 ### Field Descriptions
 
 - **`egress_mode`** (EgressMode): Specifies the outbound traffic method, which can be `mapping` or `netfilter`.
+- **`direct_forward`** (array [DirectForwardRule], optional): Specifies matching rules for traffic that needs to be forwarded directly (without decryption).
 - **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
+
+
+### DirectForwardRule
+
+In certain scenarios, you may want a protected listening port to allow both encrypted traffic and some regular traffic (e.g., health check traffic).
+
+You can use the `direct_forward` field to specify a set of matching rules. If any rule matches successfully, the traffic will be directly forwarded as regular traffic without decryption.
+
+Currently supported matching rules include:
+- **`http_path`** (string): Parses the traffic as an HTTP request and matches the [Path](https://developer.mozilla.org/en-US/docs/Web/API/URL/pathname) in the HTTP request URI using a regular expression.
+
+Example:
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 30001
+                }
+            },
+            "direct_forward": [
+                {
+                    "http_path": "/public/.*"
+                }
+            ],
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+The example configuration sets up a `netfilter` type egress that allows encrypted traffic to access port 30001 while also permitting unencrypted HTTP requests whose path matches the regular expression `/public/.*`.
+
 
 ## EgressMode
 
@@ -460,8 +498,8 @@ Parameters required to configure the TNG endpoint as a remote attestation Verifi
 
 - **`as_addr`** (string): Specifies the URL of the Attestation Service (AS) to connect to. Supports connecting to the Attestation Service with both gRPC protocol and Restful HTTP protocol. By default, it is parsed as a Restful HTTP URL, which can be controlled by the `as_is_grpc` option.
 - **`as_is_grpc`** (boolean, optional, default is false): If set to `true`, interprets `as_addr` as a gRPC URL.
-- **`policy_ids`** (array of strings): Specifies the list of policy IDs to use.
-- **`trusted_certs_paths`** (array of strings, optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the AS token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
+- **`policy_ids`** (array [string]): Specifies the list of policy IDs to use.
+- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the AS token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
 
 
 Example: Connecting to a Restful HTTP type AS service
@@ -588,11 +626,14 @@ In this example, we add a PathRewrite rule that matches all user HTTP requests w
 
 Corresponding to the inbound configuration, the outbound side can enable the dismantling of already disguised traffic by specifying the `decap_from_http` field in the `add_egress` object. If the `decap_from_http` field is not specified, it will not be enabled.
 
+> [NOTE]  
+> The `allow_non_tng_traffic_regexes` field has been deprecated since version 2.2.4. Please use the `direct_forward` field instead.
+
 Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you can allow non-encrypted HTTP request traffic to enter the endpoint in addition to the encrypted TNG traffic. This can meet scenarios where both types of traffic are needed (such as health checks). The value of this sub-item is a JSON string list, where each item is a regular expression match statement. Only non-encrypted HTTP request traffic whose HTTP request PATH completely matches these regular expression statements will be allowed by TNG. The default value of the sub-item is `[]`, which means any non-encrypted HTTP requests are denied.
 
 #### Field Descriptions
 
-- **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
+- (Deprecated) **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
 
 > [!NOTE]
 > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use http::uri::Authority;
 
 use super::HttpTransportLayerCreator;
@@ -39,6 +39,9 @@ impl PoolKeyExtraDataInserter for HttpTransportLayerCreator {
                     authority: authority.clone(),
                     path: rewrited_path,
                 });
+            }
+            RequestInfo::UnknownProtocol => {
+                bail!("failed to determine authority and path used by h2 transport layer due to unknown protocol")
             }
         };
 

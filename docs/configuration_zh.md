@@ -345,10 +345,46 @@ flowchart TD
 
 ### 字段说明
 - **`egress_mode`** (EgressMode)：指定流量出站的方式，可以是`mapping`或`netfilter`。
+- **`direct_forward`** (array [DirectForwardRule], 可选)：指定需要直接转发（而不经过解密）的流量的匹配规则。
 - **`decap_from_http`** (DecapFromHttp, 可选)：HTTP解封装配置。
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。
+
+### DirectForwardRule
+
+在某些场景中，您可能希望一个被保护的监听端口上通过加密流量的同时，也允许一些普通流量通过（比如healthcheck流量）。
+
+您可以使用`direct_forward`字段指定一组匹配规则，只要其中任意一个规则匹配成功，则该流量将作为普通流量直接转发，而不经过解密。
+
+目前支持的匹配规则有：
+- **`http_path`** (string)：将流量解析为HTTP请求，并通过正则表达式匹配HTTP请求URI中的[Path](https://developer.mozilla.org/zh-CN/docs/Web/API/URL/pathname)。
+
+示例：
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 30001
+                }
+            },
+            "direct_forward": [
+                {
+                    "http_path": "/public/.*"
+                }
+            ],
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+上面的示例配置里一个`netfilter`类型的egress，在允许通过加密流量访问30001端口的同时，允许路径与正则表达式`/public/.*`相匹配的未加密HTTP请求流量通过。
+
 
 ## EgressMode
 
@@ -454,8 +490,8 @@ flowchart TD
 ### 字段说明
 - **`as_addr`** (string)：指定要连接到的Attestation Service (AS) 的URL。支持连接到以gRPC协议和Restful HTTP两种协议类型的Attestation Service。默认将其解析为Restful HTTP的URL，可通过`as_is_grpc`选项控制。
 - **`as_is_grpc`** (boolean, 可选，默认为false)：若设置为`true`，这将`as_addr`解释为gRPC URL。
-- **`policy_ids`** (array of strings)：指定要使用的policy ID列表。
-- **`trusted_certs_paths`** (array of strings, 可选，默认为空)：指定用于验证AS token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
+- **`policy_ids`** (array [string])：指定要使用的policy ID列表。
+- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证AS token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
 示例：连接到Restful HTTP类型的AS服务
 
@@ -580,10 +616,13 @@ flowchart TD
 ### DecapFromHttp：出站侧流量的伪装
 与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`decap_from_http`字段来开启对已伪装流量的拆解。如不指定`decap_from_http`字段则不开启。
 
+> [!NOTE]
+> `allow_non_tng_traffic_regexes`在2.2.4版本及之后的版本中已被弃用，请使用`direct_forward`字段来替代。
+
 此外，还可通过配置`allow_non_tng_traffic_regexes`子项，除了允许tng加密流量传入端点，还将允许非加密http请求流量传入，这可以满足一些同时需要两种流量的场景（如healthcheck）。该子项的值为一个json字符串列表，其中的每项是一个正则表达式匹配语句，只有http请求PATH与该正则语句完全匹配的非加密http请求流量，才会被TNG放行。子项的默认值为`[]`，即拒绝任何非加密http请求。
 
 #### 字段说明
-- **`allow_non_tng_traffic_regexes`** (array [string], 可选，默认为空数组)：该字段指定了允许非加密http请求流量传入的正则表达式列表。每个元素是一个正则表达式字符串，只有当http请求路径与这些正则表达式匹配时，非加密http请求流量才会被放行。
+- (已废弃) **`allow_non_tng_traffic_regexes`** (array [string], 已弃用，可选，默认为空数组)：该字段指定了允许非加密http请求流量传入的正则表达式列表。每个元素是一个正则表达式字符串，只有当http请求路径与这些正则表达式匹配时，非加密http请求流量才会被放行。
 
 > [!NOTE]
 > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
