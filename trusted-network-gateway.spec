@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.3
+Version: 2.2.4
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,11 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Thu Jul  3 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.4-1
+- ingress/socks5: add dst_filters option for filtering destination domains
+- egress: add direct_forward option to allow traffic forwarded directly
+
+
 * Tue Jun 24 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.3-1
 - ingress/netfilter: add matching dst ip address with ip rannge or ipset
 - optimize network throughput
