@@ -1,9 +1,32 @@
 [workspace]
 default-members = ["tng"]
 exclude = ["deps/"]
-members = ["tng", "tng-testsuite"]
+members = [
+  "tng",
+  "tng-testsuite",
+  "tng-wasm",
+  "deps/hyper-util-shim",
+]
 resolver = "2"
 
+[workspace.dependencies]
+hyper-util = {version = "=0.1.7", features = ["service", "client-legacy", "http1", "http2"]}
+reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots"]}
+tokio = {version = "1.45.1", features = ["sync"]}
+tokio-graceful = "0.2.2"
+
+[patch.crates-io.rustls]
+branch = "v/0.23.27-patched"
+git = "https://github.com/inclavare-containers/rustls.git"
+
+[patch.crates-io.rustls-webpki]
+branch = "v/0.103.3-patched"
+git = "https://github.com/inclavare-containers/webpki.git"
+
 [patch.crates-io]
-rustls = {git = "https://github.com/inclavare-containers/rustls.git", branch = "v/0.23.27-patched"}
-rustls-webpki = {git = "https://github.com/inclavare-containers/webpki.git", branch = "v/0.103.3-patched"}
+hyper-util = {path = "./deps/hyper-util-shim"}
+tokio-graceful = {path = "../tokio-graceful"}
+
+[profile.release.package.tng-wasm]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"

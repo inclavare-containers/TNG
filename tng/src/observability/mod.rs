@@ -1,6 +1,9 @@
+#[cfg(feature = "metric")]
 pub mod metric;
+
 pub mod trace;
 
+#[cfg(any(feature = "metric", feature = "trace"))]
 pub fn otlp_resource() -> opentelemetry_sdk::Resource {
     opentelemetry_sdk::Resource::builder()
         .with_service_name("tng")

@@ -1,9 +1,9 @@
 use anyhow::{bail, Context as _, Result};
 use http::{Request, StatusCode, Version};
+use http_body_util::combinators::BoxBody;
 use hyper::upgrade::Upgraded;
-use hyper_util::rt::TokioIo;
 
-use crate::tunnel::attestation_result::AttestationResult;
+use crate::tunnel::{attestation_result::AttestationResult, utils::tokio::TokioIo};
 
 use super::security::RatsTlsClient;
 
@@ -12,9 +12,9 @@ pub async fn create_stream_from_hyper(
 ) -> Result<(TokioIo<Upgraded>, Option<AttestationResult>)> {
     let req = Request::connect("https://tng.internal/")
         .version(Version::HTTP_2)
-        .body(axum::body::Body::empty())?;
+        .body(BoxBody::new(http_body_util::Empty::new()))?;
 
-    tracing::debug!("Establish the wrapping layer");
+    tracing::debug!("Establishing the wrapping layer");
 
     let mut resp = client
         .hyper

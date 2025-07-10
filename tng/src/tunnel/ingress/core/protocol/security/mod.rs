@@ -18,19 +18,25 @@ use http::Uri;
 use hyper_util::client::legacy::Client;
 use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
+use rustls::pki_types::ServerName;
 use rustls_config::OnetimeTlsClientConfig;
 use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
+use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
-    tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
+    tunnel::{
+        attestation_result::AttestationResult,
+        utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
+    },
 };
 
 use super::transport::{
     TransportLayerConnector, TransportLayerCreator, TransportLayerCreatorTrait as _,
+    TransportLayerStream,
 };
 
 #[derive(Clone)]
@@ -44,14 +50,14 @@ pub struct SecurityLayer {
     pool: RwLock<ClientPool>,
     transport_layer_creator: TransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
-    rt_handle: tokio::runtime::Handle,
+    rt: Arc<TokioRuntime>,
 }
 
 impl SecurityLayer {
     pub async fn new(
         transport_layer_creator: TransportLayerCreator,
         ra_args: &RaArgs,
-        rt_handle: tokio::runtime::Handle,
+        rt: Arc<TokioRuntime>,
     ) -> Result<Self> {
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
@@ -60,7 +66,7 @@ impl SecurityLayer {
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
-            rt_handle,
+            rt,
         })
     }
 
@@ -147,7 +153,7 @@ impl SecurityLayer {
                         let client = RatsTlsClient {
                             id,
                             hyper: Client::builder(
-                                shutdown_guard.as_hyper_executor(self.rt_handle.clone()),
+                                shutdown_guard.as_hyper_executor(self.rt.clone()),
                             )
                             .build(connector),
                         };
@@ -177,9 +183,7 @@ impl SecurityConnector {}
 
 impl tower::Service<Uri> for SecurityConnector {
     type Response = SecurityConnection<
-        hyper_rustls::MaybeHttpsStream<
-            hyper_util::rt::TokioIo<super::transport::TransportLayerStream>,
-        >,
+        TokioIo<tokio_rustls::client::TlsStream<super::transport::TransportLayerStream>>,
     >;
 
     type Error = anyhow::Error;
@@ -196,27 +200,70 @@ impl tower::Service<Uri> for SecurityConnector {
 
     fn call(&mut self, uri: Uri /* Not use this as destination endpoint */) -> Self::Future {
         let tls_config_generator = self.tls_config_generator.clone();
-        let transport_layer_connector = self.transport_layer_connector.clone();
+        let mut transport_layer_connector = self.transport_layer_connector.clone();
         Box::pin(
             async move {
                 let OnetimeTlsClientConfig(tls_client_config, verifier) = tls_config_generator
                     .get_one_time_rustls_client_config()
                     .await?;
 
-                let mut https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-                    .with_tls_config(tls_client_config)
-                    .https_only() // TODO: support returning notification message on non rats-tls request with https_or_http()
-                    .enable_http2()
-                    .wrap_connector(transport_layer_connector);
-
-                let res = https_connector
-                    .call(uri)
-                    .await
-                    .map_err(anyhow::Error::from_boxed)?;
-
-                if !matches!(res, hyper_rustls::MaybeHttpsStream::Https(_)) {
-                    bail!("BUG detected, the connection is not secured by Rats-Tls")
+                if uri.scheme() != Some(&http::uri::Scheme::HTTPS) {
+                    bail!(
+                        "BUG detected, the scheme should be `https`, but got {:?}",
+                        uri.scheme()
+                            .map(|scheme| scheme.as_str())
+                            .unwrap_or("<missing scheme>")
+                    )
                 }
+
+                let transport_layer_stream = transport_layer_connector.call(uri.clone()).await?;
+
+                // Here we run the security layer in blocking thread since the API of ServerCertVerifier is blocking.
+                let tls_connect_task = async move {
+                    Ok::<_, anyhow::Error>(TokioIo::new(
+                        TlsConnector::from(Arc::new(tls_client_config))
+                            .connect(
+                                ServerName::try_from(uri.host().context("Host is empty")?)?
+                                    .to_owned(),
+                                transport_layer_stream.into_inner(),
+                            )
+                            .await?,
+                    ))
+                };
+
+                // Spawn a async task to handle all the async certificate verification tasks
+                if let Some(verifier) = &verifier {
+                    verifier.spawn_verify_task_handler().await
+                };
+
+                // Spawn a blocking task to perform the TLS handshake.
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                ))]
+                let security_layer_stream = tokio_with_wasm::task::spawn_blocking(move || {
+                    futures::executor::block_on(tls_connect_task)
+                })
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|e| e)
+                .context("Failed to setup rats-tls connection")?;
+
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                )))]
+                let security_layer_stream = tokio::task::spawn_blocking(move || {
+                    futures::executor::block_on(tls_connect_task)
+                })
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|e| e)
+                .context("Failed to setup rats-tls connection")?;
+
+                // TODO: support returning notification message on non rats-tls request
 
                 let attestation_result = match verifier {
                     Some(verifier) => Some(
@@ -227,8 +274,9 @@ impl tower::Service<Uri> for SecurityConnector {
                     ),
                     None => None,
                 };
+
                 Ok(SecurityConnection::wrap_with_attestation_result(
-                    res,
+                    security_layer_stream,
                     attestation_result,
                 ))
             }
@@ -256,15 +304,16 @@ impl<T> SecurityConnection<T> {
     }
 }
 
-impl<
-        T: hyper::rt::Read
-            + hyper::rt::Write
-            + hyper_util::client::legacy::connect::Connection
-            + Unpin,
-    > hyper_util::client::legacy::connect::Connection for SecurityConnection<T>
+impl hyper_util::client::legacy::connect::Connection
+    for SecurityConnection<TokioIo<tokio_rustls::client::TlsStream<TransportLayerStream>>>
 {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
-        let connected = self.inner.connected();
+        let (tcp, tls) = self.inner.inner().get_ref();
+        let connected = if tls.alpn_protocol() == Some(b"h2") {
+            tcp.connected().negotiated_h2()
+        } else {
+            tcp.connected()
+        };
         connected.extra(self.attestation_result.clone())
     }
 }

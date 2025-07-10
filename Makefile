@@ -96,3 +96,30 @@ update-rpm-tree:
 .PHONE: docker-build
 docker-build:
 	docker build -t tng:${VERSION} .
+
+.PHONE: wasm-build
+wasm-build:
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build ./tng-wasm -Z build-std=std,panic_abort
+
+.PHONE: wasm-test
+wasm-test: wasm-test-chrome
+	yum install -y chromium-headless
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
+
+.PHONE: wasm-test-chrome
+wasm-test-chrome:
+	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | sudo tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+
+.PHONE: wasm-test-firefox
+wasm-test-firefox:
+	if ! command -v firefox; then yum install -y firefox ; fi
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+
+.PHONE: www-demo
+www-demo:
+	cd tng-wasm/www && npm run start
+
+.PHONE: mac-cross-build
+mac-cross-build:
+	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin

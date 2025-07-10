@@ -55,7 +55,7 @@ git submodule update --init
 这将从源码完全重新编译tng及其依赖项
 
 ```sh
-docker build -t tng:latest --target tng-release -f Dockerfile .
+docker build -t tng:latest --target release -f Dockerfile .
 ```
 
 现在我们已经得到了 `tng:latest` 的 Docker 镜像，您可以直接部署运行该镜像。

@@ -1,4 +1,4 @@
-FROM registry.openanolis.cn/openanolis/anolisos:8 AS tng-builder
+FROM registry.openanolis.cn/openanolis/anolisos:8 AS builder
 
 RUN yum install -y git cargo protobuf-compiler
 
@@ -11,8 +11,7 @@ RUN { [ -e ./.git/modules/deps/rats-rs ] || git submodule update --init ./deps/r
 RUN env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root /usr/local/cargo/
 
 
-
-FROM registry.openanolis.cn/openanolis/anolisos:8 AS tng-release
+FROM registry.openanolis.cn/openanolis/anolisos:8 AS release
 
 RUN yum install -y curl iptables && yum clean all
 

@@ -56,7 +56,7 @@ git submodule update --init
 This will completely recompile TNG and its dependencies from the source code.
 
 ```sh
-docker build -t tng:latest --target tng-release -f Dockerfile .
+docker build -t tng:latest --target release -f Dockerfile .
 ```
 
 Now we have got the Docker image `tng:latest`, which you can directly deploy and run.

@@ -13,7 +13,7 @@ use axum::{
 use futures::StreamExt as _;
 use http::{uri::Scheme, HeaderValue, Request, Uri};
 use hyper::body::Incoming;
-use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+use hyper_util::service::TowerToHyperService;
 use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
@@ -27,7 +27,9 @@ use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
+use crate::tunnel::utils::tokio::TokioIo;
 
 use super::flow::{AcceptedStream, Incomming, IngressTrait};
 
@@ -359,10 +361,13 @@ async fn serve_http_proxy_no_throw_error(
     };
     let svc = TowerToHyperService::new(svc);
 
-    if let Err(error) = hyper_util::server::conn::auto::Builder::new(
-        shutdown_guard_cloned.as_hyper_executor(tokio::runtime::Handle::current()),
-    )
-    .serve_connection_with_upgrades(TokioIo::new(in_stream), svc)
+    if let Err(error) = async {
+        let executor =
+            shutdown_guard_cloned.as_hyper_executor(TokioRuntime::current()?.into_shared());
+        hyper_util::server::conn::auto::Builder::new(executor)
+            .serve_connection_with_upgrades(TokioIo::new(in_stream), svc)
+            .await
+    }
     .await
     {
         tracing::error!(?error, "Failed to serve connection");

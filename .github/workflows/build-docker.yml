@@ -46,7 +46,7 @@ jobs:
       - name: Build and export
         uses: docker/build-push-action@v6.9.0
         with:
-          target: tng-release
+          target: release
           context: .
           tags: |
             tng:test
@@ -91,9 +91,6 @@ jobs:
         with:
           name: container-image
           path: ${{ runner.temp }}
-
-      - name: List Directory
-        run: ls -R ${RUNNER_TEMP}
 
       - name: Load image
         run: |
@@ -153,4 +150,3 @@ jobs:
               docker tag tng:test ${tag}
               docker push ${tag}
           done
-

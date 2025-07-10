@@ -1,3 +1,4 @@
 pub mod counter;
-pub mod exporter;
+pub mod instance;
+pub mod simple_exporter;
 pub mod stream;

@@ -1,8 +1,11 @@
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
 use anyhow::{bail, Result};
 use tokio_graceful::ShutdownGuard;
+use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, Span};
+
+use crate::tunnel::utils::runtime::TokioRuntime;
 
 #[derive(Debug)]
 pub enum SupervisedTaskResult<O> {
@@ -13,6 +16,7 @@ pub enum SupervisedTaskResult<O> {
 }
 
 impl<O> SupervisedTaskResult<O> {
+    #[allow(dead_code)]
     pub fn assume_finished(self) -> Result<O> {
         match self {
             Self::Finished(o) => Ok(o),
@@ -29,17 +33,11 @@ impl<O> SupervisedTaskResult<O> {
 #[allow(dead_code)]
 pub trait ShutdownGuardExt {
     #[inline]
-    fn as_hyper_executor(
-        self,
-        rt_handle: tokio::runtime::Handle,
-    ) -> ShutdownGuardHyperExecutor<Self>
+    fn as_hyper_executor(self, rt: Arc<TokioRuntime>) -> ShutdownGuardHyperExecutor<Self>
     where
         Self: Sized,
     {
-        ShutdownGuardHyperExecutor {
-            inner: self,
-            rt_handle,
-        }
+        ShutdownGuardHyperExecutor { inner: self, rt }
     }
 
     #[inline]
@@ -104,6 +102,12 @@ pub trait ShutdownGuardExt {
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         T: std::future::Future<Output = O> + Send + 'static;
+
+    #[cfg(feature = "wasm")]
+    #[track_caller]
+    fn spawn_supervised_wasm_local_task_with_span<T>(&self, span: Span, task: T)
+    where
+        T: std::future::Future<Output = ()> + 'static;
 }
 
 impl ShutdownGuardExt for ShutdownGuard {
@@ -186,6 +190,20 @@ impl ShutdownGuardExt for ShutdownGuard {
             }
         })
     }
+
+    #[cfg(feature = "wasm")]
+    #[track_caller]
+    fn spawn_supervised_wasm_local_task_with_span<T>(&self, span: Span, task: T)
+    where
+        T: std::future::Future<Output = ()> + 'static,
+    {
+        let guard_cloned = self.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            task.instrument(span).await;
+            drop(guard_cloned);
+        })
+    }
 }
 
 #[track_caller]
@@ -228,7 +246,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ShutdownGuardHyperExecutor<T: ShutdownGuardExt> {
     inner: T,
-    rt_handle: tokio::runtime::Handle,
+    rt: Arc<TokioRuntime>,
 }
 
 impl<Fut, T: ShutdownGuardExt> hyper::rt::Executor<Fut> for ShutdownGuardHyperExecutor<T>
@@ -239,9 +257,8 @@ where
     #[inline(always)]
     #[track_caller]
     fn execute(&self, fut: Fut) {
-        let _guard = self.rt_handle.enter();
-        self.inner.spawn_supervised_task_current_span(async {
-            fut.await;
-        });
+        #[cfg(feature = "unix")]
+        let _guard = self.rt.tokio_rt_handle().enter();
+        self.inner.spawn_supervised_task_current_span(fut);
     }
 }

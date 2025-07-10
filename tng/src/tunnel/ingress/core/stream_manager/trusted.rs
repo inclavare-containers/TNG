@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use auto_enums::auto_enum;
@@ -16,7 +17,6 @@ use crate::{
             transport::{extra_data::PoolKeyExtraDataInserter, TransportLayerCreator},
             wrapping,
         },
-        service_metrics::ServiceMetrics,
         utils::{
             self,
             http_inspector::{HttpRequestInspector, InspectionResult},
@@ -31,7 +31,7 @@ pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
     // A standalone tokio runtime to run tasks related to the protocol module
     #[allow(unused)]
-    rt: TokioRuntime,
+    rt: Arc<TokioRuntime>,
 }
 
 impl TrustedStreamManager {
@@ -43,18 +43,16 @@ impl TrustedStreamManager {
         let transport_layer_creator =
             TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
 
-        let rt = TokioRuntime::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .context("Failed to create tokio runtime")?,
-        );
+        #[cfg(feature = "unix")]
+        let rt = TokioRuntime::new_multi_thread()?.into_shared();
+        #[cfg(not(feature = "unix"))]
+        let rt = TokioRuntime::wasm_main_thread()?.into_shared();
 
         Ok(Self {
             security_layer: SecurityLayer::new(
                 transport_layer_creator,
                 &common_args.ra_args,
-                rt.handle(),
+                rt.clone(),
             )
             .await?,
             rt,
@@ -77,7 +75,6 @@ impl StreamManager for TrustedStreamManager {
             + std::marker::Send
             + 'b,
         shutdown_guard: ShutdownGuard,
-        metrics: ServiceMetrics,
     ) -> Result<(
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,
@@ -118,8 +115,6 @@ impl StreamManager for TrustedStreamManager {
                 downstream
             }
         };
-
-        let downstream = metrics.new_wrapped_stream(downstream);
 
         let client = self
             .security_layer

@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
-use crate::{
-    config::ra::{RaArgs, VerifyArgs},
-    tunnel::utils::cert_manager::CertManager,
-};
+use crate::config::ra::{RaArgs, VerifyArgs};
 use anyhow::{bail, Context as _, Result};
 use tokio_graceful::ShutdownGuard;
 
 use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
 
+#[allow(unused)]
 pub struct RustlsDummyCert {}
 
 impl RustlsDummyCert {
+    #[allow(unused)]
     pub fn new_rustls_cert() -> Result<Arc<rustls::sign::SingleCertAndKey>> {
         let cert_chain =
             rustls_pemfile::certs(&mut TNG_DUMMY_CERT.as_bytes()).collect::<Result<Vec<_>, _>>()?;
@@ -32,8 +31,10 @@ impl RustlsDummyCert {
 pub enum TlsConfigGenerator {
     NoRa,
     Verify(VerifyArgs),
-    Attest(Arc<CertManager>),
-    AttestAndVerify(Arc<CertManager>, VerifyArgs),
+    #[cfg(feature = "unix")]
+    Attest(Arc<super::cert_manager::CertManager>),
+    #[cfg(feature = "unix")]
+    AttestAndVerify(Arc<super::cert_manager::CertManager>, VerifyArgs),
 }
 
 impl TlsConfigGenerator {
@@ -58,25 +59,52 @@ impl TlsConfigGenerator {
                 }
                 (None, Some(verfiy)) => Self::Verify(verfiy.clone()),
                 (Some(attest), None) => {
-                    Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
+                    #[cfg(feature = "unix")]
+                    {
+                        use super::cert_manager::CertManager;
+                        Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
+                    }
+                    #[cfg(not(feature = "unix"))]
+                    {
+                        let _ = attest;
+                        bail!("`attest` option is not supported since attestation is not supported on this platform.")
+                    }
                 }
-                (Some(attest), Some(verfiy)) => Self::AttestAndVerify(
-                    Arc::new(CertManager::new(attest.clone()).await?),
-                    verfiy.clone(),
-                ),
+                (Some(attest), Some(verfiy)) => {
+                    #[cfg(feature = "unix")]
+                    {
+                        use super::cert_manager::CertManager;
+
+                        Self::AttestAndVerify(
+                            Arc::new(CertManager::new(attest.clone()).await?),
+                            verfiy.clone(),
+                        )
+                    }
+                    #[cfg(not(feature = "unix"))]
+                    {
+                        let _ = attest;
+                        let _ = verfiy;
+
+                        bail!("`attest` option is not supported since attestation is not supported on this platform.")
+                    }
+                }
             }
         })
     }
 
     pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
         match &self {
+            #[cfg(feature = "unix")]
             TlsConfigGenerator::Attest(cert_manager)
             | TlsConfigGenerator::AttestAndVerify(cert_manager, _) => {
                 cert_manager
                     .launch_refresh_task_if_required(shutdown_guard)
                     .await?
             }
-            _ => { /* Nothing */ }
+            _ => {
+                let _ = shutdown_guard;
+                /* Nothing */
+            }
         }
 
         Ok(())

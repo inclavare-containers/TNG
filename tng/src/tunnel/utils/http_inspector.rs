@@ -168,6 +168,19 @@ impl HttpRequestInspector {
                 let _ = multiplex_stop_sender.send(()); // Ignore the error here
             }
 
+            #[cfg(not(all(
+                target_arch = "wasm32",
+                target_vendor = "unknown",
+                target_os = "unknown"
+            )))]
+            let timeout = tokio::time::sleep(HTTP_INSPECT_TIMEOUT);
+            #[cfg(all(
+                target_arch = "wasm32",
+                target_vendor = "unknown",
+                target_os = "unknown"
+            ))]
+            let timeout = tokio_with_wasm::time::sleep(HTTP_INSPECT_TIMEOUT);
+
             tokio::select! {
                 http1_or_http2 = async { tokio::join!(try_http1, try_http2) } => {
                     match http1_or_http2 {
@@ -179,7 +192,7 @@ impl HttpRequestInspector {
                         }
                     }
                 },
-                _ = tokio::time::sleep(HTTP_INSPECT_TIMEOUT) => {
+                _ = timeout => {
                     tracing::debug!("Timeout waiting for inspecting http1 or http2 request from tcp stream");
                     RequestInfo::UnknownProtocol
                 }

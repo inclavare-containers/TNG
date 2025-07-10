@@ -1,9 +1,12 @@
 pub(crate) mod access_log;
 pub(crate) mod attestation_result;
 pub(crate) mod cert_verifier;
+#[cfg(feature = "egress")]
 pub(crate) mod egress;
-mod endpoint;
-pub(crate) mod ingress;
+pub mod endpoint;
+#[cfg(feature = "ingress")]
+pub mod ingress;
+#[cfg(feature = "unix")]
 pub(crate) mod service_metrics;
 mod stream;
-mod utils;
+pub(crate) mod utils;
