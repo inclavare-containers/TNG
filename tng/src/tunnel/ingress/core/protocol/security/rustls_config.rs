@@ -40,6 +40,7 @@ impl TlsConfigGenerator {
 
                     OnetimeTlsClientConfig(tls_client_config, Some(verifier))
                 }
+                #[cfg(unix)]
                 TlsConfigGenerator::Attest(cert_manager) => {
                     let mut tls_client_config =
                         rustls::ClientConfig::builder_with_protocol_versions(&[
@@ -55,6 +56,7 @@ impl TlsConfigGenerator {
 
                     OnetimeTlsClientConfig(tls_client_config, None)
                 }
+                #[cfg(unix)]
                 TlsConfigGenerator::AttestAndVerify(cert_manager, verify_args) => {
                     let mut tls_client_config =
                         rustls::ClientConfig::builder_with_protocol_versions(&[

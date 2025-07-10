@@ -7,7 +7,6 @@ use auto_enums::auto_enum;
 use futures::Stream;
 use futures::StreamExt;
 use indexmap::IndexMap;
-use opentelemetry::metrics::MeterProvider;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
@@ -16,6 +15,7 @@ use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::egress::core::stream_manager::trusted::StreamType;
 use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
 use crate::tunnel::utils::socket::tcp_connect_with_so_mark;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
@@ -91,12 +91,12 @@ impl EgressFlow {
     pub async fn new(
         egress: impl EgressTrait + 'static,
         common_args: &CommonArgs,
-        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
+        service_metrics_creator: &ServiceMetricsCreator,
     ) -> Result<Self> {
         let egress = Box::new(egress);
 
         let metric_attributes = egress.metric_attributes();
-        let metrics = ServiceMetrics::new(meter_provider, metric_attributes);
+        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
 
         let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args).await?);
 

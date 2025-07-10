@@ -30,7 +30,7 @@ use crate::{
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
-        ingress::core::protocol::transport::TransportLayerStream,
+        ingress::core::protocol::transport::TransportLayerStream, utils::runtime::TokioRuntime,
         utils::rustls_config::TlsConfigGenerator,
     },
 };
@@ -50,14 +50,14 @@ pub struct SecurityLayer {
     pool: RwLock<ClientPool>,
     transport_layer_creator: TransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
-    rt_handle: tokio::runtime::Handle,
+    rt: Arc<TokioRuntime>,
 }
 
 impl SecurityLayer {
     pub async fn new(
         transport_layer_creator: TransportLayerCreator,
         ra_args: &RaArgs,
-        rt_handle: tokio::runtime::Handle,
+        rt: Arc<TokioRuntime>,
     ) -> Result<Self> {
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
@@ -66,7 +66,7 @@ impl SecurityLayer {
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
-            rt_handle,
+            rt,
         })
     }
 
@@ -153,7 +153,7 @@ impl SecurityLayer {
                         let client = RatsTlsClient {
                             id,
                             hyper: Client::builder(
-                                shutdown_guard.as_hyper_executor(self.rt_handle.clone()),
+                                shutdown_guard.as_hyper_executor(self.rt.clone()),
                             )
                             .build(connector),
                         };
@@ -185,6 +185,7 @@ impl tower::Service<Uri> for SecurityConnector {
     type Response = SecurityConnection<
         TokioIo<tokio_rustls::client::TlsStream<super::transport::TransportLayerStream>>,
     >;
+    // type Response = SecurityConnection<TokioIo<super::transport::TransportLayerStream>>;
 
     type Error = anyhow::Error;
 
@@ -230,8 +231,25 @@ impl tower::Service<Uri> for SecurityConnector {
                 };
 
                 tracing::trace!("Starting blocking task to perform the TLS handshake");
-
                 // Spawn a blocking task to perform the TLS handshake.
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                ))]
+                let security_layer_stream = tokio_with_wasm::task::spawn_blocking(move || {
+                    futures::executor::block_on(tls_connect_task)
+                })
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|e| e)
+                .context("Failed to setup rats-tls connection")?;
+
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                )))]
                 let security_layer_stream = tokio::task::spawn_blocking(move || {
                     futures::executor::block_on(tls_connect_task)
                 })
@@ -282,6 +300,10 @@ impl<T> SecurityConnection<T> {
             attestation_result,
         }
     }
+
+    pub fn into_parts(self) -> (T, Option<AttestationResult>) {
+        (self.inner, self.attestation_result)
+    }
 }
 
 impl hyper_util::client::legacy::connect::Connection
@@ -298,6 +320,17 @@ impl hyper_util::client::legacy::connect::Connection
     }
 }
 
+// impl hyper_util::client::legacy::connect::Connection
+//     for SecurityConnection<TokioIo<TransportLayerStream>>
+// {
+//     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+//         let tcp = self.inner.inner();
+//         // let connected = tcp.connected().negotiated_h2();
+//         let connected = tcp.connected();
+//         connected.extra(self.attestation_result.clone())
+//     }
+// }
+
 impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for SecurityConnection<T> {
     #[inline]
     fn poll_read(
@@ -305,7 +338,9 @@ impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for Security
         cx: &mut std::task::Context,
         buf: hyper::rt::ReadBufCursor<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_read(cx, buf)
+        let result = self.project().inner.poll_read(cx, buf);
+        tracing::debug!(?result, "poll_read");
+        result
     }
 }
 
@@ -316,7 +351,9 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        self.project().inner.poll_write(cx, buf)
+        let result = self.project().inner.poll_write(cx, buf);
+        tracing::debug!(?result, "poll_write");
+        result
     }
 
     #[inline]
@@ -324,7 +361,9 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_flush(cx)
+        let result = self.project().inner.poll_flush(cx);
+        tracing::debug!(?result, "poll_flush");
+        result
     }
 
     #[inline]
@@ -332,12 +371,16 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_shutdown(cx)
+        let result = self.project().inner.poll_shutdown(cx);
+        tracing::debug!(?result, "poll_shutdown");
+        result
     }
 
     #[inline]
     fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
+        let result = self.inner.is_write_vectored();
+        tracing::debug!(?result, "is_write_vectored");
+        result
     }
 
     #[inline]
@@ -346,6 +389,8 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         cx: &mut std::task::Context<'_>,
         bufs: &[std::io::IoSlice<'_>],
     ) -> Poll<Result<usize, std::io::Error>> {
-        self.project().inner.poll_write_vectored(cx, bufs)
+        let result = self.project().inner.poll_write_vectored(cx, bufs);
+        tracing::debug!(?result, "poll_write_vectored");
+        result
     }
 }

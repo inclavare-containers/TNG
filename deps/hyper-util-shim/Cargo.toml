@@ -1,0 +1,30 @@
+[package]
+description = "This is a shim layer for hyper-util and hyper-util-wasm"
+edition = "2021"
+name = "hyper-util"
+version = "0.1.7"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
+# The original version of hyper-util.
+hyper-util = {git = "https://github.com/hyperium/hyper-util.git", tag = "v0.1.7", default-features = false}
+
+[target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
+# The wasm patched version of hyper-util.
+hyper-util-wasm = {git = "https://github.com/r58Playz/hyper-util-wasm.git", rev = "c582f05daa6529a75f6838a26ebf29ff09f62921", default-features = false}
+
+[features]
+client = ["hyper-util/client", "hyper-util-wasm/client"]
+client-legacy = ["hyper-util/client-legacy", "hyper-util-wasm/client-legacy"]
+default = ["hyper-util/default", "hyper-util-wasm/default"]
+full = ["hyper-util/full", "hyper-util-wasm/full"]
+http1 = ["hyper-util/http1", "hyper-util-wasm/http1"]
+http2 = ["hyper-util/http2", "hyper-util-wasm/http2"]
+server = ["hyper-util/server", "hyper-util-wasm/server"]
+server-auto = ["hyper-util/server-auto", "hyper-util-wasm/server-auto"]
+server-graceful = ["hyper-util/server-graceful", "hyper-util-wasm/server-graceful"]
+service = ["hyper-util/service", "hyper-util-wasm/service"]
+tokio = ["hyper-util/tokio", "hyper-util-wasm/tokio"]

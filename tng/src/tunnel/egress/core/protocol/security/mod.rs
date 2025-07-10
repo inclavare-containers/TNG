@@ -60,6 +60,25 @@ impl SecurityLayer {
                 verifier.spawn_verify_task_handler().await
             };
 
+            // Spawn a blocking task to perform the TLS handshake.
+            #[cfg(all(
+                target_arch = "wasm32",
+                target_vendor = "unknown",
+                target_os = "unknown"
+            ))]
+            let security_layer_stream = tokio_with_wasm::task::spawn_blocking(move || {
+                futures::executor::block_on(tls_accept_task)
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|e| e)
+            .context("Failed to estabilish rats-tls connection")?;
+
+            #[cfg(not(all(
+                target_arch = "wasm32",
+                target_vendor = "unknown",
+                target_os = "unknown"
+            )))]
             let security_layer_stream =
                 tokio::task::spawn_blocking(move || futures::executor::block_on(tls_accept_task))
                     .await

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::observability::metric::exporter::noop::NoopMeterProvider;
+use crate::observability::metric::simple_exporter::noop::NoopMeterProvider;
 use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
@@ -9,6 +9,7 @@ use crate::tunnel::egress::mapping::MappingEgress;
 use crate::tunnel::ingress::flow::IngressFlow;
 use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
+use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
     control_interface::ControlInterface,
@@ -57,6 +58,8 @@ impl TngRuntime {
         let meter_provider =
             Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
 
+        let service_metrics_creator = ServiceMetricsCreator::new_creator(meter_provider.clone());
+
         Self::setup_trace_exporter(&tng_config, reload_handle)
             .context("Failed to setup trace exporter")?;
 
@@ -72,7 +75,7 @@ impl TngRuntime {
                             IngressFlow::new(
                                 MappingIngress::new(id, mapping_args).await?,
                                 &add_ingress.common,
-                                meter_provider.clone(),
+                                &service_metrics_creator,
                             )
                             .await?,
                         ),
@@ -85,7 +88,7 @@ impl TngRuntime {
                             IngressFlow::new(
                                 HttpProxyIngress::new(id, http_proxy_args).await?,
                                 &add_ingress.common,
-                                meter_provider.clone(),
+                                &service_metrics_creator,
                             )
                             .await?,
                         ),
@@ -106,7 +109,7 @@ impl TngRuntime {
                                 IngressFlow::new(
                                     NetfilterIngress::new(id, netfilter_args).await?,
                                     &add_ingress.common,
-                                    meter_provider.clone(),
+                                    &service_metrics_creator,
                                 )
                                 .await?,
                             ),
@@ -120,7 +123,7 @@ impl TngRuntime {
                             IngressFlow::new(
                                 Socks5Ingress::new(id, socks5_args).await?,
                                 &add_ingress.common,
-                                meter_provider.clone(),
+                                &service_metrics_creator,
                             )
                             .await?,
                         ),
@@ -139,7 +142,7 @@ impl TngRuntime {
                             EgressFlow::new(
                                 MappingEgress::new(id, mapping_args).await?,
                                 &add_egress.common,
-                                meter_provider.clone(),
+                                &service_metrics_creator,
                             )
                             .await?,
                         ),
@@ -160,7 +163,7 @@ impl TngRuntime {
                                 EgressFlow::new(
                                     NetfilterEgress::new(id, netfilter_args).await?,
                                     &add_egress.common,
-                                    meter_provider.clone(),
+                                    &service_metrics_creator,
                                 )
                                 .await?,
                             ),

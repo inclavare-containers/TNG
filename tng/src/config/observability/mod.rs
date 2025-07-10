@@ -8,9 +8,9 @@ pub mod trace;
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OltpCommonExporterConfig {
-    protocol: OltpExporterProtocol,
-    headers: Option<HashMap<String, String>>,
-    endpoint: String,
+    pub protocol: OltpExporterProtocol,
+    pub headers: Option<HashMap<String, String>>,
+    pub endpoint: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]

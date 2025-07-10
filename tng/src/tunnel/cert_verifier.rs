@@ -40,12 +40,36 @@ impl CoCoCommonCertVerifier {
     /// Note this should be called in non-blocking async context only
     pub async fn spawn_verify_task_handler(&self) {
         let task_receiver = self.task_receiver.clone();
-        tokio::task::spawn(async move {
-            let mut next = task_receiver.into_stream();
-            while let Some(task) = next.next().await {
-                tokio::task::spawn(task);
-            }
-        });
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_vendor = "unknown",
+            target_os = "unknown"
+        ))]
+        {
+            tokio_with_wasm::task::spawn(async {
+                tracing::trace!("Starting verify_task_handler");
+                scopeguard::defer! {tracing::trace!("Exiting verify_task_handler")};
+                let mut next = task_receiver.into_stream();
+                while let Some(task) = next.next().await {
+                    tracing::trace!("Got a cert verify task, spawn a new task to handle it");
+                    tokio_with_wasm::task::spawn(task);
+                }
+            });
+        }
+
+        #[cfg(not(all(
+            target_arch = "wasm32",
+            target_vendor = "unknown",
+            target_os = "unknown"
+        )))]
+        {
+            tokio::task::spawn(async move {
+                let mut next = task_receiver.into_stream();
+                while let Some(task) = next.next().await {
+                    tokio::task::spawn(task);
+                }
+            });
+        }
     }
 
     pub fn verify_cert(

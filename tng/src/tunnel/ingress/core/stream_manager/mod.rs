@@ -1,14 +1,14 @@
 pub mod trusted;
+#[cfg(unix)]
 pub mod unprotected;
 
 use std::future::Future;
 
-use crate::tunnel::{
-    attestation_result::AttestationResult, endpoint::TngEndpoint, service_metrics::ServiceMetrics,
-};
+use crate::tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint};
 use anyhow::Result;
 use tokio_graceful::ShutdownGuard;
 
+#[allow(async_fn_in_trait)]
 pub trait StreamManager {
     /// This function will be called after the tunnel runtime is created but before the up-layer service is started and ready for accepting connections.
     async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()>;
@@ -22,7 +22,6 @@ pub trait StreamManager {
             + std::marker::Send
             + 'b,
         shutdown_guard: ShutdownGuard,
-        metrics: ServiceMetrics,
     ) -> Result<(
         /* forward_stream_task */ impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,

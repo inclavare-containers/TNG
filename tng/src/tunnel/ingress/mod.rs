@@ -1,7 +1,11 @@
 pub mod core;
+#[cfg(unix)]
 pub mod flow;
+#[cfg(feature = "ingress-http-proxy")]
 pub mod http_proxy;
+#[cfg(feature = "ingress-mapping")]
 pub mod mapping;
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
 pub mod netfilter;
+#[cfg(feature = "ingress-socks5")]
 pub mod socks5;

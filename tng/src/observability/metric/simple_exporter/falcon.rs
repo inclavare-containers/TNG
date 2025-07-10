@@ -6,6 +6,8 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::config::observability::metric::FalconConfig;
+
 use super::{SimpleMetric, SimpleMetricExporter, ValueType};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -117,20 +119,6 @@ impl<'de> serde::de::Visitor<'de> for FalconTagsVisitor {
 
         Ok(FalconTags(map))
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FalconConfig {
-    pub server_url: String,
-    pub endpoint: String,
-    #[serde(default)]
-    pub tags: IndexMap<String, String>,
-    #[serde(default = "falcon_config_default_step")]
-    pub step: u64,
-}
-
-fn falcon_config_default_step() -> u64 {
-    60
 }
 
 pub struct FalconExporter {

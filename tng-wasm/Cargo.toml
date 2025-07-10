@@ -1,0 +1,49 @@
+[package]
+authors = ["Kun Lai <laikun@linux.alibaba.com>"]
+edition = "2021"
+name = "tng-wasm"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+anyhow = {workspace = true}
+bytes = {workspace = true}
+futures = {workspace = true}
+getrandom_0_2 = {package = "getrandom", version = "0.2", features = ["js"]}
+getrandom_0_3 = {package = "getrandom", version = "0.3", features = ["wasm_js"]}
+http = {workspace = true}
+http-body-util = {workspace = true}
+hyper = {workspace = true, features = ["client"]}
+js-sys = "0.3.77"
+serde = {workspace = true}
+serde-wasm-bindgen = "0.6.5"
+tng = {path = "../tng", default-features = false, features = ["ingress"]}
+tokio = {workspace = true}
+tokio-graceful = {workspace = true}
+tracing = "0.1"
+tracing-log = "0.2.0"
+tracing-wasm = "0.2.1"
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4.50"
+
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = {version = "0.1.7", optional = true}
+
+[target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
+tokio_with_wasm = {workspace = true}
+tokio_with_wasm_proc = {workspace = true}
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.34"
+
+# https://github.com/rustwasm/wasm-pack/issues/1351#issuecomment-2100231587
+[package.metadata.wasm-pack.profile.dev.wasm-bindgen]
+dwarf-debug-info = true

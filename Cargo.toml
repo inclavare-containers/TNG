@@ -1,9 +1,44 @@
 [workspace]
 default-members = ["tng"]
 exclude = ["deps/"]
-members = ["tng", "tng-testsuite"]
+members = [
+  "tng",
+  "tng-testsuite",
+  "tng-wasm",
+  "deps/hyper-util-shim",
+]
 resolver = "2"
 
+[workspace.dependencies]
+anyhow = "1.0.98"
+bytes = "1.10.1"
+futures = "0.3.31"
+http = "1.3.1"
+http-body-util = "0.1.3"
+hyper = {version = "1", default-features = false, features = ["http1", "http2"]}
+hyper-util = {version = "=0.1.7", features = ["service", "client-legacy", "http1", "http2"]}
+reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots"]}
+serde = {version = "1.0", features = ["derive"]}
+tokio = {version = "1.45.1", features = ["sync"]}
+tokio-graceful = "0.2.2"
+tokio_with_wasm = {version = "=0.8.6", features = ["rt", "macros", "time"]}
+tokio_with_wasm_proc = "=0.8.6"
+
+[patch.crates-io.rustls]
+branch = "v/0.23.27-patched"
+git = "https://github.com/inclavare-containers/rustls.git"
+
+[patch.crates-io.rustls-webpki]
+branch = "v/0.103.3-patched"
+git = "https://github.com/inclavare-containers/webpki.git"
+
+[patch.crates-io.tokio-graceful]
+branch = "wasm"
+git = "https://github.com/inclavare-containers/tokio-graceful.git"
+
 [patch.crates-io]
-rustls = {git = "https://github.com/inclavare-containers/rustls.git", branch = "v/0.23.27-patched"}
-rustls-webpki = {git = "https://github.com/inclavare-containers/webpki.git", branch = "v/0.103.3-patched"}
+hyper-util = {path = "./deps/hyper-util-shim"}
+
+[profile.release.package.tng-wasm]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"
