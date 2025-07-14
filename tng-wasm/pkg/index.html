@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
+  <title>WASM Example</title>
+  <style>
+    body {
+      background: hsl(0, 0%, 10%);
+      color: hsl(0, 0%, 100%);
+      font-family: monospace;
+      padding: 2em;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>WASM Example</h1>
+  <script type="module">
+    import module_init, { fetch, send_demo_request } from "./tng_wasm.js";
+
+    // First up we need to actually load the Wasm file, so we use the
+    // default export to inform it where the Wasm file is located on the
+    // server, and then we wait on the returned promise to wait for the
+    // Wasm to be loaded.
+    //
+    // It may look like this: `await init('./pkg/without_a_bundler_bg.wasm');`,
+    // but there is also a handy default inside `init` function, which uses
+    // `import.meta` to locate the Wasm file relatively to js file.
+    //
+    // Note that instead of a string you can also pass in any of the
+    // following things:
+    //
+    // * `WebAssembly.Module`
+    //
+    // * `ArrayBuffer`
+    //
+    // * `Response`
+    //
+    // * `Promise` which returns any of the above, e.g. `fetch("./path/to/wasm")`
+    //
+    // This gives you complete control over how the module is loaded
+    // and compiled.
+    //
+    // Also note that the promise, when resolved, yields the Wasm module's
+    // exports which is the same as importing the `*_bg` module in other
+    // modes
+    await module_init();
+
+    // And afterwards we can use all the functionality defined in wasm.
+    // await send_demo_request();
+
+    {
+      // Test fetch with GET function
+      const url = "http://127.0.0.1:30001/foo/bar?baz=qux";
+      const method = "GET";
+      const headers = {}; // Empty headers for simplicity in test
+      const body = "Hello"; // Empty body for GET request
+      const asAddr = "http://127.0.0.1:8080/";
+      const policyIds = ["default"];
+
+      fetch(url, method, headers, body, asAddr, policyIds)
+        .then(response => {
+          console.log("Fetch response status:", response.status);
+          console.log("Response body:", response.text);
+          console.log("Response headers:", response.headers);
+          console.log("Response ok:", response.ok);
+          console.log("Response attestation_result:", response.attestation_result);
+        })
+        .catch(error => {
+          console.error("Fetch error:", error);
+        });
+    }
+
+
+    {
+      // Test fetch with POST function
+      const url = "http://127.0.0.1:30001/foo/bar";
+      const method = "POST";
+      const headers = {}; // Empty headers for simplicity in test
+      const body = JSON.stringify({ answer: 42 }); // Sample body
+      const asAddr = "http://127.0.0.1:8080/";
+      const policyIds = ["default"];
+
+      fetch(url, method, headers, body, asAddr, policyIds)
+        .then(response => {
+          console.log("Fetch response status:", response.status);
+          console.log("Response body:", response.text);
+          console.log("Response headers:", response.headers);
+          console.log("Response ok:", response.ok);
+          console.log("Response attestation_result:", response.attestation_result);
+        })
+        .catch(error => {
+          console.error("Fetch error:", error);
+        });
+    }
+
+  </script>
+</body>
+
+</html>

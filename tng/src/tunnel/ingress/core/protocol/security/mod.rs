@@ -82,13 +82,12 @@ impl SecurityLayer {
     ) -> Result<SecurityConnector> {
         let transport_layer_connector =
             self.transport_layer_creator
-                .create(pool_key, shutdown_guard.clone(), parent_span)?;
+                .create(pool_key, shutdown_guard, parent_span)?;
 
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
             transport_layer_connector,
             security_layer_span: Span::current(),
-            shutdown_guard,
         })
     }
 
@@ -178,7 +177,6 @@ pub struct SecurityConnector {
     tls_config_generator: Arc<TlsConfigGenerator>,
     transport_layer_connector: TransportLayerConnector,
     security_layer_span: Span,
-    shutdown_guard: ShutdownGuard,
 }
 
 impl SecurityConnector {}
@@ -204,65 +202,11 @@ impl tower::Service<Uri> for SecurityConnector {
     fn call(&mut self, uri: Uri /* Not use this as destination endpoint */) -> Self::Future {
         let tls_config_generator = self.tls_config_generator.clone();
         let mut transport_layer_connector = self.transport_layer_connector.clone();
-        let shutdown_guard = self.shutdown_guard.clone();
         Box::pin(
             async move {
                 let OnetimeTlsClientConfig(tls_client_config, verifier) = tls_config_generator
                     .get_one_time_rustls_client_config()
                     .await?;
-
-                // {
-                //     // Test call hyper client directly
-                //     let transport_layer_stream =
-                //         transport_layer_connector.call(uri.clone()).await?;
-                //     // let (mut sender, conn) = hyper::client::conn::http2::handshake(
-                //     //     shutdown_guard.as_hyper_executor(
-                //     //         #[cfg(feature = "unix")]
-                //     //         TokioRuntime::current()?.into_shared(),
-                //     //         #[cfg(not(feature = "unix"))]
-                //     //         TokioRuntime::wasm_main_thread()?.into_shared(),
-                //     //     ),
-                //     //     transport_layer_stream,
-                //     // )
-                //     // .await?;
-                //     let (mut sender, conn) =
-                //         hyper::client::conn::http1::handshake(transport_layer_stream).await?;
-
-                //     #[cfg(all(
-                //         target_arch = "wasm32",
-                //         target_vendor = "unknown",
-                //         target_os = "unknown"
-                //     ))]
-                //     tokio_with_wasm::task::spawn(async move {
-                //         if let Err(err) = conn.await {
-                //             tracing::error!("Connection failed: {:?}", err);
-                //         }
-                //     });
-
-                //     #[cfg(not(all(
-                //         target_arch = "wasm32",
-                //         target_vendor = "unknown",
-                //         target_os = "unknown"
-                //     )))]
-                //     tokio::task::spawn(async move {
-                //         if let Err(err) = conn.await {
-                //             tracing::error!("Connection failed: {:?}", err);
-                //         }
-                //     });
-
-                //     // Fetch the url...
-                //     // let req = http::Request::connect("https://tng.internal/")
-                //     let req: http::Request<http_body_util::Empty<bytes::Bytes>> =
-                //         http::Request::get("https://tng.internal/")
-                //             .body(http_body_util::Empty::<bytes::Bytes>::new())?;
-
-                //     let res = sender
-                //         .send_request(req)
-                //         .await
-                //         .context("Failed to send request")?;
-
-                //     tracing::debug!("got response status: {}", res.status())
-                // }
 
                 let transport_layer_stream = transport_layer_connector.call(uri.clone()).await?;
 

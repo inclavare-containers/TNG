@@ -8,6 +8,7 @@ mod observability;
 pub mod runtime;
 #[cfg(feature = "unix")]
 mod service;
+#[cfg(feature = "unix")]
 mod state;
 pub mod tunnel;
 

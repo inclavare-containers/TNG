@@ -62,8 +62,10 @@ impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
 
 #[derive(Debug, Clone)]
 pub struct HttpTransportLayer {
+    #[allow(unused)]
     dst: TngEndpoint,
     extra_data: HttpPoolKeyExtraData,
+    #[allow(unused)]
     so_mark: Option<u32>,
     #[allow(unused)]
     shutdown_guard: ShutdownGuard,

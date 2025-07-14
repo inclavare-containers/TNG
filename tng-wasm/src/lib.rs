@@ -33,7 +33,6 @@ pub async fn fetch(
 ) -> Result<TngResponse, JsError> {
     fetch_impl(url, method, headers, body, as_addr, policy_ids)
         .await
-        // .map_err(|e| JsError::from(&*e))
         .map_err(|e: anyhow::Error| JsError::new(&format!("{e:?}")))
 }
 
@@ -177,14 +176,6 @@ impl TngResponse {
     }
 }
 
-// #[wasm_bindgen(start)]
-// fn entry() {
-//     // async_main();
-//     init();
-
-//     send_demo_request();
-// }
-
 #[wasm_bindgen(start)]
 pub fn init_tng() {
     // print pretty errors in wasm https://github.com/rustwasm/console_error_panic_hook
@@ -206,11 +197,7 @@ pub fn init_tng() {
 }
 
 #[wasm_bindgen]
-pub fn send_demo_request() {
-    wasm_bindgen_futures::spawn_local(send_request_async());
-}
-
-pub async fn send_request_async() {
+pub async fn send_demo_request() -> Result<JsValue, JsError> {
     send_request_async_impl(
         "http://127.0.0.1:8080/".to_string(),
         vec!["default".to_string()],
@@ -219,7 +206,11 @@ pub async fn send_request_async() {
         30001,
     )
     .await
-    .unwrap_throw();
+    .and_then(|attestation_result| {
+        serde_wasm_bindgen::to_value(attestation_result.claims())
+            .map_err(|err| anyhow::anyhow!("Failed to convert response headers: {err:?}"))
+    })
+    .map_err(|e: anyhow::Error| JsError::new(&format!("{e:?}")))
 }
 
 async fn send_request_async_impl(

@@ -256,6 +256,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ShutdownGuardHyperExecutor<T: ShutdownGuardExt> {
     inner: T,
+    #[allow(unused)]
     rt: Arc<TokioRuntime>,
 }
 
