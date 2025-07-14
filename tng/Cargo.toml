@@ -141,7 +141,6 @@ trace = [
   "dep:reqwest",
 ]
 unix = [
-  "rats-cert/unix",
   "dep:socket2",
   "dep:reqwest",
   "tokio/rt-multi-thread",
@@ -152,7 +151,6 @@ unix = [
   "async-tungstenite/tokio-runtime",
 ]
 wasm = [
-  "rats-cert/wasm",
   "rats-cert/verifier-coco",
   "rustls-pki-types/web",
   "dep:ring",

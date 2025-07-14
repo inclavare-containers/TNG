@@ -20,7 +20,7 @@ use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls::pki_types::ServerName;
 use rustls_config::OnetimeTlsClientConfig;
-use tokio::{io::AsyncWriteExt, sync::RwLock};
+use tokio::sync::RwLock;
 use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
@@ -30,7 +30,6 @@ use crate::{
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
-        ingress::core::protocol::security,
         utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
     },
 };
@@ -334,25 +333,6 @@ impl tower::Service<Uri> for SecurityConnector {
                     security_layer_stream,
                     attestation_result,
                 ))
-
-                // let mut transport_layer_stream = transport_layer_stream;
-                // for i in 0..=255u8 {
-                //     transport_layer_stream.inner_mut().write_all(&[i]).await?;
-                // }
-
-                // use tokio::io::AsyncReadExt;
-                // for i in 0..=255u8 {
-                //     let j = transport_layer_stream.inner_mut().read_i8().await?;
-                //     tracing::debug!("read: {i}");
-                //     if i != (j as u8) {
-                //         tracing::error!("Mismatch")
-                //     }
-                // }
-
-                // Ok(SecurityConnection::wrap_with_attestation_result(
-                //     transport_layer_stream,
-                //     None,
-                // ))
             }
             .instrument(self.security_layer_span.clone()),
         )
