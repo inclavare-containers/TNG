@@ -3845,6 +3845,7 @@ dependencies = [
 [[package]]
 name = "tokio-graceful"
 version = "0.2.2"
+source = "git+https://github.com/inclavare-containers/tokio-graceful.git?branch=wasm#a2e350dd203a5ffb08035ff9c46aa8db81ec7448"
 dependencies = [
  "loom",
  "pin-project-lite",

@@ -31,9 +31,12 @@ git = "https://github.com/inclavare-containers/rustls.git"
 branch = "v/0.103.3-patched"
 git = "https://github.com/inclavare-containers/webpki.git"
 
+[patch.crates-io.tokio-graceful]
+branch = "wasm"
+git = "https://github.com/inclavare-containers/tokio-graceful.git"
+
 [patch.crates-io]
 hyper-util = {path = "./deps/hyper-util-shim"}
-tokio-graceful = {path = "../tokio-graceful"}
 
 [profile.release.package.tng-wasm]
 # Tell `rustc` to optimize for small code size.
