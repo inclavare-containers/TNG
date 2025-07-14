@@ -39,6 +39,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.75.0
 
+      - uses: dtolnay/rust-toolchain@nightly-2025-07-07
+
       - name: Build RPM package
         run: |
           make create-tarball

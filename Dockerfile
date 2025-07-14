@@ -15,6 +15,6 @@ FROM registry.openanolis.cn/openanolis/anolisos:8 AS release
 
 RUN yum install -y curl iptables && yum clean all
 
-COPY --from=tng-builder /usr/local/cargo/bin/tng /usr/local/bin/tng
+COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
 CMD ["tng"]
