@@ -13,14 +13,14 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use http::Uri;
 use hyper_util::client::legacy::Client;
 use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls::pki_types::ServerName;
 use rustls_config::OnetimeTlsClientConfig;
-use tokio::sync::RwLock;
+use tokio::{io::AsyncWriteExt, sync::RwLock};
 use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
@@ -30,6 +30,7 @@ use crate::{
     observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
+        ingress::core::protocol::security,
         utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
     },
 };
@@ -82,12 +83,13 @@ impl SecurityLayer {
     ) -> Result<SecurityConnector> {
         let transport_layer_connector =
             self.transport_layer_creator
-                .create(pool_key, shutdown_guard, parent_span)?;
+                .create(pool_key, shutdown_guard.clone(), parent_span)?;
 
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
             transport_layer_connector,
             security_layer_span: Span::current(),
+            shutdown_guard,
         })
     }
 
@@ -177,6 +179,7 @@ pub struct SecurityConnector {
     tls_config_generator: Arc<TlsConfigGenerator>,
     transport_layer_connector: TransportLayerConnector,
     security_layer_span: Span,
+    shutdown_guard: ShutdownGuard,
 }
 
 impl SecurityConnector {}
@@ -185,6 +188,7 @@ impl tower::Service<Uri> for SecurityConnector {
     type Response = SecurityConnection<
         TokioIo<tokio_rustls::client::TlsStream<super::transport::TransportLayerStream>>,
     >;
+    // type Response = SecurityConnection<TokioIo<super::transport::TransportLayerStream>>;
 
     type Error = anyhow::Error;
 
@@ -201,26 +205,73 @@ impl tower::Service<Uri> for SecurityConnector {
     fn call(&mut self, uri: Uri /* Not use this as destination endpoint */) -> Self::Future {
         let tls_config_generator = self.tls_config_generator.clone();
         let mut transport_layer_connector = self.transport_layer_connector.clone();
+        let shutdown_guard = self.shutdown_guard.clone();
         Box::pin(
             async move {
                 let OnetimeTlsClientConfig(tls_client_config, verifier) = tls_config_generator
                     .get_one_time_rustls_client_config()
                     .await?;
 
-                if uri.scheme() != Some(&http::uri::Scheme::HTTPS) {
-                    bail!(
-                        "BUG detected, the scheme should be `https`, but got {:?}",
-                        uri.scheme()
-                            .map(|scheme| scheme.as_str())
-                            .unwrap_or("<missing scheme>")
-                    )
-                }
+                // {
+                //     // Test call hyper client directly
+                //     let transport_layer_stream =
+                //         transport_layer_connector.call(uri.clone()).await?;
+                //     // let (mut sender, conn) = hyper::client::conn::http2::handshake(
+                //     //     shutdown_guard.as_hyper_executor(
+                //     //         #[cfg(feature = "unix")]
+                //     //         TokioRuntime::current()?.into_shared(),
+                //     //         #[cfg(not(feature = "unix"))]
+                //     //         TokioRuntime::wasm_main_thread()?.into_shared(),
+                //     //     ),
+                //     //     transport_layer_stream,
+                //     // )
+                //     // .await?;
+                //     let (mut sender, conn) =
+                //         hyper::client::conn::http1::handshake(transport_layer_stream).await?;
+
+                //     #[cfg(all(
+                //         target_arch = "wasm32",
+                //         target_vendor = "unknown",
+                //         target_os = "unknown"
+                //     ))]
+                //     tokio_with_wasm::task::spawn(async move {
+                //         if let Err(err) = conn.await {
+                //             tracing::error!("Connection failed: {:?}", err);
+                //         }
+                //     });
+
+                //     #[cfg(not(all(
+                //         target_arch = "wasm32",
+                //         target_vendor = "unknown",
+                //         target_os = "unknown"
+                //     )))]
+                //     tokio::task::spawn(async move {
+                //         if let Err(err) = conn.await {
+                //             tracing::error!("Connection failed: {:?}", err);
+                //         }
+                //     });
+
+                //     // Fetch the url...
+                //     // let req = http::Request::connect("https://tng.internal/")
+                //     let req: http::Request<http_body_util::Empty<bytes::Bytes>> =
+                //         http::Request::get("https://tng.internal/")
+                //             .body(http_body_util::Empty::<bytes::Bytes>::new())?;
+
+                //     let res = sender
+                //         .send_request(req)
+                //         .await
+                //         .context("Failed to send request")?;
+
+                //     tracing::debug!("got response status: {}", res.status())
+                // }
 
                 let transport_layer_stream = transport_layer_connector.call(uri.clone()).await?;
 
+                tracing::debug!("Creating rats-tls connection");
                 // Here we run the security layer in blocking thread since the API of ServerCertVerifier is blocking.
                 let tls_connect_task = async move {
-                    Ok::<_, anyhow::Error>(TokioIo::new(
+                    tracing::trace!("TLS handshake blocking task started");
+                    Ok::<_, anyhow::Error>(
                         TlsConnector::from(Arc::new(tls_client_config))
                             .connect(
                                 ServerName::try_from(uri.host().context("Host is empty")?)?
@@ -228,7 +279,7 @@ impl tower::Service<Uri> for SecurityConnector {
                                 transport_layer_stream.into_inner(),
                             )
                             .await?,
-                    ))
+                    )
                 };
 
                 // Spawn a async task to handle all the async certificate verification tasks
@@ -236,6 +287,7 @@ impl tower::Service<Uri> for SecurityConnector {
                     verifier.spawn_verify_task_handler().await
                 };
 
+                tracing::trace!("Starting blocking task to perform the TLS handshake");
                 // Spawn a blocking task to perform the TLS handshake.
                 #[cfg(all(
                     target_arch = "wasm32",
@@ -264,6 +316,9 @@ impl tower::Service<Uri> for SecurityConnector {
                 .context("Failed to setup rats-tls connection")?;
 
                 // TODO: support returning notification message on non rats-tls request
+                tracing::debug!("The rats-tls connection is established successfully");
+
+                let security_layer_stream = TokioIo::new(security_layer_stream);
 
                 let attestation_result = match verifier {
                     Some(verifier) => Some(
@@ -279,6 +334,25 @@ impl tower::Service<Uri> for SecurityConnector {
                     security_layer_stream,
                     attestation_result,
                 ))
+
+                // let mut transport_layer_stream = transport_layer_stream;
+                // for i in 0..=255u8 {
+                //     transport_layer_stream.inner_mut().write_all(&[i]).await?;
+                // }
+
+                // use tokio::io::AsyncReadExt;
+                // for i in 0..=255u8 {
+                //     let j = transport_layer_stream.inner_mut().read_i8().await?;
+                //     tracing::debug!("read: {i}");
+                //     if i != (j as u8) {
+                //         tracing::error!("Mismatch")
+                //     }
+                // }
+
+                // Ok(SecurityConnection::wrap_with_attestation_result(
+                //     transport_layer_stream,
+                //     None,
+                // ))
             }
             .instrument(self.security_layer_span.clone()),
         )
@@ -302,6 +376,10 @@ impl<T> SecurityConnection<T> {
             attestation_result,
         }
     }
+
+    pub fn into_parts(self) -> (T, Option<AttestationResult>) {
+        (self.inner, self.attestation_result)
+    }
 }
 
 impl hyper_util::client::legacy::connect::Connection
@@ -318,6 +396,17 @@ impl hyper_util::client::legacy::connect::Connection
     }
 }
 
+// impl hyper_util::client::legacy::connect::Connection
+//     for SecurityConnection<TokioIo<TransportLayerStream>>
+// {
+//     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+//         let tcp = self.inner.inner();
+//         // let connected = tcp.connected().negotiated_h2();
+//         let connected = tcp.connected();
+//         connected.extra(self.attestation_result.clone())
+//     }
+// }
+
 impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for SecurityConnection<T> {
     #[inline]
     fn poll_read(
@@ -325,7 +414,9 @@ impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for Security
         cx: &mut std::task::Context,
         buf: hyper::rt::ReadBufCursor<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_read(cx, buf)
+        let result = self.project().inner.poll_read(cx, buf);
+        tracing::debug!(?result, "poll_read");
+        result
     }
 }
 
@@ -336,7 +427,9 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        self.project().inner.poll_write(cx, buf)
+        let result = self.project().inner.poll_write(cx, buf);
+        tracing::debug!(?result, "poll_write");
+        result
     }
 
     #[inline]
@@ -344,7 +437,9 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_flush(cx)
+        let result = self.project().inner.poll_flush(cx);
+        tracing::debug!(?result, "poll_flush");
+        result
     }
 
     #[inline]
@@ -352,12 +447,16 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        self.project().inner.poll_shutdown(cx)
+        let result = self.project().inner.poll_shutdown(cx);
+        tracing::debug!(?result, "poll_shutdown");
+        result
     }
 
     #[inline]
     fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
+        let result = self.inner.is_write_vectored();
+        tracing::debug!(?result, "is_write_vectored");
+        result
     }
 
     #[inline]
@@ -366,6 +465,8 @@ impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for Securit
         cx: &mut std::task::Context<'_>,
         bufs: &[std::io::IoSlice<'_>],
     ) -> Poll<Result<usize, std::io::Error>> {
-        self.project().inner.poll_write_vectored(cx, bufs)
+        let result = self.project().inner.poll_write_vectored(cx, bufs);
+        tracing::debug!(?result, "poll_write_vectored");
+        result
     }
 }

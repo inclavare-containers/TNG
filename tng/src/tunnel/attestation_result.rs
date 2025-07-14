@@ -12,6 +12,10 @@ impl AttestationResult {
             claims: PrettyPrintClaims::new(claims.clone()),
         }
     }
+
+    pub fn claims(&self) -> &Claims {
+        &self.claims.0
+    }
 }
 
 #[derive(Clone)]

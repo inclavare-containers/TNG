@@ -8,5 +8,5 @@ pub mod endpoint;
 pub mod ingress;
 #[cfg(feature = "unix")]
 pub(crate) mod service_metrics;
-mod stream;
+pub(crate) mod stream;
 pub(crate) mod utils;

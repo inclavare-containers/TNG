@@ -45,12 +45,12 @@ impl SecurityLayer {
                 .await?;
 
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
-            tracing::trace!("Start to estabilish rats-tls session");
+            tracing::debug!("Start to estabilish rats-tls connection");
 
             // Here we run the security layer in blocking thread since the API of ClientCertVerifier is blocking.
             let tls_accept_task = async move {
                 Ok::<_, anyhow::Error>(tls_acceptor.accept(stream).await.map(|v| {
-                    tracing::debug!("New rats-tls session established");
+                    tracing::debug!("New rats-tls connection established");
                     v
                 })?)
             };
@@ -72,7 +72,7 @@ impl SecurityLayer {
             .await
             .map_err(anyhow::Error::from)
             .and_then(|e| e)
-            .context("Failed to estabilish rats-tls session")?;
+            .context("Failed to estabilish rats-tls connection")?;
 
             #[cfg(not(all(
                 target_arch = "wasm32",
@@ -84,7 +84,7 @@ impl SecurityLayer {
                     .await
                     .map_err(anyhow::Error::from)
                     .and_then(|e| e)
-                    .context("Failed to estabilish rats-tls session")?;
+                    .context("Failed to estabilish rats-tls connection")?;
 
             let attestation_result = match verifier {
                 Some(verifier) => Some(

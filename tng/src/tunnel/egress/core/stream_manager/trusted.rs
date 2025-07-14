@@ -23,7 +23,11 @@ use super::StreamManager;
 
 pub struct TrustedStreamManager {
     transport_layer: TransportLayer,
+
     security_layer: Arc<SecurityLayer>,
+
+    connection_reuse: bool,
+
     // A standalone tokio runtime to run tasks related to the protocol module
     rt: Arc<TokioRuntime>,
 }
@@ -36,6 +40,7 @@ impl TrustedStreamManager {
                 common_args.decap_from_http.clone(),
             )?,
             security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
+            connection_reuse: common_args.decap_from_http.is_none(),
             #[cfg(feature = "unix")]
             rt: TokioRuntime::new_multi_thread()?.into_shared(),
             #[cfg(not(feature = "unix"))]
@@ -72,8 +77,10 @@ impl StreamManager for TrustedStreamManager {
                     // Run in the standalone tokio runtime
                     let _guard = self.rt.tokio_rt_handle().enter();
                     let rt_cloned = self.rt.clone();
+                    let connection_reuse = self.connection_reuse;
+
                     shutdown_guard.spawn_supervised_task_fn_current_span(
-                        |shutdown_guard| async move {
+                        move |shutdown_guard| async move {
                             let (tls_stream, attestation_result) = match security_layer
                                 .handshake(stream)
                                 .await
@@ -85,14 +92,24 @@ impl StreamManager for TrustedStreamManager {
                                 }
                             };
 
-                            WrappingLayer::unwrap_stream(
-                                tls_stream,
-                                attestation_result,
-                                channel,
-                                shutdown_guard,
-                                rt_cloned,
-                            )
-                            .await
+                            if connection_reuse {
+                                WrappingLayer::unwrap_stream(
+                                    tls_stream,
+                                    attestation_result,
+                                    channel,
+                                    shutdown_guard,
+                                    rt_cloned,
+                                )
+                                .await;
+                            } else {
+                                // Return the stream directly
+                                if let Err(e) = channel.send((
+                                    StreamType::SecuredStream(Box::new(tls_stream)),
+                                    attestation_result,
+                                )) {
+                                    tracing::error!("Failed to send stream via channel: {e:#}");
+                                }
+                            }
                         },
                     );
                 }

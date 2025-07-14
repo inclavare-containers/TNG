@@ -12,6 +12,7 @@ pub async fn create_stream_from_hyper(
 ) -> Result<(TokioIo<Upgraded>, Option<AttestationResult>)> {
     let req = Request::connect("https://tng.internal/")
         .version(Version::HTTP_2)
+        // .version(Version::HTTP_11)
         .body(BoxBody::new(http_body_util::Empty::new()))?;
 
     tracing::debug!("Establishing the wrapping layer");

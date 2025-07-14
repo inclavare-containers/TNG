@@ -98,8 +98,25 @@ docker-build:
 	docker build -t tng:${VERSION} .
 
 .PHONE: wasm-build
-wasm-build:
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build ./tng-wasm -Z build-std=std,panic_abort
+wasm-build: wasm-build-release
+
+.PHONE: wasm-build-release
+wasm-build-release:
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
+
+.PHONE: wasm-build-debug
+wasm-build-debug:
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
+
+.PHONE: wasm-pack-release
+wasm-pack-release: wasm-build-release
+	wasm-pack pack
+	@echo 'Now you can install with "npm install <tar.gz path>"'
+
+.PHONE: wasm-pack-debug
+wasm-pack-debug: wasm-build-debug
+	wasm-pack pack
+	@echo 'Now you can install with "npm install <tar.gz path>"'
 
 .PHONE: wasm-test
 wasm-test: wasm-test-chrome

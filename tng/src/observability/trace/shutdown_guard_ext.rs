@@ -1,7 +1,14 @@
+#![allow(unexpected_cfgs)]
+
 use std::{future::Future, sync::Arc};
 
 use anyhow::{bail, Result};
 use tokio_graceful::ShutdownGuard;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown"
+))]
 use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, Span};
 
@@ -232,8 +239,11 @@ where
     #[cfg(not(tokio_unstable))]
     let handle = {
         let _ = name;
+        tracing::debug!("Spawn new task");
         tokio::spawn(async move {
+            tracing::debug!("Spawn new task started");
             let output = task.await;
+            tracing::debug!("Spawn new task stoped");
             drop(guard);
             output
         })
@@ -259,6 +269,11 @@ where
     fn execute(&self, fut: Fut) {
         #[cfg(feature = "unix")]
         let _guard = self.rt.tokio_rt_handle().enter();
-        self.inner.spawn_supervised_task_current_span(fut);
+        let join_handle = self.inner.spawn_supervised_task_current_span(fut);
+
+        self.inner.spawn_supervised_task_current_span(async move {
+            let res = join_handle.await;
+            tracing::debug!(is_err = res.is_err(), err=?res.err(), "spawned task finished")
+        });
     }
 }

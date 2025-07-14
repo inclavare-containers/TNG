@@ -72,6 +72,7 @@ impl WrappingLayer {
 
         if let Err(error) =
             hyper::server::conn::http2::Builder::new(shutdown_guard_cloned.as_hyper_executor(rt))
+                // hyper::server::conn::http1::Builder::new()
                 .serve_connection(TokioIo::new(tls_stream), svc)
                 .instrument(span)
                 .await

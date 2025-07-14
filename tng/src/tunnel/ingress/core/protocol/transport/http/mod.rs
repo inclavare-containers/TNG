@@ -121,11 +121,13 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
                         // Since web_sys::features::gen_CloseEvent::CloseEvent is not Send
                         // Here we have to spawn a local task to run in background, which will pipe data with duplexstream
-                        let (s1, mut s2) = tokio::io::duplex(64);
+                        let (s1, mut s2) = tokio::io::duplex(1024);
                         shutdown_guard.spawn_supervised_wasm_local_task_with_span(
                             Span::current(),
                             async move {
                                 let fut = async {
+                                    tracing::debug!("Connecting to {url}");
+
                                     let (_ws, wsio) = ws_stream_wasm::WsMeta::connect(&url, None)
                                         .await
                                         .with_context(|| {
@@ -135,10 +137,16 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
                                         })?;
 
                                     tracing::debug!(
-                                        "websocket connection to {url} created successfully"
+                                      state=?wsio.ready_state(),
+                                      "websocket connection to {url} created successfully"
                                     );
 
                                     let mut ws_stream = wsio.into_io().compat();
+
+                                    scopeguard::defer!(
+                                        tracing::debug!("Ws connection droped");
+                                    );
+
                                     Ok::<_, anyhow::Error>(
                                         tokio::io::copy_bidirectional(&mut ws_stream, &mut s2)
                                             .await?,

@@ -13,6 +13,10 @@ pub mod tunnel;
 
 shadow!(build);
 
+pub use crate::tunnel::attestation_result::AttestationResult;
+pub use crate::tunnel::stream::CommonStreamTrait;
+pub use crate::tunnel::utils::tokio::TokioIo;
+
 #[cfg(test)]
 mod tests {
 

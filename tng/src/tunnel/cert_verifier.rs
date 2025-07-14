@@ -47,9 +47,12 @@ impl CoCoCommonCertVerifier {
         ))]
         {
             tokio_with_wasm::task::spawn(async {
-                let next = task_receiver.into_stream();
-                while let Some(task) = next.await {
-                    tokio_with_wasm::task::spawn(task)
+                tracing::trace!("Starting verify_task_handler");
+                scopeguard::defer! {tracing::trace!("Exiting verify_task_handler")};
+                let mut next = task_receiver.into_stream();
+                while let Some(task) = next.next().await {
+                    tracing::trace!("Got a cert verify task, spawn a new task to handle it");
+                    tokio_with_wasm::task::spawn(task);
                 }
             });
         }

@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use auto_enums::auto_enum;
+use http::Uri;
 use tokio_graceful::ShutdownGuard;
-use tracing::Instrument;
+use tower::Service;
+use tracing::{Instrument, Span};
 
 use crate::tunnel::ingress::core::stream_manager::TngEndpoint;
 use crate::tunnel::utils::http_inspector::RequestInfo;
+use crate::CommonStreamTrait;
 use crate::{
     config::ingress::CommonArgs,
     tunnel::{
@@ -29,6 +32,9 @@ use super::StreamManager;
 
 pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
+
+    connection_reuse: bool,
+
     // A standalone tokio runtime to run tasks related to the protocol module
     #[allow(unused)]
     rt: Arc<TokioRuntime>,
@@ -55,6 +61,7 @@ impl TrustedStreamManager {
                 rt.clone(),
             )
             .await?,
+            connection_reuse: common_args.encap_in_http.is_none(),
             rt,
         })
     }
@@ -116,14 +123,45 @@ impl StreamManager for TrustedStreamManager {
             }
         };
 
-        let client = self
-            .security_layer
-            .get_client(&pool_key, shutdown_guard)
-            .await?;
+        let (upstream, attestation_result) = if self.connection_reuse {
+            let client = self
+                .security_layer
+                .get_client(&pool_key, shutdown_guard)
+                .await?;
 
-        let (upstream, attestation_result) = wrapping::create_stream_from_hyper(&client)
-            .instrument(tracing::info_span!("wrapping"))
-            .await?;
+            let (upstream, attestation_result) = wrapping::create_stream_from_hyper(&client)
+                .instrument(tracing::info_span!("wrapping"))
+                .await?;
+
+            (
+                Box::new(upstream) as Box<dyn CommonStreamTrait>,
+                attestation_result,
+            )
+        } else {
+            let mut connector = self
+                .security_layer
+                .create_security_connector(&pool_key, shutdown_guard, Span::current())
+                .await?;
+
+            let io = connector
+                .call(
+                    // TODO: pass the real uri from argument
+                    Uri::builder()
+                        .scheme("https")
+                        .authority(format!("{}:{}", endpoint.host(), endpoint.port()))
+                        .path_and_query("/")
+                        .build()
+                        .context("Failed to build uri")?,
+                )
+                .await?;
+
+            let (upstream, attestation_result) = io.into_parts();
+
+            (
+                Box::new(upstream.into_inner()) as Box<dyn CommonStreamTrait>,
+                attestation_result,
+            )
+        };
 
         Ok((
             async { utils::forward::forward_stream(upstream, downstream).await },
