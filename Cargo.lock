@@ -3797,6 +3797,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "js-sys",
+ "serde",
  "serde-wasm-bindgen",
  "tng",
  "tokio",

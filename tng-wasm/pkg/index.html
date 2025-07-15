@@ -13,12 +13,61 @@
       font-family: monospace;
       padding: 2em;
     }
+
+    h2 {
+      color: hsl(0, 0%, 40%);
+    }
+
+    .output {
+      background: hsl(0, 0%, 15%);
+      padding: 1em;
+      border-radius: 5px;
+      margin-top: 1em;
+      white-space: pre-wrap;
+    }
+
+    .error {
+      color: red;
+      font-weight: bold;
+    }
   </style>
 </head>
 
 <body>
   <h1>WASM Example</h1>
+
+  <section>
+    <h2>GET Request Output</h2>
+    <div id="get-output" class="output">Waiting for request...</div>
+  </section>
+
+  <section>
+    <h2>POST Request Output</h2>
+    <div id="post-output" class="output">Waiting for request...</div>
+  </section>
+
   <script type="module">
+    function updateOutput(outputId, content) {
+      const el = document.getElementById(outputId);
+      if (el) {
+        el.textContent = content;
+      }
+    }
+
+    function formatResponse(response) {
+      return `Status: ${response.status}\n` +
+             `OK: ${response.ok}\n` +
+             `Body: ${response.text}\n` +
+             `Headers:\n${JSON.stringify(response.headers)}\n` +
+             `Attestation Result:\n${JSON.stringify(response.attestation_result)}`;
+    }
+
+    function formatError(error) {
+      return `❌ Error: ${error.message || String(error)}\nDetails: ${JSON.stringify(error)}`;
+    }
+
+
+
     import module_init, { fetch, send_demo_request } from "./tng_wasm.js";
 
     // Init tng wasm module
@@ -30,47 +79,43 @@
       // Test fetch with GET function
       const url = "http://127.0.0.1:30001/foo/bar?baz=qux";
       const method = "GET";
-      const headers = {}; // Empty headers for simplicity in test
-      const body = "Hello"; // Empty body for GET request
+      const headers = {};
+      const body = "";
       const asAddr = "http://127.0.0.1:8080/";
       const policyIds = ["default"];
 
       fetch(url, method, headers, body, asAddr, policyIds)
         .then(response => {
-          console.log("Fetch response status:", response.status);
-          console.log("Response body:", response.text);
-          console.log("Response headers:", response.headers);
-          console.log("Response ok:", response.ok);
-          console.log("Response attestation_result:", response.attestation_result);
+          console.log("Got response:", response)
+          const content = formatResponse(response);
+          updateOutput("get-output", content);
         })
         .catch(error => {
-          console.error("Fetch error:", error);
+          const content = formatError(error);
+          updateOutput("get-output", content);
         });
     }
-
 
     {
       // Test fetch with POST function
       const url = "http://127.0.0.1:30001/foo/bar";
       const method = "POST";
-      const headers = {}; // Empty headers for simplicity in test
-      const body = JSON.stringify({ answer: 42 }); // Sample body
+      const headers = {};
+      const body = JSON.stringify({ answer: 42 });
       const asAddr = "http://127.0.0.1:8080/";
       const policyIds = ["default"];
 
       fetch(url, method, headers, body, asAddr, policyIds)
         .then(response => {
-          console.log("Fetch response status:", response.status);
-          console.log("Response body:", response.text);
-          console.log("Response headers:", response.headers);
-          console.log("Response ok:", response.ok);
-          console.log("Response attestation_result:", response.attestation_result);
+          console.log("Got response:", response)
+          const content = formatResponse(response);
+          updateOutput("post-output", content);
         })
         .catch(error => {
-          console.error("Fetch error:", error);
+          const content = formatError(error);
+          updateOutput("post-output", content);
         });
     }
-
   </script>
 </body>
 

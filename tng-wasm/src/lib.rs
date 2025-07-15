@@ -7,6 +7,8 @@ use std::{
 use anyhow::{bail, Context as _, Result};
 use bytes::Buf;
 use http_body_util::BodyExt as _;
+use serde::Serialize;
+use serde_wasm_bindgen::Serializer;
 use tng::{
     build,
     config::{
@@ -129,9 +131,9 @@ async fn fetch_impl(
     let tng_response = TngResponse {
         status: status_code.as_u16(),
         body: text,
-        headers: serde_wasm_bindgen::to_value(&headers)
+        headers: serialize_json_compatible(&headers)
             .map_err(|err| anyhow::anyhow!("Failed to convert response headers: {err:?}"))?,
-        attestation_result: serde_wasm_bindgen::to_value(attestation_result.claims())
+        attestation_result: serialize_json_compatible(attestation_result.claims())
             .map_err(|err| anyhow::anyhow!("Failed to convert response headers: {err:?}"))?,
     };
     tracing::debug!("Converted response: {tng_response:?}");
@@ -207,7 +209,7 @@ pub async fn send_demo_request() -> Result<JsValue, JsError> {
     )
     .await
     .and_then(|attestation_result| {
-        serde_wasm_bindgen::to_value(attestation_result.claims())
+        serialize_json_compatible(attestation_result.claims())
             .map_err(|err| anyhow::anyhow!("Failed to convert response headers: {err:?}"))
     })
     .map_err(|e: anyhow::Error| JsError::new(&format!("{e:?}")))
@@ -267,4 +269,11 @@ async fn send_request_async_impl(
     });
 
     Ok(attestation_result)
+}
+
+fn serialize_json_compatible<T>(obj: &T) -> Result<JsValue, serde_wasm_bindgen::Error>
+where
+    T: Serialize,
+{
+    Ok(obj.serialize(&Serializer::json_compatible())?)
 }

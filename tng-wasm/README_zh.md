@@ -244,5 +244,5 @@ miniserve ./tng-wasm/pkg --index index.html --header "Cross-Origin-Opener-Policy
 > - [`miniserve`](https://github.com/svenstaro/miniserve)是一个纯粹的静态资源服务器，它和Nginx以及python的http.server没有什么差别，你也可以用其它组件来替代。
 > - 由于TNG SDK使用了Web Worker，在生产部署时，您需要为Web页面的HTTP响应添加`Cross-Origin-Opener-Policy:same-origin`和`Cross-Origin-Embedder-Policy:require-corp`这两个HTTP头，否则将无法正常工作。如果您希望在chrome extension中集成，请在manifest清单中添加[cross_origin_embedder_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-embedder-policy)和[cross_origin_opener_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-opener-policy)这两个manifest key。
 
-9. 在本地计算机中打开浏览器，访问`http://<机密计算服务实例ip>:8082/`
+9. 在本地计算机中打开浏览器，访问`http://<机密计算服务实例ip>:8082/`，您可以在F12中查看请求响应的日志
 

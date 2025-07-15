@@ -20,6 +20,7 @@ http = {workspace = true}
 http-body-util = {workspace = true}
 hyper = {workspace = true, features = ["client"]}
 js-sys = "0.3.77"
+serde = {workspace = true}
 serde-wasm-bindgen = "0.6.5"
 tng = {path = "../tng", default-features = false, features = ["wasm", "ingress"]}
 tokio = {workspace = true}
