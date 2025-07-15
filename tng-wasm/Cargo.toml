@@ -1,8 +1,10 @@
 [package]
-authors = ["Kun Lai <laikun@linux.alibaba.com>"]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 name = "tng-wasm"
-version = "0.1.0"
+repository.workspace = true
+version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]

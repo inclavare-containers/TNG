@@ -1,7 +1,10 @@
 [package]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 name = "tng-testsuite"
-version = "0.0.1"
+repository.workspace = true
+version.workspace = true
 
 [dependencies]
 again = "0.1.2"
