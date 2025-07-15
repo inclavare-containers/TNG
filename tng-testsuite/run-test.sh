@@ -25,7 +25,7 @@ install_cargo_llvm_cov() {
         # Get host target
         host=$(rustc -vV | grep '^host:' | cut -d' ' -f2)
         # Download binary and install to $HOME/.cargo/bin
-        curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-$host.tar.gz" |
+        curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.6.16/cargo-llvm-cov-$host.tar.gz" |
             tar xzf - -C "$HOME/.cargo/bin"
     fi
 
