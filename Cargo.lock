@@ -3757,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "tng-testsuite"
-version = "0.0.1"
+version = "2.2.4"
 dependencies = [
  "again",
  "anyhow",
@@ -3787,7 +3787,7 @@ dependencies = [
 
 [[package]]
 name = "tng-wasm"
-version = "0.1.0"
+version = "2.2.4"
 dependencies = [
  "anyhow",
  "bytes",
