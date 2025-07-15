@@ -1,7 +1,7 @@
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod cert_manager;
 pub mod certs;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod endpoint_matcher;
 pub mod forward;
 pub mod http_inspector;
@@ -9,6 +9,6 @@ pub mod http_inspector;
 pub mod iptables;
 pub mod runtime;
 pub mod rustls_config;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod socket;
 pub mod tokio;

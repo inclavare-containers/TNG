@@ -3687,6 +3687,7 @@ dependencies = [
  "auto_enums",
  "axum 0.8.4",
  "bytes",
+ "cfg_aliases",
  "cidr",
  "clap",
  "console-subscriber",

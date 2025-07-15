@@ -41,9 +41,9 @@ impl TrustedStreamManager {
             )?,
             security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
             connection_reuse: common_args.decap_from_http.is_none(),
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             rt: TokioRuntime::new_multi_thread()?.into_shared(),
-            #[cfg(not(feature = "unix"))]
+            #[cfg(wasm)]
             rt: TokioRuntime::wasm_main_thread().into_shared()?,
         })
     }

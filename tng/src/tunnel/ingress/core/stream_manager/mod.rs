@@ -1,5 +1,5 @@
 pub mod trusted;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod unprotected;
 
 use std::future::Future;

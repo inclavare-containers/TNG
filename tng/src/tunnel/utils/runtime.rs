@@ -12,14 +12,14 @@ use anyhow::Result;
 /// ```
 #[derive(Debug)]
 pub struct TokioRuntime {
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     rt: Option<tokio::runtime::Runtime>,
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     rt_handle: tokio::runtime::Handle,
 }
 
 impl TokioRuntime {
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     #[allow(dead_code)]
     pub fn new_multi_thread() -> Result<Self> {
         use anyhow::Context;
@@ -35,7 +35,7 @@ impl TokioRuntime {
         })
     }
 
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     #[allow(dead_code)]
     pub fn current() -> Result<Self> {
         let rt_handle = tokio::runtime::Handle::try_current()?;
@@ -45,13 +45,13 @@ impl TokioRuntime {
         })
     }
 
-    #[cfg(not(feature = "unix"))]
+    #[cfg(wasm)]
     #[allow(dead_code)]
     pub fn wasm_main_thread() -> Result<Self> {
         Ok(Self {})
     }
 
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     pub fn tokio_rt_handle(&self) -> &tokio::runtime::Handle {
         &self.rt_handle
     }
@@ -63,7 +63,7 @@ impl TokioRuntime {
 
 impl Drop for TokioRuntime {
     fn drop(&mut self) {
-        #[cfg(feature = "unix")]
+        #[cfg(unix)]
         if let Some(rt) = self.rt.take() {
             rt.shutdown_background();
         }

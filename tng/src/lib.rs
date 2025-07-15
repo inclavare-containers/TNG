@@ -1,14 +1,14 @@
 use shadow_rs::shadow;
 
 pub mod config;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 mod control_interface;
 mod observability;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod runtime;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 mod service;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 mod state;
 pub mod tunnel;
 

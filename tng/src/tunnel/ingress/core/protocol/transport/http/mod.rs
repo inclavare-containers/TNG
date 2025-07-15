@@ -82,11 +82,11 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
     }
 
     fn call(&mut self, _: Req) -> Self::Future {
-        #[cfg(feature = "unix")]
+        #[cfg(unix)]
         let so_mark = self.so_mark;
-        #[cfg(feature = "unix")]
+        #[cfg(unix)]
         let dst = self.dst.clone();
-        #[cfg(not(feature = "unix"))]
+        #[cfg(wasm)]
         let shutdown_guard = self.shutdown_guard.clone();
 
         let url = format!("ws://{}{}", self.extra_data.authority, self.extra_data.path);
@@ -95,7 +95,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
             tracing::debug!("Establishing the underly http stream with upstream");
 
             let stream = async {
-                #[cfg(feature = "unix")]
+                #[cfg(unix)]
                 {
                     use tokio_util::compat::TokioAsyncReadCompatExt;
 
@@ -116,7 +116,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
 
                     Ok::<_, anyhow::Error>(ws_stream)
                 }
-                #[cfg(not(feature = "unix"))]
+                #[cfg(wasm)]
                 {
                     let ws_stream = {
                         use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;

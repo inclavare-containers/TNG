@@ -49,9 +49,9 @@ impl TrustedStreamManager {
         let transport_layer_creator =
             TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
 
-        #[cfg(feature = "unix")]
+        #[cfg(unix)]
         let rt = TokioRuntime::new_multi_thread()?.into_shared();
-        #[cfg(not(feature = "unix"))]
+        #[cfg(wasm)]
         let rt = TokioRuntime::wasm_main_thread()?.into_shared();
 
         Ok(Self {

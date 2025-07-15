@@ -110,7 +110,7 @@ pub trait ShutdownGuardExt {
     where
         T: std::future::Future<Output = O> + Send + 'static;
 
-    #[cfg(feature = "wasm")]
+    #[cfg(wasm)]
     #[track_caller]
     fn spawn_supervised_wasm_local_task_with_span<T>(&self, span: Span, task: T)
     where
@@ -198,7 +198,7 @@ impl ShutdownGuardExt for ShutdownGuard {
         })
     }
 
-    #[cfg(feature = "wasm")]
+    #[cfg(wasm)]
     #[track_caller]
     fn spawn_supervised_wasm_local_task_with_span<T>(&self, span: Span, task: T)
     where
@@ -268,7 +268,7 @@ where
     #[inline(always)]
     #[track_caller]
     fn execute(&self, fut: Fut) {
-        #[cfg(feature = "unix")]
+        #[cfg(unix)]
         let _guard = self.rt.tokio_rt_handle().enter();
         let join_handle = self.inner.spawn_supervised_task_current_span(fut);
 

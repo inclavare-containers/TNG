@@ -11,7 +11,6 @@ again = "0.1.2"
 anyhow = {workspace = true}
 async-stream = "0.3.6"
 async-trait = "0.1.88"
-async-tungstenite = {version = "0.25.1", optional = true}
 auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = {version = "0.8.4", optional = true}# to disable mio
 bytes = {workspace = true}
@@ -60,24 +59,19 @@ pin-project = "1"
 pin-project-lite = "0.2.16"
 portpicker = {version = "0.1.1", optional = true}# to disable mio
 rand = "0.9.1"
-rats-cert = {path = "../deps/rats-rs/rats-cert", default-features = false, features = ["crypto-rustcrypto"]}
 regex = "1.11.1"
-reqwest = {workspace = true, optional = true}
-ring = {version = "0.17.11", features = ["wasm32_unknown_unknown_js"], optional = true}
+reqwest = {workspace = true}
 rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
 rustls-pemfile = "2.2.0"
-rustls-pki-types = {version = "*", optional = true}
 scopeguard = "1.2.0"
 serde = {workspace = true}
 serde_json = "1.0.140"
 serde_variant = "0.1.3"
 serde_with = {version = "3.12.0", features = ["json"]}
 shadow-rs = {version = "=1.0.0", default-features = false}
-socket2 = {version = "0.5.10", optional = true}
 strum = "0.27.1"
 strum_macros = "0.27.1"
 tempfile = "3.20.0"
-tokio = {workspace = true}
 tokio-graceful = {workspace = true}
 tokio-rustls = {version = "0.26.2", default-features = false, features = ["logging", "tls12", "ring"]}
 tokio-util = {version = "0.7.15", features = ["compat"]}
@@ -88,19 +82,28 @@ tracing = "0.1"
 tracing-futures = {version = "0.2.5", features = ["futures-03"]}
 tracing-opentelemetry = {version = "0.30.0", optional = true}
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-wasm-bindgen-futures = {version = "0.4.50", optional = true}
 which = {version = "7.0.3", optional = true}
-ws_stream_tungstenite = {version = "0.13.0", optional = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
+async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
 flume = {version = "0.11.1", features = ["async"]}
+rats-cert = {path = "../deps/rats-rs/rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
+socket2 = {version = "0.5.10"}
+tokio = {workspace = true, features = ["rt-multi-thread", "time"]}
+ws_stream_tungstenite = {version = "0.13.0"}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
 flume = {version = "0.11.1", features = ["async", "spin"]}
+rats-cert = {path = "../deps/rats-rs/rats-cert", default-features = false, features = ["crypto-rustcrypto", "verifier-coco"]}
+ring = {version = "0.17.11", features = ["wasm32_unknown_unknown_js"]}
+rustls-pki-types = {version = "*", features = ["web"]}
+tokio = {workspace = true}
 tokio_with_wasm = {workspace = true}
-ws_stream_wasm = {version = "=0.7.5", optional = true}
+wasm-bindgen-futures = {version = "0.4.50"}
+ws_stream_wasm = {version = "=0.7.5"}
 
 [build-dependencies]
+cfg_aliases = "0.2.1"
 shadow-rs = {version = "=1.0.0", default-features = false, features = ["tzdb", "build"]}
 
 [dev-dependencies]
@@ -119,7 +122,6 @@ default = [
   "ingress-socks5",
   "egress-mapping",
   "egress-netfilter",
-  "unix",
 ]
 egress = ["dep:axum", "hyper/server", "dep:async-tungstenite"]
 egress-mapping = ["egress"]
@@ -138,23 +140,4 @@ trace = [
   "dep:opentelemetry-stdout",
   "dep:opentelemetry_sdk",
   "dep:tracing-opentelemetry",
-  "dep:reqwest",
-]
-unix = [
-  "dep:socket2",
-  "dep:reqwest",
-  "tokio/rt-multi-thread",
-  "tokio/time",
-  "rats-cert/attester-coco",
-  "rats-cert/verifier-coco",
-  "dep:ws_stream_tungstenite",
-  "async-tungstenite/tokio-runtime",
-]
-wasm = [
-  "rats-cert/verifier-coco",
-  "rustls-pki-types/web",
-  "dep:ring",
-  "dep:reqwest",
-  "dep:ws_stream_wasm",
-  "dep:wasm-bindgen-futures",
 ]

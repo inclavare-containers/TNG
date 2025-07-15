@@ -1,5 +1,5 @@
 pub mod core;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub mod flow;
 #[cfg(feature = "ingress-http-proxy")]
 pub mod http_proxy;

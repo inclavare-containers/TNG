@@ -31,9 +31,9 @@ impl RustlsDummyCert {
 pub enum TlsConfigGenerator {
     NoRa,
     Verify(VerifyArgs),
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     Attest(Arc<super::cert_manager::CertManager>),
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     AttestAndVerify(Arc<super::cert_manager::CertManager>, VerifyArgs),
 }
 
@@ -59,19 +59,19 @@ impl TlsConfigGenerator {
                 }
                 (None, Some(verfiy)) => Self::Verify(verfiy.clone()),
                 (Some(attest), None) => {
-                    #[cfg(feature = "unix")]
+                    #[cfg(unix)]
                     {
                         use super::cert_manager::CertManager;
                         Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
                     }
-                    #[cfg(not(feature = "unix"))]
+                    #[cfg(wasm)]
                     {
                         let _ = attest;
                         bail!("`attest` option is not supported since attestation is not supported on this platform.")
                     }
                 }
                 (Some(attest), Some(verfiy)) => {
-                    #[cfg(feature = "unix")]
+                    #[cfg(unix)]
                     {
                         use super::cert_manager::CertManager;
 
@@ -80,7 +80,7 @@ impl TlsConfigGenerator {
                             verfiy.clone(),
                         )
                     }
-                    #[cfg(not(feature = "unix"))]
+                    #[cfg(wasm)]
                     {
                         let _ = attest;
                         let _ = verfiy;
@@ -94,7 +94,7 @@ impl TlsConfigGenerator {
 
     pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
         match &self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager)
             | TlsConfigGenerator::AttestAndVerify(cert_manager, _) => {
                 cert_manager

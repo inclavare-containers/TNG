@@ -8,7 +8,7 @@ use anyhow::Result;
 use extra_data::PoolKeyExtraDataInserter;
 use http::{HttpTransportLayer, HttpTransportLayerCreator};
 use pin_project::pin_project;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 use tcp::{TcpTransportLayer, TcpTransportLayerCreator};
 use tokio_graceful::ShutdownGuard;
 use tracing::Span;
@@ -25,7 +25,7 @@ use super::security::pool::PoolKey;
 
 pub mod extra_data;
 mod http;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 mod tcp;
 
 pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
@@ -43,7 +43,7 @@ pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
 ///
 /// This struct is just a enum wrapper of the real implementation of transport layer creator. By design, each transport layer creator should implement the TransportLayerCreatorTrait.
 pub enum TransportLayerCreator {
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     Tcp(TcpTransportLayerCreator),
     Http(HttpTransportLayerCreator),
 }
@@ -55,12 +55,12 @@ impl TransportLayerCreator {
                 Self::Http(HttpTransportLayerCreator::new(so_mark, encap_in_http)?)
             }
             None => {
-                #[cfg(feature = "unix")]
+                #[cfg(unix)]
                 {
                     Self::Tcp(TcpTransportLayerCreator::new(so_mark))
                 }
 
-                #[cfg(not(feature = "unix"))]
+                #[cfg(wasm)]
                 {
                     use anyhow::bail;
                     bail!("Tcp transport layer is not supported on this platform.")
@@ -79,7 +79,7 @@ impl TransportLayerCreatorTrait for TransportLayerCreator {
         parent_span: Span,
     ) -> Result<TransportLayerConnector> {
         Ok(match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerCreator::Tcp(creater) => TransportLayerConnector::Tcp(creater.create(
                 pool_key,
                 shutdown_guard,
@@ -97,7 +97,7 @@ impl TransportLayerCreatorTrait for TransportLayerCreator {
 impl PoolKeyExtraDataInserter for TransportLayerCreator {
     fn need_to_insert_extra_data(&self) -> bool {
         match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerCreator::Tcp(creater) => creater.need_to_insert_extra_data(),
             TransportLayerCreator::Http(creater) => creater.need_to_insert_extra_data(),
         }
@@ -109,7 +109,7 @@ impl PoolKeyExtraDataInserter for TransportLayerCreator {
         target_pool_key: &mut PoolKey,
     ) -> Result<()> {
         match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerCreator::Tcp(creater) => {
                 creater.insert_extra_data_to_pool_key(request_info, target_pool_key)
             }
@@ -122,7 +122,7 @@ impl PoolKeyExtraDataInserter for TransportLayerCreator {
 
 #[derive(Debug, Clone)]
 pub enum TransportLayerConnector {
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     Tcp(TcpTransportLayer),
     Http(HttpTransportLayer),
 }
@@ -135,7 +135,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
     fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerConnector::Tcp(tcp_transport_layer) => {
                 <TcpTransportLayer as tower::Service<Req>>::poll_ready(tcp_transport_layer, context)
             }
@@ -150,7 +150,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
     fn call(&mut self, req: Req) -> Self::Future {
         match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerConnector::Tcp(tcp_transport_layer) => tcp_transport_layer.call(req),
             TransportLayerConnector::Http(http_transport_layer) => http_transport_layer.call(req),
         }
@@ -159,7 +159,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
-    #[cfg(feature = "unix")]
+    #[cfg(unix)]
     Tcp(#[pin] tokio::net::TcpStream),
     Http(#[pin] Box<dyn CommonStreamTrait>),
 }
@@ -167,7 +167,7 @@ pub enum TransportLayerStream {
 impl hyper_util::client::legacy::connect::Connection for TransportLayerStream {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerStream::Tcp(tcp_stream) => tcp_stream.connected(),
             TransportLayerStream::Http(_h2_stream) => {
                 hyper_util::client::legacy::connect::Connected::new()
@@ -183,7 +183,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
         match self.project() {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_write(tcp_stream, cx, buf)
             }
@@ -198,7 +198,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         match self.project() {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_flush(tcp_stream, cx)
             }
@@ -213,7 +213,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         match self.project() {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_shutdown(tcp_stream, cx)
             }
@@ -231,7 +231,7 @@ impl tokio::io::AsyncRead for TransportLayerStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.project() {
-            #[cfg(feature = "unix")]
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncRead::poll_read(tcp_stream, cx, buf)
             }

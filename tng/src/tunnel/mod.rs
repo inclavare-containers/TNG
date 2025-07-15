@@ -6,7 +6,7 @@ pub(crate) mod egress;
 pub mod endpoint;
 #[cfg(feature = "ingress")]
 pub mod ingress;
-#[cfg(feature = "unix")]
+#[cfg(unix)]
 pub(crate) mod service_metrics;
 pub(crate) mod stream;
 pub(crate) mod utils;
