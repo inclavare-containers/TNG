@@ -1052,18 +1052,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flume"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
-dependencies = [
- "futures-core",
- "futures-sink",
- "nanorand",
- "spin",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1752,7 +1740,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -1918,15 +1906,6 @@ name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
-
-[[package]]
-name = "nanorand"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a51313c5820b0b02bd422f4b44776fbf47961755c74ce64afc73bfad10226c3"
-dependencies = [
- "getrandom 0.2.15",
-]
 
 [[package]]
 name = "netlink-packet-core"
@@ -2831,7 +2810,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "signature",
- "spin",
+ "spin 0.9.8",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "thiserror 2.0.12",
@@ -3425,6 +3404,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3696,7 +3681,6 @@ dependencies = [
  "derivative",
  "either",
  "fast-socks5",
- "flume",
  "futures",
  "getrandom 0.3.1",
  "h2",
@@ -3733,6 +3717,7 @@ dependencies = [
  "serde_with",
  "shadow-rs",
  "socket2",
+ "spin 0.10.0",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "tempfile",

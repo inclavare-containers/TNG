@@ -47,56 +47,24 @@ impl SecurityLayer {
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
             tracing::debug!("Start to estabilish rats-tls connection");
 
-            // Here we run the security layer in blocking thread since the API of ClientCertVerifier is blocking.
-            let tls_accept_task = async move {
-                Ok::<_, anyhow::Error>(tls_acceptor.accept(stream).await.map(|v| {
-                    tracing::debug!("New rats-tls connection established");
-                    v
-                })?)
-            };
+            async {
+                let security_layer_stream = tls_acceptor.accept(stream).await?;
 
-            // Spawn a async task to handle all the async certificate verification tasks
-            if let Some(verifier) = &verifier {
-                verifier.spawn_verify_task_handler().await
-            };
+                let attestation_result = match verifier {
+                    Some(verifier) => Some(
+                        verifier
+                            .verity_pending_cert()
+                            .await
+                            .context("No attestation result found")?,
+                    ),
+                    None => None,
+                };
 
-            // Spawn a blocking task to perform the TLS handshake.
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
-            let security_layer_stream = tokio_with_wasm::task::spawn_blocking(move || {
-                futures::executor::block_on(tls_accept_task)
-            })
+                tracing::debug!("New rats-tls connection established");
+                Ok::<_, anyhow::Error>((security_layer_stream, attestation_result))
+            }
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)
-            .context("Failed to estabilish rats-tls connection")?;
-
-            #[cfg(not(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            )))]
-            let security_layer_stream =
-                tokio::task::spawn_blocking(move || futures::executor::block_on(tls_accept_task))
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .and_then(|e| e)
-                    .context("Failed to estabilish rats-tls connection")?;
-
-            let attestation_result = match verifier {
-                Some(verifier) => Some(
-                    verifier
-                        .get_attestation_result()
-                        .await
-                        .context("No attestation result found")?,
-                ),
-                None => None,
-            };
-
-            Ok((security_layer_stream, attestation_result))
+            .context("Failed to setup rats-tls connection")
         }
         .instrument(tracing::info_span!("security"))
         .await

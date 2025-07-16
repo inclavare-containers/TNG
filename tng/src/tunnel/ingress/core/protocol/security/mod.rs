@@ -211,10 +211,8 @@ impl tower::Service<Uri> for SecurityConnector {
                 let transport_layer_stream = transport_layer_connector.call(uri.clone()).await?;
 
                 tracing::debug!("Creating rats-tls connection");
-                // Here we run the security layer in blocking thread since the API of ServerCertVerifier is blocking.
-                let tls_connect_task = async move {
-                    tracing::trace!("TLS handshake blocking task started");
-                    Ok::<_, anyhow::Error>(
+                async {
+                    let security_layer_stream = TokioIo::new(
                         TlsConnector::from(Arc::new(tls_client_config))
                             .connect(
                                 ServerName::try_from(uri.host().context("Host is empty")?)?
@@ -222,61 +220,26 @@ impl tower::Service<Uri> for SecurityConnector {
                                 transport_layer_stream.into_inner(),
                             )
                             .await?,
-                    )
-                };
+                    );
 
-                // Spawn a async task to handle all the async certificate verification tasks
-                if let Some(verifier) = &verifier {
-                    verifier.spawn_verify_task_handler().await
-                };
+                    let attestation_result = match verifier {
+                        Some(verifier) => Some(
+                            verifier
+                                .verity_pending_cert()
+                                .await
+                                .context("No attestation result found")?,
+                        ),
+                        None => None,
+                    };
 
-                tracing::trace!("Starting blocking task to perform the TLS handshake");
-                // Spawn a blocking task to perform the TLS handshake.
-                #[cfg(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                ))]
-                let security_layer_stream = tokio_with_wasm::task::spawn_blocking(move || {
-                    futures::executor::block_on(tls_connect_task)
-                })
+                    tracing::debug!("New rats-tls connection established");
+                    Ok::<_, anyhow::Error>(SecurityConnection::wrap_with_attestation_result(
+                        security_layer_stream,
+                        attestation_result,
+                    ))
+                }
                 .await
-                .map_err(anyhow::Error::from)
-                .and_then(|e| e)
-                .context("Failed to setup rats-tls connection")?;
-
-                #[cfg(not(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                )))]
-                let security_layer_stream = tokio::task::spawn_blocking(move || {
-                    futures::executor::block_on(tls_connect_task)
-                })
-                .await
-                .map_err(anyhow::Error::from)
-                .and_then(|e| e)
-                .context("Failed to setup rats-tls connection")?;
-
-                // TODO: support returning notification message on non rats-tls request
-                tracing::debug!("The rats-tls connection is established successfully");
-
-                let security_layer_stream = TokioIo::new(security_layer_stream);
-
-                let attestation_result = match verifier {
-                    Some(verifier) => Some(
-                        verifier
-                            .get_attestation_result()
-                            .await
-                            .context("No attestation result found")?,
-                    ),
-                    None => None,
-                };
-
-                Ok(SecurityConnection::wrap_with_attestation_result(
-                    security_layer_stream,
-                    attestation_result,
-                ))
+                .context("Failed to setup rats-tls connection")
             }
             .instrument(self.security_layer_span.clone()),
         )

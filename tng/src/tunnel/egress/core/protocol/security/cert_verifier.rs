@@ -39,12 +39,8 @@ impl CoCoClientCertVerifier {
         })
     }
 
-    pub async fn spawn_verify_task_handler(&self) {
-        self.common.spawn_verify_task_handler().await
-    }
-
-    pub async fn get_attestation_result(&self) -> Option<AttestationResult> {
-        self.common.get_attestation_result().await
+    pub async fn verity_pending_cert(&self) -> Result<AttestationResult> {
+        self.common.verity_pending_cert().await
     }
 }
 
