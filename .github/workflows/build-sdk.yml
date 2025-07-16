@@ -1,0 +1,107 @@
+name: Build SDK
+
+on:
+  push:
+    branches:
+      - "master"
+      - "native"
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - "master"
+      - "native"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      options: --privileged
+
+    steps:
+      - name: Determine label
+        run: |
+          tag="${GITHUB_REF#refs/*/}"
+          echo "tag=$tag"
+          if [[ ${tag} == *alpha* ]] ; then
+              label=alpha
+          elif [[ ${tag} == *beta* ]] ; then
+              label=beta
+          else
+              label=latest
+          fi
+          echo "label=$label"
+          echo "NPM_PKG_LABEL=$label" >> $GITHUB_ENV
+
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+              version=${{ github.ref_name }}
+              if [[ $version == v* ]]; then
+                  version=${version#v}
+              fi
+              version=${version}
+              echo "version=$version"
+              echo "NPM_PKG_VERSION=$label" >> $GITHUB_ENV
+          fi
+
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+
+          # replace the mirror
+          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+
+          yum install -y git make clang protobuf-compiler npm rsync jq
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: "true"
+
+      - uses: dtolnay/rust-toolchain@1.75.0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-07-07
+
+      # - name: Run Wasm Test
+      #   run: make wasm-test-chrome
+
+      - name: Build JS SDK
+        run: |
+          make wasm-build-release
+
+          if [ -n "${{ env.NPM_PKG_VERSION }}" ]; then
+              # Replace version in package.json
+              cp tng-wasm/pkg/package.json tng-wasm/pkg/package.json.bak && \
+                  jq '.version = "${{ env.NPM_PKG_VERSION }}"' tng-wasm/pkg/package.json.bak > tng-wasm/pkg/package.json
+          fi
+
+          wasm-pack pack
+
+          mkdir -p $GITHUB_WORKSPACE/npm/
+          cp -r tng-wasm/pkg/*.tgz $GITHUB_WORKSPACE/npm/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          if-no-files-found: error
+          path: |
+            ./npm/*.tgz
+
+      - name: Publish NPM packages
+        if: startsWith(github.ref, 'refs/tags/')
+        run: wasm-pack publish --target web --tag ${{ env.NPM_PKG_LABEL }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

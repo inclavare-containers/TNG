@@ -57,16 +57,7 @@ EOF
 . "$HOME/.cargo/env"
 ```
 
-4. 安装wasm编译依赖
-
-```sh
-# 安装wasm-pack
-cargo +nightly-2025-07-07 install wasm-pack
-# 安装rust std源码
-rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu
-```
-
-5. 构建TNG SDK的npm包
+4. 构建TNG SDK的npm包
 
 ```sh
 make wasm-pack-debug
@@ -75,7 +66,7 @@ make wasm-pack-debug
 > [!NOTE]
 > 如果希望构建最终生产版本，请使用`make wasm-pack-release`
 
-产物`tar.gz`文件将存放在`./tng-wasm/pkg/`目录下，您可以将其解压到您的web项目中。
+产物`tar.gz`文件将存放在`./tng-wasm/pkg/`目录下，您可以将其使用`npm install`安装到您的web项目中。
 
 ## 运行Demo
 
@@ -173,7 +164,7 @@ tng launch --config-content='
 
 一个参考的运行命令如下：
 ```sh
-cat <<EOF >
+cat <<EOF > /tmp/config_with_cert.json
 {
     "work_dir": "/var/lib/attestation-service/",
     "rvps_config": {

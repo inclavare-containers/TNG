@@ -27,7 +27,7 @@ jobs:
       - name: Check pre-release
         run: |
           tag="${GITHUB_REF#refs/*/}"
-          echo "tag=tag"
+          echo "tag=$tag"
           if [[ ${tag} == *alpha* || ${tag} == *beta* ]]
           then
               prerelease=true
