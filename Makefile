@@ -25,14 +25,14 @@ run-test-on-podman: install-test-deps
 	cargo test --no-default-features --features on-podman --package tng-testsuite --tests -- --nocapture
 
 
-VERSION 	:= $(shell grep '^version' ./tng/Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
+VERSION 	:= $(shell grep '^version' ./Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 
 .PHONE: create-tarball
 create-tarball:
 	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/ && mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/
 
 	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/
-	cargo vendor --locked --manifest-path ./Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ | tee /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml
+	cargo +nightly-2025-07-07 vendor --locked --manifest-path ./Cargo.toml --no-delete --versioned-dirs --respect-source-config /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ | tee /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml
 
 	sed -i 's;^.*directory = .*/vendor/.*$$;directory = "vendor";g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/.cargo/config.toml
 
@@ -47,8 +47,37 @@ create-tarball:
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/winapi*/lib/*.lib
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/lib/*.lib
 
+	# patch on some crate that cannot be resolved in cargo 1.75
+	# remove crates which need to be patched
+	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-*
+	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-*
+	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-*
+	# patch for tokio_with_wasm
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-fake/
+	printf '[package]\nedition = "2021"\nname = "tokio_with_wasm"\nversion = "0.8.6"\n\n[lib]\n\n[features]\nrt=[]\nmacros=[]\ntime=[]' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-fake/Cargo.toml
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-fake/src/
+	touch /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-fake/src/lib.rs
+	echo '{"files":{}}' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm-fake/.cargo-checksum.json
+	# patch for ws_stream_wasm
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-fake/
+	printf '[package]\nedition = "2021"\nname = "ws_stream_wasm"\nversion = "0.7.5"\n\n[lib]' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-fake/Cargo.toml
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-fake/src/
+	touch /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-fake/src/lib.rs
+	echo '{"files":{}}' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ws_stream_wasm-fake/.cargo-checksum.json
+	# patch for tokio_with_wasm_proc
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/
+	printf '[package]\nedition = "2021"\nname = "tokio_with_wasm_proc"\nversion = "0.8.6"\n\n[lib]' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/Cargo.toml
+	mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/src/
+	touch /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/src/lib.rs
+	echo '{"files":{}}' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/.cargo-checksum.json
+
+	# copy source code to src/
 	rsync -a --exclude target --exclude deps/rats-rs/build --exclude .git/modules/deps/tng-envoy ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
 
+	# delete all checksum (this is required due to previous patch work)
+	sed -i 's/checksum = ".*//g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/Cargo.lock
+
+	# create tarball
 	tar -czf /tmp/trusted-network-gateway-${VERSION}.tar.gz -C /tmp/trusted-network-gateway-tarball/ trusted-network-gateway-${VERSION}
 
 	@echo "Tarball generated:" /tmp/trusted-network-gateway-${VERSION}.tar.gz
@@ -96,3 +125,63 @@ update-rpm-tree:
 .PHONE: docker-build
 docker-build:
 	docker build -t tng:${VERSION} .
+
+.PHONE: install-wasm-build-dependencies
+install-wasm-build-dependencies:
+	if ! command -v wasm-pack >/dev/null; then \
+		cargo +nightly-2025-07-07 install wasm-pack ; \
+	fi
+	if ! rustup component list --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu | grep rust-src | grep installed >/dev/null; then \
+		rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu ; \
+	fi
+
+define WASM_PATCH_PACKAGE_JSON =
+	@echo "Patching package.json ..."
+	if ! command -v jq >/dev/null; then yum install -y jq ; fi
+	rm -f tng-wasm/pkg/package.json.bak && \
+		cp tng-wasm/pkg/package.json tng-wasm/pkg/package.json.bak && \
+		jq '.name = "@inclavare-containers/tng" | .publishConfig = { "registry": "https://npm.pkg.github.com/" }' tng-wasm/pkg/package.json.bak > tng-wasm/pkg/package.json
+endef
+
+.PHONE: wasm-build-release
+wasm-build-release: install-wasm-build-dependencies
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
+	$(WASM_PATCH_PACKAGE_JSON)
+
+.PHONE: wasm-build-debug
+wasm-build-debug: install-wasm-build-dependencies
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
+	$(WASM_PATCH_PACKAGE_JSON)
+
+.PHONE: wasm-pack-release
+wasm-pack-release: wasm-build-release
+	wasm-pack pack
+	@echo 'Now you can install with "npm install <tar.gz path>"'
+
+.PHONE: wasm-pack-debug
+wasm-pack-debug: wasm-build-debug
+	wasm-pack pack
+	@echo 'Now you can install with "npm install <tar.gz path>"'
+
+.PHONE: wasm-test
+wasm-test: wasm-test-chrome
+	yum install -y chromium-headless
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
+
+.PHONE: wasm-test-chrome
+wasm-test-chrome: install-wasm-build-dependencies
+	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+
+.PHONE: wasm-test-firefox
+wasm-test-firefox: install-wasm-build-dependencies
+	if ! command -v firefox; then yum install -y firefox ; fi
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+
+.PHONE: www-demo
+www-demo:
+	cd tng-wasm/www && npm run start
+
+.PHONE: mac-cross-build
+mac-cross-build:
+	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin

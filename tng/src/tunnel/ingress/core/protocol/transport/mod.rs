@@ -7,22 +7,25 @@ use std::{
 use anyhow::Result;
 use extra_data::PoolKeyExtraDataInserter;
 use http::{HttpTransportLayer, HttpTransportLayerCreator};
-use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
+#[cfg(unix)]
 use tcp::{TcpTransportLayer, TcpTransportLayerCreator};
-use tokio::net::TcpStream;
 use tokio_graceful::ShutdownGuard;
 use tracing::Span;
 
 use crate::{
     config::ingress::EncapInHttp,
-    tunnel::utils::{h2_stream::H2Stream, http_inspector::RequestInfo},
+    tunnel::{
+        stream::CommonStreamTrait,
+        utils::{http_inspector::RequestInfo, tokio::TokioIo},
+    },
 };
 
 use super::security::pool::PoolKey;
 
 pub mod extra_data;
 mod http;
+#[cfg(unix)]
 mod tcp;
 
 pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
@@ -40,8 +43,9 @@ pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
 ///
 /// This struct is just a enum wrapper of the real implementation of transport layer creator. By design, each transport layer creator should implement the TransportLayerCreatorTrait.
 pub enum TransportLayerCreator {
-    Http(HttpTransportLayerCreator),
+    #[cfg(unix)]
     Tcp(TcpTransportLayerCreator),
+    Http(HttpTransportLayerCreator),
 }
 
 impl TransportLayerCreator {
@@ -50,7 +54,18 @@ impl TransportLayerCreator {
             Some(encap_in_http) => {
                 Self::Http(HttpTransportLayerCreator::new(so_mark, encap_in_http)?)
             }
-            None => Self::Tcp(TcpTransportLayerCreator::new(so_mark)),
+            None => {
+                #[cfg(unix)]
+                {
+                    Self::Tcp(TcpTransportLayerCreator::new(so_mark))
+                }
+
+                #[cfg(wasm)]
+                {
+                    use anyhow::bail;
+                    bail!("Tcp transport layer is not supported on this platform.")
+                }
+            }
         })
     }
 }
@@ -64,12 +79,13 @@ impl TransportLayerCreatorTrait for TransportLayerCreator {
         parent_span: Span,
     ) -> Result<TransportLayerConnector> {
         Ok(match self {
-            TransportLayerCreator::Http(creater) => TransportLayerConnector::Http(creater.create(
+            #[cfg(unix)]
+            TransportLayerCreator::Tcp(creater) => TransportLayerConnector::Tcp(creater.create(
                 pool_key,
                 shutdown_guard,
                 parent_span,
             )?),
-            TransportLayerCreator::Tcp(creater) => TransportLayerConnector::Tcp(creater.create(
+            TransportLayerCreator::Http(creater) => TransportLayerConnector::Http(creater.create(
                 pool_key,
                 shutdown_guard,
                 parent_span,
@@ -81,8 +97,9 @@ impl TransportLayerCreatorTrait for TransportLayerCreator {
 impl PoolKeyExtraDataInserter for TransportLayerCreator {
     fn need_to_insert_extra_data(&self) -> bool {
         match self {
-            TransportLayerCreator::Http(creater) => creater.need_to_insert_extra_data(),
+            #[cfg(unix)]
             TransportLayerCreator::Tcp(creater) => creater.need_to_insert_extra_data(),
+            TransportLayerCreator::Http(creater) => creater.need_to_insert_extra_data(),
         }
     }
 
@@ -92,10 +109,11 @@ impl PoolKeyExtraDataInserter for TransportLayerCreator {
         target_pool_key: &mut PoolKey,
     ) -> Result<()> {
         match self {
-            TransportLayerCreator::Http(creater) => {
+            #[cfg(unix)]
+            TransportLayerCreator::Tcp(creater) => {
                 creater.insert_extra_data_to_pool_key(request_info, target_pool_key)
             }
-            TransportLayerCreator::Tcp(creater) => {
+            TransportLayerCreator::Http(creater) => {
                 creater.insert_extra_data_to_pool_key(request_info, target_pool_key)
             }
         }
@@ -104,6 +122,7 @@ impl PoolKeyExtraDataInserter for TransportLayerCreator {
 
 #[derive(Debug, Clone)]
 pub enum TransportLayerConnector {
+    #[cfg(unix)]
     Tcp(TcpTransportLayer),
     Http(HttpTransportLayer),
 }
@@ -116,6 +135,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
     fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self {
+            #[cfg(unix)]
             TransportLayerConnector::Tcp(tcp_transport_layer) => {
                 <TcpTransportLayer as tower::Service<Req>>::poll_ready(tcp_transport_layer, context)
             }
@@ -130,6 +150,7 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
     fn call(&mut self, req: Req) -> Self::Future {
         match self {
+            #[cfg(unix)]
             TransportLayerConnector::Tcp(tcp_transport_layer) => tcp_transport_layer.call(req),
             TransportLayerConnector::Http(http_transport_layer) => http_transport_layer.call(req),
         }
@@ -138,15 +159,17 @@ impl<Req> tower::Service<Req> for TransportLayerConnector {
 
 #[pin_project(project = TransportLayerStreamProj)]
 pub enum TransportLayerStream {
-    Tcp(#[pin] TcpStream),
-    Http(#[pin] H2Stream),
+    #[cfg(unix)]
+    Tcp(#[pin] tokio::net::TcpStream),
+    Http(#[pin] Box<dyn CommonStreamTrait>),
 }
 
 impl hyper_util::client::legacy::connect::Connection for TransportLayerStream {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
+            #[cfg(unix)]
             TransportLayerStream::Tcp(tcp_stream) => tcp_stream.connected(),
-            TransportLayerStream::Http(_duplex_stream) => {
+            TransportLayerStream::Http(_h2_stream) => {
                 hyper_util::client::legacy::connect::Connected::new()
             }
         }
@@ -160,6 +183,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
         match self.project() {
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_write(tcp_stream, cx, buf)
             }
@@ -174,6 +198,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         match self.project() {
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_flush(tcp_stream, cx)
             }
@@ -188,6 +213,7 @@ impl tokio::io::AsyncWrite for TransportLayerStream {
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         match self.project() {
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncWrite::poll_shutdown(tcp_stream, cx)
             }
@@ -205,6 +231,7 @@ impl tokio::io::AsyncRead for TransportLayerStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         match self.project() {
+            #[cfg(unix)]
             TransportLayerStreamProj::Tcp(tcp_stream) => {
                 tokio::io::AsyncRead::poll_read(tcp_stream, cx, buf)
             }

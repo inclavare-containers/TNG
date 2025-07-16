@@ -5,13 +5,12 @@ use std::{
 };
 
 use anyhow::{bail, Context as _, Result};
-use hyper_util::rt::TokioIo;
 use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
 use crate::tunnel::{
     ingress::core::protocol::security::pool::PoolKey,
-    utils::{http_inspector::RequestInfo, socket::tcp_connect_with_so_mark},
+    utils::{http_inspector::RequestInfo, socket::tcp_connect_with_so_mark, tokio::TokioIo},
 };
 
 use super::{
@@ -80,7 +79,7 @@ impl<Req> tower::Service<Req> for TcpTransportLayer {
         let dst = self.pool_key.get_endpoint().to_owned();
 
         let fut = async move {
-            tracing::debug!("Establish the underlying tcp connection with upstream");
+            tracing::debug!("Establishing the underlying tcp connection with upstream");
 
             let tcp_stream = tcp_connect_with_so_mark((dst.host(), dst.port()), so_mark)
                 .await

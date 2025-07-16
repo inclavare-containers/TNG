@@ -5,7 +5,6 @@ use rats_cert::{
     crypto::{AsymmetricAlgo, HashAlgo},
     tee::coco::attester::CocoAttester,
 };
-use scopeguard::defer;
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_graceful::ShutdownGuard;
@@ -139,34 +138,23 @@ impl CertManager {
         let retry_policy = RetryPolicy::fixed(Duration::from_secs(1)).with_max_retries(3);
         retry_policy
             .retry(|| async {
-                let aa_addr = aa_addr.to_owned();
-
-                let join_handle =
-                    tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
-                        Self::fetch_new_cert_blocking(&aa_addr)
-                    });
-
-                let abort_handle = join_handle.abort_handle();
-                defer! {
-                    abort_handle.abort();
-                }
-                join_handle
+                Self::fetch_new_cert_inner(&aa_addr)
                     .await
                     .map_err(anyhow::Error::from)
-                    .and_then(|r| r)
                     .context("Failed to generate new cert")
             })
             .await
     }
 
-    fn fetch_new_cert_blocking(aa_addr: &str) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    async fn fetch_new_cert_inner(aa_addr: &str) -> Result<Arc<rustls::sign::CertifiedKey>> {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
         tracing::debug!(aa_addr, timeout_sec, "Generate new cert with rats-rs");
         let coco_attester =
             CocoAttester::new_with_timeout_nano(aa_addr, timeout_sec * 1000 * 1000 * 1000)?;
         let cert = CertBuilder::new(coco_attester, HashAlgo::Sha256)
             .with_subject("CN=TNG,O=Inclavare Containers")
-            .build(AsymmetricAlgo::P256)?;
+            .build(AsymmetricAlgo::P256)
+            .await?;
 
         let der_cert = cert.cert_to_der()?;
         let privkey = cert.private_key().to_pkcs8_pem()?;
@@ -209,6 +197,7 @@ impl Drop for RefreshTask {
 
 #[cfg(test)]
 mod tests {
+    use scopeguard::defer;
     use tokio_util::sync::CancellationToken;
 
     use super::*;

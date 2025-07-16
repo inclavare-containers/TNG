@@ -6,7 +6,6 @@ use tokio_graceful::ShutdownGuard;
 use crate::tunnel::{
     attestation_result::AttestationResult,
     endpoint::TngEndpoint,
-    service_metrics::ServiceMetrics,
     utils::{self, socket::tcp_connect_with_so_mark},
 };
 
@@ -37,7 +36,6 @@ impl StreamManager for UnprotectedStreamManager {
             + std::marker::Send
             + 'b,
         _shutdown_guard: ShutdownGuard,
-        metrics: ServiceMetrics,
     ) -> Result<(
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,
@@ -48,8 +46,6 @@ impl StreamManager for UnprotectedStreamManager {
                 .with_context(|| {
                     format!("Failed to establish TCP connection with upstream '{endpoint}'")
                 })?;
-
-        let downstream = metrics.new_wrapped_stream(downstream);
 
         Ok((
             async { utils::forward::forward_stream(upstream, downstream).await },

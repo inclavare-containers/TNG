@@ -16,7 +16,6 @@ use crate::{
 };
 use anyhow::Context;
 use anyhow::{bail, Result};
-use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_graceful::ShutdownGuard;
 
@@ -24,9 +23,13 @@ use super::StreamManager;
 
 pub struct TrustedStreamManager {
     transport_layer: TransportLayer,
+
     security_layer: Arc<SecurityLayer>,
+
+    connection_reuse: bool,
+
     // A standalone tokio runtime to run tasks related to the protocol module
-    rt: TokioRuntime,
+    rt: Arc<TokioRuntime>,
 }
 
 impl TrustedStreamManager {
@@ -37,12 +40,11 @@ impl TrustedStreamManager {
                 common_args.decap_from_http.clone(),
             )?,
             security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
-            rt: TokioRuntime::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .context("Failed to create tokio runtime")?,
-            ),
+            connection_reuse: common_args.decap_from_http.is_none(),
+            #[cfg(unix)]
+            rt: TokioRuntime::new_multi_thread()?.into_shared(),
+            #[cfg(wasm)]
+            rt: TokioRuntime::wasm_main_thread().into_shared()?,
         })
     }
 }
@@ -60,57 +62,63 @@ impl StreamManager for TrustedStreamManager {
         sender: Self::Sender,
         shutdown_guard: ShutdownGuard,
     ) -> Result<()> {
-        let mut next_stream = self
+        let decode_result = self
             .transport_layer
             .decode(in_stream, shutdown_guard.clone())
-            .await?;
+            .await
+            .context("Failed to decode stream")?;
 
-        while let Some(stream) = next_stream.next().await {
-            match stream {
-                Err(e) => {
-                    tracing::error!(error=?e, "Failed to decode stream");
-                    continue;
-                }
-                Ok(DecodeResult::ContinueAsTngTraffic(stream)) => {
-                    let security_layer = self.security_layer.clone();
-                    let channel = sender.clone();
+        match decode_result {
+            DecodeResult::ContinueAsTngTraffic(stream) => {
+                let security_layer = self.security_layer.clone();
+                let channel = sender.clone();
 
-                    {
-                        // Run in the standalone tokio runtime
-                        let _guard = self.rt.handle().enter();
-                        shutdown_guard.spawn_supervised_task_fn_current_span(
-                            |shutdown_guard| async move {
-                                let (tls_stream, attestation_result) = match security_layer
-                                    .handshake(stream)
-                                    .await
-                                {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        tracing::error!(%e, "Failed to enstablish security session");
-                                        return;
-                                    }
-                                };
+                {
+                    // Run in the standalone tokio runtime
+                    let _guard = self.rt.tokio_rt_handle().enter();
+                    let rt_cloned = self.rt.clone();
+                    let connection_reuse = self.connection_reuse;
 
+                    shutdown_guard.spawn_supervised_task_fn_current_span(
+                        move |shutdown_guard| async move {
+                            let (tls_stream, attestation_result) = match security_layer
+                                .handshake(stream)
+                                .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    tracing::error!(%e, "Failed to enstablish security session");
+                                    return;
+                                }
+                            };
+
+                            if connection_reuse {
                                 WrappingLayer::unwrap_stream(
                                     tls_stream,
                                     attestation_result,
                                     channel,
                                     shutdown_guard,
-                                    tokio::runtime::Handle::current(),
+                                    rt_cloned,
                                 )
-                                .await
-                            },
-                        );
-                    }
+                                .await;
+                            } else {
+                                // Return the stream directly
+                                if let Err(e) = channel.send((
+                                    StreamType::SecuredStream(Box::new(tls_stream)),
+                                    attestation_result,
+                                )) {
+                                    tracing::error!("Failed to send stream via channel: {e:#}");
+                                }
+                            }
+                        },
+                    );
                 }
-                Ok(DecodeResult::DirectlyForward(stream)) => {
-                    if let Err(e) =
-                        sender.send((StreamType::DirectlyForwardStream(Box::new(stream)), None))
-                    {
-                        bail!(
-                            "Got a directly forward stream but failed to send via channel: {e:#}"
-                        );
-                    }
+            }
+            DecodeResult::DirectlyForward(stream) => {
+                if let Err(e) =
+                    sender.send((StreamType::DirectlyForwardStream(Box::new(stream)), None))
+                {
+                    bail!("Got a directly forward stream but failed to send via channel: {e:#}");
                 }
             }
         }

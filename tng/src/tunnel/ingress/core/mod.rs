@@ -1,2 +1,2 @@
 mod protocol;
-pub(super) mod stream_manager;
+pub mod stream_manager;

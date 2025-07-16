@@ -27,7 +27,7 @@ jobs:
       - name: Check pre-release
         run: |
           tag="${GITHUB_REF#refs/*/}"
-          echo "tag=tag"
+          echo "tag=$tag"
           if [[ ${tag} == *alpha* || ${tag} == *beta* ]]
           then
               prerelease=true
@@ -38,6 +38,10 @@ jobs:
           echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@1.75.0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-07-07
 
       - name: Build RPM package
         run: |

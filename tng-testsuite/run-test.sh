@@ -41,8 +41,8 @@ cargo llvm-cov clean --workspace
 # Run unit tests
 echo "============= Starting unit test ============="
 test_result_msgs="${test_result_msgs}\n============= Unit tests ============="
-echo "cargo llvm-cov --no-report --bins --lib -- --nocapture"
-if cargo llvm-cov --no-report --workspace --bins --lib -- --nocapture; then
+echo "cargo llvm-cov --no-report --workspace --bins --lib --exclude tng-wasm -- --nocapture"
+if cargo llvm-cov --no-report --workspace --bins --lib --exclude tng-wasm -- --nocapture; then
     test_result_msgs="${test_result_msgs}\nunit test:\tPASS"
 else
     test_result_msgs="${test_result_msgs}\nunit test:\tFAILED"
