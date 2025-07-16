@@ -1060,7 +1060,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "nanorand",
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -1752,7 +1752,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.8",
 ]
 
 [[package]]
@@ -2804,7 +2804,7 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=7c81fb9d609c307989e74edfea0f327177212347#7c81fb9d609c307989e74edfea0f327177212347"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=892a194b076e8e8878d5e494662ba31c78504993#892a194b076e8e8878d5e494662ba31c78504993"
 dependencies = [
  "anyhow",
  "as-any",
@@ -2832,7 +2832,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "signature",
- "spin",
+ "spin 0.9.8",
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "thiserror 2.0.12",
@@ -3426,6 +3426,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3734,6 +3740,7 @@ dependencies = [
  "serde_with",
  "shadow-rs",
  "socket2",
+ "spin 0.10.0",
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "tempfile",
