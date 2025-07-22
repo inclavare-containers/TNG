@@ -8,6 +8,23 @@ use crate::observability::metric::{
     stream::StreamWithCounter,
 };
 
+pub struct ServiceMetricsCreator(Arc<dyn MeterProvider + Send + Sync>);
+
+impl ServiceMetricsCreator {
+    pub fn new_creator(
+        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
+    ) -> ServiceMetricsCreator {
+        ServiceMetricsCreator(meter_provider)
+    }
+
+    pub fn new_service_metrics(
+        &self,
+        attributes: impl Into<IndexMap<String, String>>,
+    ) -> ServiceMetrics {
+        ServiceMetrics::new(self.0.clone(), attributes)
+    }
+}
+
 /// ServiceMetrics is a set of metrics for a service.
 ///
 /// This struct is free be cloned and used anywhere.
@@ -21,7 +38,7 @@ pub struct ServiceMetrics {
 }
 
 impl ServiceMetrics {
-    pub fn new(
+    pub(self) fn new(
         meter_provider: Arc<dyn MeterProvider + Send + Sync>,
         attributes: impl Into<IndexMap<String, String>>,
     ) -> Self {

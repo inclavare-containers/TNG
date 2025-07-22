@@ -1,5 +1,7 @@
+use http_body_util::combinators::BoxBody;
 use hyper_util::client::legacy::Client;
 use std::collections::hash_map::DefaultHasher;
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::{
@@ -11,7 +13,7 @@ use crate::tunnel::endpoint::TngEndpoint;
 
 use super::{RatsTlsClient, SecurityConnector};
 
-pub type HyperClientType = Client<SecurityConnector, axum::body::Body>;
+pub type HyperClientType = Client<SecurityConnector, BoxBody<bytes::Bytes, Infallible>>;
 
 pub type ClientPool = HashMap<PoolKey, RatsTlsClient>;
 

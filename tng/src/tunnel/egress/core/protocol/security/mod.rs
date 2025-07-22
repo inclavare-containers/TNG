@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use crate::{
     config::ra::RaArgs,
-    tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
+    tunnel::{
+        attestation_result::AttestationResult, stream::CommonStreamTrait,
+        utils::rustls_config::TlsConfigGenerator,
+    },
 };
 use anyhow::{Context as _, Result};
 use rustls_config::OnetimeTlsServerConfig;
@@ -32,11 +35,8 @@ impl SecurityLayer {
 
     pub async fn handshake(
         &self,
-        stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-    ) -> Result<(
-        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-        Option<AttestationResult>,
-    )> {
+        stream: impl CommonStreamTrait,
+    ) -> Result<(impl CommonStreamTrait, Option<AttestationResult>)> {
         async {
             // Prepare TLS config
             let OnetimeTlsServerConfig(tls_server_config, verifier) = self
@@ -45,27 +45,26 @@ impl SecurityLayer {
                 .await?;
 
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
-            tracing::trace!("Start to estabilish rats-tls session");
-            let tls_stream = tls_acceptor
-                .accept(stream)
-                .await
-                .context("Failed to estabilish rats-tls session")
-                .map(|v| {
-                    tracing::debug!("New rats-tls session established");
-                    v
-                })?;
+            tracing::debug!("Start to estabilish rats-tls connection");
 
-            let attestation_result = match verifier {
-                Some(verifier) => Some(
-                    verifier
-                        .get_attestation_result()
-                        .await
-                        .context("No attestation result found")?,
-                ),
-                None => None,
-            };
+            async {
+                let security_layer_stream = tls_acceptor.accept(stream).await?;
 
-            Ok((tls_stream, attestation_result))
+                let attestation_result = match verifier {
+                    Some(verifier) => Some(
+                        verifier
+                            .verity_pending_cert()
+                            .await
+                            .context("No attestation result found")?,
+                    ),
+                    None => None,
+                };
+
+                tracing::debug!("New rats-tls connection established");
+                Ok::<_, anyhow::Error>((security_layer_stream, attestation_result))
+            }
+            .await
+            .context("Failed to setup rats-tls connection")
         }
         .instrument(tracing::info_span!("security"))
         .await

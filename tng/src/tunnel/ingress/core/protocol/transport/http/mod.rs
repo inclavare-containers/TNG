@@ -4,21 +4,18 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use extra_data::HttpPoolKeyExtraData;
-use http::{Request, Uri};
-use hyper_util::rt::TokioIo;
 use path_rewrite::PathRewriteGroup;
 use tokio_graceful::ShutdownGuard;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
-    observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
-        endpoint::TngEndpoint,
-        ingress::core::protocol::security::pool::PoolKey,
-        utils::{h2_stream::H2Stream, socket::tcp_connect_with_so_mark},
+        endpoint::TngEndpoint, ingress::core::protocol::security::pool::PoolKey,
+        utils::tokio::TokioIo,
     },
 };
 
@@ -65,9 +62,12 @@ impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
 
 #[derive(Debug, Clone)]
 pub struct HttpTransportLayer {
+    #[allow(unused)]
     dst: TngEndpoint,
     extra_data: HttpPoolKeyExtraData,
+    #[allow(unused)]
     so_mark: Option<u32>,
+    #[allow(unused)]
     shutdown_guard: ShutdownGuard,
     transport_layer_span: Span,
 }
@@ -82,58 +82,98 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
     }
 
     fn call(&mut self, _: Req) -> Self::Future {
+        #[cfg(unix)]
         let so_mark = self.so_mark;
+        #[cfg(unix)]
         let dst = self.dst.clone();
-        let extra_data = self.extra_data.clone();
+        #[cfg(wasm)]
         let shutdown_guard = self.shutdown_guard.clone();
 
+        let url = format!("ws://{}{}", self.extra_data.authority, self.extra_data.path);
+
         let fut = async move {
-            tracing::debug!("Establish the underlying h2 stream with upstream");
+            tracing::debug!("Establishing the underly http stream with upstream");
 
-            // TODO: reuse the same tcp stream for all the h2 streams
-            let (recv_stream, send_stream) = async {
-                let tcp_stream =
-                    tcp_connect_with_so_mark((dst.host(), dst.port()), so_mark).await?;
-
-                let (mut sender, conn) = h2::client::handshake(tcp_stream).await?;
+            let stream = async {
+                #[cfg(unix)]
                 {
-                    shutdown_guard.spawn_supervised_task_current_span(async move {
-                        if let Err(e) = conn.await {
-                            tracing::error!(?e, "The H2 connection is broken");
-                        }
-                    });
-                }
+                    use tokio_util::compat::TokioAsyncReadCompatExt;
 
-                let req = Request::builder()
-                    .uri(
-                        Uri::builder()
-                            .scheme("http")
-                            .authority(extra_data.authority)
-                            .path_and_query(extra_data.path)
-                            .build()?,
+                    let tcp_stream = crate::tunnel::utils::socket::tcp_connect_with_so_mark(
+                        (dst.host(), dst.port()),
+                        so_mark,
                     )
-                    .method("POST")
-                    .header("tng", "{}")
-                    .body(())?;
+                    .await?;
 
-                let (response, send_stream) = sender.send_request(req, false)?;
+                    let (ws, _http_response) =
+                        async_tungstenite::client_async(&url, tcp_stream.compat())
+                            .await
+                            .with_context(|| {
+                                format!("Failed to create the websocket connection to {url}")
+                            })?;
 
-                let response = response.await?;
+                    let ws_stream = ws_stream_tungstenite::WsStream::new(ws).compat();
 
-                if response.status() != hyper::StatusCode::OK {
-                    bail!("unexpected status code: {}", response.status());
+                    Ok::<_, anyhow::Error>(ws_stream)
                 }
+                #[cfg(wasm)]
+                {
+                    let ws_stream = {
+                        use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 
-                Ok((response.into_body(), send_stream))
+                        // Since web_sys::features::gen_CloseEvent::CloseEvent is not Send
+                        // Here we have to spawn a local task to run in background, which will pipe data with duplexstream
+                        let (s1, mut s2) = tokio::io::duplex(1024);
+                        shutdown_guard.spawn_supervised_wasm_local_task_with_span(
+                            Span::current(),
+                            async move {
+                                let fut = async {
+                                    tracing::debug!("Connecting to {url}");
+
+                                    let (_ws, wsio) = ws_stream_wasm::WsMeta::connect(&url, None)
+                                        .await
+                                        .with_context(|| {
+                                            format!(
+                                            "Failed to create the websocket connection to {url}"
+                                        )
+                                        })?;
+
+                                    tracing::debug!(
+                                      state=?wsio.ready_state(),
+                                      "websocket connection to {url} created successfully"
+                                    );
+
+                                    let mut ws_stream = wsio.into_io().compat();
+
+                                    scopeguard::defer!(
+                                        tracing::debug!("Ws connection droped");
+                                    );
+
+                                    Ok::<_, anyhow::Error>(
+                                        tokio::io::copy_bidirectional(&mut ws_stream, &mut s2)
+                                            .await?,
+                                    )
+                                };
+                                if let Err(error) = fut.await {
+                                    tracing::error!(
+                                        ?error,
+                                        "Failed to read/write data from websocket"
+                                    );
+                                }
+                            },
+                        );
+                        s1
+                    };
+
+                    Ok::<_, anyhow::Error>(ws_stream)
+                }
             }
             .await
             .context("Failed to establish the underlying http connection for rats-tls")?;
 
-            Ok(TokioIo::new(TransportLayerStream::Http(H2Stream::new(
-                send_stream,
-                recv_stream,
-                Span::current(),
-            ))))
+            tracing::debug!("The underlying http connection is established");
+
+            Ok(TokioIo::new(TransportLayerStream::Http(Box::new(stream))))
         }
         .instrument(self.transport_layer_span.clone());
 

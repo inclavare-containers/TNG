@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -5,13 +7,16 @@ use axum::{
 };
 use http::{HeaderValue, Method, Request, StatusCode};
 use hyper::body::Incoming;
-use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+use hyper_util::service::TowerToHyperService;
 use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::tunnel::attestation_result::AttestationResult;
+use crate::tunnel::{
+    attestation_result::AttestationResult,
+    utils::{runtime::TokioRuntime, tokio::TokioIo},
+};
 use crate::{
     observability::trace::shutdown_guard_ext::ShutdownGuardExt as _,
     tunnel::egress::core::stream_manager::trusted::StreamType,
@@ -32,7 +37,7 @@ impl WrappingLayer {
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
         shutdown_guard: ShutdownGuard,
-        rt_handle: tokio::runtime::Handle,
+        rt: Arc<TokioRuntime>,
     ) {
         let shutdown_guard_cloned = shutdown_guard.clone();
 
@@ -65,12 +70,12 @@ impl WrappingLayer {
 
         let svc = TowerToHyperService::new(svc);
 
-        if let Err(error) = hyper::server::conn::http2::Builder::new(
-            shutdown_guard_cloned.as_hyper_executor(rt_handle),
-        )
-        .serve_connection(TokioIo::new(tls_stream), svc)
-        .instrument(span)
-        .await
+        if let Err(error) =
+            hyper::server::conn::http2::Builder::new(shutdown_guard_cloned.as_hyper_executor(rt))
+                // hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(tls_stream), svc)
+                .instrument(span)
+                .await
         {
             tracing::error!(?error, "Failed to serve connection");
         }

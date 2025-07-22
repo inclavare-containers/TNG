@@ -36,7 +36,7 @@ jobs:
       - name: Check pre-release
         run: |
           tag="${GITHUB_REF#refs/*/}"
-          echo "tag=tag"
+          echo "tag=$tag"
           if [[ ${tag} == *alpha* || ${tag} == *beta* ]]
           then
               prerelease=true
@@ -52,13 +52,20 @@ jobs:
           merge-multiple: false
       - name: compress
         run: |
+          version=${{ github.ref_name }}
+          if [[ $version == v* ]]; then
+            version=${version#v}
+          fi
+          version=${version}
+          echo "version=$version"
+
           cd artifacts
           for dir in */; do
               dirname="${dir%/}"
               if [[ $dirname == *"windows"* ]]; then
-                  (cd ${dirname} && zip -r - tng.exe) > tng-${{ github.ref_name }}.${dirname}.zip
+                  (cd ${dirname} && zip -r - tng.exe) > tng-${version}.${dirname}.zip
               else
-                  tar czvf tng-${{ github.ref_name }}.${dirname}.tar.gz -C ${dirname} tng
+                  tar czvf tng-${version}.${dirname}.tar.gz -C ${dirname} tng
               fi
           done
       - name: List Directory

@@ -1,14 +1,22 @@
 use shadow_rs::shadow;
 
 pub mod config;
+#[cfg(unix)]
 mod control_interface;
 mod observability;
+#[cfg(unix)]
 pub mod runtime;
+#[cfg(unix)]
 mod service;
+#[cfg(unix)]
 mod state;
-mod tunnel;
+pub mod tunnel;
 
 shadow!(build);
+
+pub use crate::tunnel::attestation_result::AttestationResult;
+pub use crate::tunnel::stream::CommonStreamTrait;
+pub use crate::tunnel::utils::tokio::TokioIo;
 
 #[cfg(test)]
 mod tests {

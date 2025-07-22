@@ -7,7 +7,6 @@ use auto_enums::auto_enum;
 use futures::Stream;
 use futures::StreamExt;
 use indexmap::IndexMap;
-use opentelemetry::metrics::MeterProvider;
 use tokio::sync::mpsc::Sender;
 use tokio_graceful::ShutdownGuard;
 
@@ -16,6 +15,7 @@ use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
 use super::core::stream_manager::{
@@ -91,12 +91,12 @@ impl IngressFlow {
     pub async fn new(
         ingress: impl IngressTrait + 'static,
         common_args: &CommonArgs,
-        meter_provider: Arc<dyn MeterProvider + Send + Sync>,
+        service_metrics_creator: &ServiceMetricsCreator,
     ) -> Result<Self> {
         let ingress = Box::new(ingress);
 
         let metric_attributes = ingress.metric_attributes();
-        let metrics = ServiceMetrics::new(meter_provider, metric_attributes);
+        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
 
         let transport_so_mark = ingress.transport_so_mark();
         let trusted_stream_manager =
@@ -136,14 +136,16 @@ impl IngressFlow {
                 let fut = async move {
                     tracing::debug!(%src, %dst, via_tunnel, "Acquire connection to upstream");
 
+                    // TODO: merge .new_cx() and .new_wrapped_stream()
                     let active_cx = metrics.new_cx();
+                    let stream = metrics.new_wrapped_stream(stream);
 
                     let attestation_result;
                     #[auto_enum(Future)]
                     let forward_stream_task = if !via_tunnel {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att) = unprotected_stream_manager
-                            .forward_stream(&dst, stream, shutdown_guard.clone(), metrics)
+                            .forward_stream(&dst, stream, shutdown_guard.clone())
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via unprotected tcp")
@@ -154,7 +156,7 @@ impl IngressFlow {
                     } else {
                         // Forward via trusted tunnel
                         let (forward_stream_task, att) = trusted_stream_manager
-                            .forward_stream(&dst, stream, shutdown_guard.clone(), metrics)
+                            .forward_stream(&dst, stream, shutdown_guard.clone())
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via trusted tunnel")

@@ -55,7 +55,7 @@ git submodule update --init
 这将从源码完全重新编译tng及其依赖项
 
 ```sh
-docker build -t tng:latest --target tng-release -f Dockerfile .
+docker build -t tng:latest --target release -f Dockerfile .
 ```
 
 现在我们已经得到了 `tng:latest` 的 Docker 镜像，您可以直接部署运行该镜像。
@@ -115,6 +115,15 @@ rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
 ## 示例
 
 你可以从[集成测试用例](./tests/)中获取一些示例。
+
+## 最低支持的 Rust 版本（MSRV）
+
+本项目需要两个版本的 Rust 工具链：
+
+- `1.75.0`：这是构建 TNG 二进制文件或 RPM 包（无论是从源码还是发布的源码 tar 包构建）所要求的最低支持的 Rust 版本。
+- `nightly-2025-07-07`：这是以下场景所需的 Rust 工具链：
+    - 构建 TNG 的 JavaScript SDK。详细信息请参见 [[./tng-wasm/README_zh.md](file:///root/tng/tng-wasm/README_zh.md)](./tng-wasm/README_zh.md)。
+    - 使用 `make create-tarball` 命令创建源代码 tar 包。这是因为我们的一些 crate 依赖项需要更新的 Rust 工具链才能解析。
 
 ## 贡献
 

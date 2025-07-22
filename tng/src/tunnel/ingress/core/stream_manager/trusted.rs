@@ -1,12 +1,16 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use auto_enums::auto_enum;
+use http::Uri;
 use tokio_graceful::ShutdownGuard;
-use tracing::Instrument;
+use tower::Service;
+use tracing::{Instrument, Span};
 
 use crate::tunnel::ingress::core::stream_manager::TngEndpoint;
 use crate::tunnel::utils::http_inspector::RequestInfo;
+use crate::CommonStreamTrait;
 use crate::{
     config::ingress::CommonArgs,
     tunnel::{
@@ -16,7 +20,6 @@ use crate::{
             transport::{extra_data::PoolKeyExtraDataInserter, TransportLayerCreator},
             wrapping,
         },
-        service_metrics::ServiceMetrics,
         utils::{
             self,
             http_inspector::{HttpRequestInspector, InspectionResult},
@@ -29,9 +32,12 @@ use super::StreamManager;
 
 pub struct TrustedStreamManager {
     security_layer: SecurityLayer,
+
+    connection_reuse: bool,
+
     // A standalone tokio runtime to run tasks related to the protocol module
     #[allow(unused)]
-    rt: TokioRuntime,
+    rt: Arc<TokioRuntime>,
 }
 
 impl TrustedStreamManager {
@@ -43,20 +49,19 @@ impl TrustedStreamManager {
         let transport_layer_creator =
             TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
 
-        let rt = TokioRuntime::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .context("Failed to create tokio runtime")?,
-        );
+        #[cfg(unix)]
+        let rt = TokioRuntime::new_multi_thread()?.into_shared();
+        #[cfg(wasm)]
+        let rt = TokioRuntime::wasm_main_thread()?.into_shared();
 
         Ok(Self {
             security_layer: SecurityLayer::new(
                 transport_layer_creator,
                 &common_args.ra_args,
-                rt.handle(),
+                rt.clone(),
             )
             .await?,
+            connection_reuse: common_args.encap_in_http.is_none(),
             rt,
         })
     }
@@ -77,7 +82,6 @@ impl StreamManager for TrustedStreamManager {
             + std::marker::Send
             + 'b,
         shutdown_guard: ShutdownGuard,
-        metrics: ServiceMetrics,
     ) -> Result<(
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,
@@ -119,16 +123,45 @@ impl StreamManager for TrustedStreamManager {
             }
         };
 
-        let downstream = metrics.new_wrapped_stream(downstream);
+        let (upstream, attestation_result) = if self.connection_reuse {
+            let client = self
+                .security_layer
+                .get_client(&pool_key, shutdown_guard)
+                .await?;
 
-        let client = self
-            .security_layer
-            .get_client(&pool_key, shutdown_guard)
-            .await?;
+            let (upstream, attestation_result) = wrapping::create_stream_from_hyper(&client)
+                .instrument(tracing::info_span!("wrapping"))
+                .await?;
 
-        let (upstream, attestation_result) = wrapping::create_stream_from_hyper(&client)
-            .instrument(tracing::info_span!("wrapping"))
-            .await?;
+            (
+                Box::new(upstream) as Box<dyn CommonStreamTrait>,
+                attestation_result,
+            )
+        } else {
+            let mut connector = self
+                .security_layer
+                .create_security_connector(&pool_key, shutdown_guard, Span::current())
+                .await?;
+
+            let io = connector
+                .call(
+                    // TODO: pass the real uri from argument
+                    Uri::builder()
+                        .scheme("https")
+                        .authority(format!("{}:{}", endpoint.host(), endpoint.port()))
+                        .path_and_query("/")
+                        .build()
+                        .context("Failed to build uri")?,
+                )
+                .await?;
+
+            let (upstream, attestation_result) = io.into_parts();
+
+            (
+                Box::new(upstream.into_inner()) as Box<dyn CommonStreamTrait>,
+                attestation_result,
+            )
+        };
 
         Ok((
             async { utils::forward::forward_stream(upstream, downstream).await },
