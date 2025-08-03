@@ -3,12 +3,12 @@ use async_stream::stream;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use tokio::net::TcpListener;
-use tokio_graceful::ShutdownGuard;
 
 use crate::{
     config::egress::EgressMappingArgs,
     tunnel::{
         egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::socket::SetListenerSockOpts,
+        utils::runtime::TokioRuntime,
     },
 };
 
@@ -68,7 +68,7 @@ impl EgressTrait for MappingEgress {
         None
     }
 
-    async fn accept(&self, _shutdown_guard: ShutdownGuard) -> Result<Incomming> {
+    async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 

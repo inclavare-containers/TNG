@@ -8,14 +8,13 @@ use futures::Stream;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
-use tokio_graceful::ShutdownGuard;
 
 use crate::config::ingress::CommonArgs;
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
 use super::core::stream_manager::{
@@ -29,6 +28,7 @@ pub struct IngressFlow {
     trusted_stream_manager: Arc<TrustedStreamManager>,
     unprotected_stream_manager: Arc<UnprotectedStreamManager>,
     metrics: ServiceMetrics,
+    runtime: TokioRuntime,
 }
 
 #[async_trait]
@@ -41,7 +41,7 @@ pub(super) trait IngressTrait: Sync + Send {
 
     /// Accept incomming streams. The returned stream should be a stream of incomming accepted streams.
     /// Note that this method should be called only once.
-    async fn accept(&self, shutdown_guard: ShutdownGuard) -> Result<Incomming>;
+    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming>;
 }
 
 pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
@@ -53,19 +53,53 @@ pub(super) struct AcceptedStream {
     pub via_tunnel: bool,
 }
 
+impl IngressFlow {
+    #[allow(private_bounds)]
+    pub async fn new(
+        ingress: impl IngressTrait + 'static,
+        common_args: &CommonArgs,
+        service_metrics_creator: &ServiceMetricsCreator,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
+        let ingress = Box::new(ingress);
+
+        let metric_attributes = ingress.metric_attributes();
+        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
+
+        let transport_so_mark = ingress.transport_so_mark();
+
+        let trusted_stream_manager = Arc::new(
+            TrustedStreamManager::new(common_args, transport_so_mark, {
+                // A standalone tokio runtime to run tasks related to the protocol module
+                #[cfg(unix)]
+                let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
+                #[cfg(wasm)]
+                let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
+                rt
+            })
+            .await?,
+        );
+        let unprotected_stream_manager = Arc::new(UnprotectedStreamManager::new(transport_so_mark));
+
+        Ok(Self {
+            ingress,
+            metrics,
+            trusted_stream_manager,
+            unprotected_stream_manager,
+            runtime,
+        })
+    }
+}
+
 #[async_trait]
 impl RegistedService for IngressFlow {
-    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
+    async fn serve(&self, ready: Sender<()>) -> Result<()> {
         // Prepare the stream manager
-        self.trusted_stream_manager
-            .prepare(shutdown_guard.clone())
-            .await?;
-        self.unprotected_stream_manager
-            .prepare(shutdown_guard.clone())
-            .await?;
+        self.trusted_stream_manager.prepare().await?;
+        self.unprotected_stream_manager.prepare().await?;
 
         // Accept incomming streams
-        let mut incomming = Box::into_pin(self.ingress.accept(shutdown_guard.clone()).await?);
+        let mut incomming = Box::into_pin(self.ingress.accept(self.runtime.clone()).await?);
 
         ready.send(()).await?;
 
@@ -78,7 +112,7 @@ impl RegistedService for IngressFlow {
                 }
             };
 
-            self.serve_in_async_task_no_throw_error(accepted_stream, shutdown_guard.clone())
+            self.serve_in_async_task_no_throw_error(accepted_stream, self.runtime.clone())
                 .await;
         }
 
@@ -87,35 +121,11 @@ impl RegistedService for IngressFlow {
 }
 
 impl IngressFlow {
-    #[allow(private_bounds)]
-    pub async fn new(
-        ingress: impl IngressTrait + 'static,
-        common_args: &CommonArgs,
-        service_metrics_creator: &ServiceMetricsCreator,
-    ) -> Result<Self> {
-        let ingress = Box::new(ingress);
-
-        let metric_attributes = ingress.metric_attributes();
-        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
-
-        let transport_so_mark = ingress.transport_so_mark();
-        let trusted_stream_manager =
-            Arc::new(TrustedStreamManager::new(common_args, transport_so_mark).await?);
-        let unprotected_stream_manager = Arc::new(UnprotectedStreamManager::new(transport_so_mark));
-
-        Ok(Self {
-            ingress,
-            metrics,
-            trusted_stream_manager,
-            unprotected_stream_manager,
-        })
-    }
-
     #[auto_enum]
     async fn serve_in_async_task_no_throw_error(
         &self,
         accepted_stream: AcceptedStream,
-        shutdown_guard: ShutdownGuard,
+        runtime: TokioRuntime,
     ) {
         let AcceptedStream {
             stream,
@@ -130,7 +140,7 @@ impl IngressFlow {
 
         // TODO: stop all task when downstream is already closed
 
-        shutdown_guard.spawn_supervised_task_fn_with_span(
+        runtime.spawn_supervised_task_fn_with_span(
             tracing::info_span!("serve", client=?src),
             move |shutdown_guard| async move {
                 let fut = async move {
@@ -145,7 +155,7 @@ impl IngressFlow {
                     let forward_stream_task = if !via_tunnel {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att) = unprotected_stream_manager
-                            .forward_stream(&dst, stream, shutdown_guard.clone())
+                            .forward_stream(&dst, stream)
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via unprotected tcp")
@@ -156,7 +166,7 @@ impl IngressFlow {
                     } else {
                         // Forward via trusted tunnel
                         let (forward_stream_task, att) = trusted_stream_manager
-                            .forward_stream(&dst, stream, shutdown_guard.clone())
+                            .forward_stream(&dst, stream)
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via trusted tunnel")
@@ -195,6 +205,8 @@ impl IngressFlow {
                 if let Err(e) = fut.await {
                     tracing::error!(error=?e, "Failed to forward stream");
                 }
+                // Ensure the shutdown_guard is used to prevent warning
+                drop(shutdown_guard);
             },
         );
     }

@@ -5,7 +5,6 @@ use futures::StreamExt;
 use indexmap::IndexMap;
 use socket2::SockRef;
 use tokio::net::TcpListener;
-use tokio_graceful::ShutdownGuard;
 
 use crate::{
     config::{egress::EgressNetfilterArgs, Endpoint},
@@ -15,6 +14,7 @@ use crate::{
         utils::{
             iptables::IptablesExecutor,
             socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT},
+            runtime::TokioRuntime,
         },
     },
 };
@@ -71,7 +71,7 @@ impl EgressTrait for NetfilterEgress {
         Some(self.so_mark)
     }
 
-    async fn accept(&self, _shutdown_guard: ShutdownGuard) -> Result<Incomming> {
+    async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
         // We have to listen on 0.0.0.0 to capture all traffic been redirected from any interface.
         // See REDIRECT section on https://ipset.netfilter.org/iptables-extensions.man.html
         let listen_addr = format!("0.0.0.0:{}", self.listen_port);

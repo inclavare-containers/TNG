@@ -4,7 +4,7 @@ use crate::{
     config::egress::{DecapFromHttp, DirectForwardRules},
     tunnel::{
         stream::CommonStreamTrait,
-        utils::http_inspector::{HttpRequestInspector, InspectionResult},
+        utils::{http_inspector::{HttpRequestInspector, InspectionResult}, runtime::TokioRuntime},
     },
 };
 
@@ -13,7 +13,6 @@ use direct_forward::DirectForwardTrafficDetector;
 use pin_project::pin_project;
 use std::task::{Context, Poll};
 use timeout::FirstByteReadTimeoutStream;
-use tokio_graceful::ShutdownGuard;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::Instrument;
@@ -79,7 +78,7 @@ impl TransportLayer {
     pub async fn decode(
         &self,
         in_stream: Box<dyn CommonStreamTrait>,
-        _shutdown_guard: ShutdownGuard,
+        _runtime: TokioRuntime,
     ) -> Result<DecodeResult> {
         let span = tracing::info_span!("transport", type={match self.typ {
             TransportLayerType::Tcp => "tcp",

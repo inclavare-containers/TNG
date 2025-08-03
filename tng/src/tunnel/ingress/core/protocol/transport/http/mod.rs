@@ -7,15 +7,15 @@ use std::{
 use anyhow::{Context as _, Result};
 use extra_data::HttpPoolKeyExtraData;
 use path_rewrite::PathRewriteGroup;
-use tokio_graceful::ShutdownGuard;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ingress::EncapInHttp,
     tunnel::{
-        endpoint::TngEndpoint, ingress::core::protocol::security::pool::PoolKey,
-        utils::tokio::TokioIo,
+        endpoint::TngEndpoint,
+        ingress::core::protocol::security::pool::PoolKey,
+        utils::{runtime::TokioRuntime, tokio::TokioIo},
     },
 };
 
@@ -27,13 +27,19 @@ mod path_rewrite;
 pub struct HttpTransportLayerCreator {
     so_mark: Option<u32>,
     path_rewrite_group: PathRewriteGroup,
+    runtime: TokioRuntime,
 }
 
 impl HttpTransportLayerCreator {
-    pub fn new(so_mark: Option<u32>, encap_in_http: EncapInHttp) -> Result<Self> {
+    pub fn new(
+        so_mark: Option<u32>,
+        encap_in_http: EncapInHttp,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
         Ok(Self {
             so_mark,
             path_rewrite_group: PathRewriteGroup::new(encap_in_http.path_rewrites)?,
+            runtime,
         })
     }
 }
@@ -41,12 +47,7 @@ impl HttpTransportLayerCreator {
 impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
     type TransportLayerConnector = HttpTransportLayer;
 
-    fn create(
-        &self,
-        pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
-        parent_span: Span,
-    ) -> Result<HttpTransportLayer> {
+    fn create(&self, pool_key: &PoolKey, parent_span: Span) -> Result<HttpTransportLayer> {
         Ok(HttpTransportLayer {
             dst: pool_key.get_endpoint().clone(),
             extra_data: pool_key
@@ -54,7 +55,7 @@ impl TransportLayerCreatorTrait for HttpTransportLayerCreator {
                 .context("Failed to get the extra data from the pool key")?
                 .clone(),
             so_mark: self.so_mark,
-            shutdown_guard,
+            runtime: self.runtime.clone(),
             transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "h2"),
         })
     }
@@ -68,7 +69,7 @@ pub struct HttpTransportLayer {
     #[allow(unused)]
     so_mark: Option<u32>,
     #[allow(unused)]
-    shutdown_guard: ShutdownGuard,
+    runtime: TokioRuntime,
     transport_layer_span: Span,
 }
 
@@ -87,7 +88,7 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
         #[cfg(unix)]
         let dst = self.dst.clone();
         #[cfg(wasm)]
-        let shutdown_guard = self.shutdown_guard.clone();
+        let runtime = self.runtime.clone();
 
         let url = format!("ws://{}{}", self.extra_data.authority, self.extra_data.path);
 
@@ -119,12 +120,10 @@ impl<Req> tower::Service<Req> for HttpTransportLayer {
                 #[cfg(wasm)]
                 {
                     let ws_stream = {
-                        use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
-
                         // Since web_sys::features::gen_CloseEvent::CloseEvent is not Send
                         // Here we have to spawn a local task to run in background, which will pipe data with duplexstream
                         let (s1, mut s2) = tokio::io::duplex(1024);
-                        shutdown_guard.spawn_supervised_wasm_local_task_with_span(
+                        runtime.spawn_supervised_wasm_local_task_with_span(
                             Span::current(),
                             async move {
                                 let fut = async {

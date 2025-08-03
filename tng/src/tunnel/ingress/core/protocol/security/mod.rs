@@ -21,13 +21,11 @@ use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls::pki_types::ServerName;
 use rustls_config::OnetimeTlsClientConfig;
 use tokio::sync::RwLock;
-use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
 
 use crate::{
     config::ra::RaArgs,
-    observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
         ingress::core::protocol::transport::TransportLayerStream, utils::runtime::TokioRuntime,
@@ -50,14 +48,14 @@ pub struct SecurityLayer {
     pool: RwLock<ClientPool>,
     transport_layer_creator: TransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
-    rt: Arc<TokioRuntime>,
+    runtime: TokioRuntime,
 }
 
 impl SecurityLayer {
     pub async fn new(
         transport_layer_creator: TransportLayerCreator,
         ra_args: &RaArgs,
-        rt: Arc<TokioRuntime>,
+        runtime: TokioRuntime,
     ) -> Result<Self> {
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
@@ -66,23 +64,23 @@ impl SecurityLayer {
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
-            rt,
+            runtime,
         })
     }
 
-    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        self.tls_config_generator.prepare(shutdown_guard).await
+    pub async fn prepare(&self) -> Result<()> {
+        self.tls_config_generator
+            .prepare(self.runtime.clone())
+            .await
     }
 
     pub async fn create_security_connector(
         &self,
         pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<SecurityConnector> {
         let transport_layer_connector =
-            self.transport_layer_creator
-                .create(pool_key, shutdown_guard, parent_span)?;
+            self.transport_layer_creator.create(pool_key, parent_span)?;
 
         Ok(SecurityConnector {
             tls_config_generator: self.tls_config_generator.clone(),
@@ -91,12 +89,8 @@ impl SecurityLayer {
         })
     }
 
-    pub async fn get_client(
-        &self,
-        pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<RatsTlsClient> {
-        self.get_client_with_span(pool_key, shutdown_guard, Span::current())
+    pub async fn get_client(&self, pool_key: &PoolKey) -> Result<RatsTlsClient> {
+        self.get_client_with_span(pool_key, Span::current())
             .instrument(tracing::info_span!(
                 "security",
                 session_id = tracing::field::Empty
@@ -107,7 +101,6 @@ impl SecurityLayer {
     async fn get_client_with_span(
         &self,
         pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<RatsTlsClient> {
         // Try to get the client from pool
@@ -142,20 +135,13 @@ impl SecurityLayer {
 
                         // Prepare the security connector
                         let connector = self
-                            .create_security_connector(
-                                pool_key,
-                                shutdown_guard.clone(),
-                                parent_span,
-                            )
+                            .create_security_connector(pool_key, parent_span)
                             .await?;
 
                         // Build the hyper client from the security connector.
                         let client = RatsTlsClient {
                             id,
-                            hyper: Client::builder(
-                                shutdown_guard.as_hyper_executor(self.rt.clone()),
-                            )
-                            .build(connector),
+                            hyper: Client::builder(self.runtime.clone()).build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
                         client

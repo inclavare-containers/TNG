@@ -1,10 +1,8 @@
 use std::future::Future;
-use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use auto_enums::auto_enum;
 use http::Uri;
-use tokio_graceful::ShutdownGuard;
 use tower::Service;
 use tracing::{Instrument, Span};
 
@@ -35,41 +33,42 @@ pub struct TrustedStreamManager {
 
     connection_reuse: bool,
 
-    // A standalone tokio runtime to run tasks related to the protocol module
     #[allow(unused)]
-    rt: Arc<TokioRuntime>,
+    runtime: TokioRuntime,
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs, transport_so_mark: Option<u32>) -> Result<Self> {
+    pub async fn new(
+        common_args: &CommonArgs,
+        transport_so_mark: Option<u32>,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
         if common_args.web_page_inject {
             bail!("The `web_page_inject` field is not supported")
         }
 
-        let transport_layer_creator =
-            TransportLayerCreator::new(transport_so_mark, common_args.encap_in_http.clone())?;
-
-        #[cfg(unix)]
-        let rt = TokioRuntime::new_multi_thread()?.into_shared();
-        #[cfg(wasm)]
-        let rt = TokioRuntime::wasm_main_thread()?.into_shared();
+        let transport_layer_creator = TransportLayerCreator::new(
+            transport_so_mark,
+            common_args.encap_in_http.clone(),
+            runtime.clone(),
+        )?;
 
         Ok(Self {
             security_layer: SecurityLayer::new(
                 transport_layer_creator,
                 &common_args.ra_args,
-                rt.clone(),
+                runtime.clone(),
             )
             .await?,
             connection_reuse: common_args.encap_in_http.is_none(),
-            rt,
+            runtime,
         })
     }
 }
 
 impl StreamManager for TrustedStreamManager {
-    async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        self.security_layer.prepare(shutdown_guard).await
+    async fn prepare(&self) -> Result<()> {
+        self.security_layer.prepare().await
     }
 
     #[auto_enum]
@@ -81,7 +80,6 @@ impl StreamManager for TrustedStreamManager {
             + std::marker::Unpin
             + std::marker::Send
             + 'b,
-        shutdown_guard: ShutdownGuard,
     ) -> Result<(
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,
@@ -124,10 +122,7 @@ impl StreamManager for TrustedStreamManager {
         };
 
         let (upstream, attestation_result) = if self.connection_reuse {
-            let client = self
-                .security_layer
-                .get_client(&pool_key, shutdown_guard)
-                .await?;
+            let client = self.security_layer.get_client(&pool_key).await?;
 
             let (upstream, attestation_result) = wrapping::create_stream_from_hyper(&client)
                 .instrument(tracing::info_span!("wrapping"))
@@ -140,7 +135,7 @@ impl StreamManager for TrustedStreamManager {
         } else {
             let mut connector = self
                 .security_layer
-                .create_security_connector(&pool_key, shutdown_guard, Span::current())
+                .create_security_connector(&pool_key, Span::current())
                 .await?;
 
             let io = connector

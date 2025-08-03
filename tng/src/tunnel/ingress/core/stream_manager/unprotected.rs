@@ -1,7 +1,6 @@
 use std::future::Future;
 
 use anyhow::{Context as _, Result};
-use tokio_graceful::ShutdownGuard;
 
 use crate::tunnel::{
     attestation_result::AttestationResult,
@@ -22,7 +21,7 @@ impl UnprotectedStreamManager {
 }
 
 impl StreamManager for UnprotectedStreamManager {
-    async fn prepare(&self, _shutdown_guard: ShutdownGuard) -> Result<()> {
+    async fn prepare(&self) -> Result<()> {
         /* Nothing */
         Ok(())
     }
@@ -35,7 +34,6 @@ impl StreamManager for UnprotectedStreamManager {
             + std::marker::Unpin
             + std::marker::Send
             + 'b,
-        _shutdown_guard: ShutdownGuard,
     ) -> Result<(
         impl Future<Output = Result<()>> + std::marker::Send + 'b,
         Option<AttestationResult>,

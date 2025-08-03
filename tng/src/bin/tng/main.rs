@@ -89,7 +89,7 @@ async fn main() {
 
                 TngRuntime::from_config_with_reload_handle(config, &reload_handle)
                     .await?
-                    .serve_forever()
+                    .serve()
                     .await?;
 
                 tracing::info!("Gracefully exit now");

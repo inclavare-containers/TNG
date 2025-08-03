@@ -7,11 +7,10 @@ use rats_cert::{
 };
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
-use tokio_graceful::ShutdownGuard;
 
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::{
-    config::ra::AttestArgs, observability::trace::shutdown_guard_ext::SupervisedTaskResult,
+    config::ra::AttestArgs,
+    tunnel::utils::runtime::{supervised_task::SupervisedTaskResult, TokioRuntime},
 };
 
 const CERT_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
@@ -77,10 +76,7 @@ impl CertManager {
         })
     }
 
-    pub async fn launch_refresh_task_if_required(
-        &self,
-        shutdown_guard: ShutdownGuard,
-    ) -> Result<()> {
+    pub async fn launch_refresh_task_if_required(&self, runtime: TokioRuntime) -> Result<()> {
         match &self.strategy {
             RefreshStrategy::Periodically {
                 interval,
@@ -96,7 +92,7 @@ impl CertManager {
                 let aa_addr = self.aa_addr.clone();
                 let latest_cert = latest_cert.clone();
 
-                let join_handle = shutdown_guard.spawn_supervised_task_current_span(async move {
+                let join_handle = runtime.spawn_supervised_task_current_span(async move {
                     let fut = async {
                         loop {
                             // Update certs in loop
@@ -239,7 +235,7 @@ mod tests {
         let cancel_clone = cancel.clone();
         let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
         cert_manager
-            .launch_refresh_task_if_required(shutdown.guard())
+            .launch_refresh_task_if_required(TokioRuntime::current(shutdown.guard())?)
             .await?;
 
         match &mut cert_manager.strategy {
@@ -301,7 +297,7 @@ mod tests {
         let cancel_clone = cancel.clone();
         let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
         cert_manager
-            .launch_refresh_task_if_required(shutdown.guard())
+            .launch_refresh_task_if_required(TokioRuntime::current(shutdown.guard())?)
             .await?;
 
         match &mut cert_manager.strategy {

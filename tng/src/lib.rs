@@ -16,6 +16,7 @@ shadow!(build);
 
 pub use crate::tunnel::attestation_result::AttestationResult;
 pub use crate::tunnel::stream::CommonStreamTrait;
+pub use crate::tunnel::utils::runtime::TokioRuntime;
 pub use crate::tunnel::utils::tokio::TokioIo;
 
 #[cfg(test)]
@@ -26,7 +27,6 @@ mod tests {
     use scopeguard::defer;
     use serde_json::json;
     use tokio::select;
-    use tokio_util::sync::CancellationToken;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
     use crate::{
@@ -90,21 +90,17 @@ mod tests {
             }
         ))?;
 
-        let cancel_token = CancellationToken::new();
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
 
-        let cancel_token_clone = cancel_token.clone();
-        let join_handle = tokio::task::spawn(async move {
-            TngRuntime::from_config(config)
-                .await?
-                .serve_with_cancel(cancel_token_clone, ready_sender)
-                .await
-        });
+        let tng_runtime = TngRuntime::from_config(config).await?;
+        let canceller = tng_runtime.canceller();
+
+        let join_handle =
+            tokio::task::spawn(async move { tng_runtime.serve_with_ready(ready_sender).await });
 
         ready_receiver.await?;
         // tng is ready now, so we cancel it
-
-        cancel_token.cancel();
+        canceller.cancel();
 
         select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
@@ -120,7 +116,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-    async fn test_exit_on_envoy_error() -> Result<()> {
+    async fn test_exit_on_config_error() -> Result<()> {
         let config: TngConfig = serde_json::from_value(json!(
             {
                 "add_ingress": [
@@ -142,16 +138,55 @@ mod tests {
             }
         ))?;
 
-        let cancel_token = CancellationToken::new();
+        assert!(TngRuntime::from_config(config).await.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_exit_on_serve_error() -> Result<()> {
+        let port = portpicker::pick_unused_port().unwrap();
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": port
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": portpicker::pick_unused_port().unwrap()
+                            }
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    },
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": port
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": portpicker::pick_unused_port().unwrap()
+                            }
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+        ))?;
+
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
 
-        let cancel_token_clone = cancel_token.clone();
-        let join_handle = tokio::task::spawn(async move {
-            TngRuntime::from_config(config)
-                .await?
-                .serve_with_cancel(cancel_token_clone, ready_sender)
-                .await
-        });
+        let tng_runtime = TngRuntime::from_config(config).await?;
+        let join_handle =
+            tokio::task::spawn(async move { tng_runtime.serve_with_ready(ready_sender).await });
 
         select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {

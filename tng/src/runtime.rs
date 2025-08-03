@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::observability::metric::simple_exporter::noop::NoopMeterProvider;
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::service::RegistedService;
 use crate::state::TngState;
 use crate::tunnel::egress::flow::EgressFlow;
@@ -10,6 +9,7 @@ use crate::tunnel::ingress::flow::IngressFlow;
 use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
     control_interface::ControlInterface,
@@ -19,7 +19,7 @@ use anyhow::{bail, Context as _, Result};
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::trace::TracerProvider;
 use scopeguard::defer;
-use tokio_graceful::ShutdownGuard;
+use tokio_graceful::Shutdown;
 use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
@@ -27,6 +27,10 @@ pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
     state: Arc<TngState>,
     meter_provider: Arc<dyn MeterProvider + Send + Sync>,
+    shutdown: Shutdown,
+    // This is a cancel token which can be called from the caller to cancel the task. Note that this funnction will not call the cancel() function on this.
+    canceller: CancellationToken,
+    runtime: TokioRuntime,
 }
 
 pub type TracingReloadHandle = tracing_subscriber::reload::Handle<
@@ -55,6 +59,25 @@ impl TngRuntime {
             tng_config.admin_bind = None;
         }
 
+        let canceller = CancellationToken::new();
+
+        // Prepare for graceful shutdown
+        let shutdown = {
+            let canceller = canceller.clone();
+            tokio_graceful::Shutdown::builder()
+                .with_signal(async move {
+                    tokio::select! {
+                        _ = canceller.cancelled() => {}
+                        _ = tokio_graceful::default_signal() => {}
+                    }
+                })
+                .with_overwrite_fn(tokio::signal::ctrl_c)
+                .build()
+        };
+
+        // Create TokioRuntime with the shutdown guard with currently running tokio runtime.
+        let runtime = crate::tunnel::utils::runtime::TokioRuntime::current(shutdown.guard())?;
+
         let meter_provider =
             Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
 
@@ -76,6 +99,7 @@ impl TngRuntime {
                                 MappingIngress::new(id, mapping_args).await?,
                                 &add_ingress.common,
                                 &service_metrics_creator,
+                                runtime.clone(),
                             )
                             .await?,
                         ),
@@ -89,6 +113,7 @@ impl TngRuntime {
                                 HttpProxyIngress::new(id, http_proxy_args).await?,
                                 &add_ingress.common,
                                 &service_metrics_creator,
+                                runtime.clone(),
                             )
                             .await?,
                         ),
@@ -110,6 +135,7 @@ impl TngRuntime {
                                     NetfilterIngress::new(id, netfilter_args).await?,
                                     &add_ingress.common,
                                     &service_metrics_creator,
+                                    runtime.clone(),
                                 )
                                 .await?,
                             ),
@@ -124,6 +150,7 @@ impl TngRuntime {
                                 Socks5Ingress::new(id, socks5_args).await?,
                                 &add_ingress.common,
                                 &service_metrics_creator,
+                                runtime.clone(),
                             )
                             .await?,
                         ),
@@ -143,6 +170,7 @@ impl TngRuntime {
                                 MappingEgress::new(id, mapping_args).await?,
                                 &add_egress.common,
                                 &service_metrics_creator,
+                                runtime.clone(),
                             )
                             .await?,
                         ),
@@ -164,6 +192,7 @@ impl TngRuntime {
                                     NetfilterEgress::new(id, netfilter_args).await?,
                                     &add_egress.common,
                                     &service_metrics_creator,
+                                    runtime.clone(),
                                 )
                                 .await?,
                             ),
@@ -178,7 +207,7 @@ impl TngRuntime {
 
         // Launch Control Interface
         if let Some(args) = tng_config.control_interface {
-            let control_interface = ControlInterface::new(args, state.clone())
+            let control_interface = ControlInterface::new(args, state.clone(), runtime.clone())
                 .await
                 .context("Failed to init control interface")?;
             services.push((
@@ -191,6 +220,9 @@ impl TngRuntime {
             services,
             state,
             meter_provider,
+            shutdown,
+            canceller,
+            runtime,
         })
     }
 
@@ -198,45 +230,28 @@ impl TngRuntime {
         Arc::clone(&self.state)
     }
 
-    pub async fn serve_forever(self) -> Result<()> {
-        self.serve_with_cancel(CancellationToken::new(), tokio::sync::oneshot::channel().0)
+    pub fn canceller(&self) -> CancellationToken {
+        self.canceller.clone()
+    }
+
+    pub async fn serve(self) -> Result<()> {
+        self.serve_with_ready(tokio::sync::oneshot::channel().0)
             .await
     }
 
-    pub async fn serve_with_cancel(
-        self,
-        cancel_by_caller: CancellationToken, // This is a canell token which can be called from the caller to cancel the task. Note that this funnction will not call the cancel() function on this.
-        ready: tokio::sync::oneshot::Sender<()>,
-    ) -> Result<()> {
-        // Start native part
+    pub async fn serve_with_ready(mut self, ready: tokio::sync::oneshot::Sender<()>) -> Result<()> {
         tracing::info!("Starting tng instance now");
 
-        let cancel_before_func_return = CancellationToken::new();
-        let for_cancel_safity = cancel_before_func_return.clone();
+        let for_cancel_safity = self.canceller.clone();
         defer! {
             // Cancel-Safity: exit tng in case of the future of this function is dropped
             for_cancel_safity.cancel();
         }
 
-        // Prepare for graceful shutdown
-        let shutdown = {
-            let cancel_before_func_return = cancel_before_func_return.clone();
-            tokio_graceful::Shutdown::builder()
-                .with_signal(async move {
-                    tokio::select! {
-                        _ = cancel_by_caller.cancelled() => {}
-                        _ = cancel_before_func_return.cancelled() => {}
-                        _ = tokio_graceful::default_signal() => {}
-                    }
-                })
-                .with_overwrite_fn(tokio::signal::ctrl_c)
-                .build()
-        };
-
         // Watch the ready signal from the tng runtime state object.
         {
             let mut receiver = self.state().ready.0.subscribe();
-            shutdown.guard().spawn_supervised_task(async move {
+            self.runtime.spawn_supervised_task(async move {
                 loop {
                     let _ = receiver.changed().await; // Ignore any error
                     if *receiver.borrow_and_update() {
@@ -247,18 +262,6 @@ impl TngRuntime {
             });
         }
 
-        // Wait for the runtime to finish serving.
-        self.serve(shutdown.guard()).await?;
-        // Trigger the shutdown guard to gracefully shutdown all the tokio tasks.
-        cancel_before_func_return.cancel();
-        // Wait for the shutdown guard to complete.
-        shutdown.shutdown().await;
-
-        tracing::debug!("The instance is shutdown complete");
-        Ok(())
-    }
-
-    async fn serve(mut self, shutdown_guard: ShutdownGuard) -> Result<()> {
         // Setup all services
         let service_count = self.services.len();
         tracing::info!("Starting all {service_count} services");
@@ -270,13 +273,15 @@ impl TngRuntime {
             for (service, span) in self.services.drain(..) {
                 let ready_sender = ready_sender.clone();
                 let error_sender = error_sender.clone();
-                shutdown_guard.spawn_supervised_task_fn_with_span(
+                self.runtime.spawn_supervised_task_fn_with_span(
                     span,
-                    |shutdown_guard| async move {
-                        if let Err(e) = service.serve(shutdown_guard, ready_sender).await {
+                    move |shutdown_guard| async move {
+                        if let Err(e) = service.serve(ready_sender).await {
                             tracing::error!(error=?e, "service failed");
                             let _ = error_sender.send(e).await;
                         }
+                        // Ensure the shutdown_guard is used to prevent warning
+                        drop(shutdown_guard);
                     },
                 );
             }
@@ -306,11 +311,11 @@ impl TngRuntime {
                 // Now waiting for exiting signal
                 tokio::select! {
                     maybe_err = error_receiver.recv() => {maybe_err}
-                    _ = shutdown_guard.cancelled() => None
+                    _ = self.runtime.shutdown_guard().cancelled() => None
                 }
             }
             maybe_err = error_receiver.recv() => {maybe_err}
-            _ = shutdown_guard.cancelled() => None
+            _ = self.runtime.shutdown_guard().cancelled() => None
         };
 
         if let Some(_e) = maybe_err {
@@ -319,6 +324,16 @@ impl TngRuntime {
             tracing::info!("Now shutdown the instance gracefully");
         }
 
+        // Trigger the shutdown guard to gracefully shutdown all the tokio tasks.
+        self.canceller.cancel();
+
+        // Wait for the shutdown guard to complete.
+        {
+            drop(self.runtime); // Drop the runtime to release the shutdown_guard hold by the runtime
+            self.shutdown.shutdown().await;
+        }
+
+        tracing::debug!("The instance is shutdown complete");
         Ok(())
     }
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::config::ra::{RaArgs, VerifyArgs};
+use crate::tunnel::utils::runtime::TokioRuntime;
 use anyhow::{bail, Context as _, Result};
-use tokio_graceful::ShutdownGuard;
 
 use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
 
@@ -92,17 +92,17 @@ impl TlsConfigGenerator {
         })
     }
 
-    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
+    pub async fn prepare(&self, runtime: TokioRuntime) -> Result<()> {
         match &self {
             #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager)
             | TlsConfigGenerator::AttestAndVerify(cert_manager, _) => {
                 cert_manager
-                    .launch_refresh_task_if_required(shutdown_guard)
+                    .launch_refresh_task_if_required(runtime)
                     .await?
             }
             _ => {
-                let _ = shutdown_guard;
+                let _ = runtime;
                 /* Nothing */
             }
         }

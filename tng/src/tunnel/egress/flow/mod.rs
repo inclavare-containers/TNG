@@ -8,10 +8,8 @@ use futures::Stream;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
-use tokio_graceful::ShutdownGuard;
 
 use crate::config::egress::CommonArgs;
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt as _;
 use crate::tunnel::access_log::AccessLog;
 use crate::tunnel::egress::core::stream_manager::trusted::StreamType;
 use crate::tunnel::service_metrics::ServiceMetrics;
@@ -22,11 +20,13 @@ use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
 use super::core::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 use crate::tunnel::endpoint::TngEndpoint;
+use crate::tunnel::utils::runtime::TokioRuntime;
 
 pub struct EgressFlow {
     egress: Box<dyn EgressTrait>,
     trusted_stream_manager: Arc<TrustedStreamManager>,
     metrics: ServiceMetrics,
+    runtime: TokioRuntime,
 }
 
 #[async_trait]
@@ -39,7 +39,7 @@ pub(super) trait EgressTrait: Sync + Send {
 
     /// Accept incomming streams. The returned stream should be a stream of incomming accepted streams.
     /// Note that this method should be called only once.
-    async fn accept(&self, shutdown_guard: ShutdownGuard) -> Result<Incomming>;
+    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming>;
 }
 
 pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
@@ -50,16 +50,48 @@ pub(super) struct AcceptedStream {
     pub dst: TngEndpoint,
 }
 
+impl EgressFlow {
+    #[allow(private_bounds)]
+    pub async fn new(
+        egress: impl EgressTrait + 'static,
+        common_args: &CommonArgs,
+        service_metrics_creator: &ServiceMetricsCreator,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
+        let egress = Box::new(egress);
+
+        let metric_attributes = egress.metric_attributes();
+        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
+
+        let trusted_stream_manager = Arc::new(
+            TrustedStreamManager::new(common_args, {
+                // A standalone tokio runtime to run tasks related to the protocol module
+                #[cfg(unix)]
+                let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
+                #[cfg(wasm)]
+                let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
+                rt
+            })
+            .await?,
+        );
+
+        Ok(Self {
+            egress,
+            metrics,
+            trusted_stream_manager,
+            runtime,
+        })
+    }
+}
+
 #[async_trait]
 impl RegistedService for EgressFlow {
-    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()> {
+    async fn serve(&self, ready: Sender<()>) -> Result<()> {
         // Prepare the stream manager
-        self.trusted_stream_manager
-            .prepare(shutdown_guard.clone())
-            .await?;
+        self.trusted_stream_manager.prepare().await?;
 
         // Accept incomming streams
-        let mut incomming = Box::into_pin(self.egress.accept(shutdown_guard.clone()).await?);
+        let mut incomming = Box::into_pin(self.egress.accept(self.runtime.clone()).await?);
 
         ready.send(()).await?;
 
@@ -77,7 +109,7 @@ impl RegistedService for EgressFlow {
             self.serve_in_async_task_no_throw_error(
                 accepted_stream,
                 transport_so_mark,
-                shutdown_guard.clone(),
+                self.runtime.clone(),
             )
             .await;
         }
@@ -87,32 +119,12 @@ impl RegistedService for EgressFlow {
 }
 
 impl EgressFlow {
-    #[allow(private_bounds)]
-    pub async fn new(
-        egress: impl EgressTrait + 'static,
-        common_args: &CommonArgs,
-        service_metrics_creator: &ServiceMetricsCreator,
-    ) -> Result<Self> {
-        let egress = Box::new(egress);
-
-        let metric_attributes = egress.metric_attributes();
-        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
-
-        let trusted_stream_manager = Arc::new(TrustedStreamManager::new(common_args).await?);
-
-        Ok(Self {
-            egress,
-            metrics,
-            trusted_stream_manager,
-        })
-    }
-
     #[auto_enum]
     async fn serve_in_async_task_no_throw_error(
         &self,
         accepted_stream: AcceptedStream,
         transport_so_mark: Option<u32>,
-        shutdown_guard: ShutdownGuard,
+        runtime: TokioRuntime,
     ) {
         let AcceptedStream { stream, src, dst } = accepted_stream;
 
@@ -125,30 +137,30 @@ impl EgressFlow {
 
         let span = tracing::info_span!("serve", client=?src);
 
-        shutdown_guard.spawn_supervised_task_fn_with_span(span.clone(), move |shutdown_guard| {
+        runtime.spawn_supervised_task_fn_with_span(span.clone(), move |shutdown_guard| {
             async move {
                 tracing::debug!("Start serving new connection from client");
 
                 // Consume streams come from downstream
-                match trusted_stream_manager
-                    .consume_stream(stream, sender, shutdown_guard)
-                    .await
-                {
+                match trusted_stream_manager.consume_stream(stream, sender).await {
                     Ok(()) => {}
                     Err(e) => {
                         tracing::error!(error=?e, "Failed to consume stream from client");
                     }
                 }
+                // Ensure the shutdown_guard is used to prevent warning
+                drop(shutdown_guard);
             }
         });
 
-        shutdown_guard.spawn_supervised_task_fn_with_span(span, move |shutdown_guard| {
+        let runtime_cloned2 = runtime.clone();
+        runtime.spawn_supervised_task_fn_with_span(span, move |shutdown_guard| {
             async move {
                 while let Some((stream_type, attestation_result)) = receiver.recv().await {
                     let metrics = metrics.clone();
 
                     // Spawn a task to handle the connection
-                    shutdown_guard.spawn_supervised_task_current_span({
+                    runtime_cloned2.spawn_supervised_task_current_span({
                         let dst = dst.clone();
 
                         async move {
@@ -187,6 +199,8 @@ impl EgressFlow {
                         }
                     });
                 }
+                // Ensure the shutdown_guard is used to prevent warning
+                drop(shutdown_guard);
             }
         });
     }

@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::{bail, Context as _, Result};
-use tokio_graceful::ShutdownGuard;
 use tracing::{Instrument, Span};
 
 use crate::tunnel::{
@@ -30,12 +29,7 @@ impl TcpTransportLayerCreator {
 impl TransportLayerCreatorTrait for TcpTransportLayerCreator {
     type TransportLayerConnector = TcpTransportLayer;
 
-    fn create(
-        &self,
-        pool_key: &PoolKey,
-        _shutdown_guard: ShutdownGuard,
-        parent_span: Span,
-    ) -> Result<TcpTransportLayer> {
+    fn create(&self, pool_key: &PoolKey, parent_span: Span) -> Result<TcpTransportLayer> {
         Ok(TcpTransportLayer {
             pool_key: pool_key.clone(),
             so_mark: self.so_mark,

@@ -17,13 +17,11 @@ use hyper_util::service::TowerToHyperService;
 use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
 use crate::config::ingress::IngressHttpProxyArgs;
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
@@ -122,7 +120,7 @@ impl RequestHelper {
     pub async fn handle(
         self,
         stream_router: Arc<StreamRouter>,
-        shutdown_guard: ShutdownGuard,
+        runtime: TokioRuntime,
         peer_addr: SocketAddr,
         sender: UnboundedSender<AcceptedStream>,
     ) -> RouteResult {
@@ -140,7 +138,7 @@ impl RequestHelper {
             // Spawn a background task to handle the upgraded stream.
             let upgrade_span = tracing::info_span!("http-connect-upgrade");
 
-            shutdown_guard.spawn_supervised_task_with_span(upgrade_span.clone(), async move {
+            runtime.spawn_supervised_task_with_span(upgrade_span.clone(), async move {
                 let fut = async {
                     let upgraded = hyper::upgrade::on(self.req)
                         .await
@@ -194,7 +192,7 @@ impl RequestHelper {
                             .context("Failed during http handshake with upstream")?;
 
                     let http_conn_span = tracing::info_span!("http_conn");
-                    shutdown_guard.spawn_supervised_task_with_span(http_conn_span, async move {
+                    runtime.spawn_supervised_task_with_span(http_conn_span, async move {
                         if let Err(e) = conn.await {
                             tracing::error!(?e, "The HTTP connection with upstream is broken");
                         }
@@ -289,7 +287,7 @@ impl IngressTrait for HttpProxyIngress {
         None
     }
 
-    async fn accept(&self, shutdown_guard: ShutdownGuard) -> Result<Incomming> {
+    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -303,7 +301,7 @@ impl IngressTrait for HttpProxyIngress {
             }.flat_map_unordered(
                 None, // Unlimited concurrency of http proxy session
                 move |res| {
-                    let shutdown_guard = shutdown_guard.clone();
+                    let runtime = runtime.clone();
                     let stream_router = self.stream_router.clone();
 
                     Box::pin(stream! {
@@ -312,8 +310,8 @@ impl IngressTrait for HttpProxyIngress {
                                 // Run http proxy server in a separate task to add parallelism with multi-cpu
                                 let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
-                                shutdown_guard.spawn_supervised_task_fn_current_span(move |shutdown_guard| async move {
-                                    serve_http_proxy_no_throw_error(stream, stream_router, shutdown_guard, peer_addr, sender)
+                                runtime.spawn_supervised_task_fn_current_span(move |runtime| async move {
+                                    serve_http_proxy_no_throw_error(stream, stream_router, runtime, peer_addr, sender)
                                         .await
                                 });
 
@@ -333,11 +331,11 @@ impl IngressTrait for HttpProxyIngress {
 async fn serve_http_proxy_no_throw_error(
     in_stream: TcpStream,
     stream_router: Arc<StreamRouter>,
-    shutdown_guard: ShutdownGuard,
+    runtime: TokioRuntime,
     peer_addr: SocketAddr,
     sender: UnboundedSender<AcceptedStream>,
 ) {
-    let shutdown_guard_cloned = shutdown_guard.clone();
+    let runtime_cloned = runtime.clone();
 
     let svc = {
         ServiceBuilder::new()
@@ -347,12 +345,12 @@ async fn serve_http_proxy_no_throw_error(
             ))
             .service(tower::service_fn(move |req| {
                 let stream_router = stream_router.clone();
-                let shutdown_guard = shutdown_guard.clone();
+                let runtime = runtime.clone();
                 let sender = sender.clone();
 
                 async move {
                     let route_result = RequestHelper::from_request(req)
-                        .handle(stream_router, shutdown_guard, peer_addr, sender)
+                        .handle(stream_router, runtime, peer_addr, sender)
                         .await;
 
                     Result::<_, String>::Ok(route_result.into())
@@ -362,8 +360,7 @@ async fn serve_http_proxy_no_throw_error(
     let svc = TowerToHyperService::new(svc);
 
     if let Err(error) = async {
-        let executor =
-            shutdown_guard_cloned.as_hyper_executor(TokioRuntime::current()?.into_shared());
+        let executor = runtime_cloned;
         hyper_util::server::conn::auto::Builder::new(executor)
             .serve_connection_with_upgrades(TokioIo::new(in_stream), svc)
             .await

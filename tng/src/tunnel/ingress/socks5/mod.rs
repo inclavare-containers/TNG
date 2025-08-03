@@ -7,13 +7,12 @@ use fast_socks5::server::Socks5ServerProtocol;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_graceful::ShutdownGuard;
 
 use crate::config::ingress::{IngressSocks5Args, Socks5AuthArgs};
-use crate::observability::trace::shutdown_guard_ext::ShutdownGuardExt;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 use super::flow::stream_router::StreamRouter;
@@ -124,7 +123,7 @@ impl IngressTrait for Socks5Ingress {
         None
     }
 
-    async fn accept(&self, shutdown_guard: ShutdownGuard) -> Result<Incomming> {
+    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -138,14 +137,14 @@ impl IngressTrait for Socks5Ingress {
                 }
             }
             .map(move |res| {
-                let shutdown_guard = shutdown_guard.clone();
+                let runtime = runtime.clone();
                 async move {
                     let (stream, peer_addr) = res?;
 
                     let auth = self.auth.clone();
 
                     // Run socks5 protocol in a separate task to add parallelism with multi-cpu
-                    let (stream, dst) = shutdown_guard
+                    let (stream, dst) = runtime
                         .spawn_supervised_task_current_span(async move {
                             serve_socks5(stream, auth)
                                 .await

@@ -10,14 +10,13 @@ use http::{HttpTransportLayer, HttpTransportLayerCreator};
 use pin_project::pin_project;
 #[cfg(unix)]
 use tcp::{TcpTransportLayer, TcpTransportLayerCreator};
-use tokio_graceful::ShutdownGuard;
 use tracing::Span;
 
 use crate::{
     config::ingress::EncapInHttp,
     tunnel::{
         stream::CommonStreamTrait,
-        utils::{http_inspector::RequestInfo, tokio::TokioIo},
+        utils::{http_inspector::RequestInfo, runtime::TokioRuntime, tokio::TokioIo},
     },
 };
 
@@ -34,7 +33,6 @@ pub trait TransportLayerCreatorTrait: PoolKeyExtraDataInserter {
     fn create(
         &self,
         pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
         parent_span: Span,
     ) -> Result<Self::TransportLayerConnector>;
 }
@@ -49,11 +47,17 @@ pub enum TransportLayerCreator {
 }
 
 impl TransportLayerCreator {
-    pub fn new(so_mark: Option<u32>, encap_in_http: Option<EncapInHttp>) -> Result<Self> {
+    pub fn new(
+        so_mark: Option<u32>,
+        encap_in_http: Option<EncapInHttp>,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
         Ok(match encap_in_http {
-            Some(encap_in_http) => {
-                Self::Http(HttpTransportLayerCreator::new(so_mark, encap_in_http)?)
-            }
+            Some(encap_in_http) => Self::Http(HttpTransportLayerCreator::new(
+                so_mark,
+                encap_in_http,
+                runtime,
+            )?),
             None => {
                 #[cfg(unix)]
                 {
@@ -72,24 +76,15 @@ impl TransportLayerCreator {
 
 impl TransportLayerCreatorTrait for TransportLayerCreator {
     type TransportLayerConnector = TransportLayerConnector;
-    fn create(
-        &self,
-        pool_key: &PoolKey,
-        shutdown_guard: ShutdownGuard,
-        parent_span: Span,
-    ) -> Result<TransportLayerConnector> {
+    fn create(&self, pool_key: &PoolKey, parent_span: Span) -> Result<TransportLayerConnector> {
         Ok(match self {
             #[cfg(unix)]
-            TransportLayerCreator::Tcp(creater) => TransportLayerConnector::Tcp(creater.create(
-                pool_key,
-                shutdown_guard,
-                parent_span,
-            )?),
-            TransportLayerCreator::Http(creater) => TransportLayerConnector::Http(creater.create(
-                pool_key,
-                shutdown_guard,
-                parent_span,
-            )?),
+            TransportLayerCreator::Tcp(creater) => {
+                TransportLayerConnector::Tcp(creater.create(pool_key, parent_span)?)
+            }
+            TransportLayerCreator::Http(creater) => {
+                TransportLayerConnector::Http(creater.create(pool_key, parent_span)?)
+            }
         })
     }
 }

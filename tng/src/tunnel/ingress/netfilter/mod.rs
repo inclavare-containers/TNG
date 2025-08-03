@@ -5,7 +5,6 @@ use futures::StreamExt;
 use indexmap::IndexMap;
 use socket2::SockRef;
 use tokio::net::TcpListener;
-use tokio_graceful::ShutdownGuard;
 
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::ingress::IngressNetfilterCaptureDst;
@@ -14,6 +13,7 @@ use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::iptables::IptablesExecutor;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::socket::TCP_CONNECT_SO_MARK_DEFAULT;
+use crate::tunnel::utils::runtime::TokioRuntime;
 
 use super::flow::Incomming;
 use super::flow::IngressTrait;
@@ -81,7 +81,7 @@ impl IngressTrait for NetfilterIngress {
         Some(self.so_mark)
     }
 
-    async fn accept(&self, _shutdown_guard: ShutdownGuard) -> Result<Incomming> {
+    async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("127.0.0.1:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc::Sender;
-use tokio_graceful::ShutdownGuard;
 
 /// The registered service is a core component of the TNG runtime. After the TNG runtime is created,
 /// they service will be started and keeping running in a background async task. Any service failed
@@ -11,5 +10,5 @@ use tokio_graceful::ShutdownGuard;
 /// not required to check the shutdown_guard.cancelled() in the service.
 #[async_trait]
 pub trait RegistedService {
-    async fn serve(&self, shutdown_guard: ShutdownGuard, ready: Sender<()>) -> Result<()>;
+    async fn serve(&self, ready: Sender<()>) -> Result<()>;
 }

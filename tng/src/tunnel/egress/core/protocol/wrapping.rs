@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -8,18 +6,14 @@ use axum::{
 use http::{HeaderValue, Method, Request, StatusCode};
 use hyper::body::Incoming;
 use hyper_util::service::TowerToHyperService;
-use tokio_graceful::ShutdownGuard;
 use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
+use crate::tunnel::egress::core::stream_manager::trusted::StreamType;
 use crate::tunnel::{
     attestation_result::AttestationResult,
     utils::{runtime::TokioRuntime, tokio::TokioIo},
-};
-use crate::{
-    observability::trace::shutdown_guard_ext::ShutdownGuardExt as _,
-    tunnel::egress::core::stream_manager::trusted::StreamType,
 };
 
 use super::super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
@@ -36,10 +30,9 @@ impl WrappingLayer {
         tls_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
-        shutdown_guard: ShutdownGuard,
-        rt: Arc<TokioRuntime>,
+        runtime: TokioRuntime,
     ) {
-        let shutdown_guard_cloned = shutdown_guard.clone();
+        let runtime_cloned = runtime.clone();
 
         let span = tracing::info_span!("wrapping");
         let svc = {
@@ -52,30 +45,24 @@ impl WrappingLayer {
                 ))
                 .service(tower::service_fn(move |req| {
                     let channel = channel.clone();
-                    let shutdown_guard = shutdown_guard.clone();
+                    let runtime = runtime.clone();
                     let attestation_result = attestation_result.clone();
                     let span = span.clone();
                     async move {
-                        Self::terminate_http_connect_svc(
-                            req,
-                            attestation_result,
-                            channel,
-                            shutdown_guard,
-                        )
-                        .instrument(span)
-                        .await
+                        Self::terminate_http_connect_svc(req, attestation_result, channel, runtime)
+                            .instrument(span)
+                            .await
                     }
                 }))
         };
 
         let svc = TowerToHyperService::new(svc);
 
-        if let Err(error) =
-            hyper::server::conn::http2::Builder::new(shutdown_guard_cloned.as_hyper_executor(rt))
-                // hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(tls_stream), svc)
-                .instrument(span)
-                .await
+        if let Err(error) = hyper::server::conn::http2::Builder::new(runtime_cloned)
+            // hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(tls_stream), svc)
+            .instrument(span)
+            .await
         {
             tracing::error!(?error, "Failed to serve connection");
         }
@@ -85,14 +72,14 @@ impl WrappingLayer {
         req: Request<Incoming>,
         attestation_result: Option<AttestationResult>,
         channel: <TrustedStreamManager as StreamManager>::Sender,
-        shutdown_guard: ShutdownGuard,
+        runtime: TokioRuntime,
     ) -> Result<Response> {
         tracing::trace!("Handling new wrapping stream");
 
         let req = req.map(Body::new);
 
         if req.method() == Method::CONNECT {
-            shutdown_guard.spawn_supervised_task_current_span(async move {
+            runtime.spawn_supervised_task_current_span(async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
                         tracing::debug!("Trusted tunnel established");

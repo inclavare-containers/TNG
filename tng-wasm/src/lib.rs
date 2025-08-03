@@ -13,7 +13,7 @@ use tng::{
         endpoint::TngEndpoint,
         ingress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
     },
-    AttestationResult, CommonStreamTrait,
+    AttestationResult, CommonStreamTrait, TokioRuntime,
 };
 
 use wasm_bindgen::prelude::*;
@@ -83,17 +83,17 @@ async fn send_request_async_impl(
     };
 
     let transport_so_mark = None;
-    let trusted_stream_manager =
-        Arc::new(TrustedStreamManager::new(&common_args, transport_so_mark).await?);
 
     let shutdown = tokio_graceful::Shutdown::no_signal();
+    let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
+    let trusted_stream_manager =
+        Arc::new(TrustedStreamManager::new(&common_args, transport_so_mark, runtime).await?);
 
     let (forward_task, attestation_result) = trusted_stream_manager
         .forward_stream(
             // TODO: note that in wasm mode, this field should be same as the http request in the body
             &TngEndpoint::new(host, port),
             downstream,
-            shutdown.guard(),
         )
         .await
         .context("failed to forward stream")?;

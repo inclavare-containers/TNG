@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::{
     config::egress::CommonArgs,
-    observability::trace::shutdown_guard_ext::ShutdownGuardExt,
     tunnel::{
         attestation_result::AttestationResult,
         egress::core::protocol::{
@@ -17,7 +16,6 @@ use crate::{
 use anyhow::Context;
 use anyhow::{bail, Result};
 use tokio::sync::mpsc;
-use tokio_graceful::ShutdownGuard;
 
 use super::StreamManager;
 
@@ -28,23 +26,21 @@ pub struct TrustedStreamManager {
 
     connection_reuse: bool,
 
-    // A standalone tokio runtime to run tasks related to the protocol module
-    rt: Arc<TokioRuntime>,
+    runtime: TokioRuntime,
 }
 
 impl TrustedStreamManager {
-    pub async fn new(common_args: &CommonArgs) -> Result<Self> {
+    pub async fn new(common_args: &CommonArgs, runtime: TokioRuntime) -> Result<Self> {
         Ok(Self {
             transport_layer: TransportLayer::new(
                 common_args.direct_forward.clone(),
                 common_args.decap_from_http.clone(),
             )?,
-            security_layer: Arc::new(SecurityLayer::new(&common_args.ra_args).await?),
+            security_layer: Arc::new(
+                SecurityLayer::new(&common_args.ra_args, runtime.clone()).await?,
+            ),
             connection_reuse: common_args.decap_from_http.is_none(),
-            #[cfg(unix)]
-            rt: TokioRuntime::new_multi_thread()?.into_shared(),
-            #[cfg(wasm)]
-            rt: TokioRuntime::wasm_main_thread().into_shared()?,
+            runtime,
         })
     }
 }
@@ -52,19 +48,18 @@ impl TrustedStreamManager {
 impl StreamManager for TrustedStreamManager {
     type Sender = mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>;
 
-    async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        self.security_layer.prepare(shutdown_guard).await
+    async fn prepare(&self) -> Result<()> {
+        self.security_layer.prepare().await
     }
 
     async fn consume_stream(
         &self,
         in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
         sender: Self::Sender,
-        shutdown_guard: ShutdownGuard,
     ) -> Result<()> {
         let decode_result = self
             .transport_layer
-            .decode(in_stream, shutdown_guard.clone())
+            .decode(in_stream, self.runtime.clone())
             .await
             .context("Failed to decode stream")?;
 
@@ -74,13 +69,10 @@ impl StreamManager for TrustedStreamManager {
                 let channel = sender.clone();
 
                 {
-                    // Run in the standalone tokio runtime
-                    let _guard = self.rt.tokio_rt_handle().enter();
-                    let rt_cloned = self.rt.clone();
                     let connection_reuse = self.connection_reuse;
 
-                    shutdown_guard.spawn_supervised_task_fn_current_span(
-                        move |shutdown_guard| async move {
+                    self.runtime
+                        .spawn_supervised_task_fn_current_span(move |runtime| async move {
                             let (tls_stream, attestation_result) = match security_layer
                                 .handshake(stream)
                                 .await
@@ -97,8 +89,7 @@ impl StreamManager for TrustedStreamManager {
                                     tls_stream,
                                     attestation_result,
                                     channel,
-                                    shutdown_guard,
-                                    rt_cloned,
+                                    runtime,
                                 )
                                 .await;
                             } else {
@@ -110,8 +101,7 @@ impl StreamManager for TrustedStreamManager {
                                     tracing::error!("Failed to send stream via channel: {e:#}");
                                 }
                             }
-                        },
-                    );
+                        });
                 }
             }
             DecodeResult::DirectlyForward(stream) => {

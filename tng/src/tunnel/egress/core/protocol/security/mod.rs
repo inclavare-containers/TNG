@@ -6,31 +6,35 @@ use std::sync::Arc;
 use crate::{
     config::ra::RaArgs,
     tunnel::{
-        attestation_result::AttestationResult, stream::CommonStreamTrait,
-        utils::rustls_config::TlsConfigGenerator,
+        attestation_result::AttestationResult,
+        stream::CommonStreamTrait,
+        utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
     },
 };
 use anyhow::{Context as _, Result};
 use rustls_config::OnetimeTlsServerConfig;
-use tokio_graceful::ShutdownGuard;
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
 pub struct SecurityLayer {
     tls_config_generator: TlsConfigGenerator,
+    runtime: TokioRuntime,
 }
 
 impl SecurityLayer {
-    pub async fn new(ra_args: &RaArgs) -> Result<Self> {
+    pub async fn new(ra_args: &RaArgs, runtime: TokioRuntime) -> Result<Self> {
         let tls_config_generator = TlsConfigGenerator::new(ra_args).await?;
 
         Ok(Self {
             tls_config_generator,
+            runtime,
         })
     }
 
-    pub async fn prepare(&self, shutdown_guard: ShutdownGuard) -> Result<()> {
-        self.tls_config_generator.prepare(shutdown_guard).await
+    pub async fn prepare(&self) -> Result<()> {
+        self.tls_config_generator
+            .prepare(self.runtime.clone())
+            .await
     }
 
     pub async fn handshake(

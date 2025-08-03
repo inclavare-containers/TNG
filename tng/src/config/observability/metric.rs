@@ -77,7 +77,6 @@ mod tests {
     use scopeguard::defer;
     use serde_json::json;
     use tokio::select;
-    use tokio_util::sync::CancellationToken;
 
     use crate::{
         config::{observability::OltpExporterProtocol, TngConfig},
@@ -234,21 +233,19 @@ mod tests {
                     }
                 ))?;
 
-                let cancel_token = CancellationToken::new();
                 let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
 
-                let cancel_token_clone = cancel_token.clone();
-                let join_handle = tokio::task::spawn(async move {
-                    TngRuntime::from_config(config)
-                        .await?
-                        .serve_with_cancel(cancel_token_clone, ready_sender)
-                        .await
-                });
+                let tng_runtime = TngRuntime::from_config(config).await?;
+                let canceller = tng_runtime.canceller();
+
+                let join_handle =
+                    tokio::task::spawn(
+                        async move { tng_runtime.serve_with_ready(ready_sender).await },
+                    );
 
                 ready_receiver.await?;
                 // tng is ready now, so we cancel it
-
-                cancel_token.cancel();
+                canceller.cancel();
 
                 select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
