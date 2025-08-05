@@ -1,4 +1,6 @@
-pub mod core;
+mod protocol;
+pub mod stream_manager;
+
 #[cfg(unix)]
 pub mod flow;
 #[cfg(feature = "ingress-http-proxy")]

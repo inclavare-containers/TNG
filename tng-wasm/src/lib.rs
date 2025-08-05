@@ -11,7 +11,7 @@ use tng::{
     },
     tunnel::{
         endpoint::TngEndpoint,
-        ingress::core::stream_manager::{trusted::TrustedStreamManager, StreamManager},
+        ingress::stream_manager::{trusted::TrustedStreamManager, StreamManager},
     },
     AttestationResult, CommonStreamTrait, TokioRuntime,
 };

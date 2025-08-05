@@ -1,4 +1,6 @@
-pub mod core;
+mod protocol;
+pub(super) mod stream_manager;
+
 pub mod flow;
 #[cfg(feature = "egress-mapping")]
 pub mod mapping;

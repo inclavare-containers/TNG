@@ -17,7 +17,7 @@ use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
-use super::core::stream_manager::{
+use super::stream_manager::{
     trusted::TrustedStreamManager, unprotected::UnprotectedStreamManager, StreamManager,
 };
 
