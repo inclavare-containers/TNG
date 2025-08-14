@@ -542,6 +542,112 @@ flowchart TD
 |无TEE（仅作调试用途）|`no_ra`|`no_ra`|tng server和tng client都在非TEE环境中，此时tng client和tng server之间通过单向验证建立普通的TLS会话|
 
 
+### Background Check模式
+
+[Background Check](https://datatracker.ietf.org/doc/html/rfc9334#name-background-check-model)是TNG默认的远程证明模式，符合[RATS RFC 9334文档](https://datatracker.ietf.org/doc/html/rfc9334)中定义的标准模式。在该模式下，证明方（Attester）通过Attestation Agent获取证明材料，验证方（Verifier）直接验证这些证明材料。验证过程需要验证方能够访问Attestation Service来验证证明的有效性。
+
+> [!NOTE]
+> 在许多场景中，Background Check模式也称为“背调模型”
+
+> [!NOTE]
+> 当配置中未指定`"model"`字段时，TNG会自动使用Background Check模式。
+
+#### Attest（Background Check模式）
+
+在Background Check模式下，[Attest](#attest)配置需要包含以下字段：
+
+- **`model`** (string，可选): 设置为"background_check"以启用Background Check模式
+- **`aa_addr`** (string): Attestation Agent的地址
+- **`refresh_interval`** (integer, 可选): 证明刷新间隔（秒）
+
+示例：
+
+```json
+"attest": {
+    "model": "background_check",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600
+}
+```
+
+#### Verify（Background Check模式）
+
+在Background Check模式下，[Verify](#verify)配置需要包含以下字段：
+
+- **`model`** (string，可选): 设置为"background_check"以启用Background Check模式
+- **`as_addr`** (string): Attestation Service的地址
+- **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
+- **`policy_ids`** (array [string]): 策略ID列表
+- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
+
+示例：
+
+```json
+"verify": {
+    "model": "background_check",
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_is_grpc": false,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+### Passport模式
+
+除了Background Check模式外，TNG还支持符合[RATS RFC 9334文档](https://datatracker.ietf.org/doc/html/rfc9334)中定义的[Passport模式](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model)的远程证明。在Passport模式中，证明方（Attester）通过Attestation Agent获取证明，并将其提交给Attestation Service获取Token（即Passport）。验证方（Verifier）只需验证该Token的有效性，而无需直接与Attestation Service交互。
+
+Passport模式适用于网络隔离或性能要求较高的场景，因为它减少了验证方与Attestation Service之间的交互。
+
+> [!NOTE]
+> 在许多场景中，Passport模式也称为“护照模型”
+
+#### Attest（Passport模式）
+
+在Passport模式下，[Attest](#attest)配置需要包含以下字段：
+
+- **`model`** (string): 设置为"passport"以启用Passport模式
+- **`aa_addr`** (string): Attestation Agent的地址
+- **`refresh_interval`** (integer, 可选): 证明刷新间隔（秒）
+- **`as_addr`** (string): Attestation Service的地址
+- **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
+- **`policy_ids`** (array [string]): 策略ID列表
+- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
+
+示例：
+
+```json
+"attest": {
+    "model": "passport",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600,
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_is_grpc": false,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+#### Verify（Passport模式）
+
+在Passport模式下，[Verify](#verify)配置需要包含以下字段：
+
+- **`model`** (string): 设置为"passport"以启用Passport模式
+- **`policy_ids`** (array [string]): 策略ID列表
+- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
+
+示例：
+
+```json
+"verify": {
+    "model": "passport",
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
 ## 伪装成七层流量
 
 在现代的服务端开发中，app client和app server之间通常采用http协议通信，且链路中很可能经过HTTP中间件（如nginx反向代理、仅允许7层的负载均衡服务等）。然而，tng的rats-tls流量可能无法通过这些HTTP中间件，为了在业务中以尽可能少的负担接入tng，我们提供一个特性将tng的rats-tls流量伪装成七层http流量。

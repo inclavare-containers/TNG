@@ -1,22 +1,23 @@
-use std::sync::Arc;
-
 use anyhow::{bail, Context, Result};
 use rats_cert::cert::verify::{
     CertVerifier, ClaimsCheck, CocoVerifyMode, VerifyPolicy, VerifyPolicyOutput,
 };
 
-use crate::{config::ra::VerifyArgs, tunnel::attestation_result::AttestationResult};
+use crate::{
+    config::ra::{AttestationServiceArgs, VerifyArgs},
+    tunnel::attestation_result::AttestationResult,
+};
 
 #[derive(Debug)]
 pub struct CoCoCommonCertVerifier {
-    verify: Arc<VerifyArgs>,
+    verify_args: VerifyArgs,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
 impl CoCoCommonCertVerifier {
-    pub fn new(verify: VerifyArgs) -> Self {
+    pub fn new(verify_args: VerifyArgs) -> Self {
         Self {
-            verify: Arc::new(verify),
+            verify_args,
             pending_cert: spin::mutex::spin::SpinMutex::new(None),
         }
     }
@@ -32,13 +33,33 @@ impl CoCoCommonCertVerifier {
 
         let (tx, mut rx) = tokio::sync::oneshot::channel();
 
+        let (verify_mode, policy_ids, trusted_certs_paths) = match &self.verify_args {
+            VerifyArgs::Passport { token_verify } => (
+                CocoVerifyMode::Token,
+                token_verify.policy_ids.clone(),
+                token_verify.trusted_certs_paths.clone(),
+            ),
+            VerifyArgs::BackgroundCheck {
+                as_args:
+                    AttestationServiceArgs {
+                        as_addr,
+                        as_is_grpc,
+                        token_verify,
+                    },
+            } => (
+                CocoVerifyMode::Evidence {
+                    as_addr: as_addr.to_owned(),
+                    as_is_grpc: *as_is_grpc,
+                },
+                token_verify.policy_ids.clone(),
+                token_verify.trusted_certs_paths.clone(),
+            ),
+        };
+
         let res = CertVerifier::new(VerifyPolicy::Coco {
-            verify_mode: CocoVerifyMode::Evidence {
-                as_addr: self.verify.as_addr.to_owned(),
-                as_is_grpc: self.verify.as_is_grpc,
-            },
-            policy_ids: self.verify.policy_ids.to_owned(),
-            trusted_certs_paths: self.verify.trusted_certs_paths.clone(),
+            verify_mode,
+            policy_ids,
+            trusted_certs_paths,
             claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
                 let claims = claims.to_owned();
                 let _ = tx.send(AttestationResult::from_claims(&claims)); // Ignore the error here.

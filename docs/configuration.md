@@ -550,6 +550,107 @@ By configuring different combinations of `attest` and `verify` properties at bot
 | (Reverse) Unidirectional | `attest` | `verify` | The TNG server is in a normal environment, and the TNG client is in a TEE. In this case, only the client certificate is verified. During the TLS handshake, the TNG server will use a fixed P256 X509 self-signed certificate embedded in the TNG code as its certificate. |
 | No TEE (For Debugging Purposes Only) | `no_ra` | `no_ra` | Both the TNG server and TNG client are in non-TEE environments. In this case, a normal TLS session is established between the TNG client and TNG server through unidirectional verification. |
 
+
+### Background Check Model
+
+[Background Check](https://datatracker.ietf.org/doc/html/rfc9334#name-background-check-model) is TNG's default remote attestation model, which conforms to the standard model defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In this model, the Attester obtains evidence through the Attestation Agent, and the Verifier directly verifies this evidence. The verification process requires the Verifier to be able to access the Attestation Service to verify the validity of the evidence.
+
+> [!NOTE]
+> When the `"model"` field is not specified in the configuration, TNG automatically uses the Background Check model.
+
+#### Attest (Background Check Model)
+
+In the Background Check model, the [Attest](#attest) configuration should include the following fields:
+
+- **`model`** (string, optional): Set to "background_check" to enable the Background Check model
+- **`aa_addr`** (string): Address of the Attestation Agent
+- **`refresh_interval`** (integer, optional): Evidence refresh interval (seconds)
+
+Example:
+
+```json
+"attest": {
+    "model": "background_check",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600
+}
+```
+
+#### Verify (Background Check Model)
+
+In the Background Check model, the [Verify](#verify) configuration should include the following fields:
+
+- **`model`** (string, optional): Set to "background_check" to enable the Background Check model
+- **`as_addr`** (string): Address of the Attestation Service
+- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`policy_ids`** (array [string]): List of policy IDs
+- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
+
+Example:
+
+```json
+"verify": {
+    "model": "background_check",
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_is_grpc": false,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+### Passport Model
+
+In addition to the Background Check model, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
+
+The Passport model is suitable for scenarios with network isolation or high performance requirements, as it reduces the interaction between the Verifier and the Attestation Service.
+
+#### Attest (Passport Model)
+
+In the Passport model, the [Attest](#attest) configuration should include the following fields:
+
+- **`model`** (string): Set to "passport" to enable the Passport model
+- **`aa_addr`** (string): Address of the Attestation Agent
+- **`refresh_interval`** (integer, optional): Evidence refresh interval (seconds)
+- **`as_addr`** (string): Address of the Attestation Service
+- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`policy_ids`** (array [string]): List of policy IDs
+- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
+
+Example:
+
+```json
+"attest": {
+    "model": "passport",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600,
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_is_grpc": false,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+#### Verify (Passport Model)
+
+In the Passport model, the [Verify](#verify) configuration should include the following fields:
+
+- **`model`** (string): Set to "passport" to enable the Passport model
+- **`policy_ids`** (array [string]): List of policy IDs
+- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
+
+Example:
+
+```json
+"verify": {
+    "model": "passport",
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
 ## Disguising as Layer 7 Traffic
 
 In modern server-side development, communication between app clients and app servers commonly uses the HTTP protocol, and the link may pass through HTTP middleware (such as nginx reverse proxy, or Layer 7-only load balancing services). However, TNG's rats-tls traffic might not pass through these HTTP middlewares. To integrate TNG with minimal burden in the business, we offer a feature to disguise TNG's rats-tls traffic as Layer 7 HTTP traffic.
