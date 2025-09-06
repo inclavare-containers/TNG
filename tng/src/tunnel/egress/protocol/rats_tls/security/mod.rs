@@ -16,13 +16,13 @@ use rustls_config::OnetimeTlsServerConfig;
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
-pub struct TcpSecurityLayer {
+pub struct RatsTlsSecurityLayer {
     tls_config_generator: TlsConfigGenerator,
     runtime: TokioRuntime,
 }
 
-impl TcpSecurityLayer {
-    pub async fn new(ra_args: &RaArgs, runtime: TokioRuntime) -> Result<Self> {
+impl RatsTlsSecurityLayer {
+    pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
         let tls_config_generator = TlsConfigGenerator::new(ra_args).await?;
 
         Ok(Self {

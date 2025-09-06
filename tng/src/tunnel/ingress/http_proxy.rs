@@ -28,6 +28,7 @@ use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::tokio::TokioIo;
+use crate::HTTP_RESPONSE_SERVER_HEADER;
 
 use super::flow::{AcceptedStream, Incomming, IngressTrait};
 
@@ -353,7 +354,12 @@ async fn serve_http_proxy_no_throw_error(
                         .handle(stream_router, runtime, peer_addr, sender)
                         .await;
 
-                    Result::<_, String>::Ok(route_result.into())
+                    let mut response: axum::response::Response = route_result.into();
+                    response.headers_mut().insert(
+                        "Server",
+                        HeaderValue::from_static(HTTP_RESPONSE_SERVER_HEADER),
+                    );
+                    Result::<_, String>::Ok(response)
                 }
             }))
     };

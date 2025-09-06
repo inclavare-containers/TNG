@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use http::uri::Authority;
 
 use super::HttpTransportLayerCreator;
-use crate::tunnel::ingress::protocol::tcp::security::pool::{ExtraValueMarkTrait, PoolKey};
+use crate::tunnel::ingress::protocol::rats_tls::security::pool::{ExtraValueMarkTrait, PoolKey};
 
 pub trait PoolKeyExtraDataInserter {
     /// Return true if the transport layer creator needs to insert extra data to the pool key.

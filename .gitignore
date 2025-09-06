@@ -2,3 +2,4 @@
 tng-*.tar.gz
 .package/
 /.vscode/
+.claude/

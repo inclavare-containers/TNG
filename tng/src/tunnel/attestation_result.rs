@@ -1,15 +1,20 @@
+use std::sync::Arc;
+
 use rats_cert::tee::claims::Claims;
 
+/// The result of remote attestation.
+///
+/// This struct is cheap to clone.
 #[derive(Debug, Clone)]
 pub struct AttestationResult {
     #[allow(unused)]
-    claims: PrettyPrintClaims,
+    claims: Arc<PrettyPrintClaims>,
 }
 
 impl AttestationResult {
-    pub fn from_claims(claims: &Claims) -> Self {
+    pub fn from_claims(claims: Claims) -> Self {
         Self {
-            claims: PrettyPrintClaims::new(claims.clone()),
+            claims: Arc::new(PrettyPrintClaims::new(claims)),
         }
     }
 

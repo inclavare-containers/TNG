@@ -1,6 +1,6 @@
-use std::future::Future;
+use std::{future::Future, pin::Pin};
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 
 use crate::tunnel::{
     attestation_result::AttestationResult,
@@ -26,16 +26,17 @@ impl StreamManager for UnprotectedStreamManager {
         Ok(())
     }
 
-    async fn forward_stream<'a, 'b>(
+    async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
         downstream: impl tokio::io::AsyncRead
             + tokio::io::AsyncWrite
             + std::marker::Unpin
             + std::marker::Send
-            + 'b,
+            + 'static,
     ) -> Result<(
-        impl Future<Output = Result<()>> + std::marker::Send + 'b,
+        /* forward_stream_task */
+        Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
     )> {
         let upstream =
@@ -46,8 +47,21 @@ impl StreamManager for UnprotectedStreamManager {
                 })?;
 
         Ok((
-            async { utils::forward::forward_stream(upstream, downstream).await },
+            Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })
+                as Pin<Box<_>>,
             None,
         ))
+    }
+
+    async fn is_forward_http_request_supported() -> bool {
+        false
+    }
+
+    async fn forward_http_request<'a>(
+        &self,
+        _endpoint: &'a TngEndpoint,
+        _request: axum::extract::Request,
+    ) -> Result<(axum::response::Response, Option<AttestationResult>)> {
+        bail!("unsupported")
     }
 }

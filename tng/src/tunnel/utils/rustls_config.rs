@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::config::ra::{RaArgs, VerifyArgs};
+use crate::config::ra::{RaArgs, RaArgsUnchecked, VerifyArgs};
 use crate::tunnel::utils::runtime::TokioRuntime;
 use anyhow::{bail, Context as _, Result};
 
@@ -38,57 +38,40 @@ pub enum TlsConfigGenerator {
 }
 
 impl TlsConfigGenerator {
-    pub async fn new(ra_args: &RaArgs) -> Result<Self> {
-        Ok(if ra_args.no_ra {
-            // Sanity check for ra_args
-            if ra_args.verify.is_some() {
-                bail!("The 'no_ra: true' flag should not be used with 'verify' field");
-            }
-
-            if ra_args.attest.is_some() {
-                bail!("The 'no_ra: true' flag should not be used with 'attest' field");
-            }
-
-            tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
-
-            Self::NoRa
-        } else {
-            match (&ra_args.attest, &ra_args.verify) {
-                (None, None) => {
-                    bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
+    pub async fn new(ra_args: RaArgs) -> Result<Self> {
+        Ok(match &ra_args {
+            RaArgs::AttestOnly(attest) => {
+                #[cfg(unix)]
+                {
+                    use super::cert_manager::CertManager;
+                    Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
                 }
-                (None, Some(verfiy)) => Self::Verify(verfiy.clone()),
-                (Some(attest), None) => {
-                    #[cfg(unix)]
-                    {
-                        use super::cert_manager::CertManager;
-                        Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
-                    }
-                    #[cfg(wasm)]
-                    {
-                        let _ = attest;
-                        bail!("`attest` option is not supported since attestation is not supported on this platform.")
-                    }
-                }
-                (Some(attest), Some(verfiy)) => {
-                    #[cfg(unix)]
-                    {
-                        use super::cert_manager::CertManager;
-
-                        Self::AttestAndVerify(
-                            Arc::new(CertManager::new(attest.clone()).await?),
-                            verfiy.clone(),
-                        )
-                    }
-                    #[cfg(wasm)]
-                    {
-                        let _ = attest;
-                        let _ = verfiy;
-
-                        bail!("`attest` option is not supported since attestation is not supported on this platform.")
-                    }
+                #[cfg(wasm)]
+                {
+                    let _ = attest;
+                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
                 }
             }
+            RaArgs::VerifyOnly(verify) => Self::Verify(verify.clone()),
+            RaArgs::AttestAndVerify(attest, verify) => {
+                #[cfg(unix)]
+                {
+                    use super::cert_manager::CertManager;
+
+                    Self::AttestAndVerify(
+                        Arc::new(CertManager::new(attest.clone()).await?),
+                        verify.clone(),
+                    )
+                }
+                #[cfg(wasm)]
+                {
+                    let _ = attest;
+                    let _ = verify;
+
+                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
+                }
+            }
+            RaArgs::NoRa => Self::NoRa,
         })
     }
 

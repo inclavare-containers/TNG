@@ -7,7 +7,7 @@ use tng::{
     build,
     config::{
         ingress::{self, EncapInHttp},
-        ra::{RaArgs, VerifyArgs},
+        ra::{RaArgsUnchecked, VerifyArgs},
     },
     tunnel::{
         endpoint::TngEndpoint,
@@ -70,7 +70,7 @@ async fn send_request_async_impl(
         encap_in_http: Some(EncapInHttp {
             path_rewrites: vec![],
         }),
-        ra_args: RaArgs {
+        ra_args: RaArgsUnchecked {
             no_ra: false,
             attest: None,
             verify: Some(VerifyArgs {

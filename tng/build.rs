@@ -7,5 +7,13 @@ fn main() {
         unix: { any(target_os = "linux", target_os = "macos" ) },
     }
 
+    // For shadow-rs
     ShadowBuilder::builder().build().unwrap();
+
+    // For protoc
+    prost_build::compile_protos(
+        &["src/tunnel/ohttp/protocol/metadata.proto"],
+        &["src/tunnel/ohttp/protocol/"],
+    )
+    .unwrap();
 }

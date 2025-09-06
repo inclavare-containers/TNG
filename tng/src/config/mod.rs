@@ -50,7 +50,7 @@ mod tests {
     use anyhow::Result;
     use egress::{DecapFromHttp, EgressMode};
     use ingress::{EncapInHttp, IngressMode, PathRewrite};
-    use ra::{AttestArgs, RaArgs, VerifyArgs};
+    use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
     use crate::config::{
         egress::EgressMappingArgs,
@@ -85,7 +85,7 @@ mod tests {
                             substitution: "/foo/bar/\\1".to_owned(),
                         }],
                     }),
-                    ra_args: RaArgs {
+                    ra_args: RaArgsUnchecked {
                         no_ra: false,
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck { as_args:   AttestationServiceArgs{
@@ -114,7 +114,7 @@ mod tests {
                     decap_from_http: Some(DecapFromHttp {
                         allow_non_tng_traffic_regexes: None,
                     }),
-                    ra_args: RaArgs {
+                    ra_args: RaArgsUnchecked {
                         no_ra: false,
                         attest: Some(AttestArgs::BackgroundCheck { aa_args: AttestationAgentArgs {
                             aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),

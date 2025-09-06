@@ -121,7 +121,6 @@ impl RegistedService for IngressFlow {
 }
 
 impl IngressFlow {
-    #[auto_enum]
     async fn serve_in_async_task_no_throw_error(
         &self,
         accepted_stream: AcceptedStream,
@@ -151,7 +150,6 @@ impl IngressFlow {
                     let stream = metrics.new_wrapped_stream(stream);
 
                     let attestation_result;
-                    #[auto_enum(Future)]
                     let forward_stream_task = if !via_tunnel {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att) = unprotected_stream_manager
@@ -185,6 +183,7 @@ impl IngressFlow {
                     };
                     tracing::info!(?access_log);
 
+                    // let forward_stream_task = pin!(forward_stream_task);
                     match forward_stream_task.await {
                         Err(e) => {
                             let error = format!("{e:#}");

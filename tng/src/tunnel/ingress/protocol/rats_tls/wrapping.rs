@@ -7,9 +7,9 @@ use crate::tunnel::{attestation_result::AttestationResult, utils::tokio::TokioIo
 
 use super::security::RatsTlsClient;
 
-pub struct TcpWrappingLayer {}
+pub struct RatsTlsWrappingLayer {}
 
-impl TcpWrappingLayer {
+impl RatsTlsWrappingLayer {
     pub async fn create_stream_from_hyper(
         client: &RatsTlsClient,
     ) -> Result<(TokioIo<Upgraded>, Option<AttestationResult>)> {

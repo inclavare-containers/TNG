@@ -14,8 +14,6 @@ use crate::{
 use anyhow::{bail, Context as _, Result};
 use direct_forward::DirectForwardTrafficDetector;
 use timeout::FirstByteReadTimeoutStream;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::Instrument;
 
 mod direct_forward;
@@ -25,13 +23,7 @@ mod timeout;
 const TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct TransportLayer {
-    typ: TransportLayerType,
     direct_forward_traffic_detector: Option<DirectForwardTrafficDetector>,
-}
-
-enum TransportLayerType {
-    Tcp,
-    Http,
 }
 
 impl TransportLayer {
@@ -39,11 +31,6 @@ impl TransportLayer {
         direct_forward: Option<DirectForwardRules>,
         decap_from_http: Option<DecapFromHttp>,
     ) -> Result<Self> {
-        let typ = match &decap_from_http {
-            Some(_) => TransportLayerType::Http,
-            None => TransportLayerType::Tcp,
-        };
-
         // For compatibility with older versions
         let direct_forward = if let Some(decap_from_http) = decap_from_http {
             match (
@@ -69,7 +56,6 @@ impl TransportLayer {
         };
 
         Ok(Self {
-            typ,
             direct_forward_traffic_detector,
         })
     }
@@ -81,10 +67,7 @@ impl TransportLayer {
         in_stream: Box<dyn CommonStreamTrait>,
         _runtime: TokioRuntime,
     ) -> Result<DecodeResult> {
-        let span = tracing::info_span!("transport", type={match self.typ {
-            TransportLayerType::Tcp => "tcp",
-            TransportLayerType::Http => "http",
-        }});
+        let span = tracing::info_span!("transport");
 
         // Set timeout for underly tcp stream
         let in_stream = {
@@ -121,33 +104,11 @@ impl TransportLayer {
                 } else {
                     tracing::debug!("Try to decode as TNG traffic");
                     // If not, we try to treat it as tng traffic, it is determined by the configuration of transport layer.
-                    match self.typ {
-                        // If the transport layer is configured to tcp, we just use it.
-                        TransportLayerType::Tcp => {
-                            DecodeResult::ContinueAsTngTrafficTcp(unmodified_stream)
-                        }
-                        // If the transport layer is configured to http1 or http2, we need to check the http request.
-                        TransportLayerType::Http => {
-                            DecodeResult::ContinueAsTngTrafficHttp(unmodified_stream)
-                        }
-                    }
+                    DecodeResult::ContinueAsTngTraffic(unmodified_stream)
                 }
             } else {
-                let in_stream = Box::new(in_stream) as Box<dyn CommonStreamTrait>;
-
-                match self.typ {
-                    TransportLayerType::Tcp => DecodeResult::ContinueAsTngTrafficTcp(in_stream),
-                    TransportLayerType::Http => {
-                        // Treat it as a valid tng traffic and try to decode from it.
-                        let websocket = async_tungstenite::accept_async(in_stream.compat())
-                            .await
-                            .context("Failed to accept websocket connection")?;
-
-                        DecodeResult::ContinueAsTngTrafficTcp(Box::new(
-                            ws_stream_tungstenite::WsStream::new(websocket).compat(),
-                        ))
-                    }
-                }
+                // Treat it as a valid tng traffic and try to decode from it.
+                DecodeResult::ContinueAsTngTraffic(Box::new(in_stream) as Box<dyn CommonStreamTrait>)
             };
 
             Ok(state)
@@ -158,7 +119,6 @@ impl TransportLayer {
 }
 
 pub enum DecodeResult {
-    ContinueAsTngTrafficTcp(Box<dyn CommonStreamTrait>),
-    ContinueAsTngTrafficHttp(Box<dyn CommonStreamTrait>),
+    ContinueAsTngTraffic(Box<dyn CommonStreamTrait>),
     DirectlyForward(Box<dyn CommonStreamTrait>),
 }

@@ -21,6 +21,7 @@ pub enum RequestInfo {
 pub struct InspectionResult<T> {
     /// This is a "clone" of the original stream, which can be used to read and write just like the original stream.
     pub unmodified_stream: T,
+
     pub result: Result<RequestInfo>,
 }
 

@@ -3,6 +3,7 @@ use shadow_rs::shadow;
 pub mod config;
 #[cfg(unix)]
 mod control_interface;
+pub mod error;
 mod observability;
 #[cfg(unix)]
 pub mod runtime;
@@ -13,6 +14,9 @@ mod state;
 pub mod tunnel;
 
 shadow!(build);
+
+pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
+    const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 
 pub use crate::tunnel::attestation_result::AttestationResult;
 pub use crate::tunnel::stream::CommonStreamTrait;

@@ -62,7 +62,7 @@ impl CoCoCommonCertVerifier {
             trusted_certs_paths,
             claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
                 let claims = claims.to_owned();
-                let _ = tx.send(AttestationResult::from_claims(&claims)); // Ignore the error here.
+                let _ = tx.send(AttestationResult::from_claims(claims)); // Ignore the error here.
                 Box::pin(async move {
                     // We do not check the claims here, just leave it to be checked by attestation service.
                     VerifyPolicyOutput::Passed

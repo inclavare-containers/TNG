@@ -11,42 +11,42 @@ use super::security::pool::PoolKey;
 use crate::tunnel::utils::{socket::tcp_connect_with_so_mark, tokio::TokioIo};
 
 /// The transport layer creator is used to create the transport layer.
-pub struct TcpTransportLayerCreator {
+pub struct RatsTlsTransportLayerCreator {
     so_mark: Option<u32>,
 }
 
-impl TcpTransportLayerCreator {
+impl RatsTlsTransportLayerCreator {
     pub fn new(so_mark: Option<u32>) -> Self {
         Self { so_mark }
     }
 }
 
-impl TcpTransportLayerCreator {
+impl RatsTlsTransportLayerCreator {
     pub fn create(
         &self,
         pool_key: &PoolKey,
         parent_span: Span,
-    ) -> Result<TcpTransportLayerConnector> {
-        Ok(TcpTransportLayerConnector {
+    ) -> Result<RatsTlsTransportLayerConnector> {
+        Ok(RatsTlsTransportLayerConnector {
             pool_key: pool_key.clone(),
             so_mark: self.so_mark,
-            transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "tcp"),
+            transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "rats-tls"),
         })
     }
 }
 
 // TODO: The connector will be cloned each time when we clone the hyper http client. Maybe we can replace it with std::borrow::Cow to save memory.
 #[derive(Debug, Clone)]
-pub struct TcpTransportLayerConnector {
+pub struct RatsTlsTransportLayerConnector {
     pub pool_key: PoolKey,
     pub so_mark: Option<u32>,
     pub transport_layer_span: Span,
 }
 
-pub type TcpTransportLayerStream = tokio::net::TcpStream;
+pub type RatsTlsTransportLayerStream = tokio::net::TcpStream;
 
-impl<Req> tower::Service<Req> for TcpTransportLayerConnector {
-    type Response = TokioIo<TcpTransportLayerStream>;
+impl<Req> tower::Service<Req> for RatsTlsTransportLayerConnector {
+    type Response = TokioIo<RatsTlsTransportLayerStream>;
     type Error = anyhow::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 

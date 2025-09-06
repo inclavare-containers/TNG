@@ -14,7 +14,7 @@ use crate::{
     config::ingress::EncapInHttp,
     tunnel::{
         endpoint::TngEndpoint,
-        ingress::protocol::tcp::security::pool::PoolKey,
+        ingress::protocol::rats_tls::security::pool::PoolKey,
         utils::{runtime::TokioRuntime, tokio::TokioIo},
     },
     CommonStreamTrait,
@@ -53,7 +53,7 @@ impl HttpTransportLayerCreator {
                 .clone(),
             so_mark: self.so_mark,
             runtime: self.runtime.clone(),
-            transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "http"),
+            transport_layer_span: tracing::info_span!(parent: parent_span, "transport", type = "ohttp"),
         })
     }
 }

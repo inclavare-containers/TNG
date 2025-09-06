@@ -3,7 +3,7 @@ use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
-use super::{ra::RaArgs, Endpoint};
+use super::{ra::RaArgsUnchecked, Endpoint};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AddIngressArgs {
@@ -24,7 +24,7 @@ pub struct CommonArgs {
     pub web_page_inject: bool,
 
     #[serde(flatten)]
-    pub ra_args: RaArgs,
+    pub ra_args: RaArgsUnchecked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

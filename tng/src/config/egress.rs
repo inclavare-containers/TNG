@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{ra::RaArgs, Endpoint};
+use super::{ra::RaArgsUnchecked, Endpoint};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AddEgressArgs {
@@ -20,7 +20,7 @@ pub struct CommonArgs {
     pub direct_forward: Option<DirectForwardRules>,
 
     #[serde(flatten)]
-    pub ra_args: RaArgs,
+    pub ra_args: RaArgsUnchecked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

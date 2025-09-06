@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use http::Uri;
-use hyper_util::{client::legacy::Client, rt::TokioIo};
+use hyper_util::client::legacy::Client;
 use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
 use rustls::pki_types::ServerName;
@@ -27,13 +27,16 @@ use tracing::{Instrument, Span};
 use crate::{
     config::ra::RaArgs,
     tunnel::{
-        attestation_result::AttestationResult, utils::runtime::TokioRuntime,
-        utils::rustls_config::TlsConfigGenerator,
+        attestation_result::AttestationResult,
+        endpoint::TngEndpoint,
+        ingress::protocol::rats_tls::wrapping::RatsTlsWrappingLayer,
+        utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
     },
+    CommonStreamTrait,
 };
 
 use super::transport::{
-    TcpTransportLayerConnector, TcpTransportLayerCreator, TcpTransportLayerStream,
+    RatsTlsTransportLayerConnector, RatsTlsTransportLayerCreator, RatsTlsTransportLayerStream,
 };
 
 #[derive(Clone)]
@@ -42,20 +45,21 @@ pub struct RatsTlsClient {
     pub hyper: HyperClientType,
 }
 
-pub struct TcpSecurityLayer {
+pub struct RatsTlsSecurityLayer {
     next_id: AtomicU64,
     pool: RwLock<ClientPool>,
-    transport_layer_creator: TcpTransportLayerCreator,
+    transport_layer_creator: RatsTlsTransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
     runtime: TokioRuntime,
 }
 
-impl TcpSecurityLayer {
+impl RatsTlsSecurityLayer {
     pub async fn new(
-        transport_layer_creator: TcpTransportLayerCreator,
-        ra_args: &RaArgs,
+        transport_so_mark: Option<u32>,
+        ra_args: RaArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        let transport_layer_creator = RatsTlsTransportLayerCreator::new(transport_so_mark);
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
         Ok(Self {
@@ -73,7 +77,7 @@ impl TcpSecurityLayer {
             .await
     }
 
-    pub async fn create_security_connector(
+    async fn create_security_connector(
         &self,
         pool_key: &PoolKey,
         parent_span: Span,
@@ -88,7 +92,7 @@ impl TcpSecurityLayer {
         })
     }
 
-    pub async fn get_client(&self, pool_key: &PoolKey) -> Result<RatsTlsClient> {
+    async fn get_client(&self, pool_key: &PoolKey) -> Result<RatsTlsClient> {
         self.get_client_with_span(pool_key, Span::current())
             .instrument(tracing::info_span!(
                 "security",
@@ -151,12 +155,24 @@ impl TcpSecurityLayer {
 
         Ok(client)
     }
+
+    pub async fn allocate_secured_stream(
+        &self,
+        endpoint: TngEndpoint,
+    ) -> Result<(impl CommonStreamTrait, Option<AttestationResult>)> {
+        let pool_key = PoolKey::new(endpoint);
+
+        let client = self.get_client(&pool_key).await?;
+        RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+            .instrument(tracing::info_span!("wrapping"))
+            .await
+    }
 }
 
 #[derive(Clone)]
 pub struct SecurityConnector {
     tls_config_generator: Arc<TlsConfigGenerator>,
-    transport_layer_connector: TcpTransportLayerConnector,
+    transport_layer_connector: RatsTlsTransportLayerConnector,
     security_layer_span: Span,
 }
 
@@ -164,7 +180,7 @@ impl SecurityConnector {}
 
 impl tower::Service<Uri> for SecurityConnector {
     type Response = SecurityConnection<
-        TokioIo<tokio_rustls::client::TlsStream<super::transport::TcpTransportLayerStream>>,
+        TokioIo<tokio_rustls::client::TlsStream<super::transport::RatsTlsTransportLayerStream>>,
     >;
 
     type Error = anyhow::Error;
@@ -250,7 +266,7 @@ impl<T> SecurityConnection<T> {
 }
 
 impl hyper_util::client::legacy::connect::Connection
-    for SecurityConnection<TokioIo<tokio_rustls::client::TlsStream<TcpTransportLayerStream>>>
+    for SecurityConnection<TokioIo<tokio_rustls::client::TlsStream<RatsTlsTransportLayerStream>>>
 {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         let (tcp, tls) = self.inner.inner().get_ref();

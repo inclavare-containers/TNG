@@ -6,7 +6,8 @@ use crate::{
         attestation_result::AttestationResult,
         egress::protocol::{
             common::transport::{DecodeResult, TransportLayer},
-            tcp::{security::TcpSecurityLayer, wrapping::TcpWrappingLayer},
+            ohttp::security::OHttpSecurityLayer,
+            rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
         },
         stream::CommonStreamTrait,
         utils::runtime::TokioRuntime,
@@ -14,41 +15,48 @@ use crate::{
 };
 use anyhow::Context;
 use anyhow::{bail, Result};
-use tokio::sync::mpsc;
 
 use super::StreamManager;
 
 pub struct TrustedStreamManager {
     transport_layer: TransportLayer,
 
-    security_layer: Arc<TcpSecurityLayer>,
+    security_layer: SecurityLayer,
 
     runtime: TokioRuntime,
 }
 
 impl TrustedStreamManager {
     pub async fn new(common_args: &CommonArgs, runtime: TokioRuntime) -> Result<Self> {
-        if common_args.decap_from_http.is_some() {
-            todo!("decap_from_http is not implemented")
-        }
+        let ra_args = common_args.ra_args.clone().into_checked()?;
+
         Ok(Self {
             transport_layer: TransportLayer::new(
                 common_args.direct_forward.clone(),
                 common_args.decap_from_http.clone(),
             )?,
-            security_layer: Arc::new(
-                TcpSecurityLayer::new(&common_args.ra_args, runtime.clone()).await?,
-            ),
+            security_layer: match &common_args.decap_from_http {
+                // Note that decap_from_http is handled by TransportLayer so we don't need to handle it here.
+                Some(_) => SecurityLayer::OHttp(Arc::new(
+                    OHttpSecurityLayer::new(ra_args, runtime.clone()).await?,
+                )),
+                None => SecurityLayer::RatsTls(Arc::new(
+                    RatsTlsSecurityLayer::new(ra_args, runtime.clone()).await?,
+                )),
+            },
             runtime,
         })
     }
 }
 
 impl StreamManager for TrustedStreamManager {
-    type Sender = mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>;
+    type Sender = tokio::sync::mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>;
 
     async fn prepare(&self) -> Result<()> {
-        self.security_layer.prepare().await
+        match &self.security_layer {
+            SecurityLayer::RatsTls(security_layer) => security_layer.prepare().await,
+            SecurityLayer::OHttp(security_layer) => security_layer.prepare().await,
+        }
     }
 
     async fn consume_stream(
@@ -63,11 +71,10 @@ impl StreamManager for TrustedStreamManager {
             .context("Failed to decode stream")?;
 
         match decode_result {
-            DecodeResult::ContinueAsTngTrafficTcp(stream) => {
-                let security_layer = self.security_layer.clone();
-                let channel = sender.clone();
+            DecodeResult::ContinueAsTngTraffic(stream) => match &self.security_layer {
+                SecurityLayer::RatsTls(security_layer) => {
+                    let security_layer = security_layer.clone();
 
-                {
                     self.runtime
                         .spawn_supervised_task_fn_current_span(move |runtime| async move {
                             let (tls_stream, attestation_result) = match security_layer
@@ -81,17 +88,19 @@ impl StreamManager for TrustedStreamManager {
                                 }
                             };
 
-                            TcpWrappingLayer::unwrap_stream(
+                            RatsTlsWrappingLayer::unwrap_stream(
                                 tls_stream,
                                 attestation_result,
-                                channel,
+                                sender,
                                 runtime,
                             )
                             .await;
                         });
                 }
-            }
-            DecodeResult::ContinueAsTngTrafficHttp(common_stream_trait) => todo!("not implemented"),
+                SecurityLayer::OHttp(security_layer) => {
+                    security_layer.handle_stream(stream, sender).await?;
+                }
+            },
             DecodeResult::DirectlyForward(stream) => {
                 if let Err(e) =
                     sender.send((StreamType::DirectlyForwardStream(Box::new(stream)), None))
@@ -103,6 +112,11 @@ impl StreamManager for TrustedStreamManager {
 
         Ok(())
     }
+}
+
+pub enum SecurityLayer {
+    RatsTls(Arc<RatsTlsSecurityLayer>),
+    OHttp(Arc<OHttpSecurityLayer>),
 }
 
 pub enum StreamType {

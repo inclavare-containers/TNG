@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// Remote Attestation configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct RaArgs {
+pub struct RaArgsUnchecked {
     /// Whether to disable Remote Attestation functionality
     #[serde(default = "bool::default")]
     pub no_ra: bool,
@@ -16,6 +16,42 @@ pub struct RaArgs {
     /// Verification parameters configuration (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyArgs>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RaArgs {
+    AttestOnly(AttestArgs),
+    VerifyOnly(VerifyArgs),
+    AttestAndVerify(AttestArgs, VerifyArgs),
+    NoRa,
+}
+
+impl RaArgsUnchecked {
+    pub fn into_checked(self) -> Result<RaArgs> {
+        Ok(if self.no_ra {
+            // Sanity check
+            if self.verify.is_some() {
+                bail!("The 'no_ra: true' flag should not be used with 'verify' field");
+            }
+
+            if self.attest.is_some() {
+                bail!("The 'no_ra: true' flag should not be used with 'attest' field");
+            }
+
+            tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
+
+            RaArgs::NoRa
+        } else {
+            match (self.attest, self.verify) {
+                (None, None) => {
+                    bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
+                }
+                (None, Some(verify)) => RaArgs::VerifyOnly(verify),
+                (Some(attest), None) => RaArgs::AttestOnly(attest),
+                (Some(attest), Some(verify)) => RaArgs::AttestAndVerify(attest, verify),
+            }
+        })
+    }
 }
 
 /// Attestation parameters configuration enum
@@ -243,7 +279,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::BackgroundCheck { aa_args }) => {
@@ -274,7 +310,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::BackgroundCheck { aa_args }) => {
@@ -304,7 +340,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::Passport { aa_args, as_args }) => {
@@ -340,7 +376,7 @@ mod tests {
         }
         "#;
 
-        serde_json::from_str::<RaArgs>(json).unwrap();
+        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
@@ -355,7 +391,7 @@ mod tests {
         }
         "#;
 
-        serde_json::from_str::<RaArgs>(json).unwrap();
+        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
@@ -373,7 +409,7 @@ mod tests {
         }
         "#;
 
-        serde_json::from_str::<RaArgs>(json).unwrap();
+        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
@@ -388,7 +424,7 @@ mod tests {
         }
         "#;
 
-        serde_json::from_str::<RaArgs>(json).unwrap();
+        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
     }
     #[test]
     fn test_background_check_verify_without_model() {
@@ -403,7 +439,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
@@ -429,7 +465,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
@@ -453,7 +489,7 @@ mod tests {
         }
         "#;
 
-        let ra_args: RaArgs = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::Passport { token_verify }) => {

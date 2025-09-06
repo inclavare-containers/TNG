@@ -23,9 +23,9 @@ fn error_response(code: StatusCode, msg: String) -> Response {
     (code, msg).into_response()
 }
 
-pub struct TcpWrappingLayer {}
+pub struct RatsTlsWrappingLayer {}
 
-impl TcpWrappingLayer {
+impl RatsTlsWrappingLayer {
     pub async fn unwrap_stream(
         tls_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
         attestation_result: Option<AttestationResult>,

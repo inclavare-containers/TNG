@@ -29,7 +29,7 @@ mod tests {
 
     use crate::config::{
         ingress::{self, AddIngressArgs, IngressMode},
-        ra::RaArgs,
+        ra::RaArgsUnchecked,
         Endpoint, TngConfig,
     };
 
@@ -89,7 +89,7 @@ mod tests {
                 common: ingress::CommonArgs {
                     web_page_inject: false,
                     encap_in_http: None,
-                    ra_args: RaArgs {
+                    ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,
                         verify: None,
@@ -155,7 +155,7 @@ mod tests {
                 common: ingress::CommonArgs {
                     web_page_inject: false,
                     encap_in_http: None,
-                    ra_args: RaArgs {
+                    ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,
                         verify: None,

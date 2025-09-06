@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use anyhow::Result;
 use axum::{routing::get, Router};
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
+use tower::ServiceBuilder;
 
-use crate::config::control_interface::RestfulArgs;
+use crate::{config::control_interface::RestfulArgs, HTTP_RESPONSE_SERVER_HEADER};
 
 use super::ControlInterfaceCore;
 
@@ -46,7 +47,8 @@ impl RestfulControlInterface {
                         }
                     }
                 }),
-            );
+            )
+            .layer(ServiceBuilder::new().layer(axum::middleware::from_fn(add_server_header)));
 
         let addr = (
             self.args.address.host.as_deref().unwrap_or("0.0.0.0"),
@@ -64,6 +66,18 @@ impl RestfulControlInterface {
 
         Ok(())
     }
+}
+
+async fn add_server_header(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, Infallible> {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        "Server",
+        HeaderValue::from_static(HTTP_RESPONSE_SERVER_HEADER),
+    );
+    Ok(res)
 }
 
 #[cfg(test)]
