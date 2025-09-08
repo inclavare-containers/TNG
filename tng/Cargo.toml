@@ -18,6 +18,7 @@ auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = {version = "0.8.4", features = ["ws"], optional = true}# to disable mio
 base64 = "0.22.1"
 bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "cda036a", features = ["http-compat"]}
+rand_chacha = "0.9.0"
 bytes = {workspace = true}
 cidr = {version = "0.2.3", features = ["serde"]}
 clap = {version = "4.5.39", features = ["derive"]}

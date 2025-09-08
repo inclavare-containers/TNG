@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 pub mod metadata;
+pub mod userdata;
 
 /// Request structure for the key configuration endpoint
 #[derive(Serialize, Deserialize, Debug)]
@@ -31,7 +32,7 @@ pub struct KeyConfigResponse {
 }
 
 /// HPKE key configuration structure
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HpkeKeyConfig {
     /// Expiration timestamp for this configuration
     pub expire_timestamp: u64,

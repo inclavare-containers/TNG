@@ -10,7 +10,7 @@ use ohttp::KeyConfig;
 use prost::Message as _;
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::CocoConverter;
-use rats_cert::tee::{AttesterPipeline, GenericAttester as _};
+use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericEvidence};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
@@ -21,6 +21,7 @@ use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::state::OhttpServerState;
 use crate::tunnel::ohttp::protocol::metadata::{Metadata, METADATA_MAX_LEN};
+use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
     AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
@@ -135,11 +136,16 @@ impl ServerKeyStore {
                             let attester_pipeline =
                                 AttesterPipeline::new(coco_attester, coco_converter);
 
+                            let userdata = ServerUserData {
+                                challenge_token: "".to_string(),
+                                hpke_key_config: key_config,
+                            };
+
                             let token = attester_pipeline
-                                .get_evidence(serde_json::to_string(&key_config)?.as_bytes())
+                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
                                 .await?;
                             KeyConfigResponse {
-                                hpke_key_config: key_config,
+                                hpke_key_config: userdata.hpke_key_config,
                                 attestation_info: Some(ServerAttestationInfo::Passport {
                                     attestation_result: AttestationResultJwt(
                                         token.as_str().to_owned(),
@@ -148,10 +154,30 @@ impl ServerKeyStore {
                             }
                         }
                         (
-                            Some(AttestationRequest::BackgroundCheck { .. }),
-                            AttestArgs::BackgroundCheck { .. },
+                            Some(AttestationRequest::BackgroundCheck { challenge_token }),
+                            AttestArgs::BackgroundCheck { aa_args },
                         ) => {
-                            bail!("Background check is not supported yet")
+                            // TODO: aa_args.refresh_interval
+                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+
+                            let userdata = ServerUserData {
+                                challenge_token,
+                                hpke_key_config: key_config,
+                            };
+
+                            let evidence = coco_attester
+                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                                .await?;
+
+                            let evidence =
+                                BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?);
+
+                            KeyConfigResponse {
+                                hpke_key_config: userdata.hpke_key_config,
+                                attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
+                                    evidence,
+                                }),
+                            }
                         }
                         (
                             Some(AttestationRequest::Passport { .. }),

@@ -9,14 +9,23 @@ use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
 use http::header::HeaderValue;
 use ohttp::KeyConfig;
 use prost::Message;
-use rats_cert::tee::{
-    coco::{evidence::CocoAsToken, verifier::CocoVerifier},
-    GenericEvidence as _, GenericVerifier as _,
+use rand::{RngCore, SeedableRng as _};
+use rand_chacha::ChaCha12Rng;
+use rats_cert::{
+    cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE,
+    tee::{
+        coco::{
+            converter::CocoConverter,
+            evidence::{CocoAsToken, CocoEvidence},
+            verifier::CocoVerifier,
+        },
+        GenericConverter, GenericEvidence as _, GenericVerifier as _,
+    },
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     io::AsyncReadExt,
-    sync::{OnceCell, RwLock},
+    sync::{Mutex, OnceCell, RwLock},
 };
 use tokio_util::{
     compat::{
@@ -35,6 +44,7 @@ use crate::{
             metadata::{
                 metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
             },
+            userdata::ServerUserData,
             AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
@@ -50,6 +60,7 @@ use crate::{
 
 pub struct OHttpClient {
     runtime: TokioRuntime,
+    rng: Mutex<ChaCha12Rng>,
     ra_args: RaArgs,
     http_client: reqwest::Client,
     // TODO: setup a updater for updating hpke config in key_store
@@ -103,6 +114,7 @@ impl OHttpClient {
 
         Ok(Self {
             runtime,
+            rng: Mutex::new(ChaCha12Rng::from_os_rng()),
             ra_args,
             http_client,
             key_store: Default::default(),
@@ -140,20 +152,50 @@ impl OHttpClient {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
         let verifier =
             CocoVerifier::new(&token_verify.trusted_certs_paths, &token_verify.policy_ids)?;
+
+        let userdata = ServerUserData {
+            challenge_token: "".to_string(),
+            hpke_key_config: server_key_config.clone(),
+        };
+
         verifier
-            .verify_evidence(
-                &token,
-                serde_json::to_string(&server_key_config)?.as_bytes(),
-            )
+            .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
             .await?;
         Ok(AttestationResult::from_claims(token.get_claims()?))
     }
 
     async fn verify_evidence(
+        server_key_config: &HpkeKeyConfig,
+        challenge_token: &str,
         evidence: &str,
         as_args: &AttestationServiceArgs,
     ) -> Result<AttestationResult> {
-        unimplemented!("server attestation with background check model is not supported yet")
+        let raw_evidence = BASE64_STANDARD.decode(evidence)?;
+
+        let coco_evidence = std::result::Result::<_, rats_cert::errors::Error>::from(
+            CocoEvidence::create_evidence_from_dice(OCBR_TAG_EVIDENCE_COCO_EVIDENCE, &raw_evidence),
+        )?;
+        let coco_converter = CocoConverter::new(
+            &as_args.as_addr,
+            &as_args.token_verify.policy_ids,
+            as_args.as_is_grpc,
+        )?;
+        let token = coco_converter.convert(&coco_evidence).await?;
+
+        let verifier = CocoVerifier::new(
+            &as_args.token_verify.trusted_certs_paths,
+            &as_args.token_verify.policy_ids,
+        )?;
+
+        let userdata = ServerUserData {
+            challenge_token: challenge_token.to_owned(),
+            hpke_key_config: server_key_config.clone(),
+        };
+
+        verifier
+            .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
+            .await?;
+        Ok(AttestationResult::from_claims(token.get_claims()?))
     }
 
     async fn get_key_store_value(&self, endpoint: &TngEndpoint) -> Result<Arc<KeyStoreValue>> {
@@ -190,7 +232,9 @@ impl OHttpClient {
                 }
             };
 
-            let key_config_request = self.prepare_key_config_request(&endpoint).await?;
+            // TODO: use kbs protocol to get challenge token from trustee
+            let challenge_token = self.rng.lock().await.next_u64().to_string();
+            let key_config_request = self.prepare_key_config_request(&challenge_token).await?;
 
             // Handle hpke configuration for server
             let response = self.get_hpke_configuration(&endpoint, key_config_request).await?;
@@ -209,7 +253,7 @@ impl OHttpClient {
                             Some(ServerAttestationInfo::BackgroundCheck { evidence }),
                             VerifyArgs::BackgroundCheck { as_args },
                         ) => {
-                            Some(Self::verify_evidence(&evidence, as_args).await?)
+                            Some(Self::verify_evidence(&server_key_config, &challenge_token, &evidence, as_args).await?)
                         },
                         (
                             Some(ServerAttestationInfo::Passport { .. }),
@@ -253,16 +297,15 @@ impl OHttpClient {
     }
 
     /// Prepare a key configuration request
-    async fn prepare_key_config_request(&self, endpoint: &TngEndpoint) -> Result<KeyConfigRequest> {
+    async fn prepare_key_config_request(&self, challenge_token: &str) -> Result<KeyConfigRequest> {
         let key_config_request = match &self.ra_args {
             RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                VerifyArgs::Passport { token_verify } => KeyConfigRequest {
+                VerifyArgs::Passport { .. } => KeyConfigRequest {
                     attestation_request: Some(AttestationRequest::Passport),
                 },
-                VerifyArgs::BackgroundCheck { as_args } => KeyConfigRequest {
+                VerifyArgs::BackgroundCheck { .. } => KeyConfigRequest {
                     attestation_request: Some(AttestationRequest::BackgroundCheck {
-                        // TODO: use kbs protocol to get real challenge token
-                        challenge_token: "dummy".to_string(),
+                        challenge_token: challenge_token.to_owned(),
                     }),
                 },
             },
