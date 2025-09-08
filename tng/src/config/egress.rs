@@ -14,7 +14,8 @@ pub struct AddEgressArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CommonArgs {
-    pub decap_from_http: Option<DecapFromHttp>,
+    #[serde(alias = "decap_from_http")]
+    pub ohttp: Option<OHttpArgs>,
 
     #[serde(default = "Option::default")]
     pub direct_forward: Option<DirectForwardRules>,
@@ -67,7 +68,7 @@ pub enum EgressMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct DecapFromHttp {
+pub struct OHttpArgs {
     #[serde(default = "Option::default")]
     pub allow_non_tng_traffic_regexes: Option<AllowNonTngTrafficRegexes>,
 }

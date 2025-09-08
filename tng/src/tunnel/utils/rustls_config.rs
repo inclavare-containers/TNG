@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::config::ra::{RaArgs, RaArgsUnchecked, VerifyArgs};
+use crate::config::ra::{RaArgs, VerifyArgs};
 use crate::tunnel::utils::runtime::TokioRuntime;
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 
 use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
 

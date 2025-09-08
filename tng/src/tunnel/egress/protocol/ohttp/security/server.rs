@@ -1,11 +1,11 @@
 use axum::{
     extract::{Request, State},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
-use http::HeaderValue;
+use http::{HeaderValue, StatusCode};
 use std::{convert::Infallible, sync::Arc};
 
 use crate::{
@@ -91,10 +91,36 @@ impl OhttpServer {
                     move |payload| async move { key_store.verify_attestation(payload).await }
                 }),
             )
+            .fallback({
+                let key_store = Arc::clone(&self.key_store);
+                move |State(state): State<OhttpServerState>, req| {
+                    fallback_handler(state, key_store.clone(), req)
+                }
+            })
             .layer(axum::middleware::from_fn(add_server_header))
             .layer(axum::middleware::from_fn(log_request))
-        // .layer(ServiceBuilder::new().layer(axum::middleware::from_fn(add_server_header)))
     }
+}
+
+async fn fallback_handler(
+    state: OhttpServerState,
+    key_store: Arc<ServerKeyStore>,
+    payload: Request<axum::body::Body>,
+) -> Result<Response, Response> {
+    let path = payload.uri().path();
+
+    if path.starts_with("/tng") {
+        // It may be a request from newer TNG version, so we should return NOT_FOUND
+        return Err(StatusCode::NOT_FOUND.into_response());
+    }
+
+    key_store
+        .process_encrypted_request(payload, state)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to process received OHTTP request");
+            error.into_response()
+        })
 }
 
 async fn add_server_header(req: Request, next: Next) -> Result<Response, Infallible> {

@@ -53,7 +53,7 @@ async fn test_access_via_tng() -> Result<()> {
                         },
                         "capture_local_traffic": true
                     },
-                    "decap_from_http": {
+                    "ohttp": {
                         "allow_non_tng_traffic_regexes": ["/public/.*"]
                     },
                     "attest": {
@@ -73,7 +73,7 @@ async fn test_access_via_tng() -> Result<()> {
                             "port": 41000
                         }
                     },
-                    "encap_in_http": {
+                    "ohttp": {
                         "path_rewrites": [
                             {
                                 "match_regex": "^/foo/([^/]+)([/]?.*)$",

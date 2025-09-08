@@ -47,7 +47,7 @@ async fn test() -> Result<()> {
                                 "port": 30001
                             }
                         },
-                        "decap_from_http": {},
+                        "ohttp": {},
                         "attest": {
                             "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                         }
@@ -71,7 +71,7 @@ async fn test() -> Result<()> {
                                 }
                             ]
                         },
-                        "encap_in_http": {
+                        "ohttp": {
                             "path_rewrites": [
                                 {
                                     "match_regex": "^/foo/([^/]+)([/]?.*)$",

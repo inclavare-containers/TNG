@@ -6,7 +6,7 @@ pub struct PathRewriteGroup {
 }
 
 impl PathRewriteGroup {
-    pub fn new(path_rewrites_config: Vec<crate::config::ingress::PathRewrite>) -> Result<Self> {
+    pub fn new(path_rewrites_config: &Vec<crate::config::ingress::PathRewrite>) -> Result<Self> {
         Ok(Self {
             path_rewrites: path_rewrites_config
                 .iter()
@@ -17,18 +17,17 @@ impl PathRewriteGroup {
         })
     }
 
-    pub fn rewrite(&self, path: &str) -> String {
+    /// Rewrite path according to the path rewrite rules. If no rewrite rule matches, return None.
+    pub fn rewrite(&self, path: &str) -> Option<String> {
         for path_rewrite in &self.path_rewrites {
             match path_rewrite.try_rewrite(path) {
                 PathRewriteResult::NotMatched => { /* Try next */ }
                 PathRewriteResult::Rewritted(rewrited_path) => {
-                    return rewrited_path;
+                    return Some(rewrited_path);
                 }
             }
         }
-
-        // If no path_rewrite matched, return the path `/`.
-        "/".to_string()
+        None
     }
 }
 
@@ -170,7 +169,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_rewrite_group() -> Result<()> {
-        let path_rewrite_group = PathRewriteGroup::new(serde_json::from_value(json! {
+        let path_rewrite_group = PathRewriteGroup::new(&serde_json::from_value(json! {
             [
                 {
                     "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
@@ -179,13 +178,13 @@ mod tests {
             ]
         })?)?;
 
-        assert_eq!(path_rewrite_group.rewrite("/sss"), "/".to_string());
+        assert_eq!(path_rewrite_group.rewrite("/sss"), None);
         assert_eq!(
             path_rewrite_group.rewrite(r"/foo/bar/user/idxxxxx/info"),
-            r"/foo/bar/user".to_string()
+            Some(r"/foo/bar/user".to_string())
         );
 
-        let path_rewrite_group = PathRewriteGroup::new(serde_json::from_value(json! {
+        let path_rewrite_group = PathRewriteGroup::new(&serde_json::from_value(json! {
             [
                 {
                     "match_regex": "/bar/([^/]+)([/]?.*)",
@@ -194,15 +193,15 @@ mod tests {
             ]
         })?)?;
 
-        assert_eq!(path_rewrite_group.rewrite("/sss"), "/".to_string());
+        assert_eq!(path_rewrite_group.rewrite("/sss"), None);
         assert_eq!(
             path_rewrite_group.rewrite(r"/bar/user/idxxxxx/info"),
-            r"/bar/user".to_string()
+            Some(r"/bar/user".to_string())
         );
 
         assert_eq!(
             path_rewrite_group.rewrite(r"/foo/bar/user/idxxxxx/info"),
-            r"/".to_string()
+            None
         );
 
         Ok(())

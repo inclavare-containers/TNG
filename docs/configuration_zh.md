@@ -15,9 +15,8 @@
 ### 字段说明
 
 - **`ingress_mode`** (IngressMode)：指定流量入站的方式，可以是`mapping`、`http_proxy`或`netfilter`。
-- **`encap_in_http`** (EncapInHttp, 可选)：HTTP封装配置。
-- （已废弃）**`web_page_inject`** (boolean, 可选，默认为`false`)：开启该选项后，会在网页最上方注入一个标题栏，以显示当前页面的远程证明状态信息，这可以让浏览器用户强感知到远程证明的存在。注意，该功能需要同时指定`encap_in_http`字段
-    > 注意：该选项仅在2.0.0之前的版本中可用
+- （已废弃）**`encap_in_http`** (EncapInHttp, 可选)：HTTP封装配置。该配置已在2.2.5中废弃，请改用`ohttp`字段代替。
+- **`ohttp`** (OHttp, 可选)：OHTTP配置。
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。
@@ -346,7 +345,8 @@ flowchart TD
 ### 字段说明
 - **`egress_mode`** (EgressMode)：指定流量出站的方式，可以是`mapping`或`netfilter`。
 - **`direct_forward`** (array [DirectForwardRule], 可选)：指定需要直接转发（而不经过解密）的流量的匹配规则。
-- **`decap_from_http`** (DecapFromHttp, 可选)：HTTP解封装配置。
+- （已废弃）**`decap_from_http`** (DecapFromHttp, 可选)：HTTP解封装配置。该配置已在2.2.5中废弃，请改用`ohttp`字段代替。
+- **`ohttp`** (OHttp, 可选)：OHTTP配置。
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。
@@ -648,31 +648,27 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 }
 ```
 
-## 伪装成七层流量
+## OHTTP
 
-在现代的服务端开发中，app client和app server之间通常采用http协议通信，且链路中很可能经过HTTP中间件（如nginx反向代理、仅允许7层的负载均衡服务等）。然而，tng的rats-tls流量可能无法通过这些HTTP中间件，为了在业务中以尽可能少的负担接入tng，我们提供一个特性将tng的rats-tls流量伪装成七层http流量。
+OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，通过在HTTP请求层面进行加密，提供端到端的隐私保护和匿名性增强。TNG可利用OHTTP提供安全通信，同时保持与现有HTTP基础设施的兼容性。
 
-这一特性可以通过分别在Ingress中配置EncapInHttp和在Egress中配置DecapFromHttp来实现
-
-鉴于这些中间组件的特性，tng在伪装成http流量后通常需要保留原始流量的一些字段，以便路由、负载均衡等功能正常运作。但出于数据机密性的考虑，伪装后http流量中的字段不应该包含敏感信息。因此，tng提供了一些规则来配置伪装后http流量的字段：
-1. 伪装后http流量的请求method统一为`POST`
-2. 伪装后http流量的请求路径path默认为`/`，也可以通过指定`path_rewrites`字段，根据内层被保护的业务http请求的path以正则表达式的方式重写出伪装后http流量的path。
-3. 伪装后http流量的Host（或者`:authority`）和内层被保护的业务http请求保持一致。
-4. 伪装后http流量将带有一个名为`tng`的请求头，可用于区分普通流量和伪装后流量。同时原业务流量中的请求头将被隐去。
+在默认情况下，TNG使用rats-tls协议提供TCP流级别的加密保护，这适用于大多数情况。如果需要启用该特性，可以通过分别在Ingress中配置`ohttp`和在Egress中配置`ohttp`来实现切换为OHTTP协议。
 
 > [!WARNING]  
-> 如果启用「伪装成七层流量」特性，则要求内层被保护的业务必须是http流量，而不能是普通的tcp流量。
+> 如果启用OHTTP特性，则要求内层被保护的业务必须是http流量，而不能是普通的tcp流量。
 
-### EncapInHttp：入站侧流量的伪装
 
-可通过在`add_ingress`对象中指定的`encap_in_http`字段来开启伪装能力。如未指定`encap_in_http`则不会开启伪装能力。
+
+### OHttp：入站侧（Ingress）配置
+
+可通过在`add_ingress`对象中指定的`ohttp`字段来开启OHTTP能力。如未指定`ohttp`则不会开启OHTTP能力。
 
 #### 字段说明
 
-- **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，这将默认设置伪装后http流量的path为`/`。
+- **`path_rewrites`** (array [PathRewrite], 可选，默认为空数组)：该字段指定了以正则表达式的方式进行流量path重写的参数列表。所有重写将按照在path_rewrites列表中的顺序进行，且只会匹配上列表中的一项。如果HTTP 请求未能匹配任何有效的path_rewrites列表成员，这将默认设置OHTTP流量的path为`/`。
     - **`match_regex`** (string)：用于匹配内层被保护的业务http请求的path的正则表达式，该字段的值将被用于针对整个path字符串进行匹配，而不是部分匹配。
 
-    - **`substitution`** (string)：当http请求的原始path与`match_regex`匹配时，伪装后http流量的path将被整个替换为`substitution`的值。
+    - **`substitution`** (string)：当http请求的原始path与`match_regex`匹配时，OHTTP流量的path将被整个替换为`substitution`的值。
 
 > [!NOTE]
 > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
@@ -684,7 +680,7 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 
 示例：
 
-在这个示例中，我们添加了一个PathRewrite规则，表示将path能够匹配上`^/foo/bar/([^/]+)([/]?.*)$`的所有用户HTTP Reqesut，其tng隧道的HTTP外壳流量的path重写为`/foo/bar/$1`（注意其中`$1`是一个正则替换规则）。
+在这个示例中，我们添加了一个PathRewrite规则，表示将path能够匹配上`^/foo/bar/([^/]+)([/]?.*)$`的所有用户HTTP Reqesut，其tng隧道的OHTTP流量的path重写为`/foo/bar/$1`（注意其中`$1`是一个正则替换规则）。
 
 ```json
 {
@@ -700,7 +696,7 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
                     "port": 20001
                 }
             },
-            "encap_in_http": {
+            "ohttp": {
                 "path_rewrites": [
                     {
                         "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
@@ -719,8 +715,19 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 }
 ```
 
-### DecapFromHttp：出站侧流量的伪装
-与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`decap_from_http`字段来开启对已伪装流量的拆解。如不指定`decap_from_http`字段则不开启。
+
+#### L7网关兼容性
+
+在使用7层网关许多场景中，TNG在使用OHTTP协议保护流量后，通常需要保留原始流量的一些字段，以便路由、负载均衡等功能正常运作。但出于数据机密性的考虑，加密保护后的HTTP请求中的字段不应该包含敏感信息。因此，tng提供了一些规则来配置加密保护后的HTTP请求的字段：
+1. 加密后的HTTP请求的请求method统一为`POST`
+2. 加密后的HTTP请求的请求路径path默认为`/`，也可以通过指定`path_rewrites`字段，根据内层被保护的业务http请求的path以正则表达式的方式重写出加密后的HTTP请求的path。
+3. 加密后的HTTP请求的Host（或者`:authority`）和内层被保护的业务http请求保持一致。
+4. 加密后的HTTP请求和响应将分别使用`Content-Type: message/ohttp-chunked-req`和`Content-Type: message/ohttp-chunked-res`作为`Content-Type`。
+5. 加密后的HTTP请求及响应中将不包含被加密HTTP请求中的请求头和响应头。
+
+
+### OHttp：出站侧（Egress）配置
+与入站侧的配置对应，出站侧可通过在`add_egress`对象中指定`ohttp`字段来开启OHTTP支持。如不指定`ohttp`字段则不使用OHTTP协议。
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes`在2.2.4版本及之后的版本中已被弃用，请使用`direct_forward`字段来替代。
@@ -750,9 +757,12 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
                     "port": 30001
                 }
             },
-            "decap_from_http": {
-                "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
-            },
+            "ohttp": {},
+            "direct_forward": [
+                {
+                    "http_path": "/api/builtin/.*"
+                }
+            ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }

@@ -4,62 +4,46 @@ use tng_testsuite::{
     task::{app::AppType, tng::TngInstance, Task as _},
 };
 
-/// tng client as verifier and tng server as attester, with "HTTP encapulation" enabled.
-///
-///
-/// You may test it by launch a python http server and connect it with curl via tng:
-///
-/// ```sh
-/// python3 -m http.server 30001
-/// ```
-///
-/// ```sh
-/// curl --connect-to example.com:80:192.168.1.1:10001 http://example.com:80/foo/bar/www?type=1&case=1 -vvvv
-/// ```
-///
-/// You can use tcpdump to observe the encapsulated HTTP traffic:
-///
-/// ```sh
-/// tcpdump -n -vvvvvvvvvv -qns 0 -X -i any tcp port 20001
-/// ```
-///
-/// You will see a POST request with `/foo/bar` as path and `tng` as one of the headers.
+/// tng client as verifier and tng server as attester, with "HTTP encapulation" enabled, while tng server is using `netfilter` mode instead of `mapping` mode.
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
     run_test(vec![
-        TngInstance::TngServer(r#"
+        TngInstance::TngServer(
+            r#"
             {
                 "add_egress": [
                     {
-                        "mapping": {
-                            "in": {
-                                "port": 20001
-                            },
-                            "out": {
-                                "host": "127.0.0.1",
+                        "netfilter": {
+                            "capture_dst": {
                                 "port": 30001
                             }
                         },
                         "ohttp": {},
                         "attest": {
-                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            "model": "passport",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
                         }
                     }
                 ]
             }
-            "#).boxed(),
-        TngInstance::TngClient(r#"
+            "#,
+        ).boxed(),
+        TngInstance::TngClient(
+            r#"
             {
                 "add_ingress": [
                     {
                         "mapping": {
                             "in": {
-                                "host": "0.0.0.0",
                                 "port": 10001
                             },
                             "out": {
                                 "host": "192.168.1.1",
-                                "port": 20001
+                                "port": 30001
                             }
                         },
                         "ohttp": {
@@ -71,7 +55,7 @@ async fn test() -> Result<()> {
                             ]
                         },
                         "verify": {
-                            "as_addr": "http://192.168.1.254:8080/",
+                            "model": "passport",
                             "policy_ids": [
                                 "default"
                             ]
@@ -79,7 +63,9 @@ async fn test() -> Result<()> {
                     }
                 ]
             }
-            "#).boxed(),
+            "#,
+        ).boxed(),
+        // TODO: add a HttpInspector for inspecting network traffic and check http body.
         AppType::HttpServer {
             port: 30001,
             expected_host_header: "example.com",

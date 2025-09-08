@@ -259,10 +259,6 @@ impl<T> SecurityConnection<T> {
             attestation_result,
         }
     }
-
-    pub fn into_parts(self) -> (T, Option<AttestationResult>) {
-        (self.inner, self.attestation_result)
-    }
 }
 
 impl hyper_util::client::legacy::connect::Connection

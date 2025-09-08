@@ -53,16 +53,13 @@ pub enum TngError {
     ClientBackgroundCheckFaild(#[source] reqwest::Error),
 
     #[error("Failed to request key config froam ohttp server: {0}")]
-    RequestKeyConfigFailed(#[source] reqwest::Error),
+    RequestKeyConfigFailed(#[source] anyhow::Error),
 
     #[error("Failed to connect to upstream")]
     ConnectUpstreamFailed,
 
     #[error("Failed to construct http response: {0}")]
     ConstructHttpResponseFailed(#[source] http::Error),
-
-    #[error("Failed to get hpke configuration: {0}")]
-    GetServerHpkeConfigurationFailed(#[source] anyhow::Error),
 
     #[error("Failed to select a hpke configutation: {0}")]
     ServerHpkeConfigurationSelectFailed(#[source] anyhow::Error),

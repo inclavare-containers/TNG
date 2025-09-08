@@ -28,7 +28,7 @@ async fn test_conflict_config_field() -> Result<()> {
                             "http_path": "/public/.*"
                         }
                     ],
-                    "decap_from_http": {
+                    "ohttp": {
                         "allow_non_tng_traffic_regexes": ["/public/.*"]
                     },
                     "attest": {
@@ -44,10 +44,9 @@ async fn test_conflict_config_field() -> Result<()> {
     Ok(())
 }
 
-
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-async fn test_direct_forward_without_decap_from_http() -> Result<()> {
+async fn test_direct_forward_without_ohttp() -> Result<()> {
     let tng_server_config = r#"
         {
             "add_egress": [
@@ -134,10 +133,9 @@ async fn test_direct_forward_without_decap_from_http() -> Result<()> {
     Ok(())
 }
 
-
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-async fn test_direct_forward_with_decap_from_http() -> Result<()> {
+async fn test_direct_forward_with_ohttp() -> Result<()> {
     let tng_server_config = r#"
         {
             "add_egress": [
@@ -153,7 +151,7 @@ async fn test_direct_forward_with_decap_from_http() -> Result<()> {
                             "http_path": "/public/.*"
                         }
                     ],
-                    "decap_from_http": {},
+                    "ohttp": {},
                     "attest": {
                         "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     }
@@ -171,7 +169,7 @@ async fn test_direct_forward_with_decap_from_http() -> Result<()> {
                             "port": 41000
                         }
                     },
-                    "encap_in_http": {
+                    "ohttp": {
                         "path_rewrites": [
                             {
                                 "match_regex": "^/foo/([^/]+)([/]?.*)$",

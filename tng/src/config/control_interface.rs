@@ -88,7 +88,7 @@ mod tests {
                 }),
                 common: ingress::CommonArgs {
                     web_page_inject: false,
-                    encap_in_http: None,
+                    ohttp: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,
@@ -154,7 +154,7 @@ mod tests {
                 }),
                 common: ingress::CommonArgs {
                     web_page_inject: false,
-                    encap_in_http: None,
+                    ohttp: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,

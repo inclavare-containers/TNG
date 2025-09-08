@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    config::egress::{DecapFromHttp, DirectForwardRules},
+    config::egress::{DirectForwardRules, OHttpArgs},
     tunnel::{
         stream::CommonStreamTrait,
         utils::{
@@ -29,16 +29,13 @@ pub struct TransportLayer {
 impl TransportLayer {
     pub fn new(
         direct_forward: Option<DirectForwardRules>,
-        decap_from_http: Option<DecapFromHttp>,
+        ohttp: Option<OHttpArgs>,
     ) -> Result<Self> {
         // For compatibility with older versions
-        let direct_forward = if let Some(decap_from_http) = decap_from_http {
-            match (
-                direct_forward,
-                decap_from_http.allow_non_tng_traffic_regexes,
-            ) {
+        let direct_forward = if let Some(ohttp) = ohttp {
+            match (direct_forward, ohttp.allow_non_tng_traffic_regexes) {
                 (Some(_), Some(_)) => {
-                    bail!("Cannot specify both `direct_forward` and `decap_from_http.allow_non_tng_traffic_regexes`. The later is deprecated, please use `direct_forward` instead.");
+                    bail!("Cannot specify both `direct_forward` and `allow_non_tng_traffic_regexes`. The later is deprecated, please use `direct_forward` instead.");
                 }
                 (None, Some(allow_non_tng_traffic_regexes)) => {
                     tracing::warn!("`allow_non_tng_traffic_regexes` is deprecated, please use `direct_forward` instead.");

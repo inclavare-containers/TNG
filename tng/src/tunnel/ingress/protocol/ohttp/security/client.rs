@@ -25,11 +25,11 @@ use tokio_util::{
     io::{ReaderStream, StreamReader},
 };
 
-use crate::{config::ra::RaArgs, error::TngError, AttestationResult, TokioRuntime};
 use crate::{
     config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
     tunnel::{
         endpoint::TngEndpoint,
+        ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
             metadata::{
                 metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
@@ -40,6 +40,11 @@ use crate::{
         },
     },
 };
+use crate::{
+    config::{ingress::OHttpArgs, ra::RaArgs},
+    error::TngError,
+    AttestationResult, TokioRuntime,
+};
 
 pub struct OHttpClient {
     runtime: TokioRuntime,
@@ -47,6 +52,8 @@ pub struct OHttpClient {
     http_client: reqwest::Client,
     // TODO: setup a updater for updating hpke config in key_store
     key_store: RwLock<HashMap<TngEndpoint, Arc<OnceCell<Arc<KeyStoreValue>>>>>,
+
+    path_rewrite_group: PathRewriteGroup,
 }
 
 struct KeyStoreValue {
@@ -66,7 +73,7 @@ struct ServerHpkeKeyConfigParsed {
 }
 
 impl OHttpClient {
-    pub fn new(runtime: TokioRuntime, ra_args: RaArgs) -> Result<Self> {
+    pub fn new(runtime: TokioRuntime, ra_args: RaArgs, ohttp_args: &OHttpArgs) -> Result<Self> {
         // TODO: add check for ra_args
 
         Ok(Self {
@@ -74,6 +81,7 @@ impl OHttpClient {
             ra_args,
             http_client: reqwest::Client::builder().build()?,
             key_store: Default::default(),
+            path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
         })
     }
 
@@ -257,16 +265,34 @@ impl OHttpClient {
             endpoint.port()
         );
 
-        let result: KeyConfigResponse = self
+        tracing::info!(
+            url,
+            ?key_config_request,
+            "Getting HPKE configuration upstream"
+        );
+
+        let response = self
             .http_client
             .post(&url)
             .json(&key_config_request)
             .send()
             .await
-            .map_err(TngError::RequestKeyConfigFailed)?
+            .map_err(|error| TngError::RequestKeyConfigFailed(error.into()))?;
+
+        if let Err(e) = response.error_for_status_ref() {
+            if let Ok(text) = response.text().await {
+                return Err(e)
+                    .with_context(|| format!("Server response: {text}"))
+                    .map_err(|error| TngError::RequestKeyConfigFailed(error.into()));
+            } else {
+                return Err(e).map_err(|error| TngError::RequestKeyConfigFailed(error.into()));
+            }
+        }
+
+        let result: KeyConfigResponse = response
             .json()
             .await
-            .map_err(TngError::RequestKeyConfigFailed)?;
+            .map_err(|error| TngError::RequestKeyConfigFailed(error.into()))?;
 
         Ok(result)
     }
@@ -280,6 +306,8 @@ impl OHttpClient {
         endpoint: &TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
+        let old_uri = request.uri().clone();
+
         // Encode the request to bhttp message
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
@@ -337,7 +365,26 @@ impl OHttpClient {
         };
 
         // Forward the request to the upstream server
-        let url = format!("http://{}:{}/tng/tunnel", endpoint.host(), endpoint.port());
+        let url = {
+            let original_path = old_uri.path();
+            let mut rewrited_path = self
+                .path_rewrite_group
+                .rewrite(original_path)
+                .unwrap_or_else(|| "/tng/tunnel".to_string());
+
+            if !rewrited_path.starts_with("/") {
+                rewrited_path = format!("/{}", rewrited_path);
+            }
+
+            tracing::debug!(original_path, rewrited_path, "path is rewrited");
+
+            let url = format!(
+                "http://{}:{}{rewrited_path}",
+                endpoint.host(),
+                endpoint.port()
+            );
+            url
+        };
 
         tracing::debug!(url, "Sending OHTTP request to upstream server");
 

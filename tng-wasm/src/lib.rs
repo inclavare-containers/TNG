@@ -6,7 +6,7 @@ use serde_wasm_bindgen::Serializer;
 use tng::{
     build,
     config::{
-        ingress::{self, EncapInHttp},
+        ingress::{self, OHttpArgs},
         ra::{RaArgsUnchecked, VerifyArgs},
     },
     tunnel::{
@@ -67,7 +67,7 @@ async fn send_request_async_impl(
     tracing::debug!("TNG called");
     let common_args = ingress::CommonArgs {
         web_page_inject: false,
-        encap_in_http: Some(EncapInHttp {
+        ohttp: Some(OHttpArgs {
             path_rewrites: vec![],
         }),
         ra_args: RaArgsUnchecked {

@@ -3,7 +3,7 @@
 ## Top-Level Configuration Object
 
 - **`control_interface`** (ControlInterface): The configuration of the control plane for the TNG instance.
-- **`metrics`** (Metrics)：Specifies the configuration for Metrics, which is disabled by default.
+- **`metrics`** (Metrics): Specifies the configuration for Metrics, which is disabled by default.
 - **`add_ingress`** (array [Ingress]): Add ingress endpoints of the tng tunnel in the `add_ingress` array. Depending on the client-side user scenario, you can choose the appropriate inbound traffic method.
 - **`add_egress`** (array [Egress]): Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on the server-side user scenario, you can choose the appropriate outbound traffic method.
 - (Deprecated) **`admin_bind`** (AdminBind): Configuration for the Admin Interface of the Envoy instance. If this option is not specified, the Admin Interface feature will not be enabled.
@@ -15,9 +15,8 @@ The `Ingress` object is used to configure the ingress endpoints of the tng tunne
 ### Field Descriptions
 
 - **`ingress_mode`** (IngressMode): Specifies the method for inbound traffic, which can be `mapping`, `http_proxy`, or `netfilter`.
-- **`encap_in_http`** (EncapInHttp, optional): HTTP encapsulation configuration.
-- (Deprecated) **`web_page_inject`** (boolean, optional, default is `false`): When enabled, this option injects a header bar at the top of the webpage to display the remote attestation status of the current page, providing strong awareness of remote attestation to browser users. Note that this feature requires the `encap_in_http` field to be specified simultaneously.
-    > Notes: This feature is currently only supported in version before 2.0.0.
+- (Deprecated) **`encap_in_http`** (EncapInHttp, optional): HTTP encapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
+- **`ohttp`** (OHttp, optional): OHTTP configuration.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
@@ -345,7 +344,8 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 
 - **`egress_mode`** (EgressMode): Specifies the outbound traffic method, which can be `mapping` or `netfilter`.
 - **`direct_forward`** (array [DirectForwardRule], optional): Specifies matching rules for traffic that needs to be forwarded directly (without decryption).
-- **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration.
+- (Deprecated) **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
+- **`ohttp`** (OHttp, optional): OHTTP configuration.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
@@ -385,7 +385,6 @@ Example:
 ```
 
 The example configuration sets up a `netfilter` type egress that allows encrypted traffic to access port 30001 while also permitting unencrypted HTTP requests whose path matches the regular expression `/public/.*`.
-
 
 ## EgressMode
 
@@ -651,33 +650,28 @@ Example:
 }
 ```
 
-## Disguising as Layer 7 Traffic
 
-In modern server-side development, communication between app clients and app servers commonly uses the HTTP protocol, and the link may pass through HTTP middleware (such as nginx reverse proxy, or Layer 7-only load balancing services). However, TNG's rats-tls traffic might not pass through these HTTP middlewares. To integrate TNG with minimal burden in the business, we offer a feature to disguise TNG's rats-tls traffic as Layer 7 HTTP traffic.
 
-This feature can be achieved by configuring `EncapInHttp` in Ingress and `DecapFromHttp` in Egress.
+## OHTTP
 
-Considering the characteristics of these intermediate components, TNG needs to retain some fields of the original traffic after being disguised as HTTP traffic to ensure normal operation of functions like routing and load balancing. However, for data confidentiality, the fields in the disguised HTTP traffic should not contain sensitive information. Therefore, TNG provides some rules to configure the fields of the disguised HTTP traffic:
+Oblivious HTTP (OHTTP) is a network protocol extension designed to enhance privacy protection by encrypting HTTP requests to provide end-to-end privacy protection and anonymity enhancement. TNG can use OHTTP to provide secure communication while maintaining compatibility with existing HTTP infrastructure.
 
-1. The request method of the disguised HTTP traffic is uniformly `POST`.
-2. The request path of the disguised HTTP traffic defaults to `/`, but it can be rewritten to the path of the disguised HTTP traffic using the `path_rewrites` field based on the path of the protected business HTTP request inside, using regular expressions.
-3. The Host (or `:authority`) of the disguised HTTP traffic remains consistent with the protected business HTTP request inside.
-4. The disguised HTTP traffic carries a request header named `tng`, which can be used to distinguish between normal traffic and disguised traffic. Meanwhile, the request headers in the original business traffic will be concealed.
+By default, TNG uses the rats-tls protocol to provide TCP stream-level encryption protection, which is suitable for most situations. If you need to enable this feature, you can switch to the OHTTP protocol by configuring `ohttp` in Ingress and `ohttp` in Egress respectively.
 
 > [!WARNING]  
-> If the "Disguising as Layer 7 Traffic" feature is enabled, the protected business inside must be HTTP traffic, not ordinary TCP traffic.
+> If the OHTTP feature is enabled, the inner protected business must be HTTP traffic, not ordinary TCP traffic.
 
-### EncapInHttp: Disguising Inbound Traffic
+### OHttp: Ingress Configuration
 
-The disguising capability can be enabled by specifying the `encap_in_http` field in the `add_ingress` object. If `encap_in_http` is not specified, the disguising capability will not be enabled.
+The OHTTP capability can be enabled by specifying the `ohttp` field in the `add_ingress` object. If `ohttp` is not specified, the OHTTP capability will not be enabled.
 
 #### Field Descriptions
 
-- **`path_rewrites`** (array [PathRewrite], optional, default: empty array): This field specifies a list of parameters for rewriting the path of traffic using regular expressions. All rewrites will be applied in the order they appear in the `path_rewrites` list, and only one match will be performed per request. If an HTTP request does not match any valid member of the `path_rewrites` list, the default path for the encapsulated HTTP traffic will be set to `/`.
+- **`path_rewrites`** (array [PathRewrite], optional, default is an empty array): This field specifies a list of parameters for rewriting traffic paths using regular expressions. All rewrites will be applied in the order they appear in the path_rewrites list, and only one match will be performed per request. If an HTTP request does not match any valid member of the `path_rewrites` list, the default path for OHTTP traffic will be set to `/`.
 
     - **`match_regex`** (string): A regular expression used to match the path of the inner protected HTTP request. The value of this field will be used to match the entire path string, not just a part of it.
 
-    - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the encapsulated HTTP traffic will be replaced entirely with the value of `substitution`.
+    - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the OHTTP traffic will be replaced entirely with the value of `substitution`.
 
 > [!NOTE]
 > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
@@ -688,7 +682,7 @@ The disguising capability can be enabled by specifying the `encap_in_http` field
 
 Example:
 
-In this example, we add a PathRewrite rule that matches all user HTTP requests with paths that can be matched by `^/foo/bar/([^/]+)([/]?.*)$`. The path of the TNG tunnel's HTTP outer traffic will be rewritten to `/foo/bar/$1` (note that `$1` is a regular expression replacement rule).
+In this example, we add a PathRewrite rule that matches all user HTTP requests with paths that can be matched by `^/foo/bar/([^/]+)([/]?.*)$`. The path of the TNG tunnel's OHTTP traffic will be rewritten to `/foo/bar/$1` (note that `$1` is a regular expression replacement rule).
 
 ```json
 {
@@ -704,7 +698,7 @@ In this example, we add a PathRewrite rule that matches all user HTTP requests w
                     "port": 20001
                 }
             },
-            "encap_in_http": {
+            "ohttp": {
                 "path_rewrites": [
                     {
                         "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
@@ -723,9 +717,18 @@ In this example, we add a PathRewrite rule that matches all user HTTP requests w
 }
 ```
 
-### DecapFromHttp: Disguising Outbound Traffic
+#### L7 Gateway Compatibility
 
-Corresponding to the inbound configuration, the outbound side can enable the dismantling of already disguised traffic by specifying the `decap_from_http` field in the `add_egress` object. If the `decap_from_http` field is not specified, it will not be enabled.
+In many Layer 7 gateway scenarios, after TNG protects traffic using the OHTTP protocol, it usually needs to retain some fields of the original traffic so that functions such as routing and load balancing can work properly. However, for data confidentiality, the fields in the encrypted HTTP request should not contain sensitive information. Therefore, TNG provides some rules to configure the fields of the encrypted HTTP request:
+1. The request method of the encrypted HTTP request is uniformly `POST`
+2. The request path of the encrypted HTTP request defaults to `/`, but it can also be rewritten according to the path of the inner protected business HTTP request using regular expressions by specifying the `path_rewrites` field.
+3. The Host (or `:authority`) of the encrypted HTTP request is consistent with the inner protected business HTTP request.
+4. The encrypted HTTP request and response will use `Content-Type: message/ohttp-chunked-req` and `Content-Type: message/ohttp-chunked-res` as `Content-Type` respectively.
+5. The encrypted HTTP request and response will not contain the request headers and response headers in the encrypted HTTP request.
+
+### OHttp: Egress Configuration
+
+Corresponding to the ingress configuration, the egress side can enable OHTTP support by specifying the `ohttp` field in the `add_egress` object. If the `ohttp` field is not specified, the OHTTP protocol will not be used.
 
 > [NOTE]  
 > The `allow_non_tng_traffic_regexes` field has been deprecated since version 2.2.4. Please use the `direct_forward` field instead.
@@ -755,9 +758,12 @@ Example:
                     "port": 30001
                 }
             },
-            "decap_from_http": {
-                "allow_non_tng_traffic_regexes": ["/api/builtin/.*"]
-            },
+            "ohttp": {},
+            "direct_forward": [
+                {
+                    "http_path": "/api/builtin/.*"
+                }
+            ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }
@@ -775,7 +781,7 @@ Example:
 - **`control_interface`** (ControlInterface, optional, default is empty): This field specifies the listening address and port for the control interface.
     - **`restful`** (Endpoint, optional, default is empty): This field specifies the configuration for the RESTful API. It includes the following subfields:
         - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-        - **`port`** (integer): The port number, required.
+        - **`port`** (integer): The port number to listen on, required.
 
 Example:
 

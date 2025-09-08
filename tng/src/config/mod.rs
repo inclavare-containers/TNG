@@ -48,8 +48,8 @@ pub struct Endpoint {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use egress::{DecapFromHttp, EgressMode};
-    use ingress::{EncapInHttp, IngressMode, PathRewrite};
+    use egress::EgressMode;
+    use ingress::{IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
     use crate::config::{
@@ -79,7 +79,7 @@ mod tests {
                 }),
                 common: ingress::CommonArgs{
                     web_page_inject: false,
-                    encap_in_http: Some(EncapInHttp {
+                    ohttp: Some(ingress::OHttpArgs {
                         path_rewrites: vec![PathRewrite {
                             match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
                             substitution: "/foo/bar/\\1".to_owned(),
@@ -111,7 +111,7 @@ mod tests {
                 }),
                 common:egress::CommonArgs{
                     direct_forward: None,
-                    decap_from_http: Some(DecapFromHttp {
+                    ohttp: Some(egress::OHttpArgs {
                         allow_non_tng_traffic_regexes: None,
                     }),
                     ra_args: RaArgsUnchecked {

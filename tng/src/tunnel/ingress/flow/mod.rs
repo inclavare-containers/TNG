@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use auto_enums::auto_enum;
 use futures::Stream;
 use futures::StreamExt;
 use indexmap::IndexMap;

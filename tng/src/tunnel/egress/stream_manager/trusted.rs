@@ -33,10 +33,10 @@ impl TrustedStreamManager {
         Ok(Self {
             transport_layer: TransportLayer::new(
                 common_args.direct_forward.clone(),
-                common_args.decap_from_http.clone(),
+                common_args.ohttp.clone(),
             )?,
-            security_layer: match &common_args.decap_from_http {
-                // Note that decap_from_http is handled by TransportLayer so we don't need to handle it here.
+            security_layer: match &common_args.ohttp {
+                // Note that ohttp args is handled by TransportLayer so we don't need to handle it here.
                 Some(_) => SecurityLayer::OHttp(Arc::new(
                     OHttpSecurityLayer::new(ra_args, runtime.clone()).await?,
                 )),

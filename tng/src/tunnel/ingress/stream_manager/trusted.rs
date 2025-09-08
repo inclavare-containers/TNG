@@ -42,11 +42,11 @@ impl TrustedStreamManager {
 
         Ok(Self {
             security_layer: {
-                match &common_args.encap_in_http {
-                    Some(encap_in_http) => SecurityLayer::OHttp(Arc::new(
+                match &common_args.ohttp {
+                    Some(ohttp_args) => SecurityLayer::OHttp(Arc::new(
                         OHttpSecurityLayer::new(
                             transport_so_mark,
-                            encap_in_http,
+                            ohttp_args,
                             ra_args,
                             runtime.clone(),
                         )

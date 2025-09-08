@@ -1,9 +1,10 @@
 pub mod client;
+mod path_rewrite;
 
 use std::sync::Arc;
 
 use crate::{
-    config::{ingress::EncapInHttp, ra::RaArgs},
+    config::{ingress::OHttpArgs, ra::RaArgs},
     error::TngError,
     tunnel::{endpoint::TngEndpoint, ingress::protocol::ohttp::security::client::OHttpClient},
     AttestationResult, TokioRuntime,
@@ -18,14 +19,13 @@ pub struct OHttpSecurityLayer {
 impl OHttpSecurityLayer {
     pub async fn new(
         transport_so_mark: Option<u32>,
-        encap_in_http: &EncapInHttp,
+        ohttp_args: &OHttpArgs,
         ra_args: RaArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        // TODO: handle encap_in_http
         Ok(Self {
             runtime: runtime.clone(),
-            ohttp_client: Arc::new(OHttpClient::new(runtime, ra_args)?),
+            ohttp_client: Arc::new(OHttpClient::new(runtime, ra_args, ohttp_args)?),
         })
     }
 

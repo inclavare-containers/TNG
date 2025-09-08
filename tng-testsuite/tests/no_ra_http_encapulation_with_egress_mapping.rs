@@ -42,7 +42,7 @@ async fn test() -> Result<()> {
                                     "port": 30001
                                 }
                             },
-                            "decap_from_http": {},
+                            "ohttp": {},
                             "no_ra": true
                         }
                     ]
@@ -65,7 +65,7 @@ async fn test() -> Result<()> {
                                     "port": 20001
                                 }
                             },
-                            "encap_in_http": {
+                            "ohttp": {
                                 "path_rewrites": [
                                     {
                                         "match_regex": "^/foo/([^/]+)([/]?.*)$",

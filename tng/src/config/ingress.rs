@@ -18,7 +18,8 @@ pub struct AddIngressArgs {
 #[serde(deny_unknown_fields)]
 pub struct CommonArgs {
     #[serde(default = "Option::default")]
-    pub encap_in_http: Option<EncapInHttp>,
+    #[serde(alias = "encap_in_http")]
+    pub ohttp: Option<OHttpArgs>,
 
     #[serde(default = "bool::default")]
     pub web_page_inject: bool,
@@ -144,7 +145,7 @@ pub struct Socks5AuthArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct EncapInHttp {
+pub struct OHttpArgs {
     #[serde(default)]
     pub path_rewrites: Vec<PathRewrite>,
 }
