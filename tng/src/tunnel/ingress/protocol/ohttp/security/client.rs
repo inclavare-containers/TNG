@@ -6,6 +6,7 @@ use bhttp::http_compat::{
 };
 use bytes::{BufMut, BytesMut};
 use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
+use hpke::{kem::X25519HkdfSha256, Kem, Serializable};
 use http::header::HeaderValue;
 use ohttp::KeyConfig;
 use prost::Message;
@@ -15,11 +16,8 @@ use rats_cert::{
     cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE,
     tee::{
         coco::{
-            converter::CocoConverter,
-            evidence::{CocoAsToken, CocoEvidence},
-            verifier::CocoVerifier,
-        },
-        GenericConverter, GenericEvidence as _, GenericVerifier as _,
+            attester::CocoAttester, converter::CocoConverter, evidence::{CocoAsToken, CocoEvidence}, verifier::CocoVerifier
+        }, AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence as _, GenericVerifier as _
     },
 };
 use std::{collections::HashMap, sync::Arc};
@@ -36,15 +34,15 @@ use tokio_util::{
 };
 
 use crate::{
-    config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
+    config::ra::{AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
     tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
             metadata::{
-                metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
+                metadata::MetadataType, EncryptedWithClientAuthAsymmetricKey, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN
             },
-            userdata::ServerUserData,
+            userdata::{ClientUserData, ServerUserData},
             AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
@@ -71,7 +69,7 @@ pub struct OHttpClient {
 
 struct KeyStoreValue {
     metadata: Metadata,
-    private_key: (), // TODO
+    client_key: Option<(<X25519HkdfSha256 as Kem>::PrivateKey, <X25519HkdfSha256 as Kem>::PublicKey)>,
     server_key_config_parsed: ServerHpkeKeyConfigParsed,
     /// Server attestation information. This is only represented if the server attestation is required.
     server_attestation_result: Option<AttestationResult>,
@@ -220,15 +218,55 @@ impl OHttpClient {
         // read from the cell
         cell.get_or_try_init(|| async {
             // Handle metatdata for self
-            let metadata = match &self.ra_args {
-                RaArgs::AttestOnly(..) | RaArgs::AttestAndVerify(..) => {
-                    unimplemented!("Client side attestation is not supported yet.")
+            let (client_key, metadata) = match &self.ra_args {
+                RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
+                    match attest {
+                        AttestArgs::Passport { aa_args, as_args } => {
+                            let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
+
+                            // TODO: aa_args.refresh_interval
+                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+                            let coco_converter = CocoConverter::new(
+                                &as_args.as_addr,
+                                &as_args.token_verify.policy_ids,
+                                as_args.as_is_grpc,
+                            )?;
+                            let attester_pipeline =
+                                AttesterPipeline::new(coco_attester, coco_converter);
+
+                            let pk_s = client_key.1.to_bytes().to_vec();
+                            let userdata = ClientUserData {
+                                // TODO: should get challenge from attestation service
+                                challenge_token: "".to_string(),
+                                pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
+                            };
+
+                            let token = attester_pipeline
+                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                                .await?;
+                            (
+                                Some(client_key), 
+                                Metadata{
+                                    metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(EncryptedWithClientAuthAsymmetricKey{
+                                        attestation_result: token.as_str().to_string(),
+                                        pk_s,
+                                    }))
+                                }
+                            )
+                        },
+                        AttestArgs::BackgroundCheck { aa_args } => {
+                            unimplemented!("Client side attestation BackgroundCheck is not supported yet.")
+                        },
+                    }
                 }
                 RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
                     // Not required
-                    Metadata{
-                        metadata_type: Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth{}))
-                    }
+                    (
+                        None,
+                        Metadata {
+                            metadata_type: Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth{}))
+                        }
+                    )
                 }
             };
 
@@ -287,7 +325,7 @@ impl OHttpClient {
 
            Ok(Arc::new(KeyStoreValue{
                 metadata,
-                private_key: (),
+                client_key, // TODO: ohttp hpke setup with the client key
                 server_key_config_parsed,
                 server_attestation_result,
             }))

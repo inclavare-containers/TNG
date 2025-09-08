@@ -34,6 +34,9 @@ pub enum TngError {
     #[error("Failed to encode metadata: {0}")]
     MetadataEncodeError(#[source] prost::EncodeError),
 
+    #[error("Failed to validate metadata: {0}")]
+    MetadataValidateError(#[source] anyhow::Error),
+
     #[error("Not a valid http request")]
     InvalidHttpRequest,
 

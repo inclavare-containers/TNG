@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
@@ -10,18 +10,25 @@ use ohttp::KeyConfig;
 use prost::Message as _;
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::CocoConverter;
-use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericEvidence};
+use rats_cert::tee::coco::evidence::CocoAsToken;
+use rats_cert::tee::coco::verifier::CocoVerifier;
+use rats_cert::tee::{
+    AttesterPipeline, GenericAttester as _, GenericEvidence, GenericVerifier as _,
+};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
-use crate::config::ra::{AttestArgs, RaArgs};
+use crate::config::ra::{AttestArgs, AttestationServiceArgs, RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::state::OhttpServerState;
-use crate::tunnel::ohttp::protocol::metadata::{Metadata, METADATA_MAX_LEN};
-use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
+use crate::tunnel::ohttp::protocol::metadata::metadata::MetadataType;
+use crate::tunnel::ohttp::protocol::metadata::{
+    EncryptedWithClientAuthAsymmetricKey, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
+};
+use crate::tunnel::ohttp::protocol::userdata::{ClientUserData, ServerUserData};
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
     AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
@@ -270,7 +277,10 @@ impl ServerKeyStore {
 
         tracing::debug!(?metadata, "Received OHTTP request");
 
-        //TODO: use metadata
+        // Check metadata
+        self.validata_metadata(metadata)
+            .await
+            .map_err(TngError::MetadataValidateError)?;
 
         // Decrypt the ohttp message
         let plain_text = self.ohttp.decapsulate_stream(reader.compat());
@@ -334,6 +344,65 @@ impl ServerKeyStore {
             .map_err(TngError::ConstructHttpResponseFailed)?;
 
         Ok(response)
+    }
+
+    async fn validata_metadata(&self, metadata: Metadata) -> Result<()> {
+        match (metadata.metadata_type, &self.ra_args) {
+            (
+                Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(
+                    EncryptedWithClientAuthAsymmetricKey {
+                        attestation_result,
+                        pk_s,
+                    },
+                )),
+                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify),
+            ) => match verify {
+                VerifyArgs::Passport { token_verify }
+                | VerifyArgs::BackgroundCheck {
+                    as_args: AttestationServiceArgs { token_verify, .. },
+                } => {
+                    let token = CocoAsToken::new(attestation_result)?;
+                    let verifier = CocoVerifier::new(
+                        &token_verify.trusted_certs_paths,
+                        &token_verify.policy_ids,
+                    )?;
+
+                    let userdata = ClientUserData {
+                        challenge_token: "".to_string(),
+                        pk_s: BASE64_STANDARD.encode(&pk_s),
+                    };
+
+                    verifier
+                        .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
+                        .await?;
+                }
+            },
+            (
+                Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth {})),
+                RaArgs::AttestOnly(..) | RaArgs::NoRa,
+            ) => {
+                // Peace and love
+            }
+            (
+                Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth {})),
+                RaArgs::VerifyOnly(..) | RaArgs::AttestAndVerify(..),
+            ) => {
+                bail!(
+                    "client attestation is required but no attestation info was provided by client"
+                )
+            }
+            (
+                Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(..)),
+                RaArgs::AttestOnly(..) | RaArgs::NoRa,
+            ) => {
+                bail!("client attestation is not required but some attestation info ware provided by client")
+            }
+            (None, _) => {
+                bail!("metadata_type is empty")
+            }
+        }
+
+        Ok(())
     }
 
     /// Interface 3: Attestation Forward - Get Challenge
