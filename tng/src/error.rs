@@ -66,6 +66,12 @@ pub enum TngError {
 
     #[error("Failed to generate hpke configuration: {0}")]
     GenServerHpkeConfigurationFailed(#[source] anyhow::Error),
+
+    #[error("Not a valid OHTTP request: {0}")]
+    InvalidOHttpRequest(#[source] anyhow::Error),
+
+    #[error("Not a valid OHTTP request: {0}")]
+    InvalidOHttpResponse(#[source] anyhow::Error),
 }
 
 /// Error response structure

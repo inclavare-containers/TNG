@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
@@ -194,6 +194,22 @@ impl ServerKeyStore {
         payload: axum::extract::Request,
         state: OhttpServerState,
     ) -> Result<axum::response::Response, TngError> {
+        // Check content-type
+        match payload.headers().get(http::header::CONTENT_TYPE) {
+            Some(value) => {
+                if value != "message/ohttp-chunked-req" {
+                    return Err(TngError::InvalidOHttpRequest(anyhow!(
+                        "Wrong content-type header"
+                    )));
+                }
+            }
+            None => {
+                return Err(TngError::InvalidOHttpRequest(anyhow!(
+                    "Wrong content-type header"
+                )));
+            }
+        }
+
         // TODO: check version of tng protocol
         let mut reader =
             tokio_util::io::StreamReader::new(payload.into_body().into_data_stream().map(
@@ -285,6 +301,7 @@ impl ServerKeyStore {
         // Return the response
         let response = http::Response::builder()
             .status(axum::http::StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-res")
             .body(axum::body::Body::from_stream(ReaderStream::new(
                 encrypted_response,
             )))

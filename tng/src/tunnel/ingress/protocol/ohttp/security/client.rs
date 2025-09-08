@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bhttp::http_compat::{
     decode::{BhttpDecoder, HttpMessage},
@@ -6,6 +6,7 @@ use bhttp::http_compat::{
 };
 use bytes::{BufMut, BytesMut};
 use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
+use http::header::HeaderValue;
 use ohttp::KeyConfig;
 use prost::Message;
 use rats_cert::tee::{
@@ -39,6 +40,7 @@ use crate::{
             KeyConfigResponse, ServerAttestationInfo,
         },
     },
+    HTTP_REQUEST_USER_AGENT_HEADER,
 };
 use crate::{
     config::{ingress::OHttpArgs, ra::RaArgs},
@@ -76,10 +78,20 @@ impl OHttpClient {
     pub fn new(runtime: TokioRuntime, ra_args: RaArgs, ohttp_args: &OHttpArgs) -> Result<Self> {
         // TODO: add check for ra_args
 
+        let http_client = reqwest::Client::builder()
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert(
+                    http::header::USER_AGENT,
+                    HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
+                );
+                headers
+            })
+            .build()?;
         Ok(Self {
             runtime,
             ra_args,
-            http_client: reqwest::Client::builder().build()?,
+            http_client,
             key_store: Default::default(),
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
         })
@@ -391,6 +403,7 @@ impl OHttpClient {
         let response = self
             .http_client
             .post(&url)
+            .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
             .body(ohttp_request_body)
             .send()
             .await
@@ -401,6 +414,22 @@ impl OHttpClient {
             version = ?response.version(),
             "Received OHTTP response from upstream server"
         );
+
+        // Check content-type
+        match response.headers().get(http::header::CONTENT_TYPE) {
+            Some(value) => {
+                if value != "message/ohttp-chunked-res" {
+                    return Err(TngError::InvalidOHttpResponse(anyhow!(
+                        "Wrong content-type header"
+                    )));
+                }
+            }
+            None => {
+                return Err(TngError::InvalidOHttpResponse(anyhow!(
+                    "Wrong content-type header"
+                )));
+            }
+        }
 
         // Check the response status code
         let response = response
