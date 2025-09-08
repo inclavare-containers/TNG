@@ -10,7 +10,7 @@ version = "0.1.7"
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
 # The original version of hyper-util.
-hyper-util = {git = "https://github.com/hyperium/hyper-util.git", tag = "v0.1.7", default-features = false}
+hyper-util = {git = "https://github.com/inclavare-containers/hyper-util.git", rev = "4854ab5e5d67ff38a038ab22a1bd25087456bc84", default-features = false}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
 # The wasm patched version of hyper-util.

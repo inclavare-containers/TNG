@@ -1824,14 +1824,14 @@ dependencies = [
 name = "hyper-util"
 version = "0.1.7"
 dependencies = [
- "hyper-util 0.1.7 (git+https://github.com/hyperium/hyper-util.git?tag=v0.1.7)",
+ "hyper-util 0.1.7 (git+https://github.com/inclavare-containers/hyper-util.git?rev=4854ab5e5d67ff38a038ab22a1bd25087456bc84)",
  "hyper-util-wasm",
 ]
 
 [[package]]
 name = "hyper-util"
 version = "0.1.7"
-source = "git+https://github.com/hyperium/hyper-util.git?tag=v0.1.7#31708072ed06a72cff80972beb7fb52b661b5982"
+source = "git+https://github.com/inclavare-containers/hyper-util.git?rev=4854ab5e5d67ff38a038ab22a1bd25087456bc84#4854ab5e5d67ff38a038ab22a1bd25087456bc84"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -3433,8 +3433,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 [[package]]
 name = "reqwest"
 version = "0.12.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a77c62af46e79de0a562e1a9849205ffcb7fc1238876e9bd743357570e04046f"
+source = "git+https://github.com/inclavare-containers/reqwest.git?rev=5e6e4cdd97f04efda4e75e532cac0a18197e11cd#5e6e4cdd97f04efda4e75e532cac0a18197e11cd"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3447,7 +3446,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-rustls",
- "hyper-util 0.1.7",
+ "hyper-util 0.1.7 (git+https://github.com/inclavare-containers/hyper-util.git?rev=4854ab5e5d67ff38a038ab22a1bd25087456bc84)",
  "ipnet",
  "js-sys",
  "log",

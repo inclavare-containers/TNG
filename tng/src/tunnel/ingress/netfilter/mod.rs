@@ -11,9 +11,9 @@ use crate::config::ingress::IngressNetfilterCaptureDst;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::iptables::IptablesExecutor;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::socket::TCP_CONNECT_SO_MARK_DEFAULT;
-use crate::tunnel::utils::runtime::TokioRuntime;
 
 use super::flow::Incomming;
 use super::flow::IngressTrait;
@@ -77,6 +77,7 @@ impl IngressTrait for NetfilterIngress {
         .into()
     }
 
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32> {
         Some(self.so_mark)
     }

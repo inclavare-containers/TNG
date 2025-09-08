@@ -10,7 +10,7 @@ pub const TCP_CONNECT_SO_MARK_DEFAULT: u32 = 0x235; // 565
 pub trait SetListenerSockOpts {
     fn set_listener_common_sock_opts(&self) -> Result<()>;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn set_listener_tproxy_sock_opts(&self) -> Result<()>;
 }
 
@@ -18,7 +18,7 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
     fn set_listener_common_sock_opts(&self) -> Result<()> {
         let fd = self.as_fd();
         setsockopt(&fd, nix::sys::socket::sockopt::KeepAlive, &true)?;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         setsockopt(&fd, nix::sys::socket::sockopt::TcpKeepIdle, &30)?;
         setsockopt(&fd, nix::sys::socket::sockopt::TcpKeepInterval, &10)?;
         setsockopt(&fd, nix::sys::socket::sockopt::TcpKeepCount, &5)?;
@@ -26,7 +26,7 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn set_listener_tproxy_sock_opts(&self) -> Result<()> {
         let fd = self.as_fd();
         setsockopt(&fd, nix::sys::socket::sockopt::IpTransparent, &true)?;
@@ -35,7 +35,12 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
     }
 }
 
-pub async fn tcp_connect_with_so_mark<T>(host: T, so_mark: Option<u32>) -> Result<TcpStream>
+pub async fn tcp_connect<T>(
+    host: T,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    #[rustfmt::skip]
+    so_mark: Option<u32>,
+) -> Result<TcpStream>
 where
     T: tokio::net::ToSocketAddrs,
 {
@@ -51,13 +56,9 @@ where
         socket
             .set_nonblocking(true)
             .context("Failed to set nonblocking on socket")?;
-        #[cfg(target_os = "macos")]
-        let _ = so_mark;
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(so_mark) = so_mark {
-                socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
-            }
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        if let Some(so_mark) = so_mark {
+            socket.set_mark(so_mark)?; // Prevent from been redirected by iptables
         }
         let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
 

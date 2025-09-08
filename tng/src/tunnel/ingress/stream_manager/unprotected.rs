@@ -5,18 +5,25 @@ use anyhow::{bail, Context as _, Result};
 use crate::tunnel::{
     attestation_result::AttestationResult,
     endpoint::TngEndpoint,
-    utils::{self, socket::tcp_connect_with_so_mark},
+    utils::{self, socket::tcp_connect},
 };
 
 use super::StreamManager;
 
 pub struct UnprotectedStreamManager {
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     transport_so_mark: Option<u32>,
 }
 
 impl UnprotectedStreamManager {
-    pub fn new(transport_so_mark: Option<u32>) -> Self {
-        Self { transport_so_mark }
+    pub fn new(
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        transport_so_mark: Option<u32>,
+    ) -> Self {
+        Self {
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            transport_so_mark,
+        }
     }
 }
 
@@ -39,12 +46,15 @@ impl StreamManager for UnprotectedStreamManager {
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
     )> {
-        let upstream =
-            tcp_connect_with_so_mark((endpoint.host(), endpoint.port()), self.transport_so_mark)
-                .await
-                .with_context(|| {
-                    format!("Failed to establish TCP connection with upstream '{endpoint}'")
-                })?;
+        let upstream = tcp_connect(
+            (endpoint.host(), endpoint.port()),
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            self.transport_so_mark,
+        )
+        .await
+        .with_context(|| {
+            format!("Failed to establish TCP connection with upstream '{endpoint}'")
+        })?;
 
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })

@@ -284,6 +284,7 @@ impl IngressTrait for HttpProxyIngress {
         .into()
     }
 
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32> {
         None
     }

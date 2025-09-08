@@ -36,6 +36,7 @@ pub(super) trait IngressTrait: Sync + Send {
     fn metric_attributes(&self) -> IndexMap<String, String>;
 
     /// Return the so_mark which should be used for creating new tcp stream to upstream.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32>;
 
     /// Accept incomming streams. The returned stream should be a stream of incomming accepted streams.
@@ -65,20 +66,29 @@ impl IngressFlow {
         let metric_attributes = ingress.metric_attributes();
         let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
 
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         let transport_so_mark = ingress.transport_so_mark();
 
         let trusted_stream_manager = Arc::new(
-            TrustedStreamManager::new(common_args, transport_so_mark, {
-                // A standalone tokio runtime to run tasks related to the protocol module
-                #[cfg(unix)]
-                let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
-                #[cfg(wasm)]
-                let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
-                rt
-            })
+            TrustedStreamManager::new(
+                common_args,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                transport_so_mark,
+                {
+                    // A standalone tokio runtime to run tasks related to the protocol module
+                    #[cfg(unix)]
+                    let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
+                    #[cfg(wasm)]
+                    let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
+                    rt
+                },
+            )
             .await?,
         );
-        let unprotected_stream_manager = Arc::new(UnprotectedStreamManager::new(transport_so_mark));
+        let unprotected_stream_manager = Arc::new(UnprotectedStreamManager::new(
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            transport_so_mark,
+        ));
 
         Ok(Self {
             ingress,

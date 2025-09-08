@@ -18,6 +18,7 @@ pub struct OHttpSecurityLayer {
 
 impl OHttpSecurityLayer {
     pub async fn new(
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         ohttp_args: &OHttpArgs,
         ra_args: RaArgs,
@@ -25,7 +26,13 @@ impl OHttpSecurityLayer {
     ) -> Result<Self> {
         Ok(Self {
             runtime: runtime.clone(),
-            ohttp_client: Arc::new(OHttpClient::new(runtime, ra_args, ohttp_args)?),
+            ohttp_client: Arc::new(OHttpClient::new(
+                runtime,
+                ra_args,
+                ohttp_args,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                transport_so_mark,
+            )?),
         })
     }
 

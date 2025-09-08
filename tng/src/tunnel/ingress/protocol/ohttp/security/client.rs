@@ -75,19 +75,32 @@ struct ServerHpkeKeyConfigParsed {
 }
 
 impl OHttpClient {
-    pub fn new(runtime: TokioRuntime, ra_args: RaArgs, ohttp_args: &OHttpArgs) -> Result<Self> {
-        // TODO: add check for ra_args
+    pub fn new(
+        runtime: TokioRuntime,
+        ra_args: RaArgs,
+        ohttp_args: &OHttpArgs,
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        transport_so_mark: Option<u32>,
+    ) -> Result<Self> {
+        // TODO: add sanity check for ra_args
 
-        let http_client = reqwest::Client::builder()
-            .default_headers({
+        let http_client = {
+            let mut builder = reqwest::Client::builder();
+            builder = builder.default_headers({
                 let mut headers = reqwest::header::HeaderMap::new();
                 headers.insert(
                     http::header::USER_AGENT,
                     HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
                 );
                 headers
-            })
-            .build()?;
+            });
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            {
+                builder = builder.tcp_mark(transport_so_mark);
+            }
+            builder.build()?
+        };
+
         Ok(Self {
             runtime,
             ra_args,

@@ -13,8 +13,8 @@ use crate::{
         endpoint::TngEndpoint,
         utils::{
             iptables::IptablesExecutor,
-            socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT},
             runtime::TokioRuntime,
+            socket::{SetListenerSockOpts, TCP_CONNECT_SO_MARK_DEFAULT},
         },
     },
 };

@@ -15,7 +15,7 @@ use crate::tunnel::egress::stream_manager::trusted::StreamType;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
-use crate::tunnel::utils::socket::tcp_connect_with_so_mark;
+use crate::tunnel::utils::socket::tcp_connect;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
@@ -104,10 +104,12 @@ impl RegistedService for EgressFlow {
                 }
             };
 
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             let transport_so_mark = self.egress.transport_so_mark();
 
             self.serve_in_async_task_no_throw_error(
                 accepted_stream,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
                 self.runtime.clone(),
             )
@@ -123,6 +125,7 @@ impl EgressFlow {
     async fn serve_in_async_task_no_throw_error(
         &self,
         accepted_stream: AcceptedStream,
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         runtime: TokioRuntime,
     ) {
@@ -178,8 +181,13 @@ impl EgressFlow {
 
                                 let downstream = stream_type.into_stream();
 
-                                let upstream = tcp_connect_with_so_mark(
+                                let upstream = tcp_connect(
                                     (dst.host(), dst.port()),
+                                    #[cfg(any(
+                                        target_os = "android",
+                                        target_os = "fuchsia",
+                                        target_os = "linux"
+                                    ))]
                                     transport_so_mark,
                                 )
                                 .await

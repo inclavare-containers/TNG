@@ -31,6 +31,7 @@ pub struct TrustedStreamManager {
 impl TrustedStreamManager {
     pub async fn new(
         common_args: &CommonArgs,
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
@@ -45,6 +46,11 @@ impl TrustedStreamManager {
                 match &common_args.ohttp {
                     Some(ohttp_args) => SecurityLayer::OHttp(Arc::new(
                         OHttpSecurityLayer::new(
+                            #[cfg(any(
+                                target_os = "android",
+                                target_os = "fuchsia",
+                                target_os = "linux"
+                            ))]
                             transport_so_mark,
                             ohttp_args,
                             ra_args,
@@ -53,8 +59,17 @@ impl TrustedStreamManager {
                         .await?,
                     )),
                     None => SecurityLayer::RatsTls(Arc::new(
-                        RatsTlsSecurityLayer::new(transport_so_mark, ra_args, runtime.clone())
-                            .await?,
+                        RatsTlsSecurityLayer::new(
+                            #[cfg(any(
+                                target_os = "android",
+                                target_os = "fuchsia",
+                                target_os = "linux"
+                            ))]
+                            transport_so_mark,
+                            ra_args,
+                            runtime.clone(),
+                        )
+                        .await?,
                     )),
                 }
             },

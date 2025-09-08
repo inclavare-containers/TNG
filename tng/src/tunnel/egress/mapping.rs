@@ -7,8 +7,8 @@ use tokio::net::TcpListener;
 use crate::{
     config::egress::EgressMappingArgs,
     tunnel::{
-        egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::socket::SetListenerSockOpts,
-        utils::runtime::TokioRuntime,
+        egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::runtime::TokioRuntime,
+        utils::socket::SetListenerSockOpts,
     },
 };
 

@@ -55,11 +55,15 @@ pub struct RatsTlsSecurityLayer {
 
 impl RatsTlsSecurityLayer {
     pub async fn new(
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         ra_args: RaArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let transport_layer_creator = RatsTlsTransportLayerCreator::new(transport_so_mark);
+        let transport_layer_creator = RatsTlsTransportLayerCreator::new(
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            transport_so_mark,
+        );
         let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
 
         Ok(Self {
