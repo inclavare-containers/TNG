@@ -8,12 +8,13 @@ use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use ohttp::KeyConfig;
 use prost::Message as _;
+use rats_cert::cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE;
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::CocoConverter;
-use rats_cert::tee::coco::evidence::CocoAsToken;
+use rats_cert::tee::coco::evidence::{CocoAsToken, CocoEvidence};
 use rats_cert::tee::coco::verifier::CocoVerifier;
 use rats_cert::tee::{
-    AttesterPipeline, GenericAttester as _, GenericEvidence, GenericVerifier as _,
+    AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence, GenericVerifier as _,
 };
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
@@ -368,6 +369,7 @@ impl ServerKeyStore {
                     )?;
 
                     let userdata = ClientUserData {
+                        // TODO: the challenge_token is not required to be check here, since it is already checked by attestation service. One way to slove it in rats-rs is to make report_data field of CocoVerifier::verify_evidence() to be Option<&[u8]>. So that we can skip the comparesion of user data.
                         challenge_token: "".to_string(),
                         pk_s: BASE64_STANDARD.encode(&pk_s),
                     };
@@ -413,12 +415,9 @@ impl ServerKeyStore {
     pub async fn get_attestation_challenge(
         &self,
     ) -> Result<Json<AttestationChallengeResponse>, TngError> {
-        // In a real implementation:
-        // 1. Forward the request to the actual AS challenge endpoint
-        // 2. Return the challenge token received from the AS
-
+        // TODO: Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
         let response = AttestationChallengeResponse {
-            challenge_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjEyM2FhY2Q0NTZkZWYiLCJpYXQiOjE2NzczMjgwMDAsImV4cCI6MTY3NzMyODMwMH0.signature".to_string(),
+            challenge_token: "".to_string(),
         };
 
         Ok(Json(response))
@@ -433,17 +432,44 @@ impl ServerKeyStore {
         &self,
         Json(payload): Json<AttestationVerifyRequest>,
     ) -> Result<Json<AttestationVerifyResponse>, TngError> {
-        // In a real implementation:
-        // 1. Forward the request to the actual AS verification endpoint
-        // 2. Return the attestation result received from the AS
+        async {
+            match &self.ra_args {
+                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
+                    VerifyArgs::Passport { token_verify: _ } => {
+                        bail!("Passport model is expected but got background check attestation from client")
+                    }
+                    VerifyArgs::BackgroundCheck {
+                        as_args,
+                    } => {
 
-        let _challenge_token = payload.challenge_token;
-        let _evidence = payload.evidence;
+                        // TODO: pass payload.challenge_token to attestation server
+                        let _challenge_token = payload.challenge_token;
 
-        let response = AttestationVerifyResponse {
-            attestation_result: ".....JWT.....".to_string(),
-        };
+                        let coco_evidence = std::result::Result::<_, rats_cert::errors::Error>::from(
+                            CocoEvidence::create_evidence_from_dice(OCBR_TAG_EVIDENCE_COCO_EVIDENCE, BASE64_STANDARD.decode(payload.evidence)?.as_ref()),
+                        )?;
 
-        Ok(Json(response))
+                        let coco_converter = CocoConverter::new(
+                            &as_args.as_addr,
+                            &as_args.token_verify.policy_ids,
+                            as_args.as_is_grpc,
+                        )?;
+
+                        let token  = coco_converter.convert(&coco_evidence).await?;
+
+                        let response = AttestationVerifyResponse {
+                            attestation_result: token.as_str().to_string(),
+                        };
+                        Ok(Json(response))
+
+                    }
+                },
+                RaArgs::AttestOnly(..) | RaArgs::NoRa => {
+                    bail!("client attestation is not required")
+                }
+            }
+        }
+        .await
+        .map_err(TngError::ServerVerifyClientEvidenceFailed)
     }
 }

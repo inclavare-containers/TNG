@@ -34,8 +34,7 @@ use tokio_util::{
 };
 
 use crate::{
-    config::ra::{AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
-    tunnel::{
+    config::ra::{AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs}, error::CheckErrorResponse as _, tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
@@ -47,8 +46,7 @@ use crate::{
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
         },
-    },
-    HTTP_REQUEST_USER_AGENT_HEADER,
+    }, HTTP_REQUEST_USER_AGENT_HEADER
 };
 use crate::{
     config::{ingress::OHttpArgs, ra::RaArgs},
@@ -220,10 +218,10 @@ impl OHttpClient {
             // Handle metatdata for self
             let (client_key, metadata) = match &self.ra_args {
                 RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
+                    let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
+
                     match attest {
                         AttestArgs::Passport { aa_args, as_args } => {
-                            let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
-
                             // TODO: aa_args.refresh_interval
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                             let coco_converter = CocoConverter::new(
@@ -255,7 +253,32 @@ impl OHttpClient {
                             )
                         },
                         AttestArgs::BackgroundCheck { aa_args } => {
-                            unimplemented!("Client side attestation BackgroundCheck is not supported yet.")
+                            let AttestationChallengeResponse{ challenge_token } = self.background_check_attestation_challenge(endpoint).await?;
+
+                            // TODO: aa_args.refresh_interval
+                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+
+                            let pk_s = client_key.1.to_bytes().to_vec();
+                            let userdata = ClientUserData {
+                                challenge_token: challenge_token.clone(),
+                                pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
+                            };
+
+                            let evidence = coco_attester
+                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                                .await?;
+
+                            let AttestationVerifyResponse{ attestation_result: token} = self.background_check_verify_attestation(endpoint, challenge_token, BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?)).await?;
+
+                            (
+                                Some(client_key), 
+                                Metadata{
+                                    metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(EncryptedWithClientAuthAsymmetricKey{
+                                        attestation_result: token.as_str().to_string(),
+                                        pk_s,
+                                    }))
+                                }
+                            )
                         },
                     }
                 }
@@ -560,21 +583,23 @@ impl OHttpClient {
         &self,
         endpoint: &TngEndpoint,
     ) -> Result<AttestationChallengeResponse, TngError> {
-        let client = reqwest::Client::new();
         let url = format!(
             "http://{}:{}/tng/background-check/challenge",
             endpoint.host(),
             endpoint.port()
         );
 
-        let result: AttestationChallengeResponse = client
+        let result: AttestationChallengeResponse = self.http_client
             .get(&url)
             .send()
             .await
-            .map_err(TngError::ClientGetAttestationChallengeFaild)?
+            .map_err(|e|TngError::ClientGetAttestationChallengeFaild(e.into()))?
+            .check_error_response().await
+            .map_err(TngError::ClientGetAttestationChallengeFaild)?            
             .json()
             .await
-            .map_err(TngError::ClientGetAttestationChallengeFaild)?;
+            .map_err(|e|TngError::ClientGetAttestationChallengeFaild(e.into()))?;
+
 
         Ok(result)
     }
@@ -590,7 +615,6 @@ impl OHttpClient {
         challenge_token: String,
         evidence: String,
     ) -> Result<AttestationVerifyResponse, TngError> {
-        let client = reqwest::Client::new();
         let url = format!(
             "http://{}:{}/tng/background-check/verify",
             endpoint.host(),
@@ -602,15 +626,17 @@ impl OHttpClient {
             evidence,
         };
 
-        let result: AttestationVerifyResponse = client
+        let result: AttestationVerifyResponse = self.http_client
             .post(&url)
             .json(&payload)
             .send()
             .await
-            .map_err(TngError::ClientBackgroundCheckFaild)?
+            .map_err(|e|TngError::ClientGetBackgroundCheckResultFaild(e.into()))?
+            .check_error_response().await
+            .map_err(TngError::ClientGetBackgroundCheckResultFaild)?            
             .json()
             .await
-            .map_err(TngError::ClientBackgroundCheckFaild)?;
+            .map_err(|e|TngError::ClientGetBackgroundCheckResultFaild(e.into()))?;
 
         Ok(result)
     }

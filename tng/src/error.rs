@@ -1,7 +1,9 @@
+use anyhow::Context as _;
+use async_trait::async_trait;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Custom error type
@@ -50,10 +52,13 @@ pub enum TngError {
     HttpCyperTextForwardError(#[source] reqwest::Error),
 
     #[error("Failed to get attestation challenge from server: {0}")]
-    ClientGetAttestationChallengeFaild(#[source] reqwest::Error),
+    ClientGetAttestationChallengeFaild(#[source] anyhow::Error),
 
-    #[error("Failed during background check from server: {0}")]
-    ClientBackgroundCheckFaild(#[source] reqwest::Error),
+    #[error("Failed to get client background check result from server: {0}")]
+    ClientGetBackgroundCheckResultFaild(#[source] anyhow::Error),
+
+    #[error("Failed to verify client evidence: {0}")]
+    ServerVerifyClientEvidenceFailed(#[source] anyhow::Error),
 
     #[error("Failed to request key config froam ohttp server: {0}")]
     RequestKeyConfigFailed(#[source] anyhow::Error),
@@ -78,7 +83,7 @@ pub enum TngError {
 }
 
 /// Error response structure
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ErrorResponse {
     /// Human-readable error description
     pub message: String,
@@ -91,5 +96,30 @@ impl IntoResponse for TngError {
         });
 
         (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+    }
+}
+
+#[async_trait]
+pub trait CheckErrorResponse: Sized {
+    async fn check_error_response(self) -> Result<Self, anyhow::Error>;
+}
+
+#[async_trait]
+impl CheckErrorResponse for reqwest::Response {
+    async fn check_error_response(self) -> Result<Self, anyhow::Error> {
+        if let Err(error) = self.error_for_status_ref() {
+            if self.status() == StatusCode::INTERNAL_SERVER_ERROR {
+                let text = self.text().await?;
+                if let Ok(ErrorResponse { message }) = serde_json::from_str(&text) {
+                    Err(error).context(format!("server error message: {message}"))?
+                } else {
+                    Err(error).context(format!("full response: {text}"))?
+                }
+            } else {
+                Err(error)?
+            }
+        } else {
+            Ok(self)
+        }
     }
 }

@@ -380,3 +380,75 @@ async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
 
     Ok(())
 }
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_ra_model_matrix_client_attest_with_background_check() -> Result<()> {
+    run_test(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {},
+                        "verify": {
+                            "model": "background_check",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        TngInstance::TngClient(
+            r#"
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {
+                            "path_rewrites": [
+                                {
+                                    "match_regex": "^/foo/([^/]+)([/]?.*)$",
+                                    "substitution": "/foo/\\1"
+                                }
+                            ]
+                        },
+                        "attest": {
+                            "model": "background_check",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        // TODO: add a HttpInspector for inspecting network traffic and check http body.
+        AppType::HttpServer {
+            port: 30001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/foo/bar/www?type=1&case=1",
+        }.boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.1",
+            port: 30001,
+            host_header: "example.com",
+            path_and_query: "/foo/bar/www?type=1&case=1",
+        }.boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}
