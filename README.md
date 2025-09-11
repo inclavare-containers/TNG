@@ -123,6 +123,16 @@ Now, you can directly use the `tng` command to start a TNG instance.
 
 You can get some examples from the [integration test cases](./tests/).
 
+## Minimal Supported Rust Version (MSRV)
+
+There are two versions of Rust toolchain required by this project:
+
+- `1.75.0`: This is the minimal supported Rust version for building TNG binary or RPM package (from the source code or the released source code tar ball).
+- `nightly-2025-07-07`: This is the requiestd Rust toolchain for:
+    - Build the TNG Javascript SDK. See [./tng-wasm/README_zh.md](./tng-wasm/README_zh.md) for details.
+    - Create the source code tar ball with `make create-tarball` command. That is because Some of our crate dependencies require a newer Rust toolchain to resolve.
+
+
 ## Contribution
 
 We welcome community contributions to make TNG a better tool for confidential computing scenarios! If you have any questions or suggestions, feel free to submit an Issue or Pull Request.

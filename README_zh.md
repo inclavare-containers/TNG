@@ -116,6 +116,15 @@ rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
 
 你可以从[集成测试用例](./tests/)中获取一些示例。
 
+## 最低支持的 Rust 版本（MSRV）
+
+本项目需要两个版本的 Rust 工具链：
+
+- `1.75.0`：这是构建 TNG 二进制文件或 RPM 包（无论是从源码还是发布的源码 tar 包构建）所要求的最低支持的 Rust 版本。
+- `nightly-2025-07-07`：这是以下场景所需的 Rust 工具链：
+    - 构建 TNG 的 JavaScript SDK。详细信息请参见 [[./tng-wasm/README_zh.md](file:///root/tng/tng-wasm/README_zh.md)](./tng-wasm/README_zh.md)。
+    - 使用 `make create-tarball` 命令创建源代码 tar 包。这是因为我们的一些 crate 依赖项需要更新的 Rust 工具链才能解析。
+
 ## 贡献
 
 欢迎社区贡献，让TNG成为机密计算场景下更好的工具！如果有任何问题或建议，请随时提交 Issue 或 Pull Request。

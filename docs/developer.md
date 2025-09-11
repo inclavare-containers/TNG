@@ -53,7 +53,7 @@ EOF
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 mkdir -p ~/.cargo/
-cat <<EOF > ~/.cargo/config
+cat <<EOF > ~/.cargo/config.toml
 [source.crates-io]
 replace-with = 'ustc'
 
