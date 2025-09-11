@@ -1,5 +1,10 @@
-use anyhow::{bail, Result};
+use std::path::Path;
+
+use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
 /// Remote Attestation configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,7 +33,7 @@ pub enum RaArgs {
 
 impl RaArgsUnchecked {
     pub fn into_checked(self) -> Result<RaArgs> {
-        Ok(if self.no_ra {
+        let ra_args = if self.no_ra {
             // Sanity check
             if self.verify.is_some() {
                 bail!("The 'no_ra: true' flag should not be used with 'verify' field");
@@ -50,7 +55,59 @@ impl RaArgsUnchecked {
                 (Some(attest), None) => RaArgs::AttestOnly(attest),
                 (Some(attest), Some(verify)) => RaArgs::AttestAndVerify(attest, verify),
             }
-        })
+        };
+
+        // Sanity check for the attest_args.
+        if let RaArgs::AttestOnly(attest_args) | RaArgs::AttestAndVerify(attest_args, _) = &ra_args
+        {
+            match &attest_args {
+                AttestArgs::Passport {
+                    aa_args: AttestationAgentArgs { aa_addr, .. },
+                    ..
+                }
+                | AttestArgs::BackgroundCheck {
+                    aa_args: AttestationAgentArgs { aa_addr, .. },
+                } => {
+                    let aa_sock_file = aa_addr
+                        .strip_prefix("unix:///")
+                        .context("AA address must start with unix:///")?;
+                    let aa_sock_file = Path::new("/").join(aa_sock_file);
+                    if !Path::new(&aa_sock_file).exists() {
+                        bail!("AA socket file {aa_sock_file:?} not found")
+                    }
+                }
+            };
+        }
+
+        // Sanity check for the verify_args.
+        if let RaArgs::VerifyOnly(verify_args) | RaArgs::AttestAndVerify(_, verify_args) = &ra_args
+        {
+            // Check token_verify
+            match verify_args {
+                VerifyArgs::Passport { token_verify }
+                | VerifyArgs::BackgroundCheck {
+                    as_args: AttestationServiceArgs { token_verify, .. },
+                } => {
+                    // Check if trusted certificate paths exist
+                    if let Some(paths) = &token_verify.trusted_certs_paths {
+                        for path in paths {
+                            if !Path::new(path).exists() {
+                                bail!("Attestation service trusted certificate path does not exist: {}", path);
+                            }
+                        }
+                    }
+                }
+            };
+
+            // Check if as_addr is a valid URL
+            if let VerifyArgs::BackgroundCheck { as_args } = verify_args {
+                Url::parse(&as_args.as_addr).with_context(|| {
+                    format!("Invalid attestation service address: {}", &as_args.as_addr)
+                })?;
+            }
+        }
+
+        Ok(ra_args)
     }
 }
 
@@ -152,6 +209,24 @@ pub struct AttestationAgentArgs {
 
     /// Evidence refresh interval (seconds), optional
     pub refresh_interval: Option<u64>,
+}
+
+const EVIDENCE_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
+
+impl AttestationAgentArgs {
+    pub fn refresh_strategy(&self) -> RefreshStrategy {
+        let refresh_interval = self
+            .refresh_interval
+            .unwrap_or(EVIDENCE_REFRESH_INTERVAL_SECOND);
+
+        if refresh_interval == 0 {
+            RefreshStrategy::Always
+        } else {
+            RefreshStrategy::Periodically {
+                interval: refresh_interval,
+            }
+        }
+    }
 }
 
 /// Verification parameters configuration enum
@@ -266,20 +341,22 @@ pub struct AttestationServiceTokenVerifyArgs {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
     fn test_background_check_attest_without_model() {
-        let json = r#"
-        {
-            "attest": {
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-                "refresh_interval": 3600
+        let json = json!(
+                {
+                "attest": {
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "refresh_interval": 3600
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::BackgroundCheck { aa_args }) => {
@@ -300,17 +377,17 @@ mod tests {
 
     #[test]
     fn test_background_check_attest_with_model() {
-        let json = r#"
-        {
-            "attest": {
-                "model": "background_check",
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-                "refresh_interval": 3600
+        let json = json!(
+                {
+                "attest": {
+                    "model": "background_check",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "refresh_interval": 3600
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::BackgroundCheck { aa_args }) => {
@@ -326,21 +403,21 @@ mod tests {
 
     #[test]
     fn test_passport_attest() {
-        let json = r#"
-        {
-            "attest": {
-                "model": "passport",
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-                "refresh_interval": 3600,
-                "as_addr": "localhost:8081",
-                "as_is_grpc": false,
-                "policy_ids": ["policy1", "policy2"],
-                "trusted_certs_paths": null
+        let json = json!(
+                {
+                "attest": {
+                    "model": "passport",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "refresh_interval": 3600,
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1", "policy2"],
+                    "trusted_certs_paths": null
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
             Some(AttestArgs::Passport { aa_args, as_args }) => {
@@ -367,79 +444,79 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_attest_bad_model() {
-        let json = r#"
-        {
-            "attest": {
-                "model": "foobar",
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+        let json = json!(
+                {
+                "attest": {
+                    "model": "foobar",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
             }
-        }
-        "#;
+        );
 
-        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
+        serde_json::from_value::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn test_passport_attest_missing_fields() {
-        let json = r#"
-        {
-            "attest": {
-                "model": "passport",
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+        let json = json!(
+                {
+                "attest": {
+                    "model": "passport",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
             }
-        }
-        "#;
+        );
 
-        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
+        serde_json::from_value::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn test_verify_bad_model() {
-        let json = r#"
-        {
-            "verify": {
-                "model": "foobar",
-                "as_addr": "localhost:8081",
-                "as_is_grpc": false,
-                "policy_ids": ["policy1", "policy2"],
-                "trusted_certs_paths": null
+        let json = json!(
+                {
+                "verify": {
+                    "model": "foobar",
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1", "policy2"],
+                    "trusted_certs_paths": null
+                }
             }
-        }
-        "#;
+        );
 
-        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
+        serde_json::from_value::<RaArgsUnchecked>(json).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn test_passport_verify_missing_fields() {
-        let json = r#"
-        {
-            "verify": {
-                "model": "passport",
-                "as_addr": "localhost:8081"
+        let json = json!(
+                {
+                "verify": {
+                    "model": "passport",
+                    "as_addr": "localhost:8081"
+                }
             }
-        }
-        "#;
+        );
 
-        serde_json::from_str::<RaArgsUnchecked>(json).unwrap();
+        serde_json::from_value::<RaArgsUnchecked>(json).unwrap();
     }
     #[test]
     fn test_background_check_verify_without_model() {
-        let json = r#"
-        {
-            "verify": {
-                "as_addr": "localhost:8081",
-                "as_is_grpc": false,
-                "policy_ids": ["policy1", "policy2"],
-                "trusted_certs_paths": null
+        let json = json!(
+                {
+                "verify": {
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1", "policy2"],
+                    "trusted_certs_paths": null
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
@@ -453,19 +530,19 @@ mod tests {
 
     #[test]
     fn test_background_check_verify_with_model() {
-        let json = r#"
-        {
-            "verify": {
-                "model": "background_check",
-                "as_addr": "localhost:8081",
-                "as_is_grpc": false,
-                "policy_ids": ["policy1", "policy2"],
-                "trusted_certs_paths": null
+        let json = json!(
+                {
+                "verify": {
+                    "model": "background_check",
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1", "policy2"],
+                    "trusted_certs_paths": null
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
@@ -479,17 +556,17 @@ mod tests {
 
     #[test]
     fn test_passport_verify() {
-        let json = r#"
-        {
-            "verify": {
-                "model": "passport",
-                "policy_ids": ["policy1", "policy2"],
-                "trusted_certs_paths": null
+        let json = json!(
+                {
+                "verify": {
+                    "model": "passport",
+                    "policy_ids": ["policy1", "policy2"],
+                    "trusted_certs_paths": null
+                }
             }
-        }
-        "#;
+        );
 
-        let ra_args: RaArgsUnchecked = serde_json::from_str(json).expect("Failed to deserialize");
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
             Some(VerifyArgs::Passport { token_verify }) => {
@@ -502,5 +579,91 @@ mod tests {
         let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
         assert!(serialized.contains(r#""model":"passport""#));
         assert!(serialized.contains(r#""policy_ids":["policy1","policy2"]"#));
+    }
+
+    #[test]
+    fn test_passport_verify_with_invalid_cert_path() {
+        let json = json!(
+                {
+                "verify": {
+                    "model": "passport",
+                    "policy_ids": ["policy1"],
+                    "trusted_certs_paths": ["/path/that/does/not/exist/cert.pem"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("trusted certificate path does not exist"));
+    }
+
+    #[test]
+    fn test_background_check_verify_with_invalid_cert_path() {
+        let json = json!(
+                {
+                "verify": {
+                    "model": "background_check",
+                    "as_addr": "http://localhost:8080",
+                    "policy_ids": ["policy1"],
+                    "trusted_certs_paths": ["/path/that/does/not/exist/cert.pem"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("trusted certificate path does not exist"));
+    }
+
+    #[test]
+    fn test_background_check_verify_with_invalid_as_addr() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "background_check",
+                    "as_addr": "not-a-valid-url",
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid attestation service address"));
+    }
+
+    #[test]
+    fn test_background_check_verify_with_valid_as_addr() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "background_check",
+                    "as_addr": "<should-be-a-url>:<should-be-a-port-number>",
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked =
+            serde_json::from_value::<RaArgsUnchecked>(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid attestation service address"));
     }
 }

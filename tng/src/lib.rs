@@ -29,16 +29,20 @@ pub use crate::tunnel::utils::tokio::TokioIo;
 #[cfg(test)]
 mod tests {
 
+    use std::future::Future;
+
     use anyhow::Result;
     use once_cell::sync::OnceCell;
     use scopeguard::defer;
     use serde_json::json;
     use tokio::select;
+    use tokio_util::sync::CancellationToken;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
     use crate::{
         config::TngConfig,
         runtime::{TngRuntime, TracingReloadHandle},
+        TokioRuntime,
     };
 
     pub static RELOAD_HANDLE: OnceCell<TracingReloadHandle> = OnceCell::new();
@@ -74,6 +78,27 @@ mod tests {
         if RELOAD_HANDLE.set(reload_handle).is_err() {
             panic!("Failed to set reload handle to global static variable")
         }
+    }
+
+    pub async fn run_test_with_tokio_runtime<F, T>(f: F) -> Result<()>
+    where
+        F: FnOnce(TokioRuntime) -> T,
+        T: Future<Output = Result<()>>,
+    {
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        defer! {
+            cancel_clone.cancel();
+        }
+        let cancel_clone = cancel.clone();
+        let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
+
+        let res = async { f(TokioRuntime::current(shutdown.guard())?).await }.await;
+
+        cancel.cancel();
+        shutdown.shutdown().await;
+
+        res
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]

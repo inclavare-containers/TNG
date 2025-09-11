@@ -35,6 +35,9 @@ use crate::tunnel::ohttp::protocol::{
     AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
     KeyConfigResponse, ServerAttestationInfo,
 };
+use crate::tunnel::utils::maybe_cached::RefreshStrategy;
+
+const DEFAULT_KEY_CONFIG_EXPIRE_SECOND: u64 = 5 * 60; // 5 minutes
 
 /// Server-side key store for managing cryptographic keys and attestation data
 #[derive(Debug, Clone)]
@@ -43,8 +46,6 @@ pub struct ServerKeyStore {
     ra_args: RaArgs,
     /// OHTTP key configurations
     ohttp: ohttp::Server,
-    /// Expiration timestamp for the key configurations
-    expire_timestamp: u64,
 }
 
 impl ServerKeyStore {
@@ -82,19 +83,7 @@ impl ServerKeyStore {
         // Initialize the ohttp server
         let ohttp = ohttp::Server::new(config).map_err(TngError::from)?;
 
-        // TODO: set a background task to refresh the keyconfig
-        // Set expiration timestamp to 1 hour from now
-        let expire_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(TngError::from)?
-            .as_secs()
-            + 3600;
-
-        Ok(ServerKeyStore {
-            ra_args,
-            ohttp,
-            expire_timestamp,
-        })
+        Ok(ServerKeyStore { ra_args, ohttp })
     }
 
     /// Interface 1: Get HPKE Configuration
@@ -106,7 +95,7 @@ impl ServerKeyStore {
     /// The client accesses this path before connecting to the TNG Server to obtain the
     /// server's public key and Evidence or Attestation Result (if needed).
     ///
-    /// This endpoint only needs to be accessed once. Before config_expire_timestamp or
+    /// This endpoint only needs to be accessed once. Before hpke_key_config.expire_timestamp or
     /// attestation_result expiration, the configuration needs to be refreshed in the background.
     pub async fn get_hpke_configuration(
         &self,
@@ -117,8 +106,30 @@ impl ServerKeyStore {
         let encoded_key_config_list = BASE64_STANDARD
             .encode(KeyConfig::encode_list(&key_config_list).map_err(TngError::from)?);
 
+        let expire_timestamp = {
+            // Set expiration timestamp accroding to the attestation configuration (aa_args.refresh_interval). Or we will use the default value.
+            let refresh_strategy = match &self.ra_args {
+                RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
+                    AttestArgs::Passport { aa_args, .. }
+                    | AttestArgs::BackgroundCheck { aa_args } => aa_args.refresh_strategy(),
+                },
+                RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Always,
+            };
+
+            let expire_time = match refresh_strategy {
+                RefreshStrategy::Periodically { interval } => interval,
+                RefreshStrategy::Always => DEFAULT_KEY_CONFIG_EXPIRE_SECOND,
+            };
+
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(TngError::from)?
+                .as_secs()
+                + expire_time
+        };
+
         let key_config = HpkeKeyConfig {
-            expire_timestamp: self.expire_timestamp,
+            expire_timestamp,
             encoded_key_config_list,
         };
 
@@ -134,7 +145,6 @@ impl ServerKeyStore {
                             Some(AttestationRequest::Passport),
                             AttestArgs::Passport { aa_args, as_args },
                         ) => {
-                            // TODO: aa_args.refresh_interval
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                             let coco_converter = CocoConverter::new(
                                 &as_args.as_addr,
@@ -165,7 +175,6 @@ impl ServerKeyStore {
                             Some(AttestationRequest::BackgroundCheck { challenge_token }),
                             AttestArgs::BackgroundCheck { aa_args },
                         ) => {
-                            // TODO: aa_args.refresh_interval
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 
                             let userdata = ServerUserData {
@@ -244,7 +253,6 @@ impl ServerKeyStore {
             }
         }
 
-        // TODO: check version of tng protocol
         let mut reader =
             tokio_util::io::StreamReader::new(payload.into_body().into_data_stream().map(
                 |result| result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),

@@ -18,23 +18,15 @@ use tracing::Instrument;
 
 pub struct RatsTlsSecurityLayer {
     tls_config_generator: TlsConfigGenerator,
-    runtime: TokioRuntime,
 }
 
 impl RatsTlsSecurityLayer {
     pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
-        let tls_config_generator = TlsConfigGenerator::new(ra_args).await?;
+        let tls_config_generator = TlsConfigGenerator::new(ra_args, runtime).await?;
 
         Ok(Self {
             tls_config_generator,
-            runtime,
         })
-    }
-
-    pub async fn prepare(&self) -> Result<()> {
-        self.tls_config_generator
-            .prepare(self.runtime.clone())
-            .await
     }
 
     pub async fn handshake(

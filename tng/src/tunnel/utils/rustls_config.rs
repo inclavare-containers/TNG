@@ -38,13 +38,13 @@ pub enum TlsConfigGenerator {
 }
 
 impl TlsConfigGenerator {
-    pub async fn new(ra_args: RaArgs) -> Result<Self> {
+    pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
         Ok(match &ra_args {
             RaArgs::AttestOnly(attest) => {
                 #[cfg(unix)]
                 {
                     use super::cert_manager::CertManager;
-                    Self::Attest(Arc::new(CertManager::new(attest.clone()).await?))
+                    Self::Attest(Arc::new(CertManager::new(attest.clone(), runtime).await?))
                 }
                 #[cfg(wasm)]
                 {
@@ -59,7 +59,7 @@ impl TlsConfigGenerator {
                     use super::cert_manager::CertManager;
 
                     Self::AttestAndVerify(
-                        Arc::new(CertManager::new(attest.clone()).await?),
+                        Arc::new(CertManager::new(attest.clone(), runtime).await?),
                         verify.clone(),
                     )
                 }
@@ -73,23 +73,5 @@ impl TlsConfigGenerator {
             }
             RaArgs::NoRa => Self::NoRa,
         })
-    }
-
-    pub async fn prepare(&self, runtime: TokioRuntime) -> Result<()> {
-        match &self {
-            #[cfg(unix)]
-            TlsConfigGenerator::Attest(cert_manager)
-            | TlsConfigGenerator::AttestAndVerify(cert_manager, _) => {
-                cert_manager
-                    .launch_refresh_task_if_required(runtime)
-                    .await?
-            }
-            _ => {
-                let _ = runtime;
-                /* Nothing */
-            }
-        }
-
-        Ok(())
     }
 }

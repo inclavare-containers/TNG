@@ -28,11 +28,6 @@ impl UnprotectedStreamManager {
 }
 
 impl StreamManager for UnprotectedStreamManager {
-    async fn prepare(&self) -> Result<()> {
-        /* Nothing */
-        Ok(())
-    }
-
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,

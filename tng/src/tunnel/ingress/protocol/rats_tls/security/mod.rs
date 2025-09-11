@@ -64,7 +64,8 @@ impl RatsTlsSecurityLayer {
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             transport_so_mark,
         );
-        let tls_config_generator = Arc::new(TlsConfigGenerator::new(ra_args).await?);
+        let tls_config_generator =
+            Arc::new(TlsConfigGenerator::new(ra_args, runtime.clone()).await?);
 
         Ok(Self {
             next_id: AtomicU64::new(0),
@@ -73,12 +74,6 @@ impl RatsTlsSecurityLayer {
             tls_config_generator,
             runtime,
         })
-    }
-
-    pub async fn prepare(&self) -> Result<()> {
-        self.tls_config_generator
-            .prepare(self.runtime.clone())
-            .await
     }
 
     async fn create_security_connector(

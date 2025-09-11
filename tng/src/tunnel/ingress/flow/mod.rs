@@ -103,10 +103,6 @@ impl IngressFlow {
 #[async_trait]
 impl RegistedService for IngressFlow {
     async fn serve(&self, ready: Sender<()>) -> Result<()> {
-        // Prepare the stream manager
-        self.trusted_stream_manager.prepare().await?;
-        self.unprotected_stream_manager.prepare().await?;
-
         // Accept incomming streams
         let mut incomming = Box::into_pin(self.ingress.accept(self.runtime.clone()).await?);
 

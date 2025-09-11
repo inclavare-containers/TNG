@@ -7,6 +7,7 @@ pub mod forward;
 pub mod http_inspector;
 #[cfg(target_os = "linux")]
 pub mod iptables;
+pub mod maybe_cached;
 pub mod runtime;
 pub mod rustls_config;
 #[cfg(unix)]

@@ -87,9 +87,6 @@ impl EgressFlow {
 #[async_trait]
 impl RegistedService for EgressFlow {
     async fn serve(&self, ready: Sender<()>) -> Result<()> {
-        // Prepare the stream manager
-        self.trusted_stream_manager.prepare().await?;
-
         // Accept incomming streams
         let mut incomming = Box::into_pin(self.egress.accept(self.runtime.clone()).await?);
 

@@ -52,13 +52,6 @@ impl TrustedStreamManager {
 impl StreamManager for TrustedStreamManager {
     type Sender = tokio::sync::mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>;
 
-    async fn prepare(&self) -> Result<()> {
-        match &self.security_layer {
-            SecurityLayer::RatsTls(security_layer) => security_layer.prepare().await,
-            SecurityLayer::OHttp(security_layer) => security_layer.prepare().await,
-        }
-    }
-
     async fn consume_stream(
         &self,
         in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,

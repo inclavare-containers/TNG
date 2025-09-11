@@ -27,7 +27,6 @@ const_format = "0.2.34"
 derivative = "2.2.0"
 either = "1.15.0"
 fast-socks5 = {git = "https://github.com/dizda/fast-socks5.git", rev = "4c8985c", optional = true}
-flume = {version = "0.11.1", features = ["async"]}
 futures = {workspace = true}
 getrandom = {version = "0.3"}
 h2 = {version = "0.4.10", features = ["stream"]}
@@ -94,6 +93,7 @@ tracing = "0.1"
 tracing-futures = {version = "0.2.5", features = ["futures-03"]}
 tracing-opentelemetry = {version = "0.30.0", optional = true}
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+url = "2.5"
 which = {version = "7.0.3", optional = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]

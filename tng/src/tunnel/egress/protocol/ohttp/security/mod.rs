@@ -32,12 +32,6 @@ impl OHttpSecurityLayer {
             ohttp_server: OhttpServer::new(key_store),
         })
     }
-
-    pub async fn prepare(&self) -> Result<()> {
-        // Do nothing
-        Ok(())
-    }
-
     pub async fn handle_stream(
         &self,
         stream: impl CommonStreamTrait,

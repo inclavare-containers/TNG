@@ -80,6 +80,9 @@ pub enum TngError {
 
     #[error("Not a valid OHTTP request: {0}")]
     InvalidOHttpResponse(#[source] anyhow::Error),
+
+    #[error("Failed to create OHTTP client: {0}")]
+    CreateOHttpClientFailed(#[source] anyhow::Error),
 }
 
 /// Error response structure

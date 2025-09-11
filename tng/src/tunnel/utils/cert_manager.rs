@@ -1,5 +1,5 @@
 use again::RetryPolicy;
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use rats_cert::{
     cert::create::CertBuilder,
     crypto::{AsymmetricAlgo, HashAlgo},
@@ -8,148 +8,42 @@ use rats_cert::{
         AttesterPipeline,
     },
 };
-use std::{path::Path, sync::Arc, time::Duration};
-use tokio::{sync::Mutex, task::JoinHandle};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use crate::{
-    config::ra::{AttestArgs, AttestationAgentArgs},
-    tunnel::utils::runtime::{supervised_task::SupervisedTaskResult, TokioRuntime},
+    config::ra::AttestArgs,
+    tunnel::utils::{
+        maybe_cached::{Expire, MaybeCached},
+        runtime::TokioRuntime,
+    },
 };
 
-const CERT_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 const CREATE_CERT_TIMEOUT_SECOND: u64 = 120; // 2 min
 
-#[derive(Debug)]
 pub struct CertManager {
-    attest_args: AttestArgs,
-    refresh_strategy: RefreshStrategy,
-}
-
-#[derive(Debug)]
-pub enum RefreshStrategy {
-    Periodically {
-        interval: u64,
-        latest_cert: (
-            tokio::sync::watch::Sender<Arc<rustls::sign::CertifiedKey>>,
-            tokio::sync::watch::Receiver<Arc<rustls::sign::CertifiedKey>>,
-        ),
-        refresh_task: Mutex<Option<RefreshTask>>,
-    },
-    WhenRequired,
-}
-
-#[derive(Debug)]
-pub struct RefreshTask {
-    join_handle: JoinHandle<SupervisedTaskResult<()>>,
+    cert: MaybeCached<rustls::sign::CertifiedKey, anyhow::Error>,
 }
 
 impl CertManager {
-    pub async fn new(attest_args: AttestArgs) -> Result<Self> {
-        // Sanity check for the attest_args.
-        let refresh_interval = match &attest_args {
-            AttestArgs::Passport {
-                aa_args:
-                    AttestationAgentArgs {
-                        aa_addr,
-                        refresh_interval,
-                    },
-                ..
-            }
-            | AttestArgs::BackgroundCheck {
-                aa_args:
-                    AttestationAgentArgs {
-                        aa_addr,
-                        refresh_interval,
-                    },
-            } => {
-                let aa_sock_file = aa_addr
-                    .strip_prefix("unix:///")
-                    .context("AA address must start with unix:///")?;
-                let aa_sock_file = Path::new("/").join(aa_sock_file);
-                if !Path::new(&aa_sock_file).exists() {
-                    bail!("AA socket file {aa_sock_file:?} not found")
-                }
-
-                refresh_interval
+    pub async fn new(attest_args: AttestArgs, runtime: TokioRuntime) -> Result<Self> {
+        let refresh_strategy = match &attest_args {
+            AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
+                aa_args.refresh_strategy()
             }
         };
 
-        // Fetch the cert first time
-        let certed_key = Self::fetch_new_cert(&attest_args).await?;
-
-        let refresh_interval = refresh_interval.unwrap_or(CERT_REFRESH_INTERVAL_SECOND);
-
-        let refresh_strategy = if refresh_interval == 0 {
-            RefreshStrategy::WhenRequired
-        } else {
-            RefreshStrategy::Periodically {
-                interval: refresh_interval,
-                latest_cert: tokio::sync::watch::channel(certed_key),
-                refresh_task: Mutex::new(None),
-            }
-        };
-
-        Ok(Self {
-            attest_args,
-            refresh_strategy,
+        let cert = MaybeCached::new(runtime, refresh_strategy, move || {
+            let attest_args = attest_args.clone();
+            Box::pin(
+                async move { Ok((Self::fetch_new_cert(&attest_args).await?, Expire::NoExpire)) },
+            ) as Pin<Box<_>>
         })
+        .await?;
+
+        Ok(Self { cert })
     }
 
-    pub async fn launch_refresh_task_if_required(&self, runtime: TokioRuntime) -> Result<()> {
-        match &self.refresh_strategy {
-            RefreshStrategy::Periodically {
-                interval,
-                latest_cert,
-                refresh_task,
-            } => {
-                let mut refresh_task = refresh_task.lock().await;
-                if refresh_task.is_some() {
-                    bail!("There is already a refresh task has been launched earlier")
-                }
-
-                let interval = *interval;
-                let attest_args = self.attest_args.clone();
-                let latest_cert = latest_cert.clone();
-
-                let join_handle = runtime.spawn_supervised_task_current_span(async move {
-                    let fut = async {
-                        loop {
-                            // Update certs in loop
-                            let fut = async {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(interval))
-                                    .await;
-
-                                let certed_key = Self::fetch_new_cert(&attest_args).await?;
-
-                                latest_cert
-                                    .0
-                                    .send(certed_key)
-                                    .context("Failed to set the latest cert")
-                            };
-
-                            if let Err(e) = fut.await {
-                                tracing::error!(error=?e,"Failed to update cert");
-                            }
-                        }
-                        #[allow(unreachable_code)]
-                        Ok::<(), anyhow::Error>(())
-                    };
-
-                    if let Err(e) = fut.await {
-                        tracing::error!(error=?e, "Failed to update cert");
-                    }
-                });
-                *refresh_task = Some(RefreshTask { join_handle })
-            }
-            RefreshStrategy::WhenRequired => {
-                // Do nothing
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn fetch_new_cert(attest_args: &AttestArgs) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    async fn fetch_new_cert(attest_args: &AttestArgs) -> Result<rustls::sign::CertifiedKey> {
         let retry_policy = RetryPolicy::fixed(Duration::from_secs(1)).with_max_retries(3);
         retry_policy
             .retry(|| async {
@@ -161,9 +55,7 @@ impl CertManager {
             .await
     }
 
-    async fn fetch_new_cert_inner(
-        attest_args: &AttestArgs,
-    ) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    async fn fetch_new_cert_inner(attest_args: &AttestArgs) -> Result<rustls::sign::CertifiedKey> {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
         tracing::debug!(?attest_args, timeout_sec, "Generate new cert with rats-rs");
 
@@ -223,156 +115,102 @@ impl CertManager {
                     .context("No private key found")?,
             )?,
         );
-        Ok(Arc::new(certified_key))
+        Ok(certified_key)
     }
 
     pub async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
-        match &self.refresh_strategy {
-            RefreshStrategy::Periodically {
-                interval: _,
-                latest_cert,
-                refresh_task: _,
-            } => Ok(latest_cert.1.borrow().clone()),
-            RefreshStrategy::WhenRequired => Self::fetch_new_cert(&self.attest_args).await,
-        }
-    }
-}
-
-impl Drop for RefreshTask {
-    fn drop(&mut self) {
-        // terminate the task when dropped
-        self.join_handle.abort();
+        self.cert.get_latest().await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use scopeguard::defer;
-    use tokio_util::sync::CancellationToken;
+    use anyhow::bail;
+
+    use crate::{config::ra::AttestationAgentArgs, tests::run_test_with_tokio_runtime};
 
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_cert_gen_with_nonzero_interval() -> Result<()> {
-        let mut cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
-            aa_args: AttestationAgentArgs {
-                aa_addr:
-                    "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                        .to_owned(),
-                refresh_interval: Some(3),
-            },
-        })
-        .await?;
-
-        let old_cert = cert_manager.get_latest_cert().await?;
-        assert!(Arc::ptr_eq(
-            &old_cert,
-            &cert_manager.get_latest_cert().await?
-        ));
-
-        match &cert_manager.refresh_strategy {
-            RefreshStrategy::Periodically {
-                interval: _,
-                latest_cert: _,
-                refresh_task,
-            } => {
-                let refresh_task = refresh_task.lock().await;
-                assert!(refresh_task.is_none());
-            }
-            RefreshStrategy::WhenRequired => {
-                bail!("wrong strategy")
-            }
-        }
-
-        let cancel = CancellationToken::new();
-        let cancel_clone = cancel.clone();
-        defer! {
-            cancel_clone.cancel();
-        }
-        let cancel_clone = cancel.clone();
-        let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
-        cert_manager
-            .launch_refresh_task_if_required(TokioRuntime::current(shutdown.guard())?)
+        run_test_with_tokio_runtime(|runtime| async move {
+            let mut cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
+                aa_args: AttestationAgentArgs {
+                    aa_addr:
+                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            .to_owned(),
+                    refresh_interval: Some(3),
+                },
+            }, runtime)
             .await?;
 
-        match &mut cert_manager.refresh_strategy {
-            RefreshStrategy::Periodically {
-                interval: _,
-                latest_cert,
-                refresh_task,
-            } => {
-                let refresh_task = refresh_task.lock().await;
-                assert!(refresh_task.is_some());
+            let old_cert = cert_manager.get_latest_cert().await?;
+            assert!(Arc::ptr_eq(
+                &old_cert,
+                &cert_manager.get_latest_cert().await?
+            ));
 
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                        bail!("The test is time out");
-                    }
-                    res = latest_cert.1.changed() => {
-                        res?;
+            match &mut cert_manager.cert {
+                MaybeCached::Periodically {
+                    interval,
+                    ref mut latest,
+                    refresh_task,
+                    ..
+                } => {
+                    assert_eq!(*interval, 3);
 
-                        let new_cert = (*latest_cert.1.borrow_and_update()).clone();
+                    assert!(!refresh_task.is_finished());
 
-                        assert!(!Arc::ptr_eq(&old_cert, &new_cert));
-                    }
-                };
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                            bail!("The test is time out");
+                        }
+                        res = latest.1.changed() => {
+                            res?;
+
+                            let new_cert = (*latest.1.borrow_and_update()).clone();
+
+                            assert!(!Arc::ptr_eq(&old_cert, &new_cert));
+                        }
+                    };
+                }
+                MaybeCached::Always { .. } => {
+                    bail!("wrong strategy")
+                }
             }
-            RefreshStrategy::WhenRequired => {
-                bail!("wrong strategy")
-            }
-        }
 
-        cancel.cancel();
-        shutdown.shutdown().await;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_cert_gen_with_zero_interval() -> Result<()> {
-        let mut cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
-            aa_args: AttestationAgentArgs {
-                aa_addr:
-                    "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                        .to_owned(),
-                refresh_interval: Some(0),
-            },
-        })
-        .await?;
-
-        let old_cert = cert_manager.get_latest_cert().await?;
-
-        match &cert_manager.refresh_strategy {
-            RefreshStrategy::Periodically { .. } => {
-                bail!("wrong strategy")
-            }
-            RefreshStrategy::WhenRequired => {}
-        }
-
-        let cancel = CancellationToken::new();
-        let cancel_clone = cancel.clone();
-        defer! {
-            cancel_clone.cancel();
-        }
-        let cancel_clone = cancel.clone();
-        let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
-        cert_manager
-            .launch_refresh_task_if_required(TokioRuntime::current(shutdown.guard())?)
+        run_test_with_tokio_runtime(|runtime| async move {
+            let cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
+                aa_args: AttestationAgentArgs {
+                    aa_addr:
+                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            .to_owned(),
+                    refresh_interval: Some(0),
+                },
+            },runtime)
             .await?;
 
-        match &mut cert_manager.refresh_strategy {
-            RefreshStrategy::Periodically { .. } => {
-                bail!("wrong strategy")
+            let old_cert = cert_manager.get_latest_cert().await?;
+
+            match &cert_manager.cert {
+                MaybeCached::Periodically { .. } => {
+                    bail!("wrong strategy")
+                }
+                MaybeCached::Always { .. } => {}
             }
-            RefreshStrategy::WhenRequired => {}
-        }
 
-        let new_cert = cert_manager.get_latest_cert().await?;
-        assert!(!Arc::ptr_eq(&old_cert, &new_cert));
+            let new_cert = cert_manager.get_latest_cert().await?;
+            assert!(!Arc::ptr_eq(&old_cert, &new_cert));
 
-        cancel.cancel();
-        shutdown.shutdown().await;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 }

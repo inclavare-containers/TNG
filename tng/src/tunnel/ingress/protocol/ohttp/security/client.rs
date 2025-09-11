@@ -7,7 +7,6 @@ use bhttp::http_compat::{
 use bytes::{BufMut, BytesMut};
 use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
 use hpke::{kem::X25519HkdfSha256, Kem, Serializable};
-use http::header::HeaderValue;
 use ohttp::KeyConfig;
 use prost::Message;
 use rand::{RngCore, SeedableRng as _};
@@ -16,15 +15,17 @@ use rats_cert::{
     cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE,
     tee::{
         coco::{
-            attester::CocoAttester, converter::CocoConverter, evidence::{CocoAsToken, CocoEvidence}, verifier::CocoVerifier
-        }, AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence as _, GenericVerifier as _
+            attester::CocoAttester,
+            converter::CocoConverter,
+            evidence::{CocoAsToken, CocoEvidence},
+            verifier::CocoVerifier,
+        },
+        AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence as _,
+        GenericVerifier as _,
     },
 };
-use std::{collections::HashMap, sync::Arc};
-use tokio::{
-    io::AsyncReadExt,
-    sync::{Mutex, OnceCell, RwLock},
-};
+use std::{pin::Pin, sync::Arc};
+use tokio::{io::AsyncReadExt, sync::Mutex};
 use tokio_util::{
     compat::{
         FuturesAsyncReadCompatExt as _, FuturesAsyncWriteCompatExt as _,
@@ -34,19 +35,25 @@ use tokio_util::{
 };
 
 use crate::{
-    config::ra::{AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs}, error::CheckErrorResponse as _, tunnel::{
+    config::ra::{
+        AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs,
+    },
+    error::CheckErrorResponse as _,
+    tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
             metadata::{
-                metadata::MetadataType, EncryptedWithClientAuthAsymmetricKey, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN
+                metadata::MetadataType, EncryptedWithClientAuthAsymmetricKey,
+                EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
             },
             userdata::{ClientUserData, ServerUserData},
             AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
         },
-    }, HTTP_REQUEST_USER_AGENT_HEADER
+        utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
+    },
 };
 use crate::{
     config::{ingress::OHttpArgs, ra::RaArgs},
@@ -54,23 +61,47 @@ use crate::{
     AttestationResult, TokioRuntime,
 };
 
-pub struct OHttpClient {
-    runtime: TokioRuntime,
-    rng: Mutex<ChaCha12Rng>,
-    ra_args: RaArgs,
-    http_client: reqwest::Client,
-    // TODO: setup a updater for updating hpke config in key_store
-    key_store: RwLock<HashMap<TngEndpoint, Arc<OnceCell<Arc<KeyStoreValue>>>>>,
+const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
+pub struct OHttpClient {
+    inner: Arc<OHttpClientInner>,
+    key_store_value: MaybeCached<KeyStoreValue, TngError>,
+}
+
+pub struct OHttpClientInner {
+    ra_args: RaArgs,
+    http_client: Arc<reqwest::Client>,
+    rng: Mutex<ChaCha12Rng>,
     path_rewrite_group: PathRewriteGroup,
+    endpoint: TngEndpoint,
+    runtime: TokioRuntime,
 }
 
 struct KeyStoreValue {
     metadata: Metadata,
-    client_key: Option<(<X25519HkdfSha256 as Kem>::PrivateKey, <X25519HkdfSha256 as Kem>::PublicKey)>,
+    #[allow(unused)]
+    client_key: Option<(
+        <X25519HkdfSha256 as Kem>::PrivateKey,
+        <X25519HkdfSha256 as Kem>::PublicKey,
+    )>,
     server_key_config_parsed: ServerHpkeKeyConfigParsed,
     /// Server attestation information. This is only represented if the server attestation is required.
     server_attestation_result: Option<AttestationResult>,
+}
+
+impl HpkeKeyConfig {
+    fn parse(self) -> Result<ServerHpkeKeyConfigParsed, anyhow::Error> {
+        let key_config_list = KeyConfig::decode_list(
+            BASE64_STANDARD
+                .decode(self.encoded_key_config_list)?
+                .as_ref(),
+        )?;
+
+        Ok(ServerHpkeKeyConfigParsed {
+            expire_timestamp: self.expire_timestamp,
+            key_config_list,
+        })
+    }
 }
 
 struct ServerHpkeKeyConfigParsed {
@@ -82,64 +113,80 @@ struct ServerHpkeKeyConfigParsed {
 }
 
 impl OHttpClient {
-    pub fn new(
-        runtime: TokioRuntime,
-        ra_args: RaArgs,
+    pub async fn new(
         ohttp_args: &OHttpArgs,
-        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-        transport_so_mark: Option<u32>,
+        ra_args: RaArgs,
+        http_client: Arc<reqwest::Client>,
+        endpoint: TngEndpoint,
+        runtime: TokioRuntime,
     ) -> Result<Self> {
-        // TODO: add sanity check for ra_args
-
-        let http_client = {
-            let mut builder = reqwest::Client::builder();
-            builder = builder.default_headers({
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(
-                    http::header::USER_AGENT,
-                    HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
-                );
-                headers
-            });
-            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-            {
-                builder = builder.tcp_mark(transport_so_mark);
-            }
-            builder.build()?
+        let refresh_strategy = match &ra_args {
+            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
+                AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
+                    aa_args.refresh_strategy()
+                }
+            },
+            RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Periodically {
+                interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
+            },
         };
 
-        Ok(Self {
-            runtime,
-            rng: Mutex::new(ChaCha12Rng::from_os_rng()),
+        let inner = Arc::new(OHttpClientInner {
             ra_args,
+            rng: Mutex::new(ChaCha12Rng::from_os_rng()),
             http_client,
-            key_store: Default::default(),
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
+            endpoint,
+            runtime: runtime.clone(),
+        });
+
+        let key_store_value = MaybeCached::new(runtime.clone(), refresh_strategy, {
+            let inner = inner.clone();
+            move || {
+                let inner = inner.clone();
+                Box::pin(async move {
+                    let value = inner
+                        .create_key_store_value()
+                        .await
+                        .map_err(TngError::GenServerHpkeConfigurationFailed)?;
+
+                    let expire =
+                        Expire::from_timestamp(value.server_key_config_parsed.expire_timestamp)
+                            .map_err(TngError::GenServerHpkeConfigurationFailed)?;
+                    Ok((value, expire))
+                }) as Pin<Box<_>>
+            }
+        })
+        .await?;
+
+        Ok(Self {
+            inner,
+            key_store_value,
         })
     }
+}
 
+impl OHttpClient {
     pub async fn forward_request(
         &self,
-        endpoint: &TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
-        let value = self
-            .get_key_store_value(&endpoint)
-            .await
-            .map_err(TngError::GenServerHpkeConfigurationFailed)?;
+        let key_store_value = self.key_store_value.get_latest().await?;
 
         let response = self
+            .inner
             .send_encrypted_request(
-                &value.server_key_config_parsed,
-                &value.metadata,
-                &endpoint,
+                &key_store_value.server_key_config_parsed,
+                &key_store_value.metadata,
                 request,
             )
             .await?;
 
-        Ok((response, value.server_attestation_result.clone()))
+        Ok((response, key_store_value.server_attestation_result.clone()))
     }
+}
 
+impl OHttpClientInner {
     async fn verify_token(
         server_key_config: &HpkeKeyConfig,
         attestation_result: &AttestationResultJwt,
@@ -194,116 +241,112 @@ impl OHttpClient {
         Ok(AttestationResult::from_claims(token.get_claims()?))
     }
 
-    async fn get_key_store_value(&self, endpoint: &TngEndpoint) -> Result<Arc<KeyStoreValue>> {
-        // Try to read the key store entry.
-        let cell = {
-            let read = self.key_store.read().await;
-            read.get(&endpoint).map(|v| v.clone())
-        };
+    async fn create_key_store_value(&self) -> Result<KeyStoreValue> {
+        // Handle metatdata for self
+        let (client_key, metadata) = match &self.ra_args {
+            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
+                let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
 
-        // If no entry exists, create one with uninitialized value.
-        let cell = match cell {
-            Some(cell) => cell,
-            _ => self
-                .key_store
-                .write()
-                .await
-                .entry(endpoint.clone())
-                .or_default()
-                .clone(),
-        };
+                match attest {
+                    AttestArgs::Passport { aa_args, as_args } => {
+                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+                        let coco_converter = CocoConverter::new(
+                            &as_args.as_addr,
+                            &as_args.token_verify.policy_ids,
+                            as_args.as_is_grpc,
+                        )?;
+                        let attester_pipeline =
+                            AttesterPipeline::new(coco_attester, coco_converter);
 
-        // read from the cell
-        cell.get_or_try_init(|| async {
-            // Handle metatdata for self
-            let (client_key, metadata) = match &self.ra_args {
-                RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
-                    let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
+                        let pk_s = client_key.1.to_bytes().to_vec();
+                        let userdata = ClientUserData {
+                            // TODO: should get challenge from attestation service
+                            challenge_token: "".to_string(),
+                            pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
+                        };
 
-                    match attest {
-                        AttestArgs::Passport { aa_args, as_args } => {
-                            // TODO: aa_args.refresh_interval
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-                            let coco_converter = CocoConverter::new(
-                                &as_args.as_addr,
-                                &as_args.token_verify.policy_ids,
-                                as_args.as_is_grpc,
-                            )?;
-                            let attester_pipeline =
-                                AttesterPipeline::new(coco_attester, coco_converter);
+                        let token = attester_pipeline
+                            .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                            .await?;
+                        (
+                            Some(client_key),
+                            Metadata {
+                                metadata_type: Some(
+                                    MetadataType::EncryptedWithClientAuthAsymmetricKey(
+                                        EncryptedWithClientAuthAsymmetricKey {
+                                            attestation_result: token.as_str().to_string(),
+                                            pk_s,
+                                        },
+                                    ),
+                                ),
+                            },
+                        )
+                    }
+                    AttestArgs::BackgroundCheck { aa_args } => {
+                        let AttestationChallengeResponse { challenge_token } =
+                            self.background_check_attestation_challenge().await?;
 
-                            let pk_s = client_key.1.to_bytes().to_vec();
-                            let userdata = ClientUserData {
-                                // TODO: should get challenge from attestation service
-                                challenge_token: "".to_string(),
-                                pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
-                            };
+                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 
-                            let token = attester_pipeline
-                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
-                                .await?;
-                            (
-                                Some(client_key), 
-                                Metadata{
-                                    metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(EncryptedWithClientAuthAsymmetricKey{
-                                        attestation_result: token.as_str().to_string(),
-                                        pk_s,
-                                    }))
-                                }
+                        let pk_s = client_key.1.to_bytes().to_vec();
+                        let userdata = ClientUserData {
+                            challenge_token: challenge_token.clone(),
+                            pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
+                        };
+
+                        let evidence = coco_attester
+                            .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                            .await?;
+
+                        let AttestationVerifyResponse {
+                            attestation_result: token,
+                        } = self
+                            .background_check_verify_attestation(
+                                challenge_token,
+                                BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?),
                             )
-                        },
-                        AttestArgs::BackgroundCheck { aa_args } => {
-                            let AttestationChallengeResponse{ challenge_token } = self.background_check_attestation_challenge(endpoint).await?;
+                            .await?;
 
-                            // TODO: aa_args.refresh_interval
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-
-                            let pk_s = client_key.1.to_bytes().to_vec();
-                            let userdata = ClientUserData {
-                                challenge_token: challenge_token.clone(),
-                                pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
-                            };
-
-                            let evidence = coco_attester
-                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
-                                .await?;
-
-                            let AttestationVerifyResponse{ attestation_result: token} = self.background_check_verify_attestation(endpoint, challenge_token, BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?)).await?;
-
-                            (
-                                Some(client_key), 
-                                Metadata{
-                                    metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(EncryptedWithClientAuthAsymmetricKey{
-                                        attestation_result: token.as_str().to_string(),
-                                        pk_s,
-                                    }))
-                                }
-                            )
-                        },
+                        (
+                            Some(client_key),
+                            Metadata {
+                                metadata_type: Some(
+                                    MetadataType::EncryptedWithClientAuthAsymmetricKey(
+                                        EncryptedWithClientAuthAsymmetricKey {
+                                            attestation_result: token.as_str().to_string(),
+                                            pk_s,
+                                        },
+                                    ),
+                                ),
+                            },
+                        )
                     }
                 }
-                RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
-                    // Not required
-                    (
-                        None,
-                        Metadata {
-                            metadata_type: Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth{}))
-                        }
-                    )
-                }
-            };
+            }
+            RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
+                // Not required
+                (
+                    None,
+                    Metadata {
+                        metadata_type: Some(MetadataType::EncryptedWithoutClientAuth(
+                            EncryptedWithoutClientAuth {},
+                        )),
+                    },
+                )
+            }
+        };
 
-            // TODO: use kbs protocol to get challenge token from trustee
-            let challenge_token = self.rng.lock().await.next_u64().to_string();
-            let key_config_request = self.prepare_key_config_request(&challenge_token).await?;
+        // TODO: use kbs protocol to get challenge token from trustee
+        let challenge_token = self.rng.lock().await.next_u64().to_string();
+        let key_config_request = self.prepare_key_config_request(&challenge_token).await?;
 
-            // Handle hpke configuration for server
-            let response = self.get_hpke_configuration(&endpoint, key_config_request).await?;
+        // Handle hpke configuration for server
+        let response = self.get_hpke_configuration(key_config_request).await?;
 
-            let server_key_config = response.hpke_key_config;
-            let server_attestation_result = match &self.ra_args {
-                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => {
-                    match (response.attestation_info, verify) {
+        let server_key_config = response.hpke_key_config;
+        let server_attestation_result = match &self.ra_args {
+            RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => {
+                match (response.attestation_info, verify) {
                         (
                             Some(ServerAttestationInfo::Passport { attestation_result }),
                             VerifyArgs::Passport { token_verify },
@@ -330,31 +373,21 @@ impl OHttpClient {
                         ),
                         (None, _) => bail!("Missing attestation info from server"),
                     }
-                }
-                RaArgs::AttestOnly(..) | RaArgs::NoRa => {
-                    // Not required
-                    None
-                }
-            };
+            }
+            RaArgs::AttestOnly(..) | RaArgs::NoRa => {
+                // Not required
+                None
+            }
+        };
 
-            let server_key_config_parsed = {
-                let key_config_list = KeyConfig::decode_list(BASE64_STANDARD.decode(server_key_config.encoded_key_config_list)?.as_ref())?;
+        let server_key_config_parsed = server_key_config.parse()?;
 
-                ServerHpkeKeyConfigParsed{
-                    expire_timestamp: server_key_config.expire_timestamp,
-                    key_config_list,
-                }
-            };
-
-           Ok(Arc::new(KeyStoreValue{
-                metadata,
-                client_key, // TODO: ohttp hpke setup with the client key
-                server_key_config_parsed,
-                server_attestation_result,
-            }))
+        Ok(KeyStoreValue {
+            metadata,
+            client_key, // TODO: ohttp hpke setup with the client key
+            server_key_config_parsed,
+            server_attestation_result,
         })
-        .await
-        .cloned()
     }
 
     /// Prepare a key configuration request
@@ -385,13 +418,12 @@ impl OHttpClient {
     /// to establish an encrypted channel and verify the server's identity.
     async fn get_hpke_configuration(
         &self,
-        endpoint: &TngEndpoint,
         key_config_request: KeyConfigRequest,
     ) -> Result<KeyConfigResponse, TngError> {
         let url = format!(
             "http://{}:{}/tng/key-config",
-            endpoint.host(),
-            endpoint.port()
+            self.endpoint.host(),
+            self.endpoint.port()
         );
 
         tracing::info!(
@@ -418,12 +450,14 @@ impl OHttpClient {
             }
         }
 
-        let result: KeyConfigResponse = response
+        let response: KeyConfigResponse = response
             .json()
             .await
             .map_err(|error| TngError::RequestKeyConfigFailed(error.into()))?;
 
-        Ok(result)
+        tracing::debug!(?response, "Received HPKE key configuration");
+
+        Ok(response)
     }
 
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
@@ -432,7 +466,6 @@ impl OHttpClient {
         &self,
         server_key_config_parsed: &ServerHpkeKeyConfigParsed,
         metadata: &Metadata,
-        endpoint: &TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
         let old_uri = request.uri().clone();
@@ -509,8 +542,8 @@ impl OHttpClient {
 
             let url = format!(
                 "http://{}:{}{rewrited_path}",
-                endpoint.host(),
-                endpoint.port()
+                self.endpoint.host(),
+                self.endpoint.port()
             );
             url
         };
@@ -581,25 +614,25 @@ impl OHttpClient {
     /// It is used specifically in the "Server verification Client + background check model" scenario.
     pub async fn background_check_attestation_challenge(
         &self,
-        endpoint: &TngEndpoint,
     ) -> Result<AttestationChallengeResponse, TngError> {
         let url = format!(
             "http://{}:{}/tng/background-check/challenge",
-            endpoint.host(),
-            endpoint.port()
+            self.endpoint.host(),
+            self.endpoint.port()
         );
 
-        let result: AttestationChallengeResponse = self.http_client
+        let result: AttestationChallengeResponse = self
+            .http_client
             .get(&url)
             .send()
             .await
-            .map_err(|e|TngError::ClientGetAttestationChallengeFaild(e.into()))?
-            .check_error_response().await
-            .map_err(TngError::ClientGetAttestationChallengeFaild)?            
+            .map_err(|e| TngError::ClientGetAttestationChallengeFaild(e.into()))?
+            .check_error_response()
+            .await
+            .map_err(TngError::ClientGetAttestationChallengeFaild)?
             .json()
             .await
-            .map_err(|e|TngError::ClientGetAttestationChallengeFaild(e.into()))?;
-
+            .map_err(|e| TngError::ClientGetAttestationChallengeFaild(e.into()))?;
 
         Ok(result)
     }
@@ -611,14 +644,13 @@ impl OHttpClient {
     /// It is used specifically in the "Server verification Client + background check model" scenario.
     pub async fn background_check_verify_attestation(
         &self,
-        endpoint: &TngEndpoint,
         challenge_token: String,
         evidence: String,
     ) -> Result<AttestationVerifyResponse, TngError> {
         let url = format!(
             "http://{}:{}/tng/background-check/verify",
-            endpoint.host(),
-            endpoint.port()
+            self.endpoint.host(),
+            self.endpoint.port()
         );
 
         let payload = AttestationVerifyRequest {
@@ -626,17 +658,19 @@ impl OHttpClient {
             evidence,
         };
 
-        let result: AttestationVerifyResponse = self.http_client
+        let result: AttestationVerifyResponse = self
+            .http_client
             .post(&url)
             .json(&payload)
             .send()
             .await
-            .map_err(|e|TngError::ClientGetBackgroundCheckResultFaild(e.into()))?
-            .check_error_response().await
-            .map_err(TngError::ClientGetBackgroundCheckResultFaild)?            
+            .map_err(|e| TngError::ClientGetBackgroundCheckResultFaild(e.into()))?
+            .check_error_response()
+            .await
+            .map_err(TngError::ClientGetBackgroundCheckResultFaild)?
             .json()
             .await
-            .map_err(|e|TngError::ClientGetBackgroundCheckResultFaild(e.into()))?;
+            .map_err(|e| TngError::ClientGetBackgroundCheckResultFaild(e.into()))?;
 
         Ok(result)
     }
