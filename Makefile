@@ -126,16 +126,32 @@ update-rpm-tree:
 docker-build:
 	docker build -t tng:${VERSION} .
 
-.PHONE: wasm-build
-wasm-build: wasm-build-release
+.PHONE: install-wasm-build-dependencies
+install-wasm-build-dependencies:
+	if ! command -v wasm-pack >/dev/null; then \
+		cargo +nightly-2025-07-07 install wasm-pack ; \
+	fi
+	if ! rustup component list --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu | grep rust-src | grep installed >/dev/null; then \
+		rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu ; \
+	fi
+
+define WASM_PATCH_PACKAGE_JSON =
+	@echo "Patching package.json ..."
+	if ! command -v jq >/dev/null; then yum install -y jq ; fi
+	rm -f tng-wasm/pkg/package.json.bak && \
+		cp tng-wasm/pkg/package.json tng-wasm/pkg/package.json.bak && \
+		jq '.name = "@inclavare-containers/tng" | .publishConfig = { "registry": "https://npm.pkg.github.com/" }' tng-wasm/pkg/package.json.bak > tng-wasm/pkg/package.json
+endef
 
 .PHONE: wasm-build-release
-wasm-build-release:
+wasm-build-release: install-wasm-build-dependencies
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
+	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-build-debug
-wasm-build-debug:
+wasm-build-debug: install-wasm-build-dependencies
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
+	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-pack-release
 wasm-pack-release: wasm-build-release
@@ -153,12 +169,12 @@ wasm-test: wasm-test-chrome
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
 
 .PHONE: wasm-test-chrome
-wasm-test-chrome:
-	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | sudo tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
+wasm-test-chrome: install-wasm-build-dependencies
+	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
 .PHONE: wasm-test-firefox
-wasm-test-firefox:
+wasm-test-firefox: install-wasm-build-dependencies
 	if ! command -v firefox; then yum install -y firefox ; fi
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
