@@ -168,7 +168,7 @@ impl IngressFlow {
                     let access_log = AccessLog::Ingress {
                         downstream: src,
                         upstream: &dst,
-                        to_trusted_tunnel: true,
+                        to_trusted_tunnel: via_tunnel,
                         peer_attested: attestation_result,
                     };
                     tracing::info!(?access_log);
