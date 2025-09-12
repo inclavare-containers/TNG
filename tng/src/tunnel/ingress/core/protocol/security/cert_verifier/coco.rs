@@ -33,6 +33,10 @@ impl CoCoServerCertVerifier {
         })
     }
 
+    pub async fn spawn_verify_task_handler(&self) {
+        self.common.spawn_verify_task_handler().await
+    }
+
     pub async fn get_attestation_result(&self) -> Option<AttestationResult> {
         self.common.get_attestation_result().await
     }

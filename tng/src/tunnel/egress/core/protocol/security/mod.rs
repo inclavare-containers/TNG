@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use crate::{
     config::ra::RaArgs,
-    tunnel::{attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator},
+    tunnel::{
+        attestation_result::AttestationResult, stream::CommonStreamTrait,
+        utils::rustls_config::TlsConfigGenerator,
+    },
 };
 use anyhow::{Context as _, Result};
 use rustls_config::OnetimeTlsServerConfig;
@@ -32,11 +35,8 @@ impl SecurityLayer {
 
     pub async fn handshake(
         &self,
-        stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-    ) -> Result<(
-        impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-        Option<AttestationResult>,
-    )> {
+        stream: impl CommonStreamTrait,
+    ) -> Result<(impl CommonStreamTrait, Option<AttestationResult>)> {
         async {
             // Prepare TLS config
             let OnetimeTlsServerConfig(tls_server_config, verifier) = self
@@ -45,15 +45,27 @@ impl SecurityLayer {
                 .await?;
 
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
-            tracing::trace!("Start to estabilish rats-tls session");
-            let tls_stream = tls_acceptor
-                .accept(stream)
-                .await
-                .context("Failed to estabilish rats-tls session")
-                .map(|v| {
-                    tracing::debug!("New rats-tls session established");
+            tracing::debug!("Start to estabilish rats-tls connection");
+
+            // Here we run the security layer in blocking thread since the API of ClientCertVerifier is blocking.
+            let tls_accept_task = async move {
+                Ok::<_, anyhow::Error>(tls_acceptor.accept(stream).await.map(|v| {
+                    tracing::debug!("New rats-tls connection established");
                     v
-                })?;
+                })?)
+            };
+
+            // Spawn a async task to handle all the async certificate verification tasks
+            if let Some(verifier) = &verifier {
+                verifier.spawn_verify_task_handler().await
+            };
+
+            let security_layer_stream =
+                tokio::task::spawn_blocking(move || futures::executor::block_on(tls_accept_task))
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(|e| e)
+                    .context("Failed to estabilish rats-tls connection")?;
 
             let attestation_result = match verifier {
                 Some(verifier) => Some(
@@ -65,7 +77,7 @@ impl SecurityLayer {
                 None => None,
             };
 
-            Ok((tls_stream, attestation_result))
+            Ok((security_layer_stream, attestation_result))
         }
         .instrument(tracing::info_span!("security"))
         .await
