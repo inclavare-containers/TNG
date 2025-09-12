@@ -47,7 +47,7 @@ create-tarball:
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/winapi*/lib/*.lib
 	rm -fr /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/windows*/lib/*.lib
 
-	rsync -a --exclude target --exclude deps/rats-rs/build --exclude .git/modules/deps/tng-envoy ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
+	rsync -a --exclude target ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
 
 	tar -czf /tmp/trusted-network-gateway-${VERSION}.tar.gz -C /tmp/trusted-network-gateway-tarball/ trusted-network-gateway-${VERSION}
 

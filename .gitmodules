@@ -1,3 +1,0 @@
-[submodule "deps/rats-rs"]
-	path = deps/rats-rs
-	url = ../rats-rs

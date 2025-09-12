@@ -2,24 +2,6 @@
 
 本指南将介绍本项目的组成，并介绍如何从头搭建一个TNG的源码开发环境
 
-## 项目组成
-
-TNG源码由两部分组成，除了本仓库，另外还依赖于另一个核心组件[rats-rs](https://github.com/inclavare-containers/rats-rs)。
-
-为了更好地跟踪每一个TNG版本与其余组件的版本依赖关系，我们使用[git submodule](https://git-scm.com/book/zh/v2/Git-%e5%b7%a5%e5%85%b7-%e5%ad%90%e6%a8%a1%e5%9d%97) 来管理依赖项，将[rats-rs](https://github.com/inclavare-containers/rats-rs)作为了本项目仓库的子模块，如下图所示：
-
-您可以通过以下命令来查看本仓库当前提交对应的子模块中的git commit id：
-
-```sh
-git submodule
-```
-
-输出例如：
-```txt
-[root@0180caefdbb9 tng]# git submodule
- 8f4e6e5f421c96b4840367085dc20c7519e5e425 deps/rats-rs (master)
-```
-
 ## 开发环境搭建
 
 ## 获取源码
@@ -45,11 +27,8 @@ docker exec -it tng-dev bash
 cd /
 git clone https://github.com/inclavare-containers/tng.git --branch <tag名称>
 cd tng
-git submodule update --init
 ```
 现在，你已经在`/tng`目录中拥有了tng仓库源码。
-
-在目录`deps/rats-rs`是rats-rs这个git submodule的源码，也已经一并clone下来，您可以直接在其中进行修改，就像它个普通的git仓库一样。
 
 ## 编译组件
 

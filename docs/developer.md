@@ -2,24 +2,6 @@
 
 This guide will introduce the composition of this project and how to set up a source code development environment for TNG from scratch.
 
-## Project Composition
-
-The TNG source code consists of two parts: this repository, and another component, [rats-rs](https://github.com/inclavare-containers/rats-rs).
-
-To better track the version dependencies between each TNG version and the other component, we use [git submodule](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to manage dependencies, making [rats-rs](https://github.com/inclavare-containers/rats-rs) a submodule of this project repository, as shown in the following diagram:
-
-You can view the current commit ID of the submodule in this repository using the following command:
-
-```sh
-git submodule
-```
-
-Example output:
-```txt
-[root@0180caefdbb9 tng]# git submodule
- 8f4e6e5f421c96b4840367085dc20c7519e5e425 deps/rats-rs (master)
-```
-
 ## Setting Up the Development Environment
 
 ## Obtaining the Source Code
@@ -45,11 +27,8 @@ docker exec -it tng-dev bash
 cd /
 git clone https://github.com/inclavare-containers/tng.git --branch <tag-name>
 cd tng
-git submodule update --init
 ```
 Now, you have the TNG repository source code in the `/tng` directory.
-
-The directory `deps/rats-rs` contains the source code of rats-rs as a submodule. You can directly modify it as if it were a regular git repository.
 
 ## Compiling Components
 

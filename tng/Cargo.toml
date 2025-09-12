@@ -59,7 +59,7 @@ opentelemetry_sdk = {version = "0.29.0", features = [
 pin-project = "1"
 portpicker = "0.1.1"
 rand = "0.9.1"
-rats-cert = {path = "../deps/rats-rs/rats-cert", default-features = false, features = ["coco", "crypto-rustcrypto"]}
+rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "34a0ed4", default-features = false, features = ["coco", "crypto-rustcrypto"]}
 regex = "1.11.1"
 reqwest = {version = "0.12.19", default-features = false, features = ["json", "h2", "rustls-tls-webpki-roots"]}
 rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
