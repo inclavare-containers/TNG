@@ -22,6 +22,7 @@ ctrlc = {version = "3.4.7", features = ["termination"]}
 derivative = "2.2.0"
 either = "1.15.0"
 fast-socks5 = {git = "https://github.com/dizda/fast-socks5.git", rev = "4c8985c"}
+flume = {version = "0.11.1", features = ["async"]}
 futures = "0.3.31"
 getrandom = {version = "0.3"}
 h2 = {version = "0.4.10", features = ["stream"]}
@@ -59,7 +60,7 @@ opentelemetry_sdk = {version = "0.29.0", features = [
 pin-project = "1"
 portpicker = "0.1.1"
 rand = "0.9.1"
-rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "34a0ed4", default-features = false, features = ["coco", "crypto-rustcrypto"]}
+rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "149b7fe5728db6e9ddb75396b5b1e404b78d8afb", default-features = false, features = ["attester-coco", "verifier-coco", "crypto-rustcrypto"]}
 regex = "1.11.1"
 reqwest = {version = "0.12.19", default-features = false, features = ["json", "h2", "rustls-tls-webpki-roots"]}
 rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
