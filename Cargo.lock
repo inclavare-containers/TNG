@@ -2758,7 +2758,7 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=149b7fe5728db6e9ddb75396b5b1e404b78d8afb#149b7fe5728db6e9ddb75396b5b1e404b78d8afb"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=7c81fb9d609c307989e74edfea0f327177212347#7c81fb9d609c307989e74edfea0f327177212347"
 dependencies = [
  "anyhow",
  "as-any",
