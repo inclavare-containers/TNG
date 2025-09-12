@@ -6,8 +6,6 @@ WORKDIR /code/
 
 COPY . .
 
-RUN { [ -e ./.git/modules/deps/rats-rs ] || git submodule update --init ./deps/rats-rs ; }
-
 RUN env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root /usr/local/cargo/
 
 
