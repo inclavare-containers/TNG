@@ -96,3 +96,7 @@ update-rpm-tree:
 .PHONE: docker-build
 docker-build:
 	docker build -t tng:${VERSION} .
+
+.PHONE: mac-cross-build
+mac-cross-build:
+	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin
