@@ -66,14 +66,14 @@ pub enum EgressMode {
     Netfilter(EgressNetfilterArgs),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OHttpArgs {
     #[serde(default = "Option::default")]
     pub allow_non_tng_traffic_regexes: Option<AllowNonTngTrafficRegexes>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AllowNonTngTrafficRegexes(Vec<String>);
 

@@ -1,122 +1,141 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="data:," />
-  <title>WASM Example</title>
-  <style>
-    body {
-      background: hsl(0, 0%, 10%);
-      color: hsl(0, 0%, 100%);
-      font-family: monospace;
-      padding: 2em;
-    }
-
-    h2 {
-      color: hsl(0, 0%, 40%);
-    }
-
-    .output {
-      background: hsl(0, 0%, 15%);
-      padding: 1em;
-      border-radius: 5px;
-      margin-top: 1em;
-      white-space: pre-wrap;
-    }
-
-    .error {
-      color: red;
-      font-weight: bold;
-    }
-  </style>
-</head>
-
-<body>
-  <h1>WASM Example</h1>
-
-  <section>
-    <h2>GET Request Output</h2>
-    <div id="get-output" class="output">Waiting for request...</div>
-  </section>
-
-  <section>
-    <h2>POST Request Output</h2>
-    <div id="post-output" class="output">Waiting for request...</div>
-  </section>
-
-  <script type="module">
-    function updateOutput(outputId, content) {
-      const el = document.getElementById(outputId);
-      if (el) {
-        el.textContent = content;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>WASM Example</title>
+    <style>
+      body {
+        background: hsl(0, 0%, 10%);
+        color: hsl(0, 0%, 100%);
+        font-family: monospace;
+        padding: 2em;
       }
-    }
 
-    function formatResponse(response) {
-      return `Status: ${response.status}\n` +
-             `OK: ${response.ok}\n` +
-             `Body: ${response.text}\n` +
-             `Headers:\n${JSON.stringify(response.headers)}\n` +
-             `Attestation Result:\n${JSON.stringify(response.attestation_result)}`;
-    }
+      h2 {
+        color: hsl(0, 0%, 40%);
+      }
 
-    function formatError(error) {
-      return `❌ Error: ${error.message || String(error)}\nDetails: ${JSON.stringify(error)}`;
-    }
+      .output {
+        background: hsl(0, 0%, 15%);
+        padding: 1em;
+        border-radius: 5px;
+        margin-top: 1em;
+        white-space: pre-wrap;
+      }
 
+      .error {
+        color: red;
+        font-weight: bold;
+      }
+    </style>
+  </head>
 
+  <body>
+    <h1>WASM Example</h1>
 
-    import module_init, { fetch, send_demo_request } from "./tng_wasm.js";
+    <section>
+      <h2>GET Request Output</h2>
+      <div id="get-output" class="output">Waiting for request...</div>
+    </section>
 
-    // Init tng wasm module
-    await module_init();
+    <section>
+      <h2>POST Request Output</h2>
+      <div id="post-output" class="output">Waiting for request...</div>
+    </section>
 
-    // await send_demo_request();
+    <script type="module">
+      const as_addr = "http://127.0.0.1:8080/";
+      const policy_ids = ["default"];
 
-    {
-      // Test fetch with GET function
-      const url = "http://127.0.0.1:30001/foo/bar?baz=qux";
-      const method = "GET";
-      const headers = {};
-      const body = "";
-      const asAddr = "http://127.0.0.1:8080/";
-      const policyIds = ["default"];
+      function updateOutput(outputId, content) {
+        const el = document.getElementById(outputId);
+        if (el) {
+          el.textContent = content;
+        }
+      }
 
-      fetch(url, method, headers, body, asAddr, policyIds)
-        .then(response => {
-          console.log("Got response:", response)
-          const content = formatResponse(response);
-          updateOutput("get-output", content);
+      function formatResponse(response) {
+        return (
+          `Status: ${response.status}\n` +
+          `OK: ${response.ok}\n` +
+          `Body: ${response.text}\n` +
+          `Headers:\n${JSON.stringify(response.headers)}\n` +
+          `Attestation Result:\n${JSON.stringify(response.attestation_result)}`
+        );
+      }
+
+      function formatError(error) {
+        return `❌ Error: ${
+          error.message || String(error)
+        }\nDetails: ${JSON.stringify(error)}`;
+      }
+
+      import tng_init, { fetch as tng_fetch } from "./tng_wasm.js";
+
+      // Init tng wasm module
+      await module_init();
+
+      const attested_fetch = (input, init) => {
+        tng_config = {
+          ohttp: {},
+          verify: {
+            model: "background_check",
+            as_addr: as_addr,
+            policy_ids: policy_ids,
+          },
+        };
+        return tng_fetch(input, init, asAddr, policyIds);
+      };
+
+      {
+        // Test fetch with GET function
+        attested_fetch("http://127.0.0.1:30001/foo/bar?baz=qux", {
+          method: "GET",
+          headers: {},
         })
-        .catch(error => {
-          const content = formatError(error);
-          updateOutput("get-output", content);
-        });
-    }
+          .then((response) => {
+            const attest_info = response?.attest_info
+              ? response.attest_info
+              : null;
+            console.log("Attest Info:", attest_info);
 
-    {
-      // Test fetch with POST function
-      const url = "http://127.0.0.1:30001/foo/bar";
-      const method = "POST";
-      const headers = {};
-      const body = JSON.stringify({ answer: 42 });
-      const asAddr = "http://127.0.0.1:8080/";
-      const policyIds = ["default"];
+            console.log("Got response:", response);
+            const content = formatResponse(response);
+            updateOutput("get-output", content);
+          })
+          .catch((error) => {
+            const content = formatError(error);
+            updateOutput("get-output", content);
+          });
+      }
 
-      fetch(url, method, headers, body, asAddr, policyIds)
-        .then(response => {
-          console.log("Got response:", response)
-          const content = formatResponse(response);
-          updateOutput("post-output", content);
+      {
+        // Test fetch with POST function
+
+        attested_fetch("http://127.0.0.1:30001/foo/bar", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ answer: 42 }),
         })
-        .catch(error => {
-          const content = formatError(error);
-          updateOutput("post-output", content);
-        });
-    }
-  </script>
-</body>
+          .then((response) => {
+            const attest_info = response?.attest_info
+              ? response.attest_info
+              : null;
+            console.log("Attest Info:", attest_info);
 
+            console.log("Got response:", response);
+            const content = formatResponse(response);
+            updateOutput("post-output", content);
+          })
+          .catch((error) => {
+            const content = formatError(error);
+            updateOutput("post-output", content);
+          });
+      }
+    </script>
+  </body>
 </html>

@@ -15,7 +15,6 @@ anyhow = {workspace = true}
 async-stream = "0.3.6"
 async-trait = "0.1.88"
 auto_enums = {version = "0.8", features = ["std", "tokio1"]}
-axum = {version = "0.8.4", features = ["ws"], optional = true}# to disable mio
 base64 = "0.22.1"
 bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "cda036a", features = ["http-compat"]}
 bytes = {workspace = true}
@@ -98,18 +97,22 @@ which = {version = "7.0.3", optional = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
 async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
+axum = {version = "0.8.4", features = ["tokio", "http1", "http2", "ws"]}
 rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "7e4eb4b114be6ae742856ea185e6bc59d23285e8", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
 socket2 = {version = "0.5.10"}
 tokio = {workspace = true, features = ["rt-multi-thread", "time"]}
 ws_stream_tungstenite = {version = "0.13.0"}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
+axum = {version = "0.8.4", default-features = false, features = ["json"]}# to disable mio
 rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "7e4eb4b114be6ae742856ea185e6bc59d23285e8", default-features = false, features = ["crypto-rustcrypto", "verifier-coco"]}
 ring = {version = "0.17.11", features = ["wasm32_unknown_unknown_js"]}
 rustls-pki-types = {version = "*", features = ["web"]}
+serde-wasm-bindgen = "0.6.5"
 tokio = {workspace = true}
 tokio_with_wasm = {workspace = true}
 wasm-bindgen-futures = {version = "0.4.50"}
+web-time = "1.1.0"
 ws_stream_wasm = {version = "=0.7.5"}
 
 [build-dependencies]
@@ -135,7 +138,7 @@ default = [
   "egress-mapping",
   "egress-netfilter",
 ]
-egress = ["dep:axum", "axum/tokio", "axum/http1", "axum/http2", "hyper/server", "dep:async-tungstenite"]
+egress = ["hyper/server", "dep:async-tungstenite"]
 egress-mapping = ["egress"]
 egress-netfilter = ["egress", "dep:which"]
 ingress = ["dep:async-tungstenite"]

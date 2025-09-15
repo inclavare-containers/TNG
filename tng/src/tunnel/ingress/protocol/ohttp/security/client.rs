@@ -6,25 +6,30 @@ use bhttp::http_compat::{
 };
 use bytes::{BufMut, BytesMut};
 use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
-use hpke::{kem::X25519HkdfSha256, Kem, Serializable};
+#[cfg(unix)]
+use hpke::Serializable;
+use hpke::{kem::X25519HkdfSha256, Kem};
 use ohttp::KeyConfig;
 use prost::Message;
 use rand::{RngCore, SeedableRng as _};
 use rand_chacha::ChaCha12Rng;
+#[cfg(unix)]
+use rats_cert::tee::coco::attester::CocoAttester;
+#[cfg(unix)]
+use rats_cert::tee::AttesterPipeline;
+#[cfg(unix)]
+use rats_cert::tee::GenericAttester as _;
 use rats_cert::{
     cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE,
     tee::{
         coco::{
-            attester::CocoAttester,
             converter::CocoConverter,
             evidence::{CocoAsToken, CocoEvidence},
             verifier::CocoVerifier,
         },
-        AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence as _,
-        GenericVerifier as _,
+        GenericConverter, GenericEvidence as _, GenericVerifier as _,
     },
 };
-use std::{pin::Pin, sync::Arc};
 use tokio::{io::AsyncReadExt, sync::Mutex};
 use tokio_util::{
     compat::{
@@ -34,20 +39,25 @@ use tokio_util::{
     io::{ReaderStream, StreamReader},
 };
 
+use std::{pin::Pin, sync::Arc};
+
+#[cfg(unix)]
+use crate::config::ra::AttestArgs;
+#[cfg(unix)]
+use crate::tunnel::ohttp::protocol::metadata::EncryptedWithClientAuthAsymmetricKey;
+#[cfg(unix)]
+use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
-    config::ra::{
-        AttestArgs, AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs,
-    },
+    config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
     error::CheckErrorResponse as _,
     tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
             metadata::{
-                metadata::MetadataType, EncryptedWithClientAuthAsymmetricKey,
-                EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
+                metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
             },
-            userdata::{ClientUserData, ServerUserData},
+            userdata::ServerUserData,
             AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
@@ -121,6 +131,7 @@ impl OHttpClient {
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let refresh_strategy = match &ra_args {
+            #[cfg(unix)]
             RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
                 AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
                     aa_args.refresh_strategy()
@@ -243,7 +254,86 @@ impl OHttpClientInner {
 
     async fn create_key_store_value(&self) -> Result<KeyStoreValue> {
         // Handle metatdata for self
-        let (client_key, metadata) = match &self.ra_args {
+        let (client_key, metadata) = self.create_attested_client_key().await?;
+
+        // TODO: use kbs protocol to get challenge token from trustee
+        let challenge_token = self.rng.lock().await.next_u64().to_string();
+        let key_config_request = self.prepare_key_config_request(&challenge_token).await?;
+
+        // Handle hpke configuration for server
+        let response = self.get_hpke_configuration(key_config_request).await?;
+
+        let server_attestation_result = self
+            .check_key_config_response(&response, &challenge_token)
+            .await?;
+
+        let server_key_config_parsed = response.hpke_key_config.parse()?;
+
+        Ok(KeyStoreValue {
+            metadata,
+            client_key, // TODO: ohttp hpke setup with the client key
+            server_key_config_parsed,
+            server_attestation_result,
+        })
+    }
+
+    async fn check_key_config_response(
+        &self,
+        response: &KeyConfigResponse,
+        challenge_token: &str,
+    ) -> Result<Option<AttestationResult>, anyhow::Error> {
+        let verify = match &self.ra_args {
+            RaArgs::VerifyOnly(verify) => verify,
+            #[cfg(unix)]
+            RaArgs::AttestAndVerify(.., verify) => verify,
+            #[cfg(unix)]
+            RaArgs::AttestOnly(..) => {
+                // Not required
+                return Ok(None);
+            }
+            RaArgs::NoRa => {
+                // Not required
+                return Ok(None);
+            }
+        };
+
+        let server_key_config = &response.hpke_key_config;
+
+        Ok(match (&response.attestation_info, verify) {
+            (
+                Some(ServerAttestationInfo::Passport { attestation_result }),
+                VerifyArgs::Passport { token_verify },
+            ) => {
+                Some(Self::verify_token(server_key_config, attestation_result, token_verify).await?)
+            }
+            (
+                Some(ServerAttestationInfo::BackgroundCheck { evidence }),
+                VerifyArgs::BackgroundCheck { as_args },
+            ) => Some(
+                Self::verify_evidence(server_key_config, &challenge_token, evidence, as_args)
+                    .await?,
+            ),
+            (Some(ServerAttestationInfo::Passport { .. }), VerifyArgs::BackgroundCheck { .. }) => {
+                bail!("Background check model is expected but got passport attestation from server")
+            }
+            (Some(ServerAttestationInfo::BackgroundCheck { .. }), VerifyArgs::Passport { .. }) => {
+                bail!("Passport model is expected but got background check attestation from server")
+            }
+            (None, _) => bail!("Missing attestation info from server"),
+        })
+    }
+
+    async fn create_attested_client_key(
+        &self,
+    ) -> Result<(
+        Option<(
+            <X25519HkdfSha256 as Kem>::PrivateKey,
+            <X25519HkdfSha256 as Kem>::PublicKey,
+        )>,
+        Metadata,
+    )> {
+        Ok(match &self.ra_args {
+            #[cfg(unix)]
             RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
                 let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
 
@@ -334,81 +424,38 @@ impl OHttpClientInner {
                     },
                 )
             }
-        };
-
-        // TODO: use kbs protocol to get challenge token from trustee
-        let challenge_token = self.rng.lock().await.next_u64().to_string();
-        let key_config_request = self.prepare_key_config_request(&challenge_token).await?;
-
-        // Handle hpke configuration for server
-        let response = self.get_hpke_configuration(key_config_request).await?;
-
-        let server_key_config = response.hpke_key_config;
-        let server_attestation_result = match &self.ra_args {
-            RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => {
-                match (response.attestation_info, verify) {
-                        (
-                            Some(ServerAttestationInfo::Passport { attestation_result }),
-                            VerifyArgs::Passport { token_verify },
-                        ) => {
-                            Some(Self::verify_token(&server_key_config, &attestation_result, token_verify).await?)
-                        },
-                        (
-                            Some(ServerAttestationInfo::BackgroundCheck { evidence }),
-                            VerifyArgs::BackgroundCheck { as_args },
-                        ) => {
-                            Some(Self::verify_evidence(&server_key_config, &challenge_token, &evidence, as_args).await?)
-                        },
-                        (
-                            Some(ServerAttestationInfo::Passport { .. }),
-                            VerifyArgs::BackgroundCheck { .. },
-                        ) => bail!(
-                            "Background check model is expected but got passport attestation from server"
-                        ),
-                        (
-                            Some(ServerAttestationInfo::BackgroundCheck { .. }),
-                            VerifyArgs::Passport { .. },
-                        ) => bail!(
-                            "Passport model is expected but got background check attestation from server"
-                        ),
-                        (None, _) => bail!("Missing attestation info from server"),
-                    }
-            }
-            RaArgs::AttestOnly(..) | RaArgs::NoRa => {
-                // Not required
-                None
-            }
-        };
-
-        let server_key_config_parsed = server_key_config.parse()?;
-
-        Ok(KeyStoreValue {
-            metadata,
-            client_key, // TODO: ohttp hpke setup with the client key
-            server_key_config_parsed,
-            server_attestation_result,
         })
     }
 
     /// Prepare a key configuration request
     async fn prepare_key_config_request(&self, challenge_token: &str) -> Result<KeyConfigRequest> {
-        let key_config_request = match &self.ra_args {
-            RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                VerifyArgs::Passport { .. } => KeyConfigRequest {
-                    attestation_request: Some(AttestationRequest::Passport),
-                },
-                VerifyArgs::BackgroundCheck { .. } => KeyConfigRequest {
-                    attestation_request: Some(AttestationRequest::BackgroundCheck {
-                        challenge_token: challenge_token.to_owned(),
-                    }),
-                },
-            },
-            RaArgs::AttestOnly(..) | RaArgs::NoRa => KeyConfigRequest {
-                attestation_request: None,
-            },
+        let verify = match &self.ra_args {
+            RaArgs::VerifyOnly(verify) => verify,
+            #[cfg(unix)]
+            RaArgs::AttestAndVerify(.., verify) => verify,
+            #[cfg(unix)]
+            RaArgs::AttestOnly(..) => {
+                return Ok(KeyConfigRequest {
+                    attestation_request: None,
+                });
+            }
+            RaArgs::NoRa => {
+                return Ok(KeyConfigRequest {
+                    attestation_request: None,
+                });
+            }
         };
 
-        Ok(key_config_request)
+        Ok(match verify {
+            VerifyArgs::Passport { .. } => KeyConfigRequest {
+                attestation_request: Some(AttestationRequest::Passport),
+            },
+            VerifyArgs::BackgroundCheck { .. } => KeyConfigRequest {
+                attestation_request: Some(AttestationRequest::BackgroundCheck {
+                    challenge_token: challenge_token.to_owned(),
+                }),
+            },
+        })
     }
 
     /// Interface 1: Get HPKE Configuration
@@ -559,9 +606,15 @@ impl OHttpClientInner {
             .await
             .map_err(TngError::HttpCyperTextForwardError)?;
 
+        #[cfg(unix)]
         tracing::debug!(
             status = ?response.status(),
             version = ?response.version(),
+            "Received OHTTP response from upstream server"
+        );
+        #[cfg(wasm)]
+        tracing::debug!(
+            status = ?response.status(),
             "Received OHTTP response from upstream server"
         );
 
@@ -587,6 +640,20 @@ impl OHttpClientInner {
             .map_err(TngError::HttpCyperTextForwardError)?;
 
         let response_body = response.bytes_stream();
+
+        #[cfg(wasm)]
+        // Create a new stream wrapper here since reqwest::Response is not Send, which is required by BhttpDecoder.
+        // TODO: maybe we can check Send requirements in BhttpDecoder can be removed ?
+        let response_body = {
+            use futures::SinkExt;
+
+            let (mut sender, receiver) = futures::channel::mpsc::unbounded();
+            tokio_with_wasm::task::spawn(async move {
+                let stream = response_body;
+                sender.send_all(&mut stream.map(|item| Ok(item))).await
+            });
+            receiver
+        };
 
         // Decrypt the ohttp response message
         let decrypted_response = client_response_decapsulator.decapsulate_response(

@@ -26,7 +26,7 @@ yum install -y git make clang protobuf-compiler npm rsync
 
 ```sh
 cd /
-git clone https://github.com/inclavare-containers/tng.git --branch wasm
+git clone https://github.com/inclavare-containers/tng.git
 cd tng
 git submodule update --init
 ```
@@ -186,7 +186,7 @@ EOF
 RUST_LOG=debug restful-as --socket 0.0.0.0:9080 --config-file /tmp/config_with_cert.json
 
 # 由于restful-as原生并不支持配置跨域规则，这里运行一个跨域代理服务（https://github.com/bulletmark/corsproxy），从8080端口转发请求到真正的Attestation Service。
-podman run -it --rm --net=host docker.1ms.run/bulletmark/corsproxy:latest 8080=http://127.0.0.1:9080
+podman run -it --rm --net=host docker.io/bulletmark/corsproxy:latest 8080=http://127.0.0.1:9080
 ```
 
 以上将在 8080 端口暴露一个 Attestation Service 服务。

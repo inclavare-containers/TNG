@@ -5,6 +5,10 @@ use bytes::BytesMut;
 use http::{uri::Authority, Uri};
 use scopeguard::defer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
+#[cfg(unix)]
+use tokio::time as tokio_time;
+#[cfg(wasm)]
+use tokio_with_wasm::alias::time as tokio_time;
 
 const HTTP_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -169,18 +173,7 @@ impl HttpRequestInspector {
                 let _ = multiplex_stop_sender.send(()); // Ignore the error here
             }
 
-            #[cfg(not(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            )))]
-            let timeout = tokio::time::sleep(HTTP_INSPECT_TIMEOUT);
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
-            let timeout = tokio_with_wasm::time::sleep(HTTP_INSPECT_TIMEOUT);
+            let timeout = tokio_time::sleep(HTTP_INSPECT_TIMEOUT);
 
             tokio::select! {
                 http1_or_http2 = async { tokio::join!(try_http1, try_http2) } => {

@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio_graceful::ShutdownGuard;
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-))]
+#[cfg(wasm)]
 use tokio_with_wasm::alias as tokio;
 
+use crate::tunnel::utils::runtime::future::TokioRuntimeSupportedFuture;
+
+pub mod future;
 pub mod hyper;
 pub mod supervised_task;
 
@@ -97,10 +96,10 @@ impl TokioRuntime {
 impl TokioRuntime {
     #[inline]
     #[track_caller]
-    fn spawn_task_named<T>(&self, name: &str, task: T) -> tokio::task::JoinHandle<T::Output>
+    fn spawn_task_named<T, O>(&self, name: &str, task: T) -> tokio::task::JoinHandle<O>
     where
-        T: std::future::Future + Send + 'static,
-        T::Output: Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
+        O: Send + 'static,
     {
         let guard = self.shutdown_guard.clone();
         let handle = match self.inner.as_ref() {

@@ -18,6 +18,7 @@ shadow!(build);
 pub(crate) const HTTP_REQUEST_USER_AGENT_HEADER: &str =
     const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 
+#[cfg(unix)]
 pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
     const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 

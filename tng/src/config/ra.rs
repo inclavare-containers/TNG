@@ -25,8 +25,10 @@ pub struct RaArgsUnchecked {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RaArgs {
+    #[cfg(unix)]
     AttestOnly(AttestArgs),
     VerifyOnly(VerifyArgs),
+    #[cfg(unix)]
     AttestAndVerify(AttestArgs, VerifyArgs),
     NoRa,
 }
@@ -52,12 +54,19 @@ impl RaArgsUnchecked {
                     bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
                 }
                 (None, Some(verify)) => RaArgs::VerifyOnly(verify),
+                #[cfg(unix)]
                 (Some(attest), None) => RaArgs::AttestOnly(attest),
+                #[cfg(unix)]
                 (Some(attest), Some(verify)) => RaArgs::AttestAndVerify(attest, verify),
+                #[cfg(wasm)]
+                (Some(..), _) => {
+                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
+                }
             }
         };
 
         // Sanity check for the attest_args.
+        #[cfg(unix)]
         if let RaArgs::AttestOnly(attest_args) | RaArgs::AttestAndVerify(attest_args, _) = &ra_args
         {
             match &attest_args {
@@ -80,8 +89,14 @@ impl RaArgsUnchecked {
         }
 
         // Sanity check for the verify_args.
-        if let RaArgs::VerifyOnly(verify_args) | RaArgs::AttestAndVerify(_, verify_args) = &ra_args
         {
+            let verify_args = match &ra_args {
+                RaArgs::VerifyOnly(verify_args) => verify_args,
+                #[cfg(unix)]
+                RaArgs::AttestAndVerify(_, verify_args) => verify_args,
+                _ => return Ok(ra_args),
+            };
+
             // Check token_verify
             match verify_args {
                 VerifyArgs::Passport { token_verify }
@@ -106,7 +121,6 @@ impl RaArgsUnchecked {
                 })?;
             }
         }
-
         Ok(ra_args)
     }
 }

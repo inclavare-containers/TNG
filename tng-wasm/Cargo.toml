@@ -14,6 +14,7 @@ default = ["console_error_panic_hook"]
 
 [dependencies]
 anyhow = {workspace = true}
+axum = {version = "0.8.4", default-features = false, features = ["json"]}# to disable mio
 bytes = {workspace = true}
 futures = {workspace = true}
 getrandom_0_2 = {package = "getrandom", version = "0.2", features = ["js"]}

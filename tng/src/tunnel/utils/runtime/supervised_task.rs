@@ -1,11 +1,9 @@
 use anyhow::{bail, Result};
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-))]
+#[cfg(wasm)]
 use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, Span};
+
+use crate::tunnel::utils::runtime::future::TokioRuntimeSupportedFuture;
 
 #[derive(Debug)]
 pub enum SupervisedTaskResult<O> {
@@ -35,7 +33,7 @@ impl super::TokioRuntime {
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(super::TokioRuntime) -> T + Send + 'static,
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let span = Span::current();
         self.spawn_supervised_task_fn_with_span(span, task)
@@ -48,7 +46,7 @@ impl super::TokioRuntime {
         task: T,
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let span = Span::current();
         self.spawn_supervised_task_with_span(span, task)
@@ -63,7 +61,7 @@ impl super::TokioRuntime {
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(super::TokioRuntime) -> T + Send + 'static,
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let runtime_cloned: super::TokioRuntime = self.clone();
         self.spawn_supervised_task_with_span(span, async move { task(runtime_cloned).await })
@@ -77,7 +75,7 @@ impl super::TokioRuntime {
         task: T,
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let guard_cloned = self.shutdown_guard.clone();
 
@@ -103,7 +101,7 @@ impl super::TokioRuntime {
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
         F: FnOnce(super::TokioRuntime) -> T + Send + 'static,
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let runtime_cloned: super::TokioRuntime = self.clone();
         self.spawn_supervised_task(async move { task(runtime_cloned).await })
@@ -116,7 +114,7 @@ impl super::TokioRuntime {
         task: T,
     ) -> tokio::task::JoinHandle<SupervisedTaskResult<O>>
     where
-        T: std::future::Future<Output = O> + Send + 'static,
+        T: TokioRuntimeSupportedFuture<O>,
     {
         let guard_cloned = self.shutdown_guard.clone();
 
@@ -131,21 +129,6 @@ impl super::TokioRuntime {
                     SupervisedTaskResult::Finished(output)
                 }
             }
-        })
-    }
-
-    #[cfg(wasm)]
-    #[inline]
-    #[track_caller]
-    pub fn spawn_supervised_wasm_local_task_with_span<T>(&self, span: Span, task: T)
-    where
-        T: std::future::Future<Output = ()> + 'static,
-    {
-        let guard_cloned = self.clone();
-
-        wasm_bindgen_futures::spawn_local(async move {
-            task.instrument(span).await;
-            drop(guard_cloned);
         })
     }
 }

@@ -42,8 +42,8 @@ branch = "v/0.103.3-patched"
 git = "https://github.com/inclavare-containers/webpki.git"
 
 [patch.crates-io.reqwest]
-rev = "5e6e4cdd97f04efda4e75e532cac0a18197e11cd"
 git = "https://github.com/inclavare-containers/reqwest.git"
+rev = "19695caced834a570b182de0089e10059bba4eb2"
 
 [patch.crates-io.tokio-graceful]
 branch = "wasm"

@@ -1,13 +1,30 @@
 use anyhow::{anyhow, Context, Result};
 use futures::FutureExt as _;
-use std::{pin::Pin, sync::Arc, time::SystemTime};
-use tokio::{select, task::JoinHandle};
+use std::{pin::Pin, sync::Arc, time::Duration};
+use tokio::select;
 
-use crate::tunnel::utils::runtime::{supervised_task::SupervisedTaskResult, TokioRuntime};
+#[cfg(unix)]
+use tokio::task::JoinHandle;
+#[cfg(wasm)]
+use tokio_with_wasm::alias::task::JoinHandle;
+
+#[cfg(unix)]
+use tokio::time as tokio_time;
+#[cfg(wasm)]
+use tokio_with_wasm::alias::time as tokio_time;
+
+#[cfg(unix)]
+use std::time::SystemTime;
+#[cfg(wasm)]
+use web_time::SystemTime;
+
+use crate::tunnel::utils::runtime::{
+    future::TokioRuntimeSupportedFuture, supervised_task::SupervisedTaskResult, TokioRuntime,
+};
 
 pub enum Expire {
     NoExpire,
-    ExpireAt(tokio::time::Instant),
+    ExpireAt(SystemTime),
 }
 
 impl Expire {
@@ -20,20 +37,13 @@ impl Expire {
                 )
             })?;
 
+        // Sanity check
         let now = SystemTime::now();
-        let duration = input_system_time.duration_since(now).with_context(|| {
+        let _duration = input_system_time.duration_since(now).with_context(|| {
             format!("the timestamp is earlier than current time: {input_system_time:?} < {now:?}")
         })?;
 
-        let instant = std::time::Instant::now()
-            .checked_add(duration)
-            .with_context(|| {
-                format!(
-                    "the timestamp is too far in the future to be represented: {timestamp_seconds}"
-                )
-            })?;
-
-        Ok(Expire::ExpireAt(tokio::time::Instant::from_std(instant)))
+        Ok(Expire::ExpireAt(input_system_time))
     }
 }
 
@@ -52,18 +62,16 @@ pub enum MaybeCached<
         refresh_task: RefreshTask,
         #[allow(unused)]
         f: Arc<
-            dyn Fn() -> Pin<
-                    Box<dyn std::future::Future<Output = Result<(T, Expire), E>> + Send + 'static>,
-                > + Send
+            dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
+                + Send
                 + Sync
                 + 'static,
         >,
     },
     Always {
         f: Arc<
-            dyn Fn() -> Pin<
-                    Box<dyn std::future::Future<Output = Result<(T, Expire), E>> + Send + 'static>,
-                > + Send
+            dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
+                + Send
                 + Sync
                 + 'static,
         >,
@@ -81,9 +89,8 @@ impl<
         f: F,
     ) -> Result<Self, E>
     where
-        F: Fn() -> Pin<
-                Box<dyn std::future::Future<Output = Result<(T, Expire), E>> + Send + 'static>,
-            > + Send
+        F: Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
+            + Send
             + Sync
             + 'static,
     {
@@ -98,6 +105,7 @@ impl<
                 let refresh_task = {
                     let f = f.clone();
                     let latest = latest.clone();
+
                     let join_handle = runtime.spawn_supervised_task_current_span(async move {
                         let mut expire = init_expire;
 
@@ -105,14 +113,32 @@ impl<
                             // Update certs in loop
                             let fut = async {
                                 let expire_fut = match expire {
-                                    Expire::NoExpire => futures::future::pending().boxed(),
-                                    Expire::ExpireAt(instant) => {
-                                        tokio::time::sleep_until(instant).boxed()
+                                    Expire::NoExpire => {
+                                        let fut = futures::future::pending();
+                                        #[cfg(unix)]
+                                        let fut = fut.boxed();
+                                        #[cfg(wasm)]
+                                        let fut = fut.boxed_local();
+
+                                        fut
+                                    }
+                                    Expire::ExpireAt(expire_time) => {
+                                        let now = SystemTime::now();
+                                        let duration =
+                                            expire_time.duration_since(now).unwrap_or_default();
+
+                                        let fut = tokio_time::sleep(duration);
+                                        #[cfg(unix)]
+                                        let fut = fut.boxed();
+                                        #[cfg(wasm)]
+                                        let fut = fut.boxed_local();
+
+                                        fut
                                     }
                                 };
 
                                 let periodically_fut =
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(interval));
+                                    tokio_time::sleep(Duration::from_secs(interval));
 
                                 select! {
                                     () = expire_fut => {
@@ -321,7 +347,7 @@ mod tests {
             assert_eq!(*value1, "value1");
 
             // Even after a short delay, should still return same value (not expired)
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(100)).await;
             let value2 = maybe_cached
                 .get_latest()
                 .await
@@ -332,7 +358,7 @@ mod tests {
             assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
             // Wait for the refresh period
-            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(1500)).await;
             // Verify the function was called twice (initial call and refresh)
             assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 2);
             let value3 = maybe_cached
@@ -361,8 +387,7 @@ mod tests {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
-                        let expire_at =
-                            tokio::time::Instant::now() + tokio::time::Duration::from_millis(1000);
+                        let expire_at = SystemTime::now() + tokio_time::Duration::from_millis(1000);
                         Ok((format!("value{}", count), Expire::ExpireAt(expire_at)))
                     })
                 },
@@ -378,7 +403,7 @@ mod tests {
             assert_eq!(*value1, "value1");
 
             // Wait for expiration
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(500)).await;
 
             // Should still return inital value because refresh happens in background and is not finished
             let value2 = maybe_cached
@@ -388,7 +413,7 @@ mod tests {
             assert_eq!(*value2, "value1");
 
             // Give some time for background refresh to happen
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(1000)).await;
 
             // Now should get updated value
             let value3 = maybe_cached
@@ -420,8 +445,7 @@ mod tests {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
-                        let expire_at =
-                            tokio::time::Instant::now() + tokio::time::Duration::from_secs(1000); // Long expire time, rely on refresh interval instead.
+                        let expire_at = SystemTime::now() + tokio_time::Duration::from_secs(1000); // Long expire time, rely on refresh interval instead.
                         Ok((format!("value{}", count), Expire::ExpireAt(expire_at)))
                     })
                 },
@@ -437,7 +461,7 @@ mod tests {
             assert_eq!(*value1, "value1");
 
             // Wait for refresh interval
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(500)).await;
 
             // Should still return inital value because refresh happens in background and is not finished
             let value2 = maybe_cached
@@ -448,7 +472,7 @@ mod tests {
             assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
             // Give some time for background refresh to happen
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(1000)).await;
 
             // Now should get updated value
             let value3 = maybe_cached
@@ -461,7 +485,7 @@ mod tests {
             assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 2);
 
             // Give some time for background refresh to happen
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            tokio_time::sleep(tokio_time::Duration::from_millis(1000)).await;
             let value4 = maybe_cached
                 .get_latest()
                 .await

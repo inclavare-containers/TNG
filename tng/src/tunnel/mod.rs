@@ -1,5 +1,6 @@
 pub(crate) mod access_log;
 pub(crate) mod attestation_result;
+#[cfg(unix)]
 pub(crate) mod cert_verifier;
 #[cfg(feature = "egress")]
 pub(crate) mod egress;

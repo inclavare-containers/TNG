@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::ra::{RaArgs, VerifyArgs};
-use crate::tunnel::utils::runtime::TokioRuntime;
+use crate::tunnel::utils::{cert_manager::CertManager, runtime::TokioRuntime};
 use anyhow::{Context as _, Result};
 
 use super::certs::{TNG_DUMMY_CERT, TNG_DUMMY_KEY};
@@ -31,9 +31,7 @@ impl RustlsDummyCert {
 pub enum TlsConfigGenerator {
     NoRa,
     Verify(VerifyArgs),
-    #[cfg(unix)]
     Attest(Arc<super::cert_manager::CertManager>),
-    #[cfg(unix)]
     AttestAndVerify(Arc<super::cert_manager::CertManager>, VerifyArgs),
 }
 
@@ -41,36 +39,13 @@ impl TlsConfigGenerator {
     pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
         Ok(match &ra_args {
             RaArgs::AttestOnly(attest) => {
-                #[cfg(unix)]
-                {
-                    use super::cert_manager::CertManager;
-                    Self::Attest(Arc::new(CertManager::new(attest.clone(), runtime).await?))
-                }
-                #[cfg(wasm)]
-                {
-                    let _ = attest;
-                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
-                }
+                Self::Attest(Arc::new(CertManager::new(attest.clone(), runtime).await?))
             }
             RaArgs::VerifyOnly(verify) => Self::Verify(verify.clone()),
-            RaArgs::AttestAndVerify(attest, verify) => {
-                #[cfg(unix)]
-                {
-                    use super::cert_manager::CertManager;
-
-                    Self::AttestAndVerify(
-                        Arc::new(CertManager::new(attest.clone(), runtime).await?),
-                        verify.clone(),
-                    )
-                }
-                #[cfg(wasm)]
-                {
-                    let _ = attest;
-                    let _ = verify;
-
-                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
-                }
-            }
+            RaArgs::AttestAndVerify(attest, verify) => Self::AttestAndVerify(
+                Arc::new(CertManager::new(attest.clone(), runtime).await?),
+                verify.clone(),
+            ),
             RaArgs::NoRa => Self::NoRa,
         })
     }

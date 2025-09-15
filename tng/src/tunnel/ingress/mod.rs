@@ -1,4 +1,9 @@
+#[cfg(unix)]
 mod protocol;
+#[cfg(wasm)] // Make it visible in wasm
+pub mod protocol;
+
+#[cfg(unix)]
 pub mod stream_manager;
 
 #[cfg(unix)]

@@ -102,27 +102,49 @@ impl IntoResponse for TngError {
     }
 }
 
+#[cfg(unix)]
 #[async_trait]
 pub trait CheckErrorResponse: Sized {
     async fn check_error_response(self) -> Result<Self, anyhow::Error>;
 }
 
+#[cfg(unix)]
 #[async_trait]
 impl CheckErrorResponse for reqwest::Response {
     async fn check_error_response(self) -> Result<Self, anyhow::Error> {
-        if let Err(error) = self.error_for_status_ref() {
-            if self.status() == StatusCode::INTERNAL_SERVER_ERROR {
-                let text = self.text().await?;
-                if let Ok(ErrorResponse { message }) = serde_json::from_str(&text) {
-                    Err(error).context(format!("server error message: {message}"))?
-                } else {
-                    Err(error).context(format!("full response: {text}"))?
-                }
+        check_error_response(self).await
+    }
+}
+
+#[cfg(wasm)]
+#[async_trait(?Send)]
+pub trait CheckErrorResponse: Sized {
+    async fn check_error_response(self) -> Result<Self, anyhow::Error>;
+}
+
+#[cfg(wasm)]
+#[async_trait(?Send)]
+impl CheckErrorResponse for reqwest::Response {
+    async fn check_error_response(self) -> Result<Self, anyhow::Error> {
+        check_error_response(self).await
+    }
+}
+
+async fn check_error_response(
+    response: reqwest::Response,
+) -> Result<reqwest::Response, anyhow::Error> {
+    if let Err(error) = response.error_for_status_ref() {
+        if response.status() == StatusCode::INTERNAL_SERVER_ERROR {
+            let text = response.text().await?;
+            if let Ok(ErrorResponse { message }) = serde_json::from_str(&text) {
+                Err(error).context(format!("server error message: {message}"))?
             } else {
-                Err(error)?
+                Err(error).context(format!("full response: {text}"))?
             }
         } else {
-            Ok(self)
+            Err(error)?
         }
+    } else {
+        Ok(response)
     }
 }
