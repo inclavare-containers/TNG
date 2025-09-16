@@ -62,8 +62,8 @@ for case_name in ${test_cases[@]}; do
         continue
     fi
 
-    echo "cargo llvm-cov --no-report --package tng-testsuite --test $case_name -- test --exact --nocapture"
-    if cargo llvm-cov --no-report --package tng-testsuite --test $case_name -- test --exact --nocapture; then
+    echo "cargo llvm-cov --no-report --package tng-testsuite --test $case_name -- --nocapture"
+    if cargo llvm-cov --no-report --package tng-testsuite --test $case_name -- --nocapture; then
         test_result_msgs="${test_result_msgs}\n${case_name}:\tPASS"
     else
         test_result_msgs="${test_result_msgs}\n${case_name}:\tFAILED"
