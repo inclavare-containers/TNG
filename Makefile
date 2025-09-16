@@ -140,7 +140,7 @@ define WASM_PATCH_PACKAGE_JSON =
 	if ! command -v jq >/dev/null; then yum install -y jq ; fi
 	rm -f tng-wasm/pkg/package.json.bak && \
 		cp tng-wasm/pkg/package.json tng-wasm/pkg/package.json.bak && \
-		jq '.name = "@inclavare-containers/tng" | .publishConfig = { "registry": "https://npm.pkg.github.com/" }' tng-wasm/pkg/package.json.bak > tng-wasm/pkg/package.json
+		jq '.name = "@inclavare-containers/tng" | .publishConfig = { "registry": "https://npm.pkg.github.com/", "access": "public" }' tng-wasm/pkg/package.json.bak > tng-wasm/pkg/package.json
 endef
 
 .PHONE: wasm-build-release
