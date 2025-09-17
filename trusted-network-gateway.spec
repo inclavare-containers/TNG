@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.4
+Version: 2.2.5
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,31 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Wed Sep 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.5-1
+- Update to version v2.2.5
+- ohttp: Refactor code structure and rename encap/decap functions to use ohttp prefix
+- ohttp: Introduce ohttp server and partial protocol support on egress side
+- ohttp: Add support for client-side and server-side attestation (background check and passport models)
+- ohttp: Handle HPKE expire_timestamp and attest.refresh_interval configuration
+- ohttp: Add Content-Type and User-Agent headers in ohttp requests/responses
+- ohttp: Add CORS configuration for egress
+- ohttp: Fix socket mark handling in netfilter ingress type
+- tng-wasm: Migrate from rats-tls to ohttp protocol; update Chinese documentation
+- tng-wasm: Add build/run example documentation
+- ra: Add support for passport model and attestation API in trustee 1.6.0
+- rats-rs: Use async verifier; deserialize and flatten tcb-status from coco as token
+- rats-rs: Move from git submodule to Cargo dependency
+- wasm: Support building as WASM module; align fetch() behavior with web standard
+- ingress: Remove unused forward_http_request(); fix incorrect to_trusted_tunnel log value
+- runtime: Merge tokio runtime with shutdown guard
+- testsuite: Fix test filtering issues; ignore tng-wasm test coverage in report
+- build: Add GitHub workflow for TNG SDK; fix npm package publishing in CI
+- build: Add mac-cross-build target in Makefile
+- deps: Unify crate versions across workspace
+- cert_verifier: Remove unnecessary spawn_blocking() call
+- run-test.sh: Adjust script to skip tng-wasm test reports
+- Fix netlink warning on newer kernels in testing environment
+
 * Thu Jul  3 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.4-1
 - ingress/socks5: add dst_filters option for filtering destination domains
 - egress: add direct_forward option to allow traffic forwarded directly

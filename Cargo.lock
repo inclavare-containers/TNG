@@ -4202,7 +4202,7 @@ dependencies = [
 
 [[package]]
 name = "tng"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "again",
  "anyhow",
@@ -4293,7 +4293,7 @@ dependencies = [
 
 [[package]]
 name = "tng-testsuite"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "again",
  "anyhow",
@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "tng-wasm"
-version = "2.2.4"
+version = "2.2.5"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
