@@ -618,6 +618,11 @@ impl OHttpClientInner {
             "Received OHTTP response from upstream server"
         );
 
+        // Check the response status code
+        let response = response
+            .error_for_status()
+            .map_err(TngError::HttpCyperTextForwardError)?;
+
         // Check content-type
         match response.headers().get(http::header::CONTENT_TYPE) {
             Some(value) => {
@@ -633,11 +638,6 @@ impl OHttpClientInner {
                 )));
             }
         }
-
-        // Check the response status code
-        let response = response
-            .error_for_status()
-            .map_err(TngError::HttpCyperTextForwardError)?;
 
         let response_body = response.bytes_stream();
 

@@ -65,7 +65,7 @@ Example:
 
 ### http_proxy: HTTP Proxy Mode
 
-In this scenario, tng listens on a local HTTP proxy port. User containers can route traffic through the proxy to the tng client’s listening port by setting the `http_proxy` environment variable (or explicitly setting the `http_proxy` proxy when sending requests in the application code). The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
+In this scenario, tng listens on a local HTTP proxy port. User containers can route traffic through the proxy to the tng client's listening port by setting the `http_proxy` environment variable (or explicitly setting the `http_proxy` proxy when sending requests in the application code). The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
 
 #### Field Descriptions
 
@@ -738,6 +738,17 @@ Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you c
 #### Field Descriptions
 
 - (Deprecated) **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
+- **`cors`** (CorsConfig, optional): CORS configuration for the OHTTP server. This field allows you to configure Cross-Origin Resource Sharing (CORS) headers to enable browser-based access to the OHTTP endpoints.
+
+    - **`allow_origins`** (array [string], optional, default is empty): A list of origins that are allowed to access the OHTTP endpoints. Use `["*"]` to allow all origins.
+    
+    - **`allow_methods`** (array [string], optional, default is empty): A list of HTTP methods that are allowed for cross-origin requests (e.g., `["GET", "POST", "OPTIONS"]`). Use `["*"]` to allow all methods.
+    
+    - **`allow_headers`** (array [string], optional, default is empty): A list of headers that are allowed in cross-origin requests (e.g., `["Content-Type", "Authorization"]`). Use `["*"]` to allow all headers.
+    
+    - **`expose_headers`** (array [string], optional, default is empty): A list of headers that browsers are allowed to access from the response. Use `["*"]` to allow all headers.
+    
+    - **`allow_credentials`** (boolean, optional, default is false): Whether to allow credentials (cookies, authorization headers, etc.) to be included in cross-origin requests.
 
 > [!NOTE]
 > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
@@ -758,7 +769,14 @@ Example:
                     "port": 30001
                 }
             },
-            "ohttp": {},
+            "ohttp": {
+                "cors": {
+                    "allow_origins": ["https://example.com"],
+                    "allow_methods": ["GET", "POST"],
+                    "allow_headers": ["Content-Type", "Authorization"],
+                    "allow_credentials": true
+                }
+            },
             "direct_forward": [
                 {
                     "http_path": "/api/builtin/.*"

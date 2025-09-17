@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use axum::{
     extract::{Request, State},
     middleware::Next,
@@ -5,9 +6,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use http::{HeaderValue, StatusCode};
-use std::{convert::Infallible, sync::Arc};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
+use std::{convert::Infallible, str::FromStr as _, sync::Arc};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
+use crate::config::egress::{CorsConfig, OHttpArgs};
 use crate::{
     tunnel::egress::protocol::ohttp::security::{
         keystore::ServerKeyStore, state::OhttpServerState,
@@ -25,14 +28,92 @@ use crate::{
 pub struct OhttpServer {
     /// The key store instance used for cryptographic operations
     key_store: Arc<ServerKeyStore>,
+    /// The configuration for the CORS
+    cors_layer: Option<CorsLayer>,
 }
 
 impl OhttpServer {
     /// Create a new TNG HTTP server instance
-    pub fn new(key_store: ServerKeyStore) -> Self {
-        Self {
+    pub fn new(key_store: ServerKeyStore, ohttp_args: OHttpArgs) -> Result<Self> {
+        let cors_layer = match &ohttp_args.cors {
+            Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
+            None => None,
+        };
+
+        Ok(Self {
             key_store: Arc::new(key_store),
+            cors_layer,
+        })
+    }
+
+    fn construct_cors_layer(cors_config: &CorsConfig) -> Result<CorsLayer> {
+        let mut cors = CorsLayer::new();
+
+        // Access-Control-Allow-Origin
+        if cors_config.allow_origins.contains(&"*".to_string()) {
+            cors = cors.allow_origin(AllowOrigin::any());
+        } else {
+            let origins = cors_config
+                .allow_origins
+                .iter()
+                .map(|origin| {
+                    origin
+                        .parse::<HeaderValue>()
+                        .with_context(|| format!("Invalid origin '{}'", origin))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            cors = cors.allow_origin(AllowOrigin::list(origins));
         }
+
+        // Access-Control-Allow-Methods
+        if cors_config.allow_methods.contains(&"*".to_string()) {
+            cors = cors.allow_methods(AllowMethods::any());
+        } else {
+            let methods = cors_config
+                .allow_methods
+                .iter()
+                .map(|m| {
+                    Method::from_str(m).with_context(|| format!("Invalid HTTP method '{}'", m))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            cors = cors.allow_methods(AllowMethods::list(methods));
+        }
+
+        // Access-Control-Allow-Headers
+        if cors_config.allow_headers.contains(&"*".to_string()) {
+            cors = cors.allow_headers(AllowHeaders::any());
+        } else {
+            let headers = cors_config
+                .allow_headers
+                .iter()
+                .map(|h| {
+                    HeaderName::from_str(h).with_context(|| format!("Invalid header name '{}'", h))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            cors = cors.allow_headers(AllowHeaders::list(headers));
+        }
+
+        // Access-Control-Expose-Headers
+        if cors_config.expose_headers.contains(&"*".to_string()) {
+            cors = cors.expose_headers(ExposeHeaders::any());
+        } else {
+            let headers = cors_config
+                .expose_headers
+                .iter()
+                .map(|h| {
+                    HeaderName::from_str(h)
+                        .with_context(|| format!("Invalid expose header name '{}'", h))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            cors = cors.expose_headers(ExposeHeaders::list(headers));
+        }
+
+        // Access-Control-Allow-Credentials
+        if cors_config.allow_credentials {
+            cors = cors.allow_credentials(true);
+        }
+
+        Ok(cors)
     }
 
     /// Create the TNG HTTP routes with the server instance
@@ -47,7 +128,7 @@ impl OhttpServer {
         // - /tng/* to return 404
         // - fallback to /tng/tunnel for all other requests
 
-        Router::new()
+        let router = Router::new()
             // Interface 1: Get HPKE Configuration
             // POST /tng/key-config
             .route(
@@ -97,8 +178,15 @@ impl OhttpServer {
                     fallback_handler(state, key_store.clone(), req)
                 }
             })
-            .layer(axum::middleware::from_fn(add_server_header))
-            .layer(axum::middleware::from_fn(log_request))
+            .layer(axum::middleware::from_fn(add_server_header));
+
+        let router = if let Some(cors) = &self.cors_layer {
+            router.layer(cors.clone())
+        } else {
+            router
+        };
+
+        router.layer(axum::middleware::from_fn(log_request))
     }
 }
 

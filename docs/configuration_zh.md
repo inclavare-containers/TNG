@@ -547,7 +547,7 @@ flowchart TD
 [Background Check](https://datatracker.ietf.org/doc/html/rfc9334#name-background-check-model)是TNG默认的远程证明模式，符合[RATS RFC 9334文档](https://datatracker.ietf.org/doc/html/rfc9334)中定义的标准模式。在该模式下，证明方（Attester）通过Attestation Agent获取证明材料，验证方（Verifier）直接验证这些证明材料。验证过程需要验证方能够访问Attestation Service来验证证明的有效性。
 
 > [!NOTE]
-> 在许多场景中，Background Check模式也称为“背调模型”
+> 在许多场景中，Background Check模式也称为"背调模型"
 
 > [!NOTE]
 > 当配置中未指定`"model"`字段时，TNG会自动使用Background Check模式。
@@ -600,7 +600,7 @@ flowchart TD
 Passport模式适用于网络隔离或性能要求较高的场景，因为它减少了验证方与Attestation Service之间的交互。
 
 > [!NOTE]
-> 在许多场景中，Passport模式也称为“护照模型”
+> 在许多场景中，Passport模式也称为"护照模型"
 
 #### Attest（Passport模式）
 
@@ -736,6 +736,17 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 
 #### 字段说明
 - (已废弃) **`allow_non_tng_traffic_regexes`** (array [string], 已弃用，可选，默认为空数组)：该字段指定了允许非加密http请求流量传入的正则表达式列表。每个元素是一个正则表达式字符串，只有当http请求路径与这些正则表达式匹配时，非加密http请求流量才会被放行。
+- **`cors`** (CorsConfig, 可选)：OHTTP服务器的CORS配置。该字段允许您配置跨域资源共享（CORS）头部，以启用基于浏览器的访问OHTTP端点。
+
+    - **`allow_origins`** (array [string], 可选，默认为空)：允许访问OHTTP端点的来源列表。使用`["*"]`允许所有来源。
+    
+    - **`allow_methods`** (array [string], 可选，默认为空)：允许用于跨域请求的HTTP方法列表（例如`["GET", "POST", "OPTIONS"]`）。使用`["*"]`允许所有方法。
+    
+    - **`allow_headers`** (array [string], 可选，默认为空)：允许在跨域请求中使用的头部列表（例如`["Content-Type", "Authorization"]`）。使用`["*"]`允许所有头。
+    
+    - **`expose_headers`** (array [string], 可选，默认为空)：浏览器被允许从响应中访问的头部列表。使用`["*"]`允许所有头。
+    
+    - **`allow_credentials`** (boolean, 可选，默认为false)：是否允许在跨域请求中包含凭证（cookies、authorization headers等）。
 
 > [!NOTE]
 > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
@@ -757,7 +768,14 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
                     "port": 30001
                 }
             },
-            "ohttp": {},
+            "ohttp": {
+                "cors": {
+                    "allow_origins": ["https://example.com"],
+                    "allow_methods": ["GET", "POST"],
+                    "allow_headers": ["Content-Type", "Authorization"],
+                    "allow_credentials": true
+                }
+            },
             "direct_forward": [
                 {
                     "http_path": "/api/builtin/.*"

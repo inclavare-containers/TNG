@@ -113,6 +113,7 @@ mod tests {
                     direct_forward: None,
                     ohttp: Some(egress::OHttpArgs {
                         allow_non_tng_traffic_regexes: None,
+                        cors: None,
                     }),
                     ra_args: RaArgsUnchecked {
                         no_ra: false,

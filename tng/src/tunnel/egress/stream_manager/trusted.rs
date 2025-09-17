@@ -36,9 +36,9 @@ impl TrustedStreamManager {
                 common_args.ohttp.clone(),
             )?,
             security_layer: match &common_args.ohttp {
-                // Note that ohttp args is handled by TransportLayer so we don't need to handle it here.
-                Some(_) => SecurityLayer::OHttp(Arc::new(
-                    OHttpSecurityLayer::new(ra_args, runtime.clone()).await?,
+                // Note that ohttp.allow_non_tng_traffic_regexes is handled by TransportLayer so we don't need to handle it here.
+                Some(ohttp) => SecurityLayer::OHttp(Arc::new(
+                    OHttpSecurityLayer::new(ra_args, ohttp.clone(), runtime.clone()).await?,
                 )),
                 None => SecurityLayer::RatsTls(Arc::new(
                     RatsTlsSecurityLayer::new(ra_args, runtime.clone()).await?,

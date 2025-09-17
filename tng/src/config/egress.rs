@@ -71,6 +71,34 @@ pub enum EgressMode {
 pub struct OHttpArgs {
     #[serde(default = "Option::default")]
     pub allow_non_tng_traffic_regexes: Option<AllowNonTngTrafficRegexes>,
+
+    /// CORS configuration for OHTTP server
+    #[serde(default = "Option::default")]
+    pub cors: Option<CorsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CorsConfig {
+    /// Allow origins for CORS, e.g. ["https://example.com", "https://app.example.com"]
+    #[serde(default)]
+    pub allow_origins: Vec<String>,
+
+    /// Allow methods for CORS, e.g. ["GET", "POST", "OPTIONS"]
+    #[serde(default)]
+    pub allow_methods: Vec<String>,
+
+    /// Allow headers for CORS, e.g. ["Content-Type", "Authorization"]
+    #[serde(default)]
+    pub allow_headers: Vec<String>,
+
+    /// Expose headers for CORS, e.g. ["X-Custom-Header"]
+    #[serde(default)]
+    pub expose_headers: Vec<String>,
+
+    /// Allow credentials for CORS
+    #[serde(default)]
+    pub allow_credentials: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

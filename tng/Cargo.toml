@@ -87,7 +87,7 @@ tokio-rustls = {version = "0.26.2", default-features = false, features = ["loggi
 tokio-util = {version = "0.7.15", features = ["compat"]}
 tonic = {version = "0.12.3", optional = true}
 tower = {version = "0.5", features = ["util"]}
-tower-http = {version = "0.6.6", features = ["trace", "set-header"]}
+tower-http = {version = "0.6.6", features = ["trace", "set-header", "cors"]}
 tracing = "0.1"
 tracing-futures = {version = "0.2.5", features = ["futures-03"]}
 tracing-opentelemetry = {version = "0.30.0", optional = true}

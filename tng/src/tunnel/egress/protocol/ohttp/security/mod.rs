@@ -5,7 +5,7 @@ use tracing::Instrument;
 pub mod server;
 
 use crate::{
-    config::ra::RaArgs,
+    config::{egress::OHttpArgs, ra::RaArgs},
     tunnel::egress::{
         protocol::ohttp::security::{
             keystore::ServerKeyStore, server::OhttpServer, state::OhttpServerState,
@@ -24,12 +24,16 @@ pub struct OHttpSecurityLayer {
 }
 
 impl OHttpSecurityLayer {
-    pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
+    pub async fn new(
+        ra_args: RaArgs,
+        ohttp_args: OHttpArgs,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
         let key_store = ServerKeyStore::new(ra_args)?;
 
         Ok(Self {
             runtime,
-            ohttp_server: OhttpServer::new(key_store),
+            ohttp_server: OhttpServer::new(key_store, ohttp_args)?,
         })
     }
     pub async fn handle_stream(
