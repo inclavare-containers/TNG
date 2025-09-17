@@ -2,13 +2,20 @@
 
 ## 说明
 
-提供，SDK 使用 wasm-pack 进行构建
+TNG Client JavaScript SDK为浏览器环境提供客户端功能，使用wasm-pack构建。
 
-浏览器环境使用的
+## 获取 SDK
 
-## 构建 npm 包
+您可以通过两种方式获取 TNG SDK：
 
-1. Docker 环境准备
+### 1. 从 GitHub Packages 下载
+
+直接从 GitHub Packages 页面下载预编译的 npm 包：
+[https://github.com/inclavare-containers/TNG/pkgs/npm/tng](https://github.com/inclavare-containers/TNG/pkgs/npm/tng)
+
+### 2. 从源码构建
+
+#### Docker 环境准备
 
 ```sh
 docker run -it --name tng-dev --privileged --network=host alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest bash
@@ -22,7 +29,7 @@ docker run -it --name tng-dev --privileged --network=host alibaba-cloud-linux-3-
 yum install -y git make clang protobuf-compiler npm rsync
 ```
 
-2. 拉取源码
+#### 拉取源码
 
 ```sh
 cd /
@@ -33,7 +40,7 @@ git submodule update --init
 
 现在，你已经在`/tng`目录中拥有了 tng 仓库源码。
 
-3. 安装 rust 工具链
+#### 安装 rust 工具链
 
 ```sh
 cat <<EOF >> ~/.bashrc
@@ -57,7 +64,7 @@ EOF
 . "$HOME/.cargo/env"
 ```
 
-4. 构建 TNG SDK 的 npm 包
+#### 构建 TNG SDK 的 npm 包
 
 ```sh
 make wasm-pack-debug
@@ -68,11 +75,111 @@ make wasm-pack-debug
 
 产物`tar.gz`文件将存放在`./tng-wasm/pkg/`目录下，您可以将其使用`npm install`安装到您的 web 项目中。
 
-## 运行 Demo
+## 在您的项目中使用 SDK
+
+### 安装 SDK 到您的项目
+
+```bash
+npm install tng-<version>.tgz
+```
+
+### 在您的 HTML 中集成 SDK
+
+将以下代码添加到您的 HTML 页面中以使用 TNG SDK：
+
+```html
+<!DOCTYPE html>
+<html>
+  <head> </head>
+  <body>
+    <!-- Your page content -->
+
+    <script type="module">
+      import tng_init, { fetch as tng_fetch } from "tng_wasm.js";
+
+      // Initialize the TNG WASM module
+      await tng_init();
+
+      // Configure attestation parameters
+      const asAddr = "http://127.0.0.1:8080/";
+      const policyIds = ["default"];
+
+      // Create a wrapped fetch function
+      const attested_fetch = (input, init) => {
+        const tng_config = {
+          ohttp: {},
+          verify: {
+            model: "background_check",
+            as_addr: asAddr,
+            policy_ids: policyIds,
+          },
+        };
+        return tng_fetch(input, init, tng_config);
+      };
+
+      // Send a request using the wrapped fetch function
+      attested_fetch("http://127.0.0.1:30001/foo/bar?baz=qux", {
+        method: "GET",
+        headers: {},
+      })
+        .then((response) => {
+          const attest_info = response?.attest_info
+            ? response.attest_info
+            : null;
+          console.log("Attest Info:", attest_info);
+          // Access remote attestation report information
+
+          console.log("Got response:", response);
+          // Process response
+        })
+        .catch((error) => {
+          console.error("Error:", error);
+          // Handle errors
+        });
+    </script>
+  </body>
+</html>
+```
+
+主要步骤包括：
+
+1. 在 HTML 头部添加必要的安全策略元标签
+2. 导入并初始化 TNG WASM 模块
+3. 配置证明服务地址和策略 ID
+4. 使用封装的 `tng_fetch` 函数发送加密请求
+
+### 部署配置
+
+#### 在网页中使用
+
+由于 TNG SDK 使用了 Web Workers，在生产部署时，您需要为网页的 HTTP 响应添加 `Cross-Origin-Opener-Policy:same-origin` 和 `Cross-Origin-Embedder-Policy:require-corp` 这两个 HTTP 头，否则将无法正常工作。
+
+#### 在 Chrome 扩展中使用
+
+如果您希望在 Chrome 扩展中集成，由于 manifest v3 的限制，您需要在清单中添加一些额外内容。
+
+1. 修改 `manifest.json` 文件中的 `background` 配置项，将 `type` 配置项设置为 `"module"`。
+
+```json
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+```
+
+2. 修改 `manifest.json` 文件中的 `content_security_policy` 配置项为以下内容：
+
+```json
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+```
+
+## 运行示例代码
 
 pkg 目录中包含一个使用 TNG SDK 发送加密请求的示例程序，该示例需要一个机密计算服务器实例，以及一台本地计算机，下面介绍如何运行该示例
 
-1. 准备 server 端服务
+### 1. 准备 server 端服务
 
 使用[dummyhttp](https://github.com/svenstaro/dummyhttp)这个简单的 http server 程序模拟我们的后端服务，我们需要安装并运行它
 
@@ -91,7 +198,7 @@ dummyhttp -p 30001 -vvvv
 > [!NOTE]
 > 您可以使用 curl 命令在本地计算机中测试直接访问这个 http server，以检查网络联通性
 
-2. 编译并安装服务端侧的 TNG
+### 2. 编译并安装服务端侧的 TNG
 
 构建 rpm 包
 
@@ -117,7 +224,7 @@ docker build -t tng:test .
 
 将产生名为`tng:test`容器镜像。
 
-3. 在服务端侧运行 Attestation-Agent
+### 3. 在服务端侧运行 Attestation-Agent
 
 您可以选择从 yum 源安装 attestation-agent，或者编译部署自己的 attestation-agent
 
@@ -131,7 +238,7 @@ yum install -y attestation-agent
 RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock
 ```
 
-4. 在服务端侧运行 TNG
+### 4. 在服务端侧运行 TNG
 
 ```sh
 tng launch --config-content='
@@ -158,9 +265,7 @@ tng launch --config-content='
 > - 目前 TNG SDK 仅支持对服务端进行验证，因此您必须提供`"attest"`选项
 > - 如上所示，您需要在 TNG 配置中添加一项`"ohttp": {}`，以开启使用 OHTTP 作为加密协议（而不是 rats-tls）中进行双向加密流量的传输。
 
-该规则
-
-5. 运行 Attestation Service 实例
+### 5. 运行 Attestation Service 实例
 
 您需要准备一个暴露 Restful HTTP 接口的 Attestation Service 实例，这可以通过安装 yum 源中的`trustee`包或者编译部署自己的`restful-as`来实现。
 
@@ -196,7 +301,7 @@ podman run -it --rm --net=host docker.io/bulletmark/corsproxy:latest 8080=http:/
 
 以下是一个示例：
 
-6. 编译 TNG SDK
+### 6. 编译 TNG SDK
 
 ```sh
 make wasm-build-debug
@@ -204,7 +309,7 @@ make wasm-build-debug
 
 这将在`tng-wasm/pkg/`目录中产生对应的`.wasm`和`.js`文件
 
-7. 修改前端页面中的代码
+### 7. 修改前端页面中的代码
 
 请按需修改[tng-wasm/pkg/index.html](./pkg/index.html)中的如下内容
 
@@ -221,7 +326,7 @@ const asAddr = "http://127.0.0.1:8080/";
 const policyIds = ["default"];
 ```
 
-8. 在服务端侧运行前端服务
+### 8. 在服务端侧运行前端服务
 
 首先安装 miniserve
 
@@ -240,4 +345,7 @@ miniserve ./tng-wasm/pkg --index index.html --header "Cross-Origin-Opener-Policy
 > - [`miniserve`](https://github.com/svenstaro/miniserve)是一个纯粹的静态资源服务器，它和 Nginx 以及 python 的 http.server 没有什么差别，你也可以用其它组件来替代。
 > - 由于 TNG SDK 使用了 Web Worker，在生产部署时，您需要为 Web 页面的 HTTP 响应添加`Cross-Origin-Opener-Policy:same-origin`和`Cross-Origin-Embedder-Policy:require-corp`这两个 HTTP 头，否则将无法正常工作。如果您希望在 chrome extension 中集成，请在 manifest 清单中添加[cross_origin_embedder_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-embedder-policy)和[cross_origin_opener_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-opener-policy)这两个 manifest key。
 
-9. 在本地计算机中打开浏览器，访问`http://<机密计算服务实例ip>:8082/`，您可以在 F12 中查看请求响应的日志
+### 9. 从浏览器访问
+
+在本地计算机中打开浏览器，访问`http://<机密计算服务实例ip>:8082/`，您可以在 F12 中查看请求响应的日志
+
