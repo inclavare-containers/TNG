@@ -22,12 +22,4 @@ pub trait StreamManager {
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
     )>;
-
-    async fn is_forward_http_request_supported() -> bool;
-
-    async fn forward_http_request<'a>(
-        &self,
-        endpoint: &'a TngEndpoint,
-        request: axum::extract::Request,
-    ) -> Result<(axum::response::Response, Option<AttestationResult>)>;
 }

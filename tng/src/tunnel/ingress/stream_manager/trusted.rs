@@ -140,29 +140,13 @@ impl StreamManager for TrustedStreamManager {
                                 .await
                                 .map_err(|error| anyhow!("failed to serve connection: {error:?}"))
                         }) as Pin<Box<_>>,
+                        // TODO: ohttp always return None attestation result in stream level, which may cause misunderstanding when user is reading the logs.
                         None,
                     ))
                 }
                 .instrument(tracing::info_span!("security"))
                 .await
             }
-        }
-    }
-
-    async fn is_forward_http_request_supported() -> bool {
-        true
-    }
-
-    async fn forward_http_request<'a>(
-        &self,
-        endpoint: &'a TngEndpoint,
-        request: axum::extract::Request,
-    ) -> Result<(axum::response::Response, Option<AttestationResult>)> {
-        match &self.security_layer {
-            SecurityLayer::RatsTls(..) => Err::<(_, _), anyhow::Error>(anyhow!("unsupported")),
-            SecurityLayer::OHttp(security_layer) => Ok(security_layer
-                .forward_http_request(&endpoint, request.map(axum::body::Body::new))
-                .await?),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 
 use crate::tunnel::{
     attestation_result::AttestationResult,
@@ -56,17 +56,5 @@ impl StreamManager for UnprotectedStreamManager {
                 as Pin<Box<_>>,
             None,
         ))
-    }
-
-    async fn is_forward_http_request_supported() -> bool {
-        false
-    }
-
-    async fn forward_http_request<'a>(
-        &self,
-        _endpoint: &'a TngEndpoint,
-        _request: axum::extract::Request,
-    ) -> Result<(axum::response::Response, Option<AttestationResult>)> {
-        bail!("unsupported")
     }
 }
