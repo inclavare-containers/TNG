@@ -4401,6 +4401,7 @@ dependencies = [
  "tokio_with_wasm_proc",
  "tracing",
  "tracing-log",
+ "tracing-subscriber",
  "tracing-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
