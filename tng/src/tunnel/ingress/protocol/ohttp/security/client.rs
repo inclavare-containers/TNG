@@ -597,14 +597,20 @@ impl OHttpClientInner {
 
         tracing::debug!(url, "Sending OHTTP request to upstream server");
 
-        let response = self
-            .http_client
-            .post(&url)
-            .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
-            .body(ohttp_request_body)
-            .send()
-            .await
-            .map_err(TngError::HttpCyperTextForwardError)?;
+        let response = {
+            let request_builder = self
+                .http_client
+                .post(&url)
+                .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
+                .body(ohttp_request_body);
+
+            #[cfg(wasm)]
+            let request_builder = request_builder.duplex("half");
+            request_builder
+                .send()
+                .await
+                .map_err(TngError::HttpCyperTextForwardError)?
+        };
 
         #[cfg(unix)]
         tracing::debug!(
