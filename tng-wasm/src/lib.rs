@@ -12,6 +12,9 @@ use tng::{
     AttestationResult, TokioRuntime,
 };
 
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::Layer;
+use tracing_wasm::{WASMLayer, WASMLayerConfig};
 use wasm_bindgen::prelude::*;
 
 pub mod fetch;
@@ -21,7 +24,15 @@ pub fn init_tng() {
     // print pretty errors in wasm https://github.com/rustwasm/console_error_panic_hook
     // This is not needed for tracing_wasm to work, but it is a common tool for getting proper error line numbers for panics.
     console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default();
+
+    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(
+        WASMLayer::new(WASMLayerConfig::default()).with_filter(
+            Into::<tracing_subscriber::EnvFilter>::into(
+                "info,tokio_graceful=off,rats_cert=debug,tng=debug",
+            ),
+        ),
+    ))
+    .expect("failed to set tng default global tracing subscriber");
 
     tracing::info!(
         r#"
