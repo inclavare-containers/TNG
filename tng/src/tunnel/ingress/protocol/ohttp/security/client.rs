@@ -550,18 +550,25 @@ impl OHttpClientInner {
 
         tracing::debug!(?url, "Sending OHTTP request to upstream server");
 
-        let response = self
-            .http_client
-            .post(url)
-            .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
-            .header(
-                http::header::CONTENT_TYPE,
-                OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
-            )
-            .body(ohttp_request_body)
-            .send()
-            .await
-            .map_err(TngError::HttpCipherTextForwardError)?;
+        let response = {
+            let request_builder = self
+                .http_client
+                .post(url)
+                .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
+                .header(
+                    http::header::CONTENT_TYPE,
+                    OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
+                )
+                .body(ohttp_request_body);
+
+            #[cfg(wasm)]
+            let request_builder = request_builder.duplex("half");
+
+            request_builder
+                .send()
+                .await
+                .map_err(TngError::HttpCipherTextForwardError)?
+        };
 
         #[cfg(unix)]
         tracing::debug!(
