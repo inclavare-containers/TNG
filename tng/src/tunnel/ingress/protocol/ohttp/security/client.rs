@@ -36,7 +36,7 @@ use tokio_util::{
         FuturesAsyncReadCompatExt as _, FuturesAsyncWriteCompatExt as _,
         TokioAsyncReadCompatExt as _,
     },
-    io::{ReaderStream, StreamReader},
+    io::StreamReader,
 };
 use url::Url;
 
@@ -542,7 +542,17 @@ impl OHttpClientInner {
             };
 
             let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
-            reqwest::Body::wrap_stream(ReaderStream::new(body))
+            #[cfg(wasm)]
+            {
+                let mut body = body;
+                let mut body_bytes = Vec::new();
+                body.read_to_end(&mut body_bytes)
+                    .await
+                    .map_err(|error| TngError::EncryptHttpRequestError(error.into()))?;
+                reqwest::Body::from(body_bytes)
+            }
+            #[cfg(unix)]
+            reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(body))
         };
 
         // Forward the request to the upstream server
@@ -550,25 +560,18 @@ impl OHttpClientInner {
 
         tracing::debug!(?url, "Sending OHTTP request to upstream server");
 
-        let response = {
-            let request_builder = self
-                .http_client
-                .post(url)
-                .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
-                .header(
-                    http::header::CONTENT_TYPE,
-                    OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
-                )
-                .body(ohttp_request_body);
-
-            #[cfg(wasm)]
-            let request_builder = request_builder.duplex("half");
-
-            request_builder
-                .send()
-                .await
-                .map_err(TngError::HttpCipherTextForwardError)?
-        };
+        let response = self
+            .http_client
+            .post(url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
+            .header(
+                http::header::CONTENT_TYPE,
+                OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
+            )
+            .body(ohttp_request_body)
+            .send()
+            .await
+            .map_err(TngError::HttpCipherTextForwardError)?;
 
         #[cfg(unix)]
         tracing::debug!(
