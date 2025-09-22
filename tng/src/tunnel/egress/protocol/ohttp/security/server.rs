@@ -177,8 +177,7 @@ impl OhttpServer {
                 move |State(state): State<OhttpServerState>, req| {
                     fallback_handler(state, key_store.clone(), req)
                 }
-            })
-            .layer(axum::middleware::from_fn(add_server_header));
+            });
 
         let router = if let Some(cors) = &self.cors_layer {
             router.layer(cors.clone())
@@ -186,7 +185,9 @@ impl OhttpServer {
             router
         };
 
-        router.layer(axum::middleware::from_fn(log_request))
+        router
+            .layer(axum::middleware::from_fn(add_server_header))
+            .layer(axum::middleware::from_fn(log_request))
     }
 }
 
