@@ -6,18 +6,22 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     config::{ingress::OHttpArgs, ra::RaArgs},
     error::TngError,
-    tunnel::{endpoint::TngEndpoint, ingress::protocol::ohttp::security::client::OHttpClient},
+    tunnel::{
+        endpoint::TngEndpoint,
+        ingress::protocol::ohttp::security::{client::OHttpClient, path_rewrite::PathRewriteGroup},
+    },
     AttestationResult, TokioRuntime, HTTP_REQUEST_USER_AGENT_HEADER,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use http::HeaderValue;
 use tokio::sync::{OnceCell, RwLock};
+use url::Url;
 
 pub struct OHttpSecurityLayer {
-    ohttp_args: OHttpArgs,
     ra_args: RaArgs,
     http_client: Arc<reqwest::Client>,
-    ohttp_clients: RwLock<HashMap<TngEndpoint, Arc<OnceCell<Arc<OHttpClient>>>>>,
+    ohttp_clients: RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>,
+    path_rewrite_group: PathRewriteGroup,
     runtime: TokioRuntime,
 }
 
@@ -47,10 +51,10 @@ impl OHttpSecurityLayer {
         };
 
         Ok(Self {
-            ohttp_args: ohttp_args.clone(),
             ra_args,
             http_client: Arc::new(http_client),
             ohttp_clients: Default::default(),
+            path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
             runtime,
         })
     }
@@ -60,7 +64,9 @@ impl OHttpSecurityLayer {
         endpoint: &'a TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
-        let ohttp_client = self.get_or_create_ohttp_client(endpoint).await?;
+        let base_url = self.construct_base_url(endpoint, &request)?;
+
+        let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
 
         ohttp_client
             .forward_request(request)
@@ -71,14 +77,48 @@ impl OHttpSecurityLayer {
             })
     }
 
+    fn construct_base_url(
+        &self,
+        endpoint: &TngEndpoint,
+        request: &axum::extract::Request,
+    ) -> Result<Url, TngError> {
+        let old_uri = request.uri();
+        let base_url = {
+            let original_path = old_uri.path();
+            let mut rewrited_path = self
+                .path_rewrite_group
+                .rewrite(original_path)
+                .unwrap_or_else(|| "/".to_string());
+
+            if !rewrited_path.starts_with("/") {
+                rewrited_path.insert(0, '/');
+            }
+
+            tracing::debug!(original_path, rewrited_path, "path is rewrited");
+
+            let url = format!(
+                "http://{}:{}{rewrited_path}",
+                endpoint.host(),
+                endpoint.port()
+            );
+            let url = url
+                .parse::<Url>()
+                .with_context(|| format!("Not a valid URL: {}", url))
+                .map_err(TngError::CreateOHttpClientFailed)?;
+
+            url
+        };
+        Ok(base_url)
+    }
+
     async fn get_or_create_ohttp_client<'a>(
         &self,
-        endpoint: &'a TngEndpoint,
+        base_url: Url,
     ) -> Result<Arc<OHttpClient>, TngError> {
         // Try to read the ohttp client entry.
         let cell = {
             let read = self.ohttp_clients.read().await;
-            read.get(&endpoint).map(|v| v.clone())
+            read.get(&base_url).map(|v| v.clone())
         };
 
         // If no entry exists, create one with uninitialized value.
@@ -88,7 +128,7 @@ impl OHttpSecurityLayer {
                 .ohttp_clients
                 .write()
                 .await
-                .entry(endpoint.clone())
+                .entry(base_url.clone())
                 .or_default()
                 .clone(),
         };
@@ -97,10 +137,9 @@ impl OHttpSecurityLayer {
         cell.get_or_try_init(|| async {
             Ok(Arc::new(
                 OHttpClient::new(
-                    &self.ohttp_args,
                     self.ra_args.clone(),
                     self.http_client.clone(),
-                    endpoint.clone(),
+                    base_url,
                     self.runtime.clone(),
                 )
                 .await

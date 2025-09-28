@@ -38,6 +38,7 @@ use tokio_util::{
     },
     io::{ReaderStream, StreamReader},
 };
+use url::Url;
 
 use std::{pin::Pin, sync::Arc};
 
@@ -79,8 +80,7 @@ pub struct OHttpClientInner {
     ra_args: RaArgs,
     http_client: Arc<reqwest::Client>,
     rng: Mutex<ChaCha12Rng>,
-    path_rewrite_group: PathRewriteGroup,
-    endpoint: TngEndpoint,
+    base_url: Url,
     runtime: TokioRuntime,
 }
 
@@ -121,10 +121,9 @@ struct ServerHpkeKeyConfigParsed {
 
 impl OHttpClient {
     pub async fn new(
-        ohttp_args: &OHttpArgs,
         ra_args: RaArgs,
         http_client: Arc<reqwest::Client>,
-        endpoint: TngEndpoint,
+        base_url: Url,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let refresh_strategy = match &ra_args {
@@ -143,8 +142,7 @@ impl OHttpClient {
             ra_args,
             rng: Mutex::new(ChaCha12Rng::from_os_rng()),
             http_client,
-            path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
-            endpoint,
+            base_url,
             runtime: runtime.clone(),
         });
 
@@ -464,21 +462,17 @@ impl OHttpClientInner {
         &self,
         key_config_request: KeyConfigRequest,
     ) -> Result<KeyConfigResponse, TngError> {
-        let url = format!(
-            "http://{}:{}/tng/key-config",
-            self.endpoint.host(),
-            self.endpoint.port()
-        );
+        let url = self.base_url.clone();
 
         tracing::info!(
-            url,
+            ?url,
             ?key_config_request,
             "Getting HPKE configuration upstream"
         );
 
         let response = self
             .http_client
-            .post(&url)
+            .post(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::KEY_CONFIG)
             .json(&key_config_request)
             .send()
@@ -513,8 +507,6 @@ impl OHttpClientInner {
         metadata: &Metadata,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
-        let old_uri = request.uri().clone();
-
         // Encode the request to bhttp message
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
@@ -572,32 +564,13 @@ impl OHttpClientInner {
         };
 
         // Forward the request to the upstream server
-        let url = {
-            let original_path = old_uri.path();
-            let mut rewrited_path = self
-                .path_rewrite_group
-                .rewrite(original_path)
-                .unwrap_or_else(|| "/tng/tunnel".to_string());
+        let url = self.base_url.clone();
 
-            if !rewrited_path.starts_with("/") {
-                rewrited_path = format!("/{}", rewrited_path);
-            }
-
-            tracing::debug!(original_path, rewrited_path, "path is rewrited");
-
-            let url = format!(
-                "http://{}:{}{rewrited_path}",
-                self.endpoint.host(),
-                self.endpoint.port()
-            );
-            url
-        };
-
-        tracing::debug!(url, "Sending OHTTP request to upstream server");
+        tracing::debug!(?url, "Sending OHTTP request to upstream server");
 
         let response = self
             .http_client
-            .post(&url)
+            .post(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
             .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
             .body(ohttp_request_body)
@@ -681,15 +654,11 @@ impl OHttpClientInner {
     pub async fn background_check_attestation_challenge(
         &self,
     ) -> Result<AttestationChallengeResponse, TngError> {
-        let url = format!(
-            "http://{}:{}/tng/background-check/challenge",
-            self.endpoint.host(),
-            self.endpoint.port()
-        );
+        let url = self.base_url.clone();
 
         let result: AttestationChallengeResponse = self
             .http_client
-            .get(&url)
+            .get(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::BACKGROUND_CHECK_CHALLENGE)
             .send()
             .await
@@ -714,11 +683,7 @@ impl OHttpClientInner {
         challenge_token: String,
         evidence: String,
     ) -> Result<AttestationVerifyResponse, TngError> {
-        let url = format!(
-            "http://{}:{}/tng/background-check/verify",
-            self.endpoint.host(),
-            self.endpoint.port()
-        );
+        let url = self.base_url.clone();
 
         let payload = AttestationVerifyRequest {
             challenge_token,
@@ -727,7 +692,7 @@ impl OHttpClientInner {
 
         let result: AttestationVerifyResponse = self
             .http_client
-            .post(&url)
+            .post(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::BACKGROUND_CHECK_VERIFY)
             .json(&payload)
             .send()
