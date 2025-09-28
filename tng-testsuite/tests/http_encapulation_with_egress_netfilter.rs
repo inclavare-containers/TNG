@@ -37,7 +37,7 @@ async fn test() -> Result<()> {
                                 "port": 10001
                             },
                             "out": {
-                                "host": "192.168.1.1",
+                                "host": "192.168.1.3",
                                 "port": 30001
                             }
                         },
@@ -60,7 +60,14 @@ async fn test() -> Result<()> {
             }
             "#,
         ).boxed(),
-        // TODO: add a HttpInspector for inspecting network traffic and check http body.
+        AppType::LoadBalancer {
+            listen_port: 30001,
+            upstream_servers: vec![
+                ("192.168.1.1", 30001),
+            ],
+            path_matcher: r"^/foo/(.*)$",
+            rewrite_to: r"/baz/$1",
+        }.boxed(),
         AppType::HttpServer {
             port: 30001,
             expected_host_header: "example.com",

@@ -12,6 +12,7 @@ pub mod tng;
 pub enum NodeType {
     Client,
     Server,
+    Middleware,
 }
 
 #[async_trait]

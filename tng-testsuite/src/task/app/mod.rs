@@ -8,6 +8,7 @@ use super::{NodeType, Task};
 
 mod http_client;
 mod http_server;
+mod load_balancer;
 mod tcp_client;
 mod tcp_server;
 
@@ -35,6 +36,13 @@ pub enum AppType {
         http_proxy: HttpProxy,
     },
     #[allow(dead_code)]
+    LoadBalancer {
+        listen_port: u16,
+        upstream_servers: Vec<(&'static str, u16)>,
+        path_matcher: &'static str,
+        rewrite_to: &'static str,
+    },
+    #[allow(dead_code)]
     TcpServer { port: u16 },
     #[allow(dead_code)]
     TcpClient {
@@ -52,6 +60,7 @@ impl Task for AppType {
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => "app_client",
+            AppType::LoadBalancer { .. } => "load_balancer",
         }
         .to_owned()
     }
@@ -62,11 +71,12 @@ impl Task for AppType {
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => NodeType::Client,
+            AppType::LoadBalancer { .. } => NodeType::Middleware,
         }
     }
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
-        Ok(match *self {
+        Ok(match self {
             AppType::HttpServer {
                 port,
                 expected_host_header,
@@ -74,7 +84,7 @@ impl Task for AppType {
             } => {
                 http_server::launch_http_server(
                     token,
-                    port,
+                    *port,
                     expected_host_header,
                     expected_path_and_query,
                 )
@@ -92,7 +102,7 @@ impl Task for AppType {
                     path_and_query,
                     HttpClientMode::NoProxy {
                         host: host.to_string(),
-                        port,
+                        port: *port,
                     },
                 )
                 .await
@@ -106,16 +116,33 @@ impl Task for AppType {
                     token,
                     host_header,
                     path_and_query,
-                    HttpClientMode::ProxyWithReverseMode { http_proxy },
+                    HttpClientMode::ProxyWithReverseMode {
+                        http_proxy: *http_proxy,
+                    },
                 )
                 .await
             }
-            AppType::TcpServer { port } => tcp_server::launch_tcp_server(token, port).await,
+            AppType::TcpServer { port } => tcp_server::launch_tcp_server(token, *port).await,
             AppType::TcpClient {
                 host,
                 port,
                 http_proxy,
-            } => tcp_client::launch_tcp_client(token, host, port, http_proxy).await,
+            } => tcp_client::launch_tcp_client(token, host, *port, *http_proxy).await,
+            AppType::LoadBalancer {
+                listen_port,
+                upstream_servers,
+                path_matcher,
+                rewrite_to,
+            } => {
+                load_balancer::launch_load_balancer(
+                    token,
+                    *listen_port,
+                    upstream_servers.clone(),
+                    path_matcher,
+                    rewrite_to,
+                )
+                .await
+            }
         }?)
     }
 }

@@ -65,6 +65,7 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
         let network = BridgeNetwork::new("192.168.1.254", 24).await?;
         let server_node = network.new_node("192.168.1.1").await?;
         let client_node = network.new_node("192.168.1.2").await?;
+        let middleware_node = network.new_node("192.168.1.3").await?;
 
         // Launch all tasks in order and get the join handles
         let mut sub_tasks = futures::stream::FuturesUnordered::new();
@@ -78,6 +79,7 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
                     let node = match task.node_type() {
                         task::NodeType::Client => &client_node,
                         task::NodeType::Server => &server_node,
+                        task::NodeType::Middleware => &middleware_node,
                     };
 
                     let token = token.clone();

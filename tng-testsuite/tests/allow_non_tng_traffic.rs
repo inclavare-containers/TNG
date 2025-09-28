@@ -95,14 +95,21 @@ async fn test_access_via_tng() -> Result<()> {
     run_test(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         TngInstance::TngClient(tng_client_config).boxed(),
+        AppType::LoadBalancer {
+            listen_port: 30001,
+            upstream_servers: vec![("192.168.1.1", 30001)],
+            path_matcher: r"^/foo/(.*)$",
+            rewrite_to: r"/baz/$1",
+        }
+        .boxed(),
         AppType::HttpServer {
             port: 30001,
-            expected_host_header: "192.168.1.1:30001",
+            expected_host_header: "192.168.1.3:30001",
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }
         .boxed(),
         AppType::HttpClientWithReverseProxy {
-            host_header: "192.168.1.1:30001",
+            host_header: "192.168.1.3:30001",
             path_and_query: "/foo/bar/www?type=1&case=1",
             http_proxy: HttpProxy {
                 host: "127.0.0.1",
