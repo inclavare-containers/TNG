@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use futures::FutureExt as _;
+use std::cmp::{Ord, Ordering, PartialOrd};
 use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::select;
 
@@ -22,9 +23,36 @@ use crate::tunnel::utils::runtime::{
     future::TokioRuntimeSupportedFuture, supervised_task::SupervisedTaskResult, TokioRuntime,
 };
 
+/// Represents an optional expiration time.
+/// - `NoExpire`: Never expires (treated as infinite future).
+/// - `ExpireAt(time)`: Expires at a specific system time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expire {
     NoExpire,
     ExpireAt(SystemTime),
+}
+
+impl PartialOrd for Expire {
+    /// Compare two `Expire` values:
+    /// - `NoExpire` is considered greater than any `ExpireAt` (i.e., it expires later).
+    /// - Two `ExpireAt` times are compared using `SystemTime`.
+    /// - Returns `None` only if comparison between `SystemTime` values fails (rare).
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Expire::NoExpire, Expire::NoExpire) => Some(Ordering::Equal),
+            (Expire::NoExpire, Expire::ExpireAt(_)) => Some(Ordering::Greater), // Never expire > finite time
+            (Expire::ExpireAt(_), Expire::NoExpire) => Some(Ordering::Less), // Finite time < never expire
+            (Expire::ExpireAt(a), Expire::ExpireAt(b)) => a.partial_cmp(b), // Compare actual timestamps
+        }
+    }
+}
+
+impl Ord for Expire {
+    /// Provides a total ordering by unwrapping the result of `partial_cmp`.
+    /// Since all cases are handled in `partial_cmp`, this will not panic in practice.
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    }
 }
 
 impl Expire {
@@ -213,7 +241,29 @@ mod tests {
 
     use super::*;
     use crate::tests::run_test_with_tokio_runtime;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_expire_min_max() {
+        let now = SystemTime::now();
+        let past = now - Duration::from_secs(3600);
+        let future = now + Duration::from_secs(3600);
+
+        let expired = Expire::ExpireAt(past); // Already expired
+        let valid = Expire::ExpireAt(future); // Expires in the future
+        let no_expire = Expire::NoExpire; // Never expires
+
+        // min returns the earlier expiration (sooner to expire)
+        assert_eq!(std::cmp::min(expired, valid), expired);
+        assert_eq!(std::cmp::min(valid, no_expire), valid);
+        assert_eq!(std::cmp::min(expired, no_expire), expired);
+
+        // max returns the later expiration (longer to live)
+        assert_eq!(std::cmp::max(expired, valid), valid);
+        assert_eq!(std::cmp::max(valid, no_expire), no_expire);
+        assert_eq!(std::cmp::max(expired, no_expire), no_expire);
+    }
 
     #[test]
     fn test_expire_from_timestamp_valid_future() {

@@ -34,16 +34,16 @@ impl CertManager {
 
         let cert = MaybeCached::new(runtime, refresh_strategy, move || {
             let attest_args = attest_args.clone();
-            Box::pin(
-                async move { Ok((Self::fetch_new_cert(&attest_args).await?, Expire::NoExpire)) },
-            ) as Pin<Box<_>>
+            Box::pin(async move { Ok(Self::fetch_new_cert(&attest_args).await?) }) as Pin<Box<_>>
         })
         .await?;
 
         Ok(Self { cert })
     }
 
-    async fn fetch_new_cert(attest_args: &AttestArgs) -> Result<rustls::sign::CertifiedKey> {
+    async fn fetch_new_cert(
+        attest_args: &AttestArgs,
+    ) -> Result<(rustls::sign::CertifiedKey, Expire)> {
         let retry_policy = RetryPolicy::fixed(Duration::from_secs(1)).with_max_retries(3);
         retry_policy
             .retry(|| async {
@@ -55,11 +55,13 @@ impl CertManager {
             .await
     }
 
-    async fn fetch_new_cert_inner(attest_args: &AttestArgs) -> Result<rustls::sign::CertifiedKey> {
+    async fn fetch_new_cert_inner(
+        attest_args: &AttestArgs,
+    ) -> Result<(rustls::sign::CertifiedKey, Expire)> {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
         tracing::debug!(?attest_args, timeout_sec, "Generate new cert with rats-rs");
 
-        let (der_cert, privkey) = match attest_args {
+        let (der_cert, privkey, expired) = match attest_args {
             AttestArgs::Passport { aa_args, as_args } => {
                 let coco_attester = CocoAttester::new_with_timeout_nano(
                     &aa_args.aa_addr,
@@ -72,18 +74,32 @@ impl CertManager {
                     as_args.as_is_grpc,
                 )?;
                 let attester_pipeline = AttesterPipeline::new(coco_attester, coco_converter);
-                let cert = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
+                let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
                     .with_subject("CN=TNG,O=Inclavare Containers")
                     .build(AsymmetricAlgo::P256)
                     .await?;
 
                 tracing::debug!(
-                    cert = cert.cert_to_pem()?,
+                    cert = cert_bundle.cert_to_pem()?,
                     timeout_sec,
                     "Generated new cert"
                 );
 
-                (cert.cert_to_der()?, cert.private_key().to_pkcs8_pem()?)
+                let evidence_expire = Expire::from_timestamp(cert_bundle.evidence().exp()?)?;
+                let cert_expire = Expire::ExpireAt(
+                    cert_bundle
+                        .cert()
+                        .tbs_certificate
+                        .validity
+                        .not_after
+                        .to_system_time(),
+                );
+
+                (
+                    cert_bundle.cert_to_der()?,
+                    cert_bundle.private_key().to_pkcs8_pem()?,
+                    std::cmp::min(evidence_expire, cert_expire),
+                )
             }
             AttestArgs::BackgroundCheck { aa_args } => {
                 let coco_attester = CocoAttester::new_with_timeout_nano(
@@ -91,18 +107,31 @@ impl CertManager {
                     timeout_sec * 1000 * 1000 * 1000,
                 )?;
 
-                let cert = CertBuilder::new(coco_attester, HashAlgo::Sha256)
+                let cert_bundle = CertBuilder::new(coco_attester, HashAlgo::Sha256)
                     .with_subject("CN=TNG,O=Inclavare Containers")
                     .build(AsymmetricAlgo::P256)
                     .await?;
 
                 tracing::debug!(
-                    cert = cert.cert_to_pem()?,
+                    cert = cert_bundle.cert_to_pem()?,
                     timeout_sec,
                     "Generated new cert"
                 );
 
-                (cert.cert_to_der()?, cert.private_key().to_pkcs8_pem()?)
+                let cert_expire = Expire::ExpireAt(
+                    cert_bundle
+                        .cert()
+                        .tbs_certificate
+                        .validity
+                        .not_after
+                        .to_system_time(),
+                );
+
+                (
+                    cert_bundle.cert_to_der()?,
+                    cert_bundle.private_key().to_pkcs8_pem()?,
+                    cert_expire,
+                )
             }
         };
 
@@ -115,7 +144,7 @@ impl CertManager {
                     .context("No private key found")?,
             )?,
         );
-        Ok(certified_key)
+        Ok((certified_key, expired))
     }
 
     pub async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {

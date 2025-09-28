@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub enum OhttpApi {
     KeyConfig,
     Tunnel,

@@ -3302,7 +3302,7 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=7e4eb4b114be6ae742856ea185e6bc59d23285e8#7e4eb4b114be6ae742856ea185e6bc59d23285e8"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=15690513da0ad14795fbd3b8ee1c4dcbfdee3037#15690513da0ad14795fbd3b8ee1c4dcbfdee3037"
 dependencies = [
  "anyhow",
  "as-any",
@@ -4289,6 +4289,7 @@ dependencies = [
  "which 7.0.3",
  "ws_stream_tungstenite",
  "ws_stream_wasm",
+ "x509-cert",
 ]
 
 [[package]]

@@ -86,37 +86,18 @@ pub struct OHttpClientInner {
 
 struct KeyStoreValue {
     metadata: Metadata,
+
     #[allow(unused)]
     client_key: Option<(
         <X25519HkdfSha256 as Kem>::PrivateKey,
         <X25519HkdfSha256 as Kem>::PublicKey,
     )>,
-    server_key_config_parsed: ServerHpkeKeyConfigParsed,
-    /// Server attestation information. This is only represented if the server attestation is required.
-    server_attestation_result: Option<AttestationResult>,
-}
-
-impl HpkeKeyConfig {
-    fn parse(self) -> Result<ServerHpkeKeyConfigParsed, anyhow::Error> {
-        let key_config_list = KeyConfig::decode_list(
-            BASE64_STANDARD
-                .decode(self.encoded_key_config_list)?
-                .as_ref(),
-        )?;
-
-        Ok(ServerHpkeKeyConfigParsed {
-            expire_timestamp: self.expire_timestamp,
-            key_config_list,
-        })
-    }
-}
-
-struct ServerHpkeKeyConfigParsed {
-    /// Expiration timestamp for this configuration
-    pub expire_timestamp: u64,
 
     /// A base64 encoded list of key configurations, each entry is a Individual key configuration entry. Defined in Section 3.1 of RFC 9458.
-    pub key_config_list: Vec<KeyConfig>,
+    server_key_config_list: Vec<KeyConfig>,
+
+    /// Server attestation information. This is only represented if the server attestation is required.
+    server_attestation_result: Option<AttestationResult>,
 }
 
 impl OHttpClient {
@@ -151,15 +132,10 @@ impl OHttpClient {
             move || {
                 let inner = inner.clone();
                 Box::pin(async move {
-                    let value = inner
+                    inner
                         .create_key_store_value()
                         .await
-                        .map_err(TngError::GenServerHpkeConfigurationFailed)?;
-
-                    let expire =
-                        Expire::from_timestamp(value.server_key_config_parsed.expire_timestamp)
-                            .map_err(TngError::GenServerHpkeConfigurationFailed)?;
-                    Ok((value, expire))
+                        .map_err(TngError::GenServerHpkeConfigurationFailed)
                 }) as Pin<Box<_>>
             }
         })
@@ -182,7 +158,7 @@ impl OHttpClient {
         let response = self
             .inner
             .send_encrypted_request(
-                &key_store_value.server_key_config_parsed,
+                &key_store_value.server_key_config_list,
                 &key_store_value.metadata,
                 request,
             )
@@ -197,7 +173,7 @@ impl OHttpClientInner {
         server_key_config: &HpkeKeyConfig,
         attestation_result: &AttestationResultJwt,
         token_verify: &AttestationServiceTokenVerifyArgs,
-    ) -> Result<AttestationResult> {
+    ) -> Result<CocoAsToken> {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
         let verifier =
             CocoVerifier::new(&token_verify.trusted_certs_paths, &token_verify.policy_ids)?;
@@ -210,7 +186,7 @@ impl OHttpClientInner {
         verifier
             .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
             .await?;
-        Ok(AttestationResult::from_claims(token.get_claims()?))
+        Ok(token)
     }
 
     async fn verify_evidence(
@@ -218,7 +194,7 @@ impl OHttpClientInner {
         challenge_token: &str,
         evidence: &str,
         as_args: &AttestationServiceArgs,
-    ) -> Result<AttestationResult> {
+    ) -> Result<CocoAsToken> {
         let raw_evidence = BASE64_STANDARD.decode(evidence)?;
 
         let coco_evidence = std::result::Result::<_, rats_cert::errors::Error>::from(
@@ -244,12 +220,12 @@ impl OHttpClientInner {
         verifier
             .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
             .await?;
-        Ok(AttestationResult::from_claims(token.get_claims()?))
+        Ok(token)
     }
 
-    async fn create_key_store_value(&self) -> Result<KeyStoreValue> {
+    async fn create_key_store_value(&self) -> Result<(KeyStoreValue, Expire)> {
         // Handle metatdata for self
-        let (client_key, metadata) = self.create_attested_client_key().await?;
+        let (client_key, metadata, mut expire) = self.create_attested_client_key().await?;
 
         // TODO: use kbs protocol to get challenge token from trustee
         let challenge_token = self.rng.lock().await.next_u64().to_string();
@@ -258,25 +234,45 @@ impl OHttpClientInner {
         // Handle hpke configuration for server
         let response = self.get_hpke_configuration(key_config_request).await?;
 
-        let server_attestation_result = self
+        let token = self
             .check_key_config_response(&response, &challenge_token)
             .await?;
 
-        let server_key_config_parsed = response.hpke_key_config.parse()?;
+        expire = std::cmp::min(
+            expire,
+            Expire::from_timestamp(response.hpke_key_config.expire_timestamp)?,
+        );
 
-        Ok(KeyStoreValue {
-            metadata,
-            client_key, // TODO: ohttp hpke setup with the client key
-            server_key_config_parsed,
-            server_attestation_result,
-        })
+        let server_attestation_result = match token {
+            Some(token) => {
+                expire = std::cmp::min(expire, Expire::from_timestamp(token.exp()?)?);
+                Some(AttestationResult::from_claims(token.get_claims()?))
+            }
+            None => None,
+        };
+
+        let server_key_config_list = KeyConfig::decode_list(
+            BASE64_STANDARD
+                .decode(response.hpke_key_config.encoded_key_config_list)?
+                .as_ref(),
+        )?;
+
+        Ok((
+            KeyStoreValue {
+                metadata,
+                client_key, // TODO: ohttp hpke setup with the client key
+                server_key_config_list,
+                server_attestation_result,
+            },
+            expire,
+        ))
     }
 
     async fn check_key_config_response(
         &self,
         response: &KeyConfigResponse,
         challenge_token: &str,
-    ) -> Result<Option<AttestationResult>, anyhow::Error> {
+    ) -> Result<Option<CocoAsToken>, anyhow::Error> {
         let verify = match &self.ra_args {
             RaArgs::VerifyOnly(verify) => verify,
             #[cfg(unix)]
@@ -326,13 +322,15 @@ impl OHttpClientInner {
             <X25519HkdfSha256 as Kem>::PublicKey,
         )>,
         Metadata,
+        Expire,
     )> {
         Ok(match &self.ra_args {
             #[cfg(unix)]
             RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
                 let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
+                let pk_s = client_key.1.to_bytes().to_vec();
 
-                match attest {
+                let token = match attest {
                     AttestArgs::Passport { aa_args, as_args } => {
                         let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                         let coco_converter = CocoConverter::new(
@@ -343,29 +341,15 @@ impl OHttpClientInner {
                         let attester_pipeline =
                             AttesterPipeline::new(coco_attester, coco_converter);
 
-                        let pk_s = client_key.1.to_bytes().to_vec();
                         let userdata = ClientUserData {
                             // TODO: should get challenge from attestation service
                             challenge_token: "".to_string(),
                             pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
                         };
 
-                        let token = attester_pipeline
+                        attester_pipeline
                             .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
-                            .await?;
-                        (
-                            Some(client_key),
-                            Metadata {
-                                metadata_type: Some(
-                                    MetadataType::EncryptedWithClientAuthAsymmetricKey(
-                                        EncryptedWithClientAuthAsymmetricKey {
-                                            attestation_result: token.as_str().to_string(),
-                                            pk_s,
-                                        },
-                                    ),
-                                ),
-                            },
-                        )
+                            .await?
                     }
                     AttestArgs::BackgroundCheck { aa_args } => {
                         let AttestationChallengeResponse { challenge_token } =
@@ -373,7 +357,6 @@ impl OHttpClientInner {
 
                         let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 
-                        let pk_s = client_key.1.to_bytes().to_vec();
                         let userdata = ClientUserData {
                             challenge_token: challenge_token.clone(),
                             pk_s: BASE64_STANDARD.encode(pk_s.as_slice()),
@@ -391,22 +374,24 @@ impl OHttpClientInner {
                                 BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?),
                             )
                             .await?;
-
-                        (
-                            Some(client_key),
-                            Metadata {
-                                metadata_type: Some(
-                                    MetadataType::EncryptedWithClientAuthAsymmetricKey(
-                                        EncryptedWithClientAuthAsymmetricKey {
-                                            attestation_result: token.as_str().to_string(),
-                                            pk_s,
-                                        },
-                                    ),
-                                ),
-                            },
-                        )
+                        CocoAsToken::new(token)?
                     }
-                }
+                };
+
+                let token_expire = Expire::from_timestamp(token.exp()?)?;
+
+                (
+                    Some(client_key),
+                    Metadata {
+                        metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(
+                            EncryptedWithClientAuthAsymmetricKey {
+                                attestation_result: token.into_str(),
+                                pk_s,
+                            },
+                        )),
+                    },
+                    token_expire,
+                )
             }
             RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
                 // Not required
@@ -417,6 +402,7 @@ impl OHttpClientInner {
                             EncryptedWithoutClientAuth {},
                         )),
                     },
+                    Expire::NoExpire,
                 )
             }
         })
@@ -503,7 +489,7 @@ impl OHttpClientInner {
     /// and send the encrypted ciphertext as the request body to the server.
     async fn send_encrypted_request(
         &self,
-        server_key_config_parsed: &ServerHpkeKeyConfigParsed,
+        server_key_config_list: &Vec<KeyConfig>,
         metadata: &Metadata,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
@@ -511,8 +497,7 @@ impl OHttpClientInner {
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
         // Encrypt to get the ohttp message
-        let mut key_config = server_key_config_parsed
-            .key_config_list
+        let mut key_config = server_key_config_list
             .first()
             .context("No key config found")
             .map_err(TngError::ServerHpkeConfigurationSelectFailed)?

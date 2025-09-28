@@ -165,9 +165,7 @@ impl ServerKeyStore {
                             KeyConfigResponse {
                                 hpke_key_config: userdata.hpke_key_config,
                                 attestation_info: Some(ServerAttestationInfo::Passport {
-                                    attestation_result: AttestationResultJwt(
-                                        token.as_str().to_owned(),
-                                    ),
+                                    attestation_result: AttestationResultJwt(token.into_str()),
                                 }),
                             }
                         }
@@ -466,7 +464,7 @@ impl ServerKeyStore {
                         let token  = coco_converter.convert(&coco_evidence).await?;
 
                         let response = AttestationVerifyResponse {
-                            attestation_result: token.as_str().to_string(),
+                            attestation_result: token.into_str(),
                         };
                         Ok(Json(response))
 
