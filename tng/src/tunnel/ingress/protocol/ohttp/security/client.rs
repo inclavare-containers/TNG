@@ -48,11 +48,13 @@ use crate::tunnel::ohttp::protocol::metadata::EncryptedWithClientAuthAsymmetricK
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
+    config::ra::RaArgs, error::TngError, tunnel::ohttp::protocol::header::OhttpApi,
+    AttestationResult, TokioRuntime,
+};
+use crate::{
     config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
     error::CheckErrorResponse as _,
     tunnel::{
-        endpoint::TngEndpoint,
-        ingress::protocol::ohttp::security::path_rewrite::PathRewriteGroup,
         ohttp::protocol::{
             metadata::{
                 metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
@@ -64,11 +66,6 @@ use crate::{
         },
         utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
     },
-};
-use crate::{
-    config::{ingress::OHttpArgs, ra::RaArgs},
-    error::TngError,
-    AttestationResult, TokioRuntime,
 };
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
@@ -459,7 +456,7 @@ impl OHttpClientInner {
     }
 
     /// Interface 1: Get HPKE Configuration
-    /// POST /tng/key-config
+    /// x-tng-ohttp-api: /tng/key-config
     ///
     /// This method is used by TNG Clients to obtain the public key configuration needed
     /// to establish an encrypted channel and verify the server's identity.
@@ -482,6 +479,7 @@ impl OHttpClientInner {
         let response = self
             .http_client
             .post(&url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::KEY_CONFIG)
             .json(&key_config_request)
             .send()
             .await
@@ -600,6 +598,7 @@ impl OHttpClientInner {
         let response = self
             .http_client
             .post(&url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
             .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
             .body(ohttp_request_body)
             .send()
@@ -675,7 +674,7 @@ impl OHttpClientInner {
     }
 
     /// Interface 3: Attestation Forward - Get Challenge
-    /// GET /tng/background-check/challenge
+    /// x-tng-ohttp-api: /tng/background-check/challenge
     ///
     /// This method is a forwarder for the AS (Attestation Service) challenge endpoint.
     /// It is used specifically in the "Server verification Client + background check model" scenario.
@@ -691,6 +690,7 @@ impl OHttpClientInner {
         let result: AttestationChallengeResponse = self
             .http_client
             .get(&url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::BACKGROUND_CHECK_CHALLENGE)
             .send()
             .await
             .map_err(|e| TngError::ClientGetAttestationChallengeFaild(e.into()))?
@@ -705,7 +705,7 @@ impl OHttpClientInner {
     }
 
     /// Interface 3: Attestation Forward - Verify Evidence
-    /// POST /tng/background-check/verify
+    /// x-tng-ohttp-api: /tng/background-check/verify
     ///
     /// This method is a forwarder for the AS (Attestation Service) verification endpoint.
     /// It is used specifically in the "Server verification Client + background check model" scenario.
@@ -728,6 +728,7 @@ impl OHttpClientInner {
         let result: AttestationVerifyResponse = self
             .http_client
             .post(&url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::BACKGROUND_CHECK_VERIFY)
             .json(&payload)
             .send()
             .await

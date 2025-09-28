@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Request, State},
+    extract::{FromRequest, Request, State},
     middleware::Next,
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Router,
+    Json, Router,
 };
-use http::{HeaderName, HeaderValue, Method, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use std::{convert::Infallible, str::FromStr as _, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
-use crate::config::egress::{CorsConfig, OHttpArgs};
+use crate::{
+    config::egress::{CorsConfig, OHttpArgs},
+    tunnel::ohttp::protocol::{header::OhttpApi, AttestationVerifyRequest, KeyConfigRequest},
+};
 use crate::{
     tunnel::egress::protocol::ohttp::security::{
         keystore::ServerKeyStore, state::OhttpServerState,
@@ -20,10 +22,7 @@ use crate::{
 
 /// TNG OHTTP Server implementation
 ///
-/// This struct represents a TNG OHTTP server instance that handles the three required TNG server interfaces:
-/// 1. Get HPKE Configuration (/tng/key-config)
-/// 2. Process Encrypted Request (/tng/tunnel)
-/// 3. Attestation Forward (/tng/background-check/*)
+/// This struct represents a TNG OHTTP server instance that handles the required TNG server interfaces
 #[derive(Clone)]
 pub struct OhttpServer {
     /// The key store instance used for cryptographic operations
@@ -117,67 +116,11 @@ impl OhttpServer {
     }
 
     /// Create the TNG HTTP routes with the server instance
-    ///
-    /// This method sets up all the required TNG server interfaces:
-    /// - POST /tng/key-config: Get HPKE configuration
-    /// - POST /tng/tunnel: Process encrypted requests
-    /// - GET /tng/background-check/challenge: Get attestation challenge
-    /// - POST /tng/background-check/verify: Verify attestation evidence
     pub fn create_routes(&self) -> Router<OhttpServerState> {
-        // TODO:
-        // - /tng/* to return 404
-        // - fallback to /tng/tunnel for all other requests
-
-        let router = Router::new()
-            // Interface 1: Get HPKE Configuration
-            // POST /tng/key-config
-            .route(
-                "/tng/key-config",
-                post({
-                    let key_store = Arc::clone(&self.key_store);
-                    move |payload| async move { key_store.get_hpke_configuration(payload).await }
-                }),
-            )
-            // Interface 2: Process Encrypted Request
-            // POST /tng/tunnel (or user specified path via path_rewrites)
-            .route(
-                "/tng/tunnel",
-                post({
-                    let key_store = Arc::clone(&self.key_store);
-                    move |State(state): State<OhttpServerState>, payload| async move {
-                        key_store
-                            .process_encrypted_request(payload, state)
-                            .await
-                            .map_err(|error| {
-                                tracing::error!(?error, "Failed to process received OHTTP request");
-                                error
-                            })
-                    }
-                }),
-            )
-            // Interface 3: Attestation Forward
-            // GET /tng/background-check/challenge
-            .route(
-                "/tng/background-check/challenge",
-                get({
-                    let key_store = Arc::clone(&self.key_store);
-                    move || async move { key_store.get_attestation_challenge().await }
-                }),
-            )
-            // POST /tng/background-check/verify
-            .route(
-                "/tng/background-check/verify",
-                post({
-                    let key_store = Arc::clone(&self.key_store);
-                    move |payload| async move { key_store.verify_attestation(payload).await }
-                }),
-            )
-            .fallback({
-                let key_store = Arc::clone(&self.key_store);
-                move |State(state): State<OhttpServerState>, req| {
-                    fallback_handler(state, key_store.clone(), req)
-                }
-            });
+        let router = Router::new().fallback({
+            let key_store = Arc::clone(&self.key_store);
+            move |State(state): State<OhttpServerState>, req| handler(state, key_store.clone(), req)
+        });
 
         let router = if let Some(cors) = &self.cors_layer {
             router.layer(cors.clone())
@@ -191,25 +134,63 @@ impl OhttpServer {
     }
 }
 
-async fn fallback_handler(
+async fn handler(
     state: OhttpServerState,
     key_store: Arc<ServerKeyStore>,
-    payload: Request<axum::body::Body>,
+    request: Request,
 ) -> Result<Response, Response> {
-    let path = payload.uri().path();
+    let ohttp_api = parse_ohttp_api_from_request(&request).map_err(IntoResponse::into_response)?;
 
-    if path.starts_with("/tng") {
-        // It may be a request from newer TNG version, so we should return NOT_FOUND
-        return Err(StatusCode::NOT_FOUND.into_response());
+    match ohttp_api {
+        OhttpApi::KeyConfig => key_store
+            .get_hpke_configuration(
+                <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
+                    .await
+                    .map_err(IntoResponse::into_response)?,
+            )
+            .await
+            .map(IntoResponse::into_response),
+        OhttpApi::Tunnel => key_store
+            .process_encrypted_request(request, state)
+            .await
+            .map_err(|error| {
+                tracing::error!(?error, "Failed to process received OHTTP request");
+                error
+            }),
+        OhttpApi::BackgroundCheckChallenge => key_store
+            .get_attestation_challenge()
+            .await
+            .map(IntoResponse::into_response),
+        OhttpApi::BackgroundCheckVerify => key_store
+            .verify_attestation(
+                <Json<AttestationVerifyRequest> as FromRequest<()>>::from_request(request, &())
+                    .await
+                    .map_err(IntoResponse::into_response)?,
+            )
+            .await
+            .map(IntoResponse::into_response),
     }
+    .map_err(IntoResponse::into_response)
+}
 
-    key_store
-        .process_encrypted_request(payload, state)
-        .await
-        .map_err(|error| {
-            tracing::error!(?error, "Failed to process received OHTTP request");
-            error.into_response()
-        })
+fn parse_ohttp_api_from_request(req: &Request) -> Result<OhttpApi, (StatusCode, &'static str)> {
+    let headers: &HeaderMap = req.headers();
+
+    let api_value = headers
+        .get(OhttpApi::HEADER_NAME)
+        .ok_or((StatusCode::BAD_REQUEST, "Missing x-tng-ohttp-api header"))?
+        .to_str()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Header is not valid UTF-8"))?;
+
+    let api = match api_value {
+        OhttpApi::KEY_CONFIG => OhttpApi::KeyConfig,
+        OhttpApi::TUNNEL => OhttpApi::Tunnel,
+        OhttpApi::BACKGROUND_CHECK_CHALLENGE => OhttpApi::BackgroundCheckChallenge,
+        OhttpApi::BACKGROUND_CHECK_VERIFY => OhttpApi::BackgroundCheckVerify,
+        _ => return Err((StatusCode::BAD_REQUEST, "Unknown x-tng-ohttp-api value")),
+    };
+
+    Ok(api)
 }
 
 async fn add_server_header(req: Request, next: Next) -> Result<Response, Infallible> {
@@ -230,6 +211,13 @@ pub async fn log_request(
     let version = req.version();
     let start = std::time::Instant::now();
 
+    let ohttp_api = req
+        .headers()
+        .get(OhttpApi::HEADER_NAME)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_owned();
+
     let res = next.run(req).await;
 
     let duration = start.elapsed();
@@ -243,7 +231,7 @@ pub async fn log_request(
         .unwrap_or(0);
 
     tracing::info!(
-        "\"{method} {uri} {version:?}\" {status} {content_length} {:.2}ms",
+        "\"{method} {uri} ({ohttp_api}) {version:?}\" {status} {content_length} {:.2}ms",
         duration.as_secs_f64() * 1000.0
     );
 

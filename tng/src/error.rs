@@ -66,6 +66,9 @@ pub enum TngError {
     #[error("Failed to connect to upstream")]
     ConnectUpstreamFailed,
 
+    #[error("Failed to construct http request: {0}")]
+    ConstructHttpRequestFailed(#[source] anyhow::Error),
+
     #[error("Failed to construct http response: {0}")]
     ConstructHttpResponseFailed(#[source] http::Error),
 

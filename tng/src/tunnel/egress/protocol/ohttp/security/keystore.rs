@@ -87,7 +87,7 @@ impl ServerKeyStore {
     }
 
     /// Interface 1: Get HPKE Configuration
-    /// POST /tng/key-config
+    /// x-tng-ohttp-api: /tng/key-config
     ///
     /// This endpoint is used by TNG Clients to obtain the public key configuration needed
     /// to establish an encrypted channel and verify the server's identity.
@@ -227,7 +227,7 @@ impl ServerKeyStore {
     }
 
     /// Interface 2: Process Encrypted Request
-    /// POST /tng/tunnel (or user specified path via path_rewrites)
+    /// x-tng-ohttp-api: /tng/tunnel (or user specified path via path_rewrites)
     ///
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
     /// and send the encrypted ciphertext as the request body to the server. The server decrypts and processes
@@ -416,7 +416,7 @@ impl ServerKeyStore {
     }
 
     /// Interface 3: Attestation Forward - Get Challenge
-    /// GET /tng/background-check/challenge
+    /// x-tng-ohttp-api: /tng/background-check/challenge
     ///
     /// This endpoint is a forwarder for the AS (Attestation Service) challenge endpoint.
     /// It is used specifically in the "Server verification Client + background check model" scenario.
@@ -432,7 +432,7 @@ impl ServerKeyStore {
     }
 
     /// Interface 3: Attestation Forward - Verify Evidence
-    /// POST /tng/background-check/verify
+    /// x-tng-ohttp-api: /tng/background-check/verify
     ///
     /// This endpoint is a forwarder for the AS (Attestation Service) verification endpoint.
     /// It is used specifically in the "Server verification Client + background check model" scenario.
