@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.5
+Version: 2.2.6
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,14 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Mon Sep 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.6-1
+- Standardize error handling with machine-readable codes and precise HTTP status mapping
+- Honor AS token JWT exp and certificate validity in credential caching TTL calculation
+- Migrate OHTTP routing from path-based to header-driven using x-tng-ohttp-api
+- Use full URL as OHttpClient cache key for per-path service isolation
+- Introduce test load balancer with path rewriting for integration testing
+- Unify middleware order in OHTTP server for consistent processing
+
 * Wed Sep 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.5-1
 - Update to version v2.2.5
 - ohttp: Refactor code structure and rename encap/decap functions to use ohttp prefix
