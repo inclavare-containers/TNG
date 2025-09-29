@@ -4,14 +4,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use strum_macros::AsRefStr;
 use thiserror::Error;
 
 /// Custom error type
-#[derive(Error, Debug)]
+#[derive(Error, Debug, AsRefStr)]
 pub enum TngError {
-    #[error("Internal server error")]
-    InternalError,
-
     #[error("System time error: {0}")]
     SystemTimeError(#[from] std::time::SystemTimeError),
 
@@ -48,8 +46,8 @@ pub enum TngError {
     #[error("Http error during forwarding HTTP plain text to upstream: {0}")]
     HttpPlainTextForwardError(#[source] hyper::Error),
 
-    #[error("Http error during forwarding HTTP cyper text to upstream: {0}")]
-    HttpCyperTextForwardError(#[source] reqwest::Error),
+    #[error("Http error during forwarding HTTP cipher text to upstream: {0}")]
+    HttpCipherTextForwardError(#[source] reqwest::Error),
 
     #[error("Failed to get attestation challenge from server: {0}")]
     ClientGetAttestationChallengeFaild(#[source] anyhow::Error),
@@ -60,19 +58,16 @@ pub enum TngError {
     #[error("Failed to verify client evidence: {0}")]
     ServerVerifyClientEvidenceFailed(#[source] anyhow::Error),
 
-    #[error("Failed to request key config froam ohttp server: {0}")]
+    #[error("Failed to request key config from ohttp server: {0}")]
     RequestKeyConfigFailed(#[source] anyhow::Error),
 
     #[error("Failed to connect to upstream")]
     ConnectUpstreamFailed,
 
-    #[error("Failed to construct http request: {0}")]
-    ConstructHttpRequestFailed(#[source] anyhow::Error),
-
     #[error("Failed to construct http response: {0}")]
     ConstructHttpResponseFailed(#[source] http::Error),
 
-    #[error("Failed to select a hpke configutation: {0}")]
+    #[error("Failed to select a hpke configuration: {0}")]
     ServerHpkeConfigurationSelectFailed(#[source] anyhow::Error),
 
     #[error("Failed to generate hpke configuration: {0}")]
@@ -81,27 +76,100 @@ pub enum TngError {
     #[error("Not a valid OHTTP request: {0}")]
     InvalidOHttpRequest(#[source] anyhow::Error),
 
-    #[error("Not a valid OHTTP request: {0}")]
+    #[error("Not a valid OHTTP response: {0}")]
     InvalidOHttpResponse(#[source] anyhow::Error),
 
     #[error("Failed to create OHTTP client: {0}")]
     CreateOHttpClientFailed(#[source] anyhow::Error),
+
+    #[error("Access to this service requires a TNG-secured connection. Ensure your client connects via TNG. To bypass, update the direct_forward rules in the TNG server side configuration.")]
+    RejectNonTngRequest,
+
+    #[error("Invalid request payload: {0}")]
+    InvalidRequestPayload(#[from] axum::extract::rejection::JsonRejection),
+
+    #[error("Invalid x-tng-ohttp-api value")]
+    InvalidOhttpApiHeaderValue,
 }
 
 /// Error response structure
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ErrorResponse {
+    /// Machine-readable error code
+    pub code: String,
     /// Human-readable error description
     pub message: String,
 }
 
 impl IntoResponse for TngError {
     fn into_response(self) -> Response {
-        let body = Json(ErrorResponse {
-            message: self.to_string(),
-        });
+        let status = match &self {
+            // Client errors (4xx)
+            TngError::InvalidRequestPayload(..) => StatusCode::BAD_REQUEST,
+            TngError::RejectNonTngRequest => StatusCode::FORBIDDEN,
+            TngError::InvalidOhttpApiHeaderValue => StatusCode::BAD_REQUEST,
+            TngError::InvalidHttpRequest => StatusCode::BAD_REQUEST,
+            TngError::InvalidHttpResponse => StatusCode::BAD_REQUEST,
+            TngError::InvalidOHttpRequest(..) => StatusCode::BAD_REQUEST,
+            TngError::InvalidOHttpResponse(..) => StatusCode::BAD_REQUEST,
 
-        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+            // Validation / Decode errors → 400 Bad Request
+            TngError::Base64DecodeError(..) => StatusCode::BAD_REQUEST,
+            TngError::MetadataDecodeError(..) => StatusCode::BAD_REQUEST,
+            TngError::MetadataEncodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::ConstructHttpResponseFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+
+            // Not Found / Upstream issues
+            TngError::ConnectUpstreamFailed => StatusCode::BAD_GATEWAY,
+
+            // Timeouts / Network failures
+            TngError::HttpPlainTextForwardError(..) => StatusCode::BAD_GATEWAY,
+            TngError::HttpCipherTextForwardError(e) => {
+                #[cfg(unix)]
+                let is_timeout = e.is_connect() || e.is_timeout();
+                #[cfg(wasm)]
+                let is_timeout = e.is_timeout();
+                if is_timeout {
+                    StatusCode::GATEWAY_TIMEOUT
+                } else if e
+                    .status()
+                    .map(|s| s == StatusCode::TOO_MANY_REQUESTS)
+                    .unwrap_or(false)
+                {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::BAD_GATEWAY
+                }
+            }
+
+            // Metadata I/O errors
+            TngError::MetadataReadError(..) => StatusCode::BAD_REQUEST,
+
+            // Metadata size limit → 413 Payload Too Large
+            TngError::MetadataTooLong => StatusCode::PAYLOAD_TOO_LARGE,
+
+            // 500 for all other internal errors
+            TngError::SystemTimeError(..)
+            | TngError::OhttpError(..)
+            | TngError::BhttpError(..)
+            | TngError::MetadataValidateError(..)
+            | TngError::ClientGetAttestationChallengeFaild(..)
+            | TngError::ClientGetBackgroundCheckResultFaild(..)
+            | TngError::ServerVerifyClientEvidenceFailed(..)
+            | TngError::RequestKeyConfigFailed(..)
+            | TngError::ServerHpkeConfigurationSelectFailed(..)
+            | TngError::GenServerHpkeConfigurationFailed(..)
+            | TngError::CreateOHttpClientFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        (
+            status,
+            Json(ErrorResponse {
+                code: self.as_ref().to_owned(),
+                message: self.to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -139,8 +207,8 @@ async fn check_error_response(
     if let Err(error) = response.error_for_status_ref() {
         if response.status() == StatusCode::INTERNAL_SERVER_ERROR {
             let text = response.text().await?;
-            if let Ok(ErrorResponse { message }) = serde_json::from_str(&text) {
-                Err(error).context(format!("server error message: {message}"))?
+            if let Ok(ErrorResponse { code, message }) = serde_json::from_str(&text) {
+                Err(error).context(format!("server error code: {code} message: {message}"))?
             } else {
                 Err(error).context(format!("full response: {text}"))?
             }

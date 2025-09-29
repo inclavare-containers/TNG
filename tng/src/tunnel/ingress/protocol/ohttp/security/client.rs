@@ -561,7 +561,7 @@ impl OHttpClientInner {
             .body(ohttp_request_body)
             .send()
             .await
-            .map_err(TngError::HttpCyperTextForwardError)?;
+            .map_err(TngError::HttpCipherTextForwardError)?;
 
         #[cfg(unix)]
         tracing::debug!(
@@ -578,7 +578,7 @@ impl OHttpClientInner {
         // Check the response status code
         let response = response
             .error_for_status()
-            .map_err(TngError::HttpCyperTextForwardError)?;
+            .map_err(TngError::HttpCipherTextForwardError)?;
 
         // Check content-type
         match response.headers().get(http::header::CONTENT_TYPE) {

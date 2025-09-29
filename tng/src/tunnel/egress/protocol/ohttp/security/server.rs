@@ -5,12 +5,13 @@ use axum::{
     response::{IntoResponse, Response},
     Json, Router,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use std::{convert::Infallible, str::FromStr as _, sync::Arc};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
 
 use crate::{
     config::egress::{CorsConfig, OHttpArgs},
+    error::TngError,
     tunnel::ohttp::protocol::{header::OhttpApi, AttestationVerifyRequest, KeyConfigRequest},
 };
 use crate::{
@@ -138,15 +139,15 @@ async fn handler(
     state: OhttpServerState,
     key_store: Arc<ServerKeyStore>,
     request: Request,
-) -> Result<Response, Response> {
-    let ohttp_api = parse_ohttp_api_from_request(&request).map_err(IntoResponse::into_response)?;
+) -> Result<Response, TngError> {
+    let ohttp_api = parse_ohttp_api_from_request(&request)?;
 
     match ohttp_api {
         OhttpApi::KeyConfig => key_store
             .get_hpke_configuration(
                 <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
                     .await
-                    .map_err(IntoResponse::into_response)?,
+                    .map_err(TngError::InvalidRequestPayload)?,
             )
             .await
             .map(IntoResponse::into_response),
@@ -165,29 +166,28 @@ async fn handler(
             .verify_attestation(
                 <Json<AttestationVerifyRequest> as FromRequest<()>>::from_request(request, &())
                     .await
-                    .map_err(IntoResponse::into_response)?,
+                    .map_err(TngError::InvalidRequestPayload)?,
             )
             .await
             .map(IntoResponse::into_response),
     }
-    .map_err(IntoResponse::into_response)
 }
 
-fn parse_ohttp_api_from_request(req: &Request) -> Result<OhttpApi, (StatusCode, &'static str)> {
+fn parse_ohttp_api_from_request(req: &Request) -> Result<OhttpApi, TngError> {
     let headers: &HeaderMap = req.headers();
 
     let api_value = headers
         .get(OhttpApi::HEADER_NAME)
-        .ok_or((StatusCode::BAD_REQUEST, "Missing x-tng-ohttp-api header"))?
+        .ok_or(TngError::RejectNonTngRequest)?
         .to_str()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Header is not valid UTF-8"))?;
+        .map_err(|_| TngError::InvalidOhttpApiHeaderValue)?;
 
     let api = match api_value {
         OhttpApi::KEY_CONFIG => OhttpApi::KeyConfig,
         OhttpApi::TUNNEL => OhttpApi::Tunnel,
         OhttpApi::BACKGROUND_CHECK_CHALLENGE => OhttpApi::BackgroundCheckChallenge,
         OhttpApi::BACKGROUND_CHECK_VERIFY => OhttpApi::BackgroundCheckVerify,
-        _ => return Err((StatusCode::BAD_REQUEST, "Unknown x-tng-ohttp-api value")),
+        _ => return Err(TngError::InvalidOhttpApiHeaderValue),
     };
 
     Ok(api)
