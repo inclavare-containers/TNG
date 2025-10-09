@@ -27,7 +27,7 @@ jobs:
           - distro: alinux3
             distro_img: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
 
-    runs-on: ubuntu-latest-16-cores
+    runs-on: oracle-vm-16cpu-64gb-x86-64
     defaults:
       run:
         shell: bash
