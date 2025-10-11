@@ -134,7 +134,7 @@ impl IngressTrait for Socks5Ingress {
         Ok(Box::new(
             stream! {
                 loop {
-                    yield listener.accept().await
+                    yield listener.accept_with_common_sock_opts().await
                 }
             }
             .map(move |res| {
