@@ -7,12 +7,20 @@ use axum::{
 };
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use std::{convert::Infallible, str::FromStr as _, sync::Arc};
-use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders};
+use tower_http::{
+    compression::{
+        predicate::NotForContentType, CompressionLayer, DefaultPredicate, Predicate as _,
+    },
+    cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders},
+};
 
 use crate::{
     config::egress::{CorsConfig, OHttpArgs},
     error::TngError,
-    tunnel::ohttp::protocol::{header::OhttpApi, AttestationVerifyRequest, KeyConfigRequest},
+    tunnel::ohttp::protocol::{
+        header::{OhttpApi, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
+        AttestationVerifyRequest, KeyConfigRequest,
+    },
 };
 use crate::{
     tunnel::egress::protocol::ohttp::security::{
@@ -130,6 +138,12 @@ impl OhttpServer {
         };
 
         router
+            .layer(
+                CompressionLayer::new().compress_when(
+                    DefaultPredicate::new()
+                        .and(NotForContentType::new(OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE)), // Don't compress responses who's `content-type` ohttp chunked response`
+                ),
+            )
             .layer(axum::middleware::from_fn(add_server_header))
             .layer(axum::middleware::from_fn(log_request))
     }

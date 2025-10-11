@@ -25,6 +25,9 @@ use tokio_util::io::ReaderStream;
 use crate::config::ra::{AttestArgs, AttestationServiceArgs, RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::state::OhttpServerState;
+use crate::tunnel::ohttp::protocol::header::{
+    OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+};
 use crate::tunnel::ohttp::protocol::metadata::metadata::MetadataType;
 use crate::tunnel::ohttp::protocol::metadata::{
     EncryptedWithClientAuthAsymmetricKey, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
@@ -238,7 +241,7 @@ impl ServerKeyStore {
         // Check content-type
         match payload.headers().get(http::header::CONTENT_TYPE) {
             Some(value) => {
-                if value != "message/ohttp-chunked-req" {
+                if value != OHTTP_CHUNKED_REQUEST_CONTENT_TYPE {
                     return Err(TngError::InvalidOHttpRequest(anyhow!(
                         "Wrong content-type header"
                     )));
@@ -344,7 +347,10 @@ impl ServerKeyStore {
         // Return the response
         let response = http::Response::builder()
             .status(axum::http::StatusCode::OK)
-            .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-res")
+            .header(
+                http::header::CONTENT_TYPE,
+                OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+            )
             .body(axum::body::Body::from_stream(ReaderStream::new(
                 encrypted_response,
             )))

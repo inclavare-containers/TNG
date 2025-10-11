@@ -87,7 +87,6 @@ tokio-rustls = {version = "0.26.2", default-features = false, features = ["loggi
 tokio-util = {version = "0.7.15", features = ["compat"]}
 tonic = {version = "0.12.3", optional = true}
 tower = {version = "0.5", features = ["util"]}
-tower-http = {version = "0.6.6", features = ["trace", "set-header", "cors"]}
 tracing = "0.1"
 tracing-futures = {version = "0.2.5", features = ["futures-03"]}
 tracing-opentelemetry = {version = "0.30.0", optional = true}
@@ -102,6 +101,7 @@ axum = {version = "0.8.4", features = ["tokio", "http1", "http2", "ws"]}
 rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "15690513da0ad14795fbd3b8ee1c4dcbfdee3037", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
 socket2 = {version = "0.5.10"}
 tokio = {workspace = true, features = ["rt-multi-thread", "time"]}
+tower-http = {version = "0.6.6", features = ["trace", "set-header", "cors", "compression-br", "compression-gzip", "compression-zstd"]}
 ws_stream_tungstenite = {version = "0.13.0"}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
