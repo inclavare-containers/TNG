@@ -49,7 +49,9 @@ use crate::tunnel::ohttp::protocol::metadata::EncryptedWithClientAuthAsymmetricK
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
-    config::ra::RaArgs, error::TngError, tunnel::ohttp::protocol::header::OhttpApi,
+    config::ra::RaArgs,
+    error::TngError,
+    tunnel::ohttp::protocol::header::{OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
     AttestationResult, TokioRuntime,
 };
 use crate::{
@@ -557,7 +559,10 @@ impl OHttpClientInner {
             .http_client
             .post(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
-            .header(http::header::CONTENT_TYPE, "message/ohttp-chunked-req")
+            .header(
+                http::header::CONTENT_TYPE,
+                OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
+            )
             .body(ohttp_request_body)
             .send()
             .await
@@ -583,7 +588,7 @@ impl OHttpClientInner {
         // Check content-type
         match response.headers().get(http::header::CONTENT_TYPE) {
             Some(value) => {
-                if value != "message/ohttp-chunked-res" {
+                if value != OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE {
                     return Err(TngError::InvalidOHttpResponse(anyhow!(
                         "Wrong content-type header"
                     )));
