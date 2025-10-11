@@ -12,11 +12,17 @@ pub trait SetListenerSockOpts {
 
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn set_listener_tproxy_sock_opts(&self) -> Result<()>;
+
+    async fn accept_with_common_sock_opts(
+        &self,
+    ) -> std::io::Result<(TcpStream, std::net::SocketAddr)>;
 }
 
 impl SetListenerSockOpts for tokio::net::TcpListener {
     fn set_listener_common_sock_opts(&self) -> Result<()> {
         let fd = self.as_fd();
+
+        // Enable keep alive
         setsockopt(&fd, nix::sys::socket::sockopt::KeepAlive, &true)?;
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         setsockopt(&fd, nix::sys::socket::sockopt::TcpKeepIdle, &30)?;
@@ -32,6 +38,17 @@ impl SetListenerSockOpts for tokio::net::TcpListener {
         setsockopt(&fd, nix::sys::socket::sockopt::IpTransparent, &true)?;
 
         Ok(())
+    }
+
+    async fn accept_with_common_sock_opts(
+        &self,
+    ) -> std::io::Result<(TcpStream, std::net::SocketAddr)> {
+        self.accept().await.and_then(|(conn, addr)| {
+            // Disable Nagle algorithm
+            conn.set_nodelay(true)?;
+
+            Ok((conn, addr))
+        })
     }
 }
 

@@ -87,7 +87,7 @@ impl EgressTrait for NetfilterEgress {
             stream! {
                 let _iptables_guard = iptables_guard; // Move iptables guard to here to keep it alive
                 loop {
-                    yield listener.accept().await
+                    yield listener.accept_with_common_sock_opts().await
                 }
             }
             .map(move |res| {

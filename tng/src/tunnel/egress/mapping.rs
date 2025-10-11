@@ -77,7 +77,7 @@ impl EgressTrait for MappingEgress {
 
         Ok(Box::new(stream! {
             loop {
-                match listener.accept().await {
+                match listener.accept_with_common_sock_opts().await {
                     Ok((stream, peer_addr)) => yield Ok(AcceptedStream{
                         stream: Box::new(stream),
                         src: peer_addr,

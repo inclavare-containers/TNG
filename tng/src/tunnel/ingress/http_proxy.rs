@@ -298,7 +298,7 @@ impl IngressTrait for HttpProxyIngress {
         Ok(Box::new(
             stream! {
                 loop {
-                    yield listener.accept().await
+                    yield listener.accept_with_common_sock_opts().await
                 }
             }.flat_map_unordered(
                 None, // Unlimited concurrency of http proxy session
