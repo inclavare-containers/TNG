@@ -72,7 +72,7 @@ reqwest = {workspace = true, features = ["stream"]}
 rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
 rustls-pemfile = "2.2.0"
 scopeguard = "1.2.0"
-serde = {workspace = true}
+serde = {workspace = true, features = ["rc"]}
 serde_json = {workspace = true}
 serde_variant = "0.1.3"
 serde_with = {version = "3.12.0", features = ["json"]}

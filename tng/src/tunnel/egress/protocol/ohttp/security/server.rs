@@ -157,14 +157,16 @@ async fn handler(
     let ohttp_api = parse_ohttp_api_from_request(&request)?;
 
     match ohttp_api {
-        OhttpApi::KeyConfig => key_store
-            .get_hpke_configuration(
-                <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
-                    .await
-                    .map_err(TngError::InvalidRequestPayload)?,
-            )
-            .await
-            .map(IntoResponse::into_response),
+        OhttpApi::KeyConfig => {
+            key_store
+                .get_hpke_configuration(
+                    <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
+                        .await
+                        .map_err(TngError::InvalidRequestPayload)?,
+                    state,
+                )
+                .await
+        }
         OhttpApi::Tunnel => key_store
             .process_encrypted_request(request, state)
             .await

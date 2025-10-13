@@ -1,4 +1,9 @@
-use anyhow::{anyhow, bail, Result};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use anyhow::{anyhow, bail, Context, Result};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
@@ -17,6 +22,7 @@ use rats_cert::tee::{
     AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence, GenericVerifier as _,
 };
 use tokio::io::AsyncReadExt;
+use tokio::sync::OnceCell;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
@@ -38,17 +44,18 @@ use crate::tunnel::ohttp::protocol::{
     AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
     KeyConfigResponse, ServerAttestationInfo,
 };
-use crate::tunnel::utils::maybe_cached::RefreshStrategy;
+use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy};
 
 const DEFAULT_KEY_CONFIG_EXPIRE_SECOND: u64 = 5 * 60; // 5 minutes
 
 /// Server-side key store for managing cryptographic keys and attestation data
-#[derive(Debug, Clone)]
 pub struct ServerKeyStore {
     /// Remote Attestation arguments
-    ra_args: RaArgs,
+    ra_args: Arc<RaArgs>,
     /// OHTTP key configurations
-    ohttp: ohttp::Server,
+    ohttp: Arc<ohttp::Server>,
+
+    passport_cache: OnceCell<MaybeCached<KeyConfigResponse, TngError>>,
 }
 
 impl ServerKeyStore {
@@ -86,7 +93,11 @@ impl ServerKeyStore {
         // Initialize the ohttp server
         let ohttp = ohttp::Server::new(config).map_err(TngError::from)?;
 
-        Ok(ServerKeyStore { ra_args, ohttp })
+        Ok(ServerKeyStore {
+            ra_args: Arc::new(ra_args),
+            ohttp: Arc::new(ohttp),
+            passport_cache: Default::default(),
+        })
     }
 
     /// Interface 1: Get HPKE Configuration
@@ -103,15 +114,74 @@ impl ServerKeyStore {
     pub async fn get_hpke_configuration(
         &self,
         payload: Option<Json<KeyConfigRequest>>,
-    ) -> Result<Json<KeyConfigResponse>, TngError> {
-        let key_config_list = vec![self.ohttp.config()];
+        state: OhttpServerState,
+    ) -> Result<Response, TngError> {
+        match (self.ra_args.as_ref(), &payload) {
+            // If the server is set to be a attester with passport mode, and the client is requesting a passport response, we cache it and return the cached response
+            (
+                RaArgs::AttestOnly(AttestArgs::Passport { aa_args, .. })
+                | RaArgs::AttestAndVerify(AttestArgs::Passport { aa_args, .. }, ..),
+                Some(Json(KeyConfigRequest {
+                    attestation_request: Some(AttestationRequest::Passport),
+                })),
+            ) => self
+                .passport_cache
+                .get_or_try_init(|| async {
+                    let ra_args = self.ra_args.clone();
+                    let ohttp = self.ohttp.clone();
+                    let payload = Arc::new(payload);
+
+                    let refresh_strategy = aa_args.refresh_strategy();
+
+                    MaybeCached::new(state.runtime.clone(), refresh_strategy, move || {
+                        Box::pin({
+                            let ra_args = ra_args.clone();
+                            let ohttp = ohttp.clone();
+                            let payload = payload.clone();
+
+                            async move {
+                                let (response, expire_time) =
+                                    Self::get_hpke_configuration_internal(
+                                        &ra_args,
+                                        &ohttp,
+                                        payload.as_ref().clone(),
+                                    )
+                                    .await?;
+
+                                Ok((response, Expire::ExpireAt(expire_time)))
+                            }
+                        }) as Pin<Box<_>>
+                    })
+                    .await
+                })
+                .await?
+                .get_latest()
+                .await
+                .map(|response: Arc<KeyConfigResponse>| {
+                    IntoResponse::into_response(Json(response))
+                }),
+            // Otherwise, we generate a new response
+            _ => Self::get_hpke_configuration_internal(&self.ra_args, &self.ohttp, payload)
+                .await
+                .map(|(response, _): (KeyConfigResponse, _)| {
+                    IntoResponse::into_response(Json(response))
+                }),
+        }
+    }
+
+    async fn get_hpke_configuration_internal(
+        ra_args: &RaArgs,
+        ohttp: &ohttp::Server,
+        payload: Option<Json<KeyConfigRequest>>,
+    ) -> Result<(KeyConfigResponse, SystemTime), TngError> {
+        let key_config_list = vec![ohttp.config()];
 
         let encoded_key_config_list = BASE64_STANDARD
             .encode(KeyConfig::encode_list(&key_config_list).map_err(TngError::from)?);
 
-        let expire_timestamp = {
+        let (expire_time, expire_timestamp) = {
             // Set expiration timestamp accroding to the attestation configuration (aa_args.refresh_interval). Or we will use the default value.
-            let refresh_strategy = match &self.ra_args {
+            let refresh_strategy = match &ra_args {
                 RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
                     AttestArgs::Passport { aa_args, .. }
                     | AttestArgs::BackgroundCheck { aa_args } => aa_args.refresh_strategy(),
@@ -119,16 +189,27 @@ impl ServerKeyStore {
                 RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Always,
             };
 
-            let expire_time = match refresh_strategy {
+            let expire_duration_second = match refresh_strategy {
                 RefreshStrategy::Periodically { interval } => interval,
                 RefreshStrategy::Always => DEFAULT_KEY_CONFIG_EXPIRE_SECOND,
             };
 
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(TngError::from)?
-                .as_secs()
-                + expire_time
+            let expire_time = std::time::SystemTime::now()
+                .checked_add(Duration::from_secs(expire_duration_second))
+                .with_context(|| {
+                    format!(
+                    "the expire duration is too far in the future to be represented: {expire_duration_second}s"
+                )
+                })
+                .map_err(TngError::GenServerHpkeConfigurationFailed)?;
+
+            (
+                expire_time,
+                expire_time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(TngError::from)?
+                    .as_secs(),
+            )
         };
 
         let key_config = HpkeKeyConfig {
@@ -141,7 +222,7 @@ impl ServerKeyStore {
             .flatten();
 
         let response = async {
-            Ok(match &self.ra_args {
+            Ok(match &ra_args {
                 RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
                     match (attestation_request, attest) {
                         (
@@ -200,15 +281,11 @@ impl ServerKeyStore {
                         (
                             Some(AttestationRequest::Passport { .. }),
                             AttestArgs::BackgroundCheck { .. },
-                        ) => bail!(
-                        "Background check model is expected but passport attestation is requested"
-                    ),
+                        ) => bail!("Background check model is expected but passport attestation is requested"),
                         (
                             Some(AttestationRequest::BackgroundCheck { .. }),
                             AttestArgs::Passport { .. },
-                        ) => bail!(
-                        "Passport model is expected but background check attestation is requested"
-                    ),
+                        ) => bail!("Passport model is expected but background check attestation is requested"),
                         (None, _) => bail!("Missing attestation request from client"),
                     }
                 }
@@ -224,7 +301,7 @@ impl ServerKeyStore {
         .await
         .map_err(TngError::GenServerHpkeConfigurationFailed)?;
 
-        Ok(Json(response))
+        Ok((response, expire_time))
     }
 
     /// Interface 2: Process Encrypted Request
@@ -360,7 +437,7 @@ impl ServerKeyStore {
     }
 
     async fn validata_metadata(&self, metadata: Metadata) -> Result<()> {
-        match (metadata.metadata_type, &self.ra_args) {
+        match (metadata.metadata_type, self.ra_args.as_ref()) {
             (
                 Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(
                     EncryptedWithClientAuthAsymmetricKey {
@@ -445,7 +522,7 @@ impl ServerKeyStore {
         Json(payload): Json<AttestationVerifyRequest>,
     ) -> Result<Json<AttestationVerifyResponse>, TngError> {
         async {
-            match &self.ra_args {
+            match self.ra_args.as_ref() {
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
                     VerifyArgs::Passport { token_verify: _ } => {
                         bail!("Passport model is expected but got background check attestation from client")

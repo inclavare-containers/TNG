@@ -4,13 +4,13 @@ pub mod metadata;
 pub mod userdata;
 
 /// Request structure for the key configuration endpoint
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KeyConfigRequest {
     /// The request for attestation of server side
     pub attestation_request: Option<AttestationRequest>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case", tag = "model")]
 pub enum AttestationRequest {
     Passport,

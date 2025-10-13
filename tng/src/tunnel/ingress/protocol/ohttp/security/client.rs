@@ -51,7 +51,9 @@ use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
     config::ra::RaArgs,
     error::TngError,
-    tunnel::ohttp::protocol::header::{OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
+    tunnel::ohttp::protocol::header::{
+        OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+    },
     AttestationResult, TokioRuntime,
 };
 use crate::{
