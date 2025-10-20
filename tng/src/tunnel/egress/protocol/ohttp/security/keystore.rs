@@ -13,13 +13,12 @@ use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use ohttp::KeyConfig;
 use prost::Message as _;
-use rats_cert::cert::dice::cbor::OCBR_TAG_EVIDENCE_COCO_EVIDENCE;
 use rats_cert::tee::coco::attester::CocoAttester;
-use rats_cert::tee::coco::converter::CocoConverter;
+use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
 use rats_cert::tee::coco::evidence::{CocoAsToken, CocoEvidence};
 use rats_cert::tee::coco::verifier::CocoVerifier;
 use rats_cert::tee::{
-    AttesterPipeline, GenericAttester as _, GenericConverter, GenericEvidence, GenericVerifier as _,
+    AttesterPipeline, GenericAttester as _, GenericConverter, GenericVerifier as _, ReportData,
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::OnceCell;
@@ -212,7 +211,7 @@ impl ServerKeyStore {
             )
         };
 
-        let key_config = HpkeKeyConfig {
+        let hpke_key_config = HpkeKeyConfig {
             expire_timestamp,
             encoded_key_config_list,
         };
@@ -235,19 +234,22 @@ impl ServerKeyStore {
                                 &as_args.token_verify.policy_ids,
                                 as_args.as_is_grpc,
                             )?;
+                            // fetch a challenge token from attestation service
+                            let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+
                             let attester_pipeline =
                                 AttesterPipeline::new(coco_attester, coco_converter);
 
                             let userdata = ServerUserData {
-                                challenge_token: "".to_string(),
-                                hpke_key_config: key_config,
-                            };
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: hpke_key_config.clone(),
+                            }.to_claims()?;
 
                             let token = attester_pipeline
-                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
+                                .get_evidence(&ReportData::Claims(userdata))
                                 .await?;
                             KeyConfigResponse {
-                                hpke_key_config: userdata.hpke_key_config,
+                                hpke_key_config,
                                 attestation_info: Some(ServerAttestationInfo::Passport {
                                     attestation_result: AttestationResultJwt(token.into_str()),
                                 }),
@@ -260,19 +262,16 @@ impl ServerKeyStore {
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 
                             let userdata = ServerUserData {
-                                challenge_token,
-                                hpke_key_config: key_config,
-                            };
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: hpke_key_config.clone(),
+                            }.to_claims()?;
 
                             let evidence = coco_attester
-                                .get_evidence(serde_json::to_string(&userdata)?.as_bytes())
-                                .await?;
-
-                            let evidence =
-                                BASE64_STANDARD.encode(evidence.get_dice_raw_evidence()?);
+                                .get_evidence(&ReportData::Claims(userdata))
+                                .await?.serialize_to_json()?;
 
                             KeyConfigResponse {
-                                hpke_key_config: userdata.hpke_key_config,
+                                hpke_key_config,
                                 attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
                                     evidence,
                                 }),
@@ -292,7 +291,7 @@ impl ServerKeyStore {
                 RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
                     // No remote attestaion
                     KeyConfigResponse {
-                        hpke_key_config: key_config,
+                        hpke_key_config,
                         attestation_info: None,
                     }
                 }
@@ -458,13 +457,14 @@ impl ServerKeyStore {
                     )?;
 
                     let userdata = ClientUserData {
-                        // TODO: the challenge_token is not required to be check here, since it is already checked by attestation service. One way to slove it in rats-rs is to make report_data field of CocoVerifier::verify_evidence() to be Option<&[u8]>. So that we can skip the comparesion of user data.
-                        challenge_token: "".to_string(),
+                        // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
+                        challenge_token: None,
                         pk_s: BASE64_STANDARD.encode(&pk_s),
-                    };
+                    }
+                    .to_claims()?;
 
                     verifier
-                        .verify_evidence(&token, serde_json::to_string(&userdata)?.as_bytes())
+                        .verify_evidence(&token, &ReportData::Claims(userdata))
                         .await?;
                 }
             },
@@ -504,12 +504,37 @@ impl ServerKeyStore {
     pub async fn get_attestation_challenge(
         &self,
     ) -> Result<Json<AttestationChallengeResponse>, TngError> {
-        // TODO: Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
-        let response = AttestationChallengeResponse {
-            challenge_token: "".to_string(),
-        };
+        async {
+            match self.ra_args.as_ref() {
+                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
+                    VerifyArgs::Passport { token_verify: _ } => {
+                        bail!("Passport model is expected but got background check attestation from client")
+                    }
+                    VerifyArgs::BackgroundCheck {
+                        as_args,
+                    } => {
+                        // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
+                        let coco_converter = CocoConverter::new(
+                            &as_args.as_addr,
+                            &as_args.token_verify.policy_ids,
+                            as_args.as_is_grpc,
+                        )?;
 
-        Ok(Json(response))
+                        let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+
+                        Ok(Json(AttestationChallengeResponse {
+                            challenge_token,
+                        }))
+
+                    }
+                },
+                RaArgs::AttestOnly(..) | RaArgs::NoRa => {
+                    bail!("client attestation is not required")
+                }
+            }
+        }
+        .await
+        .map_err(TngError::ServerVerifyClientGetChallengeTokenFailed)
     }
 
     /// Interface 3: Attestation Forward - Verify Evidence
@@ -530,13 +555,7 @@ impl ServerKeyStore {
                     VerifyArgs::BackgroundCheck {
                         as_args,
                     } => {
-
-                        // TODO: pass payload.challenge_token to attestation server
-                        let _challenge_token = payload.challenge_token;
-
-                        let coco_evidence = std::result::Result::<_, rats_cert::errors::Error>::from(
-                            CocoEvidence::create_evidence_from_dice(OCBR_TAG_EVIDENCE_COCO_EVIDENCE, BASE64_STANDARD.decode(payload.evidence)?.as_ref()),
-                        )?;
+                        let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
 
                         let coco_converter = CocoConverter::new(
                             &as_args.as_addr,

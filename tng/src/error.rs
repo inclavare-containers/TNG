@@ -49,11 +49,17 @@ pub enum TngError {
     #[error("Http error during forwarding HTTP cipher text to upstream: {0}")]
     HttpCipherTextForwardError(#[source] reqwest::Error),
 
+    #[error("Got bad response during forwarding HTTP cipher text to upstream: {0}")]
+    HttpCipherTextBadResponse(#[source] anyhow::Error),
+
     #[error("Failed to get attestation challenge from server: {0}")]
     ClientGetAttestationChallengeFaild(#[source] anyhow::Error),
 
     #[error("Failed to get client background check result from server: {0}")]
     ClientGetBackgroundCheckResultFaild(#[source] anyhow::Error),
+
+    #[error("Failed to get challenge token for client: {0}")]
+    ServerVerifyClientGetChallengeTokenFailed(#[source] anyhow::Error),
 
     #[error("Failed to verify client evidence: {0}")]
     ServerVerifyClientEvidenceFailed(#[source] anyhow::Error),
@@ -141,6 +147,7 @@ impl IntoResponse for TngError {
                     StatusCode::BAD_GATEWAY
                 }
             }
+            TngError::HttpCipherTextBadResponse(..) => StatusCode::BAD_GATEWAY,
 
             // Metadata I/O errors
             TngError::MetadataReadError(..) => StatusCode::BAD_REQUEST,
@@ -155,6 +162,7 @@ impl IntoResponse for TngError {
             | TngError::MetadataValidateError(..)
             | TngError::ClientGetAttestationChallengeFaild(..)
             | TngError::ClientGetBackgroundCheckResultFaild(..)
+            | TngError::ServerVerifyClientGetChallengeTokenFailed(..)
             | TngError::ServerVerifyClientEvidenceFailed(..)
             | TngError::RequestKeyConfigFailed(..)
             | TngError::ServerHpkeConfigurationSelectFailed(..)
@@ -205,15 +213,12 @@ async fn check_error_response(
     response: reqwest::Response,
 ) -> Result<reqwest::Response, anyhow::Error> {
     if let Err(error) = response.error_for_status_ref() {
-        if response.status() == StatusCode::INTERNAL_SERVER_ERROR {
-            let text = response.text().await?;
-            if let Ok(ErrorResponse { code, message }) = serde_json::from_str(&text) {
-                Err(error).context(format!("server error code: {code} message: {message}"))?
-            } else {
-                Err(error).context(format!("full response: {text}"))?
-            }
+        let text = response.text().await?;
+        // Try to parse the error response as TNG error response
+        if let Ok(ErrorResponse { code, message }) = serde_json::from_str(&text) {
+            Err(error).context(format!("server error code: {code} message: {message}"))?
         } else {
-            Err(error)?
+            Err(error).context(format!("full response: {text}"))?
         }
     } else {
         Ok(response)

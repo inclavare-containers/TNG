@@ -179,15 +179,9 @@ fn bind_attestation_result(
     ra_args: &RaArgs,
 ) -> Result<web_sys::Response, JsValue> {
     // Create a JavaScript object from the claims map
-    let claims_obj = js_sys::Object::new();
-    for (key, value) in attestation_result.claims() {
-        // Try to convert value to UTF-8 string first, otherwise use hex encoding
-        let value_str = match std::str::from_utf8(value.as_ref()) {
-            Ok(s) if !s.contains('\0') => JsValue::from_str(s),
-            _ => JsValue::from_str(&hex::encode(value)),
-        };
-        js_sys::Reflect::set(&claims_obj, &JsValue::from_str(key), &value_str)?;
-    }
+    let claims_obj = JsValue::from_serde(attestation_result.claims())
+        .context("Failed to serialize attestation_result")
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
     // Create the attest_info object with claims as an object
     let attest_info_obj = js_sys::Object::new();
