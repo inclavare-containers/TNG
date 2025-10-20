@@ -505,17 +505,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bstr"
-version = "1.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "531a9155a481e2ee699d4f98f43c0ca4ff8ee1bfd55c31e9e98fb29d2b176fe0"
-dependencies = [
- "memchr",
- "regex-automata 0.4.9",
- "serde",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3352,21 +3341,18 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=15690513da0ad14795fbd3b8ee1c4dcbfdee3037#15690513da0ad14795fbd3b8ee1c4dcbfdee3037"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=4438eb5e146af9ec63e7bb60698235069694df16#4438eb5e146af9ec63e7bb60698235069694df16"
 dependencies = [
  "anyhow",
  "as-any",
  "async-trait",
  "base64 0.22.1",
  "bitflags 2.8.0",
- "bstr",
  "bytes",
  "ciborium",
  "const-oid",
  "flatten-json-object",
  "futures",
- "hex",
- "indexmap 2.9.0",
  "itertools 0.14.0",
  "p256",
  "pkcs8",

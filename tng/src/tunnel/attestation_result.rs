@@ -7,40 +7,19 @@ use rats_cert::tee::claims::Claims;
 /// This struct is cheap to clone.
 #[derive(Debug, Clone)]
 pub struct AttestationResult {
+    /// Use Arc to avoid cloning the claims to save memory.
     #[allow(unused)]
-    claims: Arc<PrettyPrintClaims>,
+    claims: Arc<Claims>,
 }
 
 impl AttestationResult {
     pub fn from_claims(claims: Claims) -> Self {
         Self {
-            claims: Arc::new(PrettyPrintClaims::new(claims)),
+            claims: Arc::new(claims),
         }
     }
 
     pub fn claims(&self) -> &Claims {
-        &self.claims.0
-    }
-}
-
-#[derive(Clone)]
-pub struct PrettyPrintClaims(Claims);
-
-impl PrettyPrintClaims {
-    pub fn new(claims: Claims) -> Self {
-        Self(claims)
-    }
-}
-
-impl std::fmt::Debug for PrettyPrintClaims {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut debug_map = f.debug_map();
-        self.0.iter().for_each(|(name, value)| {
-            match std::str::from_utf8(value.as_ref()) {
-                Ok(s) if !s.contains('\0') => debug_map.entry(name, &s),
-                _ => debug_map.entry(name, &hex::encode(value)),
-            };
-        });
-        debug_map.finish()
+        &self.claims
     }
 }
