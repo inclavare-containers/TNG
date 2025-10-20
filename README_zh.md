@@ -116,6 +116,19 @@ rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
 
 你可以从[集成测试用例](./tests/)中获取一些示例。
 
+
+## 版本兼容性
+
+尽管我们在研发过程中尽量保持对旧版本行为的兼容性，但有些情况下仍不可避免地存在兼容性变更。我们建议您在client侧和server侧部署相同的最新的 TNG 稳定版本，下表是两个TNG实例之间的版本兼容性表。
+
+| 兼容版本范围 | 说明 |
+| --- | --- |
+| >= 1.0.0, < 2.0.0 | 这些版本使用Envoy作为数据面 |
+| >= 2.0.0, <= 2.2.4 | 从2.0.0开始，TNG转向基于[rustls](https://github.com/rustls/rustls)和[hyper](https://github.com/hyperium/hyper)实现的数据面 |
+| 2.2.5 | 从该版本开始，TNG使用OHTTP替代了之前的 rats-tls over HTTP CONNECT 协议的组合，并且引入了护照模型支持 |
+| 2.2.6 | 从该版本开始，TNG对使用的OHTTP协议进行了调整，解决2.2.5版本在HTTP路由场景下的设计问题 |
+
+
 ## 最低支持的 Rust 版本（MSRV）
 
 本项目需要两个版本的 Rust 工具链：

@@ -123,6 +123,18 @@ Now, you can directly use the `tng` command to start a TNG instance.
 
 You can get some examples from the [integration test cases](./tests/).
 
+## Version Compatibility
+
+Although we strive to maintain behavioral compatibility with older versions during development, compatibility changes are sometimes unavoidable. We recommend deploying the same latest stable version of TNG on both the client and server sides. The table below outlines version compatibility between two TNG instances.
+
+| Compatible Version Range | Description |
+| --- | --- |
+| >= 1.0.0, < 2.0.0 | These versions use Envoy as the data plane |
+| >= 2.0.0, <= 2.2.4 | Starting from version 2.0.0, TNG switched to a data plane implemented using [rustls](https://github.com/rustls/rustls) and [hyper](https://github.com/hyperium/hyper) |
+| 2.2.5 | Starting from this version, TNG uses OHTTP instead of the previous combination of rats-tls over HTTP CONNECT, and introduces support for the Passport model |
+| 2.2.6 | Starting from this version, TNG adjusted the OHTTP protocol used to address design issues present in version 2.2.5 when used in HTTP routing scenarios |
+
+
 ## Minimal Supported Rust Version (MSRV)
 
 There are two versions of Rust toolchain required by this project:
