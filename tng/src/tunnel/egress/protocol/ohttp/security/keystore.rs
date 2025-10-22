@@ -408,19 +408,23 @@ impl ServerKeyStore {
             let server_response =
                 server_response_encapsulator.encapsulate_response(response_write.compat())?;
             state.runtime.spawn_supervised_task_current_span(async {
-                let mut server_response = server_response.compat_write();
-                tokio::io::copy(
-                    &mut bhttp_encoder
-                        .map_err(std::io::Error::other)
-                        .into_async_read()
-                        .compat(),
-                    &mut server_response,
-                )
-                .await?;
-                let mut server_response = server_response.into_inner();
-                server_response.close().await?; // Remember to close the response stream
+                async {
+                    let mut server_response = server_response.compat_write();
+                    tokio::io::copy(
+                        &mut bhttp_encoder
+                            .map_err(std::io::Error::other)
+                            .into_async_read()
+                            .compat(),
+                        &mut server_response,
+                    )
+                    .await?;
+                    let mut server_response = server_response.into_inner();
+                    server_response.close().await?; // Remember to close the response stream
 
-                Ok::<_, anyhow::Error>(())
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await
+                .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting response"))
             });
 
             response_read

@@ -52,9 +52,6 @@ pub enum TngError {
     #[error("Got bad response during forwarding HTTP cipher text to upstream: {0}")]
     HttpCipherTextBadResponse(#[source] anyhow::Error),
 
-    #[error("Failed to encrypt HTTP plaintext request to OHTTP request: {0}")]
-    EncryptHttpRequestError(#[source] anyhow::Error),
-
     #[error("Failed to get attestation challenge from server: {0}")]
     ClientGetAttestationChallengeFaild(#[source] anyhow::Error),
 
@@ -151,7 +148,6 @@ impl IntoResponse for TngError {
                 }
             }
             TngError::HttpCipherTextBadResponse(..) => StatusCode::BAD_GATEWAY,
-            TngError::EncryptHttpRequestError(..) => StatusCode::BAD_GATEWAY,
 
             // Metadata I/O errors
             TngError::MetadataReadError(..) => StatusCode::BAD_REQUEST,

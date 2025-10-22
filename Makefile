@@ -166,7 +166,6 @@ wasm-pack-debug: wasm-build-debug
 
 .PHONE: wasm-test
 wasm-test: wasm-test-chrome
-	yum install -y chromium-headless
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
 
 .PHONE: wasm-test-chrome

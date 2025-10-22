@@ -34,12 +34,12 @@ tokio = {workspace = true}
 tokio-graceful = {workspace = true}
 tracing = "0.1"
 tracing-log = "0.2.0"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 tracing-wasm = "0.2.1"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.50"
 wasm-streams = "0.4.2"
 web-sys = {version = "0.3.77", features = ["Headers", "Request", "RequestInit", "Response", "ResponseInit"]}
-tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
@@ -56,4 +56,5 @@ wasm-bindgen-test = "0.3.34"
 
 # https://github.com/rustwasm/wasm-pack/issues/1351#issuecomment-2100231587
 [package.metadata.wasm-pack.profile.dev.wasm-bindgen]
+# this works the same as `--keep-debug` in wasm-bindgen
 dwarf-debug-info = true

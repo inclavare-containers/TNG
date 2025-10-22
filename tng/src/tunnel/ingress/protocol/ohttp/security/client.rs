@@ -30,6 +30,7 @@ use rats_cert::tee::{
     },
     GenericConverter, GenericEvidence as _, GenericVerifier as _,
 };
+#[cfg(unix)]
 use tokio::io::AsyncReadExt;
 use tokio_util::{
     compat::{
@@ -86,6 +87,7 @@ pub struct OHttpClientInner {
     #[cfg(unix)]
     rng: tokio::sync::Mutex<ChaCha12Rng>,
     base_url: Url,
+    #[allow(unused)]
     runtime: TokioRuntime,
 }
 
@@ -502,27 +504,49 @@ impl OHttpClientInner {
         let client = ohttp::ClientRequest::from_config(&mut key_config)?;
 
         let (encrypted_request, client_response_decapsulator) = {
-            let (response_read, response_write) = tokio::io::duplex(4096);
-            let client_request = client.encapsulate_stream(response_write.compat())?;
+            #[cfg(wasm)]
+            let mut encrypted_request = Vec::new();
+            #[cfg(wasm)]
+            let client_request =
+                client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
+
+            #[cfg(unix)]
+            let (encrypted_request, request_write) = tokio::io::duplex(4096);
+            #[cfg(unix)]
+            let client_request = client.encapsulate_stream(request_write.compat())?;
+
             let client_response_decapsulator = client_request.response_decapsulator()?;
 
-            self.runtime.spawn_supervised_task_current_span(async {
-                let mut client_request = client_request.compat_write();
-                tokio::io::copy(
-                    &mut bhttp_encoder
-                        .map_err(std::io::Error::other)
-                        .into_async_read()
-                        .compat(),
-                    &mut client_request,
-                )
-                .await?;
-                let mut client_request = client_request.into_inner();
-                client_request.close().await?; // Remember to close the response stream
+            let encryption_task = async {
+                async {
+                    let mut client_request = client_request.compat_write();
+                    tokio::io::copy(
+                        &mut bhttp_encoder
+                            .map_err(std::io::Error::other)
+                            .into_async_read()
+                            .compat(),
+                        &mut client_request,
+                    )
+                    .await?;
+                    let mut client_request = client_request.into_inner();
+                    client_request.close().await?; // Remember to close the response stream
 
-                Ok::<_, anyhow::Error>(())
-            });
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await
+                .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting request"))
+            };
 
-            (response_read, client_response_decapsulator)
+            // We have to avoid using spawn_supervised_task_current_span(), since it may randomly not got executed on wasm (web) and currently we have no idea why.
+            //  streaming request is not supported, so we can just wait for the encryption task to finish here.
+            #[cfg(wasm)]
+            let _: () = encryption_task.await;
+
+            #[cfg(unix)]
+            self.runtime
+                .spawn_supervised_task_current_span(encryption_task);
+
+            (encrypted_request, client_response_decapsulator)
         };
 
         let ohttp_request_body = {
@@ -538,21 +562,22 @@ impl OHttpClientInner {
                 metadata
                     .encode(&mut metadata_buf)
                     .map_err(TngError::MetadataEncodeError)?;
+                tracing::debug!("metadata length: {:?}", metadata_buf.len());
                 metadata_buf
             };
 
-            let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
             #[cfg(wasm)]
             {
-                let mut body = body;
-                let mut body_bytes = Vec::new();
-                body.read_to_end(&mut body_bytes)
-                    .await
-                    .map_err(|error| TngError::EncryptHttpRequestError(error.into()))?;
-                reqwest::Body::from(body_bytes)
+                let mut body_bytes = metadata_buf;
+                body_bytes.extend_from_slice(&encrypted_request);
+                tracing::debug!("Encrypted request body length: {:?}", body_bytes.len());
+                reqwest::Body::from(body_bytes.freeze())
             }
             #[cfg(unix)]
-            reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(body))
+            {
+                let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
+                reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(body))
+            }
         };
 
         // Forward the request to the upstream server

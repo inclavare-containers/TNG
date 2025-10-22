@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context as _};
-use futures::SinkExt;
-use futures::StreamExt;
+use futures::AsyncReadExt;
 use futures::TryStreamExt;
 use gloo::utils::format::JsValueSerdeExt;
 use http_body_util::BodyDataStream;
@@ -57,7 +56,7 @@ async fn fetch_core_impl(
     // Create web_sys::Request
     let web_request: web_sys::Request = web_sys::Request::new_with_str_and_init(&url, &init)?;
 
-    let http_request = convert_to_rust_request(web_request)?;
+    let http_request = convert_to_rust_request(web_request).await?;
 
     let authority = http_request
         .uri()
@@ -77,7 +76,30 @@ async fn fetch_core_impl(
         .map_err(|e| JsError::new(&format!("{e:?}")).into())
 }
 
-fn convert_to_rust_request(
+async fn read_stream_to_vec(
+    body_stream: web_sys::ReadableStream,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let stream = wasm_streams::ReadableStream::from_raw(body_stream)
+        .into_stream()
+        .map_ok(|chunk| {
+            let uint8_array = chunk
+                .dyn_into::<js_sys::Uint8Array>()
+                .expect("Expected Uint8Array");
+            uint8_array.to_vec()
+        })
+        .map_err(|e| std::io::Error::other(anyhow::anyhow!("Stream error: {:?}", e)));
+
+    let mut reader = stream.into_async_read(); // This allows using async read methods
+    let mut buffer = Vec::new();
+
+    reader.read_to_end(&mut buffer).await.map_err(|error| {
+        tracing::error!(?error, "Error in read_to_end()");
+        error
+    })?;
+    Ok(buffer)
+}
+
+async fn convert_to_rust_request(
     web_request: web_sys::Request,
 ) -> Result<axum::extract::Request, JsValue> {
     let gloo_request = gloo::net::http::Request::from(web_request);
@@ -89,32 +111,10 @@ fn convert_to_rust_request(
         web_sys::ReadableStream::new()?
     };
 
-    // convert ReadableStream to hyper compatible stream
-    let stream_body = wasm_streams::ReadableStream::from_raw(body_stream)
-        .into_stream()
-        .map_ok(|chunk| {
-            let uint8_array = chunk
-                .dyn_into::<js_sys::Uint8Array>()
-                .expect("Expected Uint8Array");
-            http_body::Frame::data(bytes::Bytes::from_owner(uint8_array.to_vec()))
-        })
-        .or_else(|e| async {
-            Err::<_, anyhow::Error>(
-                gloo::utils::errors::JsError::try_from(e)
-                    .map(|e| anyhow!(e))
-                    .unwrap_or(anyhow!("Not a JsError")),
-            )
-        });
-
-    // Create a new stream wrapper here since wasm_streams::ReadableStream is not Send.
-    let stream_body = {
-        let (mut sender, receiver) = futures::channel::mpsc::unbounded();
-        tokio_with_wasm::task::spawn(async move {
-            let mut stream_body = std::pin::pin!(stream_body.map(|item| Ok(item)));
-            sender.send_all(&mut stream_body).await
-        });
-        receiver
-    };
+    // convert ReadableStream to Vec<u8>
+    let body_bytes = read_stream_to_vec(body_stream)
+        .await
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
     let mut builder = http::Request::builder()
         .uri(gloo_request.url())
@@ -125,11 +125,9 @@ fn convert_to_rust_request(
     }
 
     let http_request = builder
-        .body(http_body_util::StreamBody::new(stream_body))
+        .body(axum::body::Body::from(body_bytes))
         .context("Failed to build http::Request")
         .map_err(|e| JsError::new(&format!("{e:?}")))?;
-
-    let http_request = http_request.map(axum::body::Body::new);
 
     Ok(http_request)
 }
