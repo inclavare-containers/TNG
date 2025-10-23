@@ -285,7 +285,13 @@ impl ServerKeyStore {
                             Some(AttestationRequest::BackgroundCheck { .. }),
                             AttestArgs::Passport { .. },
                         ) => bail!("Passport model is expected but background check attestation is requested"),
-                        (None, _) => bail!("Missing attestation request from client"),
+                        (None, _) => {
+                            // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
+                            KeyConfigResponse {
+                                hpke_key_config,
+                                attestation_info: None,
+                            }
+                        },
                     }
                 }
                 RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
