@@ -82,17 +82,18 @@ impl OHttpSecurityLayer {
         endpoint: &'a TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
-        let base_url = self.construct_base_url(endpoint, &request)?;
+        async {
+            let base_url = self.construct_base_url(endpoint, &request)?;
 
-        let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
+            let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
 
-        ohttp_client
-            .forward_request(request)
-            .await
-            .map_err(|error| {
-                tracing::error!(?error, "Failed to forward HTTP request");
-                error
-            })
+            ohttp_client.forward_request(request).await
+        }
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to forward HTTP request");
+            error
+        })
     }
 
     fn construct_base_url(
