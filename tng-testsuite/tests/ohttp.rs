@@ -160,6 +160,64 @@ async fn test_ingress_netfilter() -> Result<()> {
 
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_ingress_netfilter_server_attest_client_no_ra() -> Result<()> {
+    run_test(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {},
+                        "attest": {
+                            "model": "background_check",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        TngInstance::TngClient(
+            r#"
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {},
+                        "no_ra": true
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        AppType::HttpServer {
+            port: 30001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/foo/bar/www?type=1&case=1",
+        }.boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.1",
+            port: 30001,
+            host_header: "example.com",
+            path_and_query: "/foo/bar/www?type=1&case=1",
+        }.boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
     run_test(vec![
         TngInstance::TngServer(
