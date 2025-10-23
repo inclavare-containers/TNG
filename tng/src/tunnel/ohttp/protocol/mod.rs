@@ -58,7 +58,7 @@ pub enum ServerAttestationInfo {
     BackgroundCheck {
         /// Evidence data containing the nonce
         /// This is used only in Client verification + background check model scenario
-        evidence: String,
+        evidence: serde_json::Value,
     },
 }
 
@@ -75,11 +75,8 @@ pub struct AttestationChallengeResponse {
 /// Request structure for the attestation verification endpoint
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AttestationVerifyRequest {
-    /// The JWT challenge token obtained from the challenge endpoint
-    pub challenge_token: String,
-
     /// Evidence data containing the nonce
-    pub evidence: String,
+    pub evidence: serde_json::Value,
 }
 
 /// Response structure for the attestation verification endpoint
