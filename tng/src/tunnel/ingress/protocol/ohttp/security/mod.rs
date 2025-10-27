@@ -3,6 +3,10 @@ mod path_rewrite;
 
 use std::{collections::HashMap, sync::Arc};
 
+#[cfg(unix)]
+use crate::tunnel::utils::socket::{
+    TCP_KEEPALIVE_IDLE_SECS, TCP_KEEPALIVE_INTERVAL_SECS, TCP_KEEPALIVE_PROBE_COUNT,
+};
 use crate::{
     config::{ingress::OHttpArgs, ra::RaArgs},
     error::TngError,
@@ -43,6 +47,20 @@ impl OHttpSecurityLayer {
                 );
                 headers
             });
+
+            #[cfg(unix)]
+            {
+                use std::time::Duration;
+                builder =
+                    builder.tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_IDLE_SECS as u64));
+                builder = builder.tcp_keepalive_interval(Duration::from_secs(
+                    TCP_KEEPALIVE_INTERVAL_SECS as u64,
+                ));
+                builder = builder.tcp_keepalive_retries(TCP_KEEPALIVE_PROBE_COUNT);
+                // TODO: update reqwest and hyper-util version to support tcp_user_timeout()
+                // builder = builder.tcp_user_timeout(Duration::from_secs(TCP_USER_TIMEOUT_SECS as u64));
+            }
+
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             {
                 builder = builder.tcp_mark(transport_so_mark);

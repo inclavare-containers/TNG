@@ -3464,7 +3464,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 [[package]]
 name = "reqwest"
 version = "0.12.9"
-source = "git+https://github.com/inclavare-containers/reqwest.git?rev=19695caced834a570b182de0089e10059bba4eb2#19695caced834a570b182de0089e10059bba4eb2"
+source = "git+https://github.com/inclavare-containers/reqwest.git?rev=edd4658e698a030ff04bbb62e954f363b31a25c8#edd4658e698a030ff04bbb62e954f363b31a25c8"
 dependencies = [
  "async-compression",
  "base64 0.22.1",
