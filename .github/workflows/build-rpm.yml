@@ -14,7 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on: oracle-vm-16cpu-64gb-x86-64
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
 
