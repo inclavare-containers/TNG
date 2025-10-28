@@ -104,28 +104,27 @@ async fn convert_to_rust_request(
 ) -> Result<axum::extract::Request, JsValue> {
     let gloo_request = gloo::net::http::Request::from(web_request);
 
-    // Get ReadableStream from web_sys::Request
-    let body_stream = if let Some(body_stream) = gloo_request.body() {
-        body_stream
+    // Get ReadableStream from web_sys::Request and convert to Vec<u8>
+    let body = if let Some(body_stream) = gloo_request.body() {
+        let body_bytes = read_stream_to_vec(body_stream)
+            .await
+            .map_err(|e| JsError::new(&format!("{e:?}")))?;
+        axum::body::Body::from(body_bytes)
     } else {
-        web_sys::ReadableStream::new()?
+        axum::body::Body::empty()
     };
-
-    // convert ReadableStream to Vec<u8>
-    let body_bytes = read_stream_to_vec(body_stream)
-        .await
-        .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
     let mut builder = http::Request::builder()
         .uri(gloo_request.url())
         .method(gloo_request.method().as_ref())
         .version(http::Version::HTTP_11);
+
     for (key, value) in gloo_request.headers().entries() {
         builder = builder.header(key, value);
     }
 
     let http_request = builder
-        .body(axum::body::Body::from(body_bytes))
+        .body(body)
         .context("Failed to build http::Request")
         .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
