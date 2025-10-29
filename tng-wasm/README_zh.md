@@ -26,7 +26,7 @@ docker run -it --name tng-dev --privileged --network=host alibaba-cloud-linux-3-
 安装依赖：
 
 ```sh
-yum install -y git make clang protobuf-compiler npm rsync
+yum install -y git make clang protobuf-compiler npm
 ```
 
 #### 拉取源码

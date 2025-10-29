@@ -72,7 +72,8 @@ create-tarball:
 	echo '{"files":{}}' > /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/tokio_with_wasm_proc-fake/.cargo-checksum.json
 
 	# copy source code to src/
-	rsync -a --exclude target ./ /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
+	git clone --no-hardlinks . /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
+	cd /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src && git clean -xdf
 
 	# delete all checksum (this is required due to previous patch work)
 	sed -i 's/checksum = ".*//g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/Cargo.lock
