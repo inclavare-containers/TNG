@@ -54,7 +54,7 @@ impl StreamManager for TrustedStreamManager {
 
     async fn consume_stream(
         &self,
-        in_stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
+        in_stream: Box<dyn CommonStreamTrait + std::marker::Send + 'static>,
         sender: Self::Sender,
     ) -> Result<()> {
         let decode_result = self

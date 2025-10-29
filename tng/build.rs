@@ -4,7 +4,7 @@ fn main() {
     cfg_aliases! {
         // Platforms
         wasm: { all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown") },
-        unix: { any(target_os = "linux", target_os = "macos" ) },
+        // "unix" is already defined by rustc so we skip it here: https://doc.rust-lang.org/reference/conditional-compilation.html#unix-and-windows
     }
 
     // For shadow-rs

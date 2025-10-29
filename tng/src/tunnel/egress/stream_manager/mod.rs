@@ -9,7 +9,7 @@ pub trait StreamManager {
 
     async fn consume_stream(
         &self,
-        stream: Box<(dyn CommonStreamTrait + std::marker::Send + 'static)>,
+        stream: Box<dyn CommonStreamTrait + std::marker::Send + 'static>,
         sender: Self::Sender,
     ) -> Result<()>;
 }
