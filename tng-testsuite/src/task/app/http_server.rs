@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{bail, Result};
-use axum::{body::Body, extract::Request, routing::get, Router};
+use axum::{body::Body, extract::Request, routing::any, Router};
 use axum_extra::extract::Host;
 use http::StatusCode;
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -25,18 +25,10 @@ pub async fn launch_http_server(
     Ok(tokio::task::spawn(async move {
         let app = Router::new().route(
             "/{*path}",
-            get(|Host(hostname): Host, request: Request<Body>| async move {
+            any(|Host(hostname): Host, request: Request<Body>| async move {
                 (|| -> Result<_> {
                     if hostname != expected_host_header {
                         bail!("Got hostname `{hostname}`, but `{expected_host_header}` is expected");
-                    }
-
-                    if request.uri().scheme().is_some() {
-                        bail!("The request URI should not contain scheme, but got {:?}", request.uri().scheme())
-                    }
-
-                    if request.uri().authority().is_some() {
-                        bail!("The request URI should not contain authority, but got {:?}", request.uri().authority())
                     }
 
                     let path_and_query = request.uri().path_and_query();

@@ -75,67 +75,73 @@
       import tng_init, { fetch as tng_fetch } from "./tng_wasm.js";
 
       // Init tng wasm module
-      await module_init();
-
-      const attested_fetch = (input, init) => {
-        tng_config = {
-          ohttp: {},
-          verify: {
-            model: "background_check",
-            as_addr: as_addr,
-            policy_ids: policy_ids,
-          },
-        };
-        return tng_fetch(input, init, asAddr, policyIds);
-      };
-
-      {
-        // Test fetch with GET function
-        attested_fetch("http://127.0.0.1:30001/foo/bar?baz=qux", {
-          method: "GET",
-          headers: {},
+      tng_init()
+        .catch((err) => {
+          console.error("Failed to initialize tng", err);
         })
-          .then((response) => {
-            const attest_info = response?.attest_info
-              ? response.attest_info
-              : null;
-            console.log("Attest Info:", attest_info);
+        .then(() => {
+          console.log("tng initialized");
 
-            console.log("Got response:", response);
-            const content = formatResponse(response);
-            updateOutput("get-output", content);
-          })
-          .catch((error) => {
-            const content = formatError(error);
-            updateOutput("get-output", content);
-          });
-      }
+          const attested_fetch = (input, init) => {
+            const tng_config = {
+              ohttp: {},
+              verify: {
+                model: "background_check",
+                as_addr: as_addr,
+                policy_ids: policy_ids,
+              },
+            };
+            return tng_fetch(input, init, tng_config);
+          };
 
-      {
-        // Test fetch with POST function
+          {
+            // Test fetch with GET function
+            attested_fetch("http://127.0.0.1:30001/foo/bar?baz=qux", {
+              method: "GET",
+              headers: {},
+            })
+              .then((response) => {
+                const attest_info = response?.attest_info
+                  ? response.attest_info
+                  : null;
+                console.log("Attest Info:", attest_info);
 
-        attested_fetch("http://127.0.0.1:30001/foo/bar", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ answer: 42 }),
-        })
-          .then((response) => {
-            const attest_info = response?.attest_info
-              ? response.attest_info
-              : null;
-            console.log("Attest Info:", attest_info);
+                console.log("Got response:", response);
+                const content = formatResponse(response);
+                updateOutput("get-output", content);
+              })
+              .catch((error) => {
+                const content = formatError(error);
+                updateOutput("get-output", content);
+              });
+          }
 
-            console.log("Got response:", response);
-            const content = formatResponse(response);
-            updateOutput("post-output", content);
-          })
-          .catch((error) => {
-            const content = formatError(error);
-            updateOutput("post-output", content);
-          });
-      }
+          {
+            // Test fetch with POST function
+
+            attested_fetch("http://127.0.0.1:30001/foo/bar", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ answer: 42 }),
+            })
+              .then((response) => {
+                const attest_info = response?.attest_info
+                  ? response.attest_info
+                  : null;
+                console.log("Attest Info:", attest_info);
+
+                console.log("Got response:", response);
+                const content = formatResponse(response);
+                updateOutput("post-output", content);
+              })
+              .catch((error) => {
+                const content = formatError(error);
+                updateOutput("post-output", content);
+              });
+          }
+        });
     </script>
   </body>
 </html>

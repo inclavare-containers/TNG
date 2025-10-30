@@ -1,21 +1,22 @@
+use anyhow::{bail, Result};
+use tng::{
+    config::{ingress::OHttpArgs, ra::RaArgs},
+    tunnel::{endpoint::TngEndpoint, ingress::protocol::ohttp::security::OHttpSecurityLayer},
+    AttestationResult, TokioRuntime,
+};
+
 use anyhow::{anyhow, Context as _};
-use futures::SinkExt;
+use futures::AsyncReadExt;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use gloo::utils::format::JsValueSerdeExt;
 use http_body_util::BodyDataStream;
-use tng::{
-    config::{
-        ingress::{self, OHttpArgs},
-        ra::{RaArgs, VerifyArgs},
-    },
-    tunnel::endpoint::TngEndpoint,
-    AttestationResult,
+use serde::Serialize;
+use tng::config::{
+    ingress::{self},
+    ra::VerifyArgs,
 };
-
 use wasm_bindgen::prelude::*;
-
-use crate::send_request_async_impl;
 
 #[wasm_bindgen]
 pub async fn fetch(
@@ -57,7 +58,7 @@ async fn fetch_core_impl(
     // Create web_sys::Request
     let web_request: web_sys::Request = web_sys::Request::new_with_str_and_init(&url, &init)?;
 
-    let http_request = convert_to_rust_request(web_request)?;
+    let http_request = convert_to_rust_request(web_request).await?;
 
     let authority = http_request
         .uri()
@@ -77,59 +78,61 @@ async fn fetch_core_impl(
         .map_err(|e| JsError::new(&format!("{e:?}")).into())
 }
 
-fn convert_to_rust_request(
+async fn read_stream_to_vec(
+    body_stream: web_sys::ReadableStream,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let stream = wasm_streams::ReadableStream::from_raw(body_stream)
+        .into_stream()
+        .map(|chunk| {
+            chunk.and_then(|chunk| {
+                let uint8_array = chunk.dyn_into::<js_sys::Uint8Array>().map_err(|e| {
+                    JsValue::from(JsError::new(&format!(
+                        "Failed to convert chunk to Expected Uint8Array: {e:?}"
+                    )))
+                })?;
+                Ok(uint8_array.to_vec())
+            })
+        })
+        .map_err(|e| std::io::Error::other(anyhow::anyhow!("Stream error: {:?}", e)));
+
+    let mut reader = stream.into_async_read(); // This allows using async read methods
+    let mut buffer = Vec::new();
+
+    reader.read_to_end(&mut buffer).await.map_err(|error| {
+        tracing::error!(?error, "Error in read_to_end()");
+        error
+    })?;
+    Ok(buffer)
+}
+
+async fn convert_to_rust_request(
     web_request: web_sys::Request,
 ) -> Result<axum::extract::Request, JsValue> {
     let gloo_request = gloo::net::http::Request::from(web_request);
 
-    // Get ReadableStream from web_sys::Request
-    let body_stream = if let Some(body_stream) = gloo_request.body() {
-        body_stream
+    // Get ReadableStream from web_sys::Request and convert to Vec<u8>
+    let body = if let Some(body_stream) = gloo_request.body() {
+        let body_bytes = read_stream_to_vec(body_stream)
+            .await
+            .map_err(|e| JsError::new(&format!("{e:?}")))?;
+        axum::body::Body::from(body_bytes)
     } else {
-        web_sys::ReadableStream::new()?
-    };
-
-    // convert ReadableStream to hyper compatible stream
-    let stream_body = wasm_streams::ReadableStream::from_raw(body_stream)
-        .into_stream()
-        .map_ok(|chunk| {
-            let uint8_array = chunk
-                .dyn_into::<js_sys::Uint8Array>()
-                .expect("Expected Uint8Array");
-            http_body::Frame::data(bytes::Bytes::from_owner(uint8_array.to_vec()))
-        })
-        .or_else(|e| async {
-            Err::<_, anyhow::Error>(
-                gloo::utils::errors::JsError::try_from(e)
-                    .map(|e| anyhow!(e))
-                    .unwrap_or(anyhow!("Not a JsError")),
-            )
-        });
-
-    // Create a new stream wrapper here since wasm_streams::ReadableStream is not Send.
-    let stream_body = {
-        let (mut sender, receiver) = futures::channel::mpsc::unbounded();
-        tokio_with_wasm::task::spawn(async move {
-            let mut stream_body = std::pin::pin!(stream_body.map(|item| Ok(item)));
-            sender.send_all(&mut stream_body).await
-        });
-        receiver
+        axum::body::Body::empty()
     };
 
     let mut builder = http::Request::builder()
         .uri(gloo_request.url())
         .method(gloo_request.method().as_ref())
         .version(http::Version::HTTP_11);
+
     for (key, value) in gloo_request.headers().entries() {
         builder = builder.header(key, value);
     }
 
     let http_request = builder
-        .body(http_body_util::StreamBody::new(stream_body))
+        .body(body)
         .context("Failed to build http::Request")
         .map_err(|e| JsError::new(&format!("{e:?}")))?;
-
-    let http_request = http_request.map(axum::body::Body::new);
 
     Ok(http_request)
 }
@@ -173,18 +176,28 @@ async fn convert_to_web_response(
     )
 }
 
+#[derive(Serialize)]
+struct AttestationInfo {
+    /// Attestation service address
+    as_addr: Option<String>,
+    /// Policy ID list
+    policy_ids: Option<Vec<String>>,
+    /// A JWT string which represent the result of remote attestation.
+    attestation_result: AttestationResult,
+}
+
 fn bind_attestation_result(
     web_response: web_sys::Response,
     attestation_result: AttestationResult,
     ra_args: &RaArgs,
 ) -> Result<web_sys::Response, JsValue> {
-    // Create a JavaScript object from the claims map
-    let claims_obj = JsValue::from_serde(attestation_result.claims())
-        .context("Failed to serialize attestation_result")
-        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+    // Create the attest_info object
+    let mut attest_info = AttestationInfo {
+        as_addr: None,
+        policy_ids: None,
+        attestation_result,
+    };
 
-    // Create the attest_info object with claims as an object
-    let attest_info_obj = js_sys::Object::new();
     match ra_args {
         RaArgs::VerifyOnly(verify_args) => {
             let token_verify = match verify_args {
@@ -197,30 +210,20 @@ fn bind_attestation_result(
                             ..
                         },
                 } => {
-                    js_sys::Reflect::set(
-                        &attest_info_obj,
-                        &JsValue::from_str("as_addr"),
-                        &JsValue::from_str(&as_addr),
-                    )?;
+                    attest_info.as_addr = Some(as_addr.clone());
                     token_verify
                 }
             };
-            js_sys::Reflect::set(
-                &attest_info_obj,
-                &JsValue::from_str("policy_ids"),
-                &JsValue::from_serde(&token_verify.policy_ids)
-                    .context("Failed to serialize policy_ids")
-                    .map_err(|e| JsError::new(&format!("{e:?}")))?,
-            )?;
+
+            attest_info.policy_ids = Some(token_verify.policy_ids.clone());
         }
         RaArgs::NoRa => { /* nothing */ }
     }
 
-    js_sys::Reflect::set(
-        &attest_info_obj,
-        &JsValue::from_str("attestation_result"),
-        &claims_obj,
-    )?;
+    // Create a JavaScript object
+    let attest_info_obj = JsValue::from_serde(&attest_info)
+        .context("Failed to serialize attestation_info object")
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
 
     // Set attest_info as a property on the web_response
     js_sys::Reflect::set(
@@ -230,4 +233,38 @@ fn bind_attestation_result(
     )?;
 
     Ok(web_response)
+}
+
+async fn send_request_async_impl(
+    endpoint: &TngEndpoint,
+    ohttp: &OHttpArgs,
+    ra_args: &RaArgs,
+    request: axum::extract::Request,
+) -> Result<(axum::response::Response, AttestationResult)> {
+    let request = {
+        let (parts, body) = request.into_parts();
+        tracing::debug!(
+            request=?parts,
+            ?ra_args,
+            "http::Request to be send"
+        );
+        http::Request::from_parts(parts, body)
+    };
+
+    let shutdown = tokio_graceful::Shutdown::no_signal();
+    let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
+
+    let ohttp_security_layer =
+        OHttpSecurityLayer::new(ohttp, ra_args.clone(), runtime.clone()).await?;
+
+    let (response, attestation_result) = ohttp_security_layer
+        .forward_http_request(endpoint, request)
+        .await?;
+
+    tracing::info!(?attestation_result, "start forward task");
+    let Some(attestation_result) = attestation_result else {
+        bail!("The attestation result is missing")
+    };
+
+    Ok((response, attestation_result))
 }

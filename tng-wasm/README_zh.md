@@ -154,6 +154,9 @@ npm install tng-<version>.tgz
 
 由于 TNG SDK 使用了 Web Workers，在生产部署时，您需要为网页的 HTTP 响应添加 `Cross-Origin-Opener-Policy:same-origin` 和 `Cross-Origin-Embedder-Policy:require-corp` 这两个 HTTP 头，否则将无法正常工作。
 
+> [!NOTE]
+> 由于构建产生的`.wasm`文件通常比较大，我们建议您在部署页面时开启gzip压缩，以减少传输大小，这大约能减少50%的体积。
+
 #### 在 Chrome 扩展中使用
 
 如果您希望在 Chrome 扩展中集成，由于 manifest v3 的限制，您需要在清单中添加一些额外内容。
@@ -343,7 +346,6 @@ miniserve ./tng-wasm/pkg --index index.html --header "Cross-Origin-Opener-Policy
 > [!NOTE]
 >
 > - [`miniserve`](https://github.com/svenstaro/miniserve)是一个纯粹的静态资源服务器，它和 Nginx 以及 python 的 http.server 没有什么差别，你也可以用其它组件来替代。
-> - 由于 TNG SDK 使用了 Web Worker，在生产部署时，您需要为 Web 页面的 HTTP 响应添加`Cross-Origin-Opener-Policy:same-origin`和`Cross-Origin-Embedder-Policy:require-corp`这两个 HTTP 头，否则将无法正常工作。如果您希望在 chrome extension 中集成，请在 manifest 清单中添加[cross_origin_embedder_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-embedder-policy)和[cross_origin_opener_policy](https://developer.chrome.com/docs/extensions/reference/manifest/cross-origin-opener-policy)这两个 manifest key。
 
 ### 9. 从浏览器访问
 
