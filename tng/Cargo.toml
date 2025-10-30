@@ -98,7 +98,7 @@ x509-cert = {version = "0.2.5"}
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
 async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
 axum = {version = "0.8.4", features = ["tokio", "http1", "http2", "ws"]}
-rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "c0eeaa130d7c5b171439b323f874910ede04d433", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
+rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "4975cf92389a9134d9b373c6a7a7afbf1a2becd9", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
 socket2 = {version = "0.5.10"}
 tokio = {workspace = true, features = ["rt-multi-thread", "time"]}
 tower-http = {version = "0.6.6", features = ["trace", "set-header", "cors", "compression-br", "compression-gzip", "compression-zstd"]}
@@ -106,7 +106,7 @@ ws_stream_tungstenite = {version = "0.13.0"}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
 axum = {version = "0.8.4", default-features = false, features = ["json"]}# to disable mio
-rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "c0eeaa130d7c5b171439b323f874910ede04d433", default-features = false, features = ["crypto-rustcrypto", "verifier-coco"]}
+rats-cert = {git = "https://github.com/inclavare-containers/rats-rs.git", rev = "4975cf92389a9134d9b373c6a7a7afbf1a2becd9", default-features = false, features = ["crypto-rustcrypto", "verifier-coco"]}
 ring = {version = "0.17.11", features = ["wasm32_unknown_unknown_js"]}
 rustls-pki-types = {version = "*", features = ["web"]}
 serde-wasm-bindgen = "0.6.5"

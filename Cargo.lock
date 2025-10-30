@@ -523,6 +523,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
+name = "canon-json"
+version = "0.2.1"
+source = "git+https://github.com/inclavare-containers/canon-json-rs?rev=d6fa90c68f60d3d7a51daf942d882b589541be51#d6fa90c68f60d3d7a51daf942d882b589541be51"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2383,7 +2394,7 @@ dependencies = [
  "log",
  "netlink-packet-core",
  "netlink-sys",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2596,7 +2607,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tracing",
 ]
 
@@ -2629,7 +2640,7 @@ dependencies = [
  "prost 0.13.5",
  "reqwest",
  "serde_json",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tokio",
  "tonic 0.12.3",
 ]
@@ -2675,7 +2686,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.1",
  "serde_json",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3188,7 +3199,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2 0.5.10",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "web-time",
@@ -3208,7 +3219,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tinyvec",
  "tracing",
  "web-time",
@@ -3341,7 +3352,7 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=c0eeaa130d7c5b171439b323f874910ede04d433#c0eeaa130d7c5b171439b323f874910ede04d433"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=4975cf92389a9134d9b373c6a7a7afbf1a2becd9#4975cf92389a9134d9b373c6a7a7afbf1a2becd9"
 dependencies = [
  "anyhow",
  "as-any",
@@ -3349,6 +3360,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.8.0",
  "bytes",
+ "canon-json",
  "ciborium",
  "const-oid",
  "flatten-json-object",
@@ -3369,7 +3381,7 @@ dependencies = [
  "spin 0.9.8",
  "strum 0.26.3",
  "strum_macros 0.26.4",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "time",
  "tokio",
  "tokio_with_wasm",
@@ -4118,11 +4130,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
- "thiserror-impl 2.0.12",
+ "thiserror-impl 2.0.17",
 ]
 
 [[package]]
@@ -4138,9 +4150,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.12"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4307,7 +4319,7 @@ dependencies = [
  "strum 0.27.1",
  "strum_macros 0.27.1",
  "tempfile",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-graceful",
  "tokio-rustls",
@@ -4658,7 +4670,7 @@ dependencies = [
  "httparse",
  "js-sys",
  "pin-project",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "tonic 0.13.1",
  "tower-service",
  "wasm-bindgen",
@@ -4926,7 +4938,7 @@ dependencies = [
  "log",
  "rand 0.9.1",
  "sha1",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "utf-8",
 ]
 
@@ -5638,7 +5650,7 @@ dependencies = [
  "pharos",
  "rustc_version",
  "send_wrapper",
- "thiserror 2.0.12",
+ "thiserror 2.0.17",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
