@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use rats_cert::tee::claims::Claims;
+use serde::Serialize;
 
 /// The result of remote attestation.
 ///
 /// This struct is cheap to clone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
 pub struct AttestationResult {
     /// Use Arc to avoid cloning the claims to save memory.
     #[allow(unused)]

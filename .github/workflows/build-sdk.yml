@@ -74,8 +74,11 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
-      # - name: Run Wasm Test
-      #   run: make wasm-test-chrome
+      - name: Run wasm unit test
+        run: make wasm-unit-test-chrome
+
+      - name: Run wasm integration test
+        run: make wasm-integration-test
 
       - name: Build JS SDK
         run: |
