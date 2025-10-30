@@ -527,14 +527,25 @@ mod tests {
                         ping 192.168.1.2 -c 1 -W 5 ;
                         ping 192.168.1.254 -c 1 -W 5 ;
                         cat /etc/resolv.conf
+
+                        dig @8.8.8.8 connectivitycheck.gstatic.com || { echo $? ; true ; } ;
+                        dig connectivitycheck.gstatic.com || { echo $? ; true ; } ;
+                        curl http://connectivitycheck.gstatic.com/generate_204 --connect-timeout 5 || { echo $? ; true ; } ;
                         ",
                     ])
                     .output()
                     .await?;
 
+                println!(
+                    "exit code: {:?}\nstdout: {}\nstderr: {}",
+                    output.status.code(),
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr)
+                );
+
                 if !output.status.success() {
                     bail!(
-                        "exit code: {:?}\nstdout: {}\nstderr: {}",
+                        "network test failed with exit code: {:?}\nstdout: {}\nstderr: {}",
                         output.status.code(),
                         &String::from_utf8_lossy(&output.stdout),
                         &String::from_utf8_lossy(&output.stderr)

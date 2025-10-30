@@ -18,8 +18,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
     defaults:
       run:
         shell: bash
@@ -61,7 +59,7 @@ jobs:
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
 
-          yum install -y git make clang protobuf-compiler npm jq
+          yum install -y git make clang protobuf-compiler npm jq openssl-devel
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -74,8 +72,20 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
-      # - name: Run Wasm Test
-      #   run: make wasm-test-chrome
+      - uses: ./.github/actions/run-aa-as
+
+      - name: Run wasm unit test
+        run: make wasm-unit-test-chrome
+
+      - name: Run wasm integration test
+        run: |
+          set -e
+          set -x
+
+          # Append dns server
+          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          # Run test
+          make wasm-integration-test
 
       - name: Build JS SDK
         run: |

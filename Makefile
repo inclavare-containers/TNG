@@ -4,24 +4,21 @@ help:
 
 .PHONE: install-test-deps
 install-test-deps:
-	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute
+	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset
 
 .PHONE: run-test
 run-test: install-test-deps
 	yum-builddep -y ./trusted-network-gateway.spec
 
-	yum install -y ipset
 	./tng-testsuite/run-test.sh
 
 .PHONE: run-test-on-bin
 run-test-on-bin: install-test-deps
-	yum install -y ipset
 	cargo test --no-default-features --features on-bin --package tng-testsuite --tests -- --nocapture
 
 
 .PHONE: run-test-on-podman
 run-test-on-podman: install-test-deps
-	yum install -y ipset
 	cargo test --no-default-features --features on-podman --package tng-testsuite --tests -- --nocapture
 
 
@@ -164,19 +161,23 @@ wasm-pack-debug: wasm-build-debug
 	wasm-pack pack
 	@echo 'Now you can install with "npm install <tar.gz path>"'
 
-.PHONE: wasm-test
-wasm-test: wasm-test-chrome
+.PHONE: wasm-unit-test
+wasm-unit-test: wasm-unit-test-chrome
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
 
-.PHONE: wasm-test-chrome
-wasm-test-chrome: install-wasm-build-dependencies
+.PHONE: wasm-unit-test-chrome
+wasm-unit-test-chrome: install-wasm-build-dependencies
 	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
-.PHONE: wasm-test-firefox
-wasm-test-firefox: install-wasm-build-dependencies
+.PHONE: wasm-unit-test-firefox
+wasm-unit-test-firefox: install-wasm-build-dependencies
 	if ! command -v firefox; then yum install -y firefox ; fi
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+
+.PHONE: wasm-integration-test
+wasm-integration-test: wasm-build-debug install-test-deps
+	RUSTUP_TOOLCHAIN=nightly-2025-07-07 cargo test --no-default-features --features on-source-code,js-sdk --package tng-testsuite --test 'js_sdk*' -- --nocapture
 
 .PHONE: www-demo
 www-demo:

@@ -6,6 +6,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{NodeType, Task};
 
+#[cfg(feature = "js-sdk")]
+mod browser_client;
 mod http_client;
 mod http_server;
 mod load_balancer;
@@ -35,6 +37,9 @@ pub enum AppType {
         path_and_query: &'static str,
         http_proxy: HttpProxy,
     },
+    #[cfg(feature = "js-sdk")]
+    #[allow(dead_code)]
+    BrowserClient { js: &'static str },
     #[allow(dead_code)]
     LoadBalancer {
         listen_port: u16,
@@ -61,6 +66,8 @@ impl Task for AppType {
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => "app_client",
             AppType::LoadBalancer { .. } => "load_balancer",
+            #[cfg(feature = "js-sdk")]
+            AppType::BrowserClient { .. } => "browser_client",
         }
         .to_owned()
     }
@@ -72,6 +79,8 @@ impl Task for AppType {
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => NodeType::Client,
             AppType::LoadBalancer { .. } => NodeType::Middleware,
+            #[cfg(feature = "js-sdk")]
+            AppType::BrowserClient { .. } => NodeType::Client,
         }
     }
 
@@ -142,6 +151,10 @@ impl Task for AppType {
                     rewrite_to,
                 )
                 .await
+            }
+            #[cfg(feature = "js-sdk")]
+            AppType::BrowserClient { js } => {
+                browser_client::launch_browser_client(token, js.to_string()).await
             }
         }?)
     }
