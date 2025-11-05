@@ -30,7 +30,7 @@ images:
       path: Dockerfile
       scene:
         args: []
-        tags: [[2.2.6, latest]]
+        tags: [[2.3.0, latest]]
         registry: [*ACR_PROD]
       # 测试配置
       test_config: [*WORKSPACE, *PROJECT, *TEST_SUITE, *TEST_CONF, *TEST_CASE, *CLOUD_SERVER_TAG[0], '']

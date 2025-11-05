@@ -132,7 +132,7 @@ Although we strive to maintain behavioral compatibility with older versions duri
 | >= 1.0.0, < 2.0.0 | These versions use Envoy as the data plane |
 | >= 2.0.0, <= 2.2.4 | Starting from version 2.0.0, TNG switched to a data plane implemented using [rustls](https://github.com/rustls/rustls) and [hyper](https://github.com/hyperium/hyper) |
 | 2.2.5 | Starting from this version, TNG uses OHTTP instead of the previous combination of rats-tls over HTTP CONNECT, and introduces support for the Passport model |
-| 2.2.6 | Starting from this version, TNG adjusted the OHTTP protocol used to address design issues present in version 2.2.5 when used in HTTP routing scenarios |
+| >= 2.2.6 | Starting from this version, TNG adjusted the OHTTP protocol used to address design issues present in version 2.2.5 when used in HTTP routing scenarios |
 
 
 ## Minimal Supported Rust Version (MSRV)

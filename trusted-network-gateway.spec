@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.2.6
+Version: 2.3.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -72,6 +72,16 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Wed Nov  5 2025 Kun Lai <laikun@linux.alibaba.com> - 2.3.0-1
+- Fix TDX attestation failure: use canonical JSON serialization to ensure REPORT_DATA hash consistency in rats-cert
+- Enable TCP keepalive (10s idle, 10s interval, 3 probes) for OHTTP tunnel connections to improve connection stability
+- Set TCP_NODELAY on all TCP listeners to reduce latency for real-time services
+- Add support for clients using "no_ra" when server requires attestation — returns key config with `attestation_info: None` instead of rejecting
+- Cache OHTTP passport attestation responses within refresh interval to reduce AS load and improve performance
+- Enable gzip/brotli/zstd compression for OHTTP responses (except ohttp-chunked-res) to reduce bandwidth usage
+- Log OHTTP forwarding errors to stdout for improved operational visibility
+
+
 * Mon Sep 29 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.6-1
 - Standardize error handling with machine-readable codes and precise HTTP status mapping
 - Honor AS token JWT exp and certificate validity in credential caching TTL calculation
@@ -79,6 +89,7 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 - Use full URL as OHttpClient cache key for per-path service isolation
 - Introduce test load balancer with path rewriting for integration testing
 - Unify middleware order in OHTTP server for consistent processing
+
 
 * Wed Sep 17 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.5-1
 - Update to version v2.2.5
@@ -104,6 +115,7 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 - cert_verifier: Remove unnecessary spawn_blocking() call
 - run-test.sh: Adjust script to skip tng-wasm test reports
 - Fix netlink warning on newer kernels in testing environment
+
 
 * Thu Jul  3 2025 Kun Lai <laikun@linux.alibaba.com> - 2.2.4-1
 - ingress/socks5: add dst_filters option for filtering destination domains
