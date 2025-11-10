@@ -15,7 +15,10 @@ use tower_http::{
 };
 
 use crate::{
-    config::egress::{CorsConfig, OHttpArgs},
+    config::{
+        egress::{CorsConfig, OHttpArgs},
+        ra::RaArgs,
+    },
     error::TngError,
     tunnel::ohttp::protocol::{
         header::{OhttpApi, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
@@ -23,9 +26,7 @@ use crate::{
     },
 };
 use crate::{
-    tunnel::egress::protocol::ohttp::security::{
-        keystore::ServerKeyStore, state::OhttpServerState,
-    },
+    tunnel::egress::protocol::ohttp::security::{api::OhttpServerApi, context::TngStreamContext},
     HTTP_RESPONSE_SERVER_HEADER,
 };
 
@@ -34,23 +35,21 @@ use crate::{
 /// This struct represents a TNG OHTTP server instance that handles the required TNG server interfaces
 #[derive(Clone)]
 pub struct OhttpServer {
-    /// The key store instance used for cryptographic operations
-    key_store: Arc<ServerKeyStore>,
+    /// The API handler instance used for for processing TNG server interfaces
+    api: Arc<OhttpServerApi>,
     /// The configuration for the CORS
     cors_layer: Option<CorsLayer>,
 }
 
 impl OhttpServer {
     /// Create a new TNG HTTP server instance
-    pub fn new(key_store: ServerKeyStore, ohttp_args: OHttpArgs) -> Result<Self> {
-        let cors_layer = match &ohttp_args.cors {
-            Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
-            None => None,
-        };
-
+    pub fn new(ra_args: RaArgs, ohttp_args: OHttpArgs) -> Result<Self> {
         Ok(Self {
-            key_store: Arc::new(key_store),
-            cors_layer,
+            api: Arc::new(OhttpServerApi::new(ra_args)?),
+            cors_layer: match &ohttp_args.cors {
+                Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
+                None => None,
+            },
         })
     }
 
@@ -125,10 +124,10 @@ impl OhttpServer {
     }
 
     /// Create the TNG HTTP routes with the server instance
-    pub fn create_routes(&self) -> Router<OhttpServerState> {
+    pub fn create_routes(&self) -> Router<TngStreamContext> {
         let router = Router::new().fallback({
-            let key_store = Arc::clone(&self.key_store);
-            move |State(state): State<OhttpServerState>, req| handler(state, key_store.clone(), req)
+            let api = Arc::clone(&self.api);
+            move |State(state): State<TngStreamContext>, req| handler(state, api.clone(), req)
         });
 
         let router = if let Some(cors) = &self.cors_layer {
@@ -150,35 +149,34 @@ impl OhttpServer {
 }
 
 async fn handler(
-    state: OhttpServerState,
-    key_store: Arc<ServerKeyStore>,
+    context: TngStreamContext,
+    api: Arc<OhttpServerApi>,
     request: Request,
 ) -> Result<Response, TngError> {
     let ohttp_api = parse_ohttp_api_from_request(&request)?;
 
     match ohttp_api {
         OhttpApi::KeyConfig => {
-            key_store
-                .get_hpke_configuration(
-                    <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
-                        .await
-                        .map_err(TngError::InvalidRequestPayload)?,
-                    state,
-                )
-                .await
+            api.get_hpke_configuration(
+                <Option<Json<KeyConfigRequest>> as FromRequest<()>>::from_request(request, &())
+                    .await
+                    .map_err(TngError::InvalidRequestPayload)?,
+                context,
+            )
+            .await
         }
-        OhttpApi::Tunnel => key_store
-            .process_encrypted_request(request, state)
+        OhttpApi::Tunnel => api
+            .process_encrypted_request(request, context)
             .await
             .map_err(|error| {
                 tracing::error!(?error, "Failed to process received OHTTP request");
                 error
             }),
-        OhttpApi::BackgroundCheckChallenge => key_store
+        OhttpApi::BackgroundCheckChallenge => api
             .get_attestation_challenge()
             .await
             .map(IntoResponse::into_response),
-        OhttpApi::BackgroundCheckVerify => key_store
+        OhttpApi::BackgroundCheckVerify => api
             .verify_attestation(
                 <Json<AttestationVerifyRequest> as FromRequest<()>>::from_request(request, &())
                     .await

@@ -7,16 +7,14 @@ pub mod server;
 use crate::{
     config::{egress::OHttpArgs, ra::RaArgs},
     tunnel::egress::{
-        protocol::ohttp::security::{
-            keystore::ServerKeyStore, server::OhttpServer, state::OhttpServerState,
-        },
+        protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
         stream_manager::trusted::StreamType,
     },
     AttestationResult, CommonStreamTrait, TokioRuntime,
 };
 
-mod keystore;
-mod state;
+mod api;
+mod context;
 
 pub struct OHttpSecurityLayer {
     runtime: TokioRuntime,
@@ -29,11 +27,9 @@ impl OHttpSecurityLayer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let key_store = ServerKeyStore::new(ra_args)?;
-
         Ok(Self {
             runtime,
-            ohttp_server: OhttpServer::new(key_store, ohttp_args)?,
+            ohttp_server: OhttpServer::new(ra_args, ohttp_args)?,
         })
     }
     pub async fn handle_stream(
@@ -45,7 +41,7 @@ impl OHttpSecurityLayer {
             let app = self
                 .ohttp_server
                 .create_routes()
-                .with_state(OhttpServerState {
+                .with_state(TngStreamContext {
                     runtime: self.runtime.clone(),
                     sender,
                 });

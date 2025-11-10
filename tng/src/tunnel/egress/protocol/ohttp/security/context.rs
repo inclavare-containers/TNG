@@ -6,12 +6,12 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct OhttpServerState {
+pub struct TngStreamContext {
     pub runtime: TokioRuntime,
     pub sender: tokio::sync::mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>,
 }
 
-impl OhttpServerState {
+impl TngStreamContext {
     pub async fn forward_request<B>(
         &self,
         req: http::Request<B>,
