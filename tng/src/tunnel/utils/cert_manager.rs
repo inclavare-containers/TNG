@@ -180,7 +180,7 @@ mod tests {
             ));
 
             match &mut cert_manager.cert {
-                MaybeCached::Periodically {
+                MaybeCached::UpdatePeriodically {
                     interval,
                     ref mut latest,
                     refresh_task,
@@ -203,7 +203,7 @@ mod tests {
                         }
                     };
                 }
-                MaybeCached::Always { .. } => {
+                MaybeCached::NoCache { .. } => {
                     bail!("wrong strategy")
                 }
             }
@@ -229,10 +229,10 @@ mod tests {
             let old_cert = cert_manager.get_latest_cert().await?;
 
             match &cert_manager.cert {
-                MaybeCached::Periodically { .. } => {
+                MaybeCached::UpdatePeriodically { .. } => {
                     bail!("wrong strategy")
                 }
-                MaybeCached::Always { .. } => {}
+                MaybeCached::NoCache { .. } => {}
             }
 
             let new_cert = cert_manager.get_latest_cert().await?;

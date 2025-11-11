@@ -79,7 +79,7 @@ pub enum MaybeCached<
     T: std::marker::Send + std::marker::Sync + 'static,
     E: Into<anyhow::Error> + std::marker::Send + std::marker::Sync + 'static,
 > {
-    Periodically {
+    UpdatePeriodically {
         #[allow(unused)]
         interval: u64,
         latest: (
@@ -96,7 +96,7 @@ pub enum MaybeCached<
                 + 'static,
         >,
     },
-    Always {
+    NoCache {
         f: Arc<
             dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
                 + Send
@@ -192,21 +192,21 @@ impl<
                     RefreshTask { join_handle }
                 };
 
-                Ok(MaybeCached::Periodically {
+                Ok(MaybeCached::UpdatePeriodically {
                     interval,
                     latest,
                     refresh_task,
                     f,
                 })
             }
-            RefreshStrategy::Always => Ok(MaybeCached::Always { f: Arc::new(f) }),
+            RefreshStrategy::Always => Ok(MaybeCached::NoCache { f: Arc::new(f) }),
         }
     }
 
     pub async fn get_latest(&self) -> Result<Arc<T>, E> {
         match self {
-            MaybeCached::Periodically { latest, .. } => Ok(latest.1.borrow().clone()),
-            MaybeCached::Always { f } => Ok(Arc::new(f().await?.0)),
+            MaybeCached::UpdatePeriodically { latest, .. } => Ok(latest.1.borrow().clone()),
+            MaybeCached::NoCache { f } => Ok(Arc::new(f().await?.0)),
         }
     }
 }
