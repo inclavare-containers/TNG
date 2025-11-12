@@ -14,14 +14,14 @@ use rats_cert::tee::{AttesterPipeline, GenericAttester as _, ReportData};
 
 use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
-use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
+use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
 use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 use crate::tunnel::ohttp::protocol::{
     AttestationRequest, AttestationResultJwt, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse,
     ServerAttestationInfo,
 };
-use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy};
+use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached};
 
 const DEFAULT_KEY_CONFIG_EXPIRE_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -106,19 +106,7 @@ impl OhttpServerApi {
             .encode(KeyConfig::encode_list(&key_config_list).map_err(TngError::from)?);
 
         let (expire_time, expire_timestamp) = {
-            // Set expiration timestamp accroding to the attestation configuration (aa_args.refresh_interval). Or we will use the default value.
-            let refresh_strategy = match &ra_args {
-                RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
-                    AttestArgs::Passport { aa_args, .. }
-                    | AttestArgs::BackgroundCheck { aa_args } => aa_args.refresh_strategy(),
-                },
-                RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Always,
-            };
-
-            let expire_duration_second = match refresh_strategy {
-                RefreshStrategy::Periodically { interval } => interval,
-                RefreshStrategy::Always => DEFAULT_KEY_CONFIG_EXPIRE_SECOND,
-            };
+            let expire_duration_second = DEFAULT_KEY_CONFIG_EXPIRE_SECOND;
 
             let expire_time = std::time::SystemTime::now()
                 .checked_add(Duration::from_secs(expire_duration_second))

@@ -17,7 +17,7 @@ use tower_http::{
 use crate::{
     config::{
         egress::{CorsConfig, OHttpArgs},
-        ra::RaArgs,
+        ra::{AttestArgs, RaArgs},
     },
     error::TngError,
     tunnel::ohttp::protocol::{
@@ -44,6 +44,16 @@ pub struct OhttpServer {
 impl OhttpServer {
     /// Create a new TNG HTTP server instance
     pub fn new(ra_args: RaArgs, ohttp_args: OHttpArgs) -> Result<Self> {
+        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args })
+        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args }, ..) = &ra_args
+        {
+            if aa_args.refresh_interval.is_some() {
+                tracing::warn!(
+                    "`refresh_interval` in your configuration is set but will be ignored for background check"
+                );
+            }
+        }
+
         Ok(Self {
             api: Arc::new(OhttpServerApi::new(ra_args)?),
             cors_layer: match &ohttp_args.cors {

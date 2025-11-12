@@ -461,82 +461,33 @@ Example:
 }
 ```
 
-## Attester
+## Remote Attestation
 
-Parameters required to configure the TNG endpoint as a remote attestation Attester role.
+Remote attestation is one of the core security mechanisms of trusted computing, used to verify the runtime integrity and trusted state of remote systems (such as virtual machines, containers, or edge devices). Through cryptographic means, a system (**Attester**) can generate "evidence" describing its hardware and software configuration, and another system (**Verifier**) can verify this evidence to ensure it comes from a legitimate, untampered trusted execution environment (TEE, such as Intel TDX, AMD SEV-SNP, HYGON CSV, etc.).
 
-> Currently, only supports obtaining evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent).
+In the TNG architecture, we have integrated a standardized remote attestation process that supports flexibly configuring TNG endpoints as either **Attester** or **Verifier** roles, thus achieving bidirectional trusted authentication and establishing secure communication links.
 
-### Field Descriptions
+### Attester: The Initiator Proving Its Trustworthiness
 
-- **`aa_addr`** (string): Specifies the address of the Attestation Agent (AA).
-- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining evidence from the Attestation Agent and updating its own X.509 certificate (in seconds). If set to 0, it requests the latest evidence each time a secure session is established.
+**Attester** refers to the party being verified, responsible for collecting trusted state information of the local platform and generating cryptographic evidence. This evidence contains measurements, signatures, timestamps, and attestation materials from the TEE (such as reports and certificates), which can be used to prove its integrity and security to remote parties.
 
-Example:
+In TNG, you can configure any endpoint as an Attester role, enabling it to respond to remote verification requests and provide trusted evidence.
 
-```json
-            "attest": {
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-            }
-```
+> [!NOTE]
+> **Current Implementation Notes**:  
+> Currently, TNG only supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent).  
+> The Attestation Agent runs in a protected guest environment, responsible for interacting with the underlying TEE and encapsulating standardized attestation data, ensuring the security and portability of the attestation process.
 
-```json
-            "attest": {
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-                "refresh_interval": 600
-            }
-```
+### Verifier: The Decision Maker Verifying Peer Trustworthiness
 
-## Verifier
+**Verifier** is the verifying party, responsible for receiving Evidence from the Attester and performing integrity verification, policy comparison, and trust assessment. Only when the evidence complies with preset trust policies (such as specific PCR values, firmware versions, or signing keys) will the Verifier recognize the Attester as trusted and allow subsequent security operations (such as key release or connection establishment).
 
-Parameters required to configure the TNG endpoint as a remote attestation Verifier role.
+In the TNG architecture, the Verifier can be part of the control plane or service gateway, actively or passively verifying the identity and trust level of accessing nodes.
 
-> Currently, only supports consuming and verifying evidence received from the peer through the [Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service).
+> **Current Implementation Notes**:  
+> The current Verifier functionality of TNG relies on the [Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service) to consume and verify received Evidence.  
+> The Attestation Service provides a unified interface for parsing and verifying attestation data of different TEE types, and supports integration with the Trustee Server to achieve centralized policy management and root of trust distribution.
 
-### Field Descriptions
-
-- **`as_addr`** (string): Specifies the URL of the Attestation Service (AS) to connect to. Supports connecting to the Attestation Service with both gRPC protocol and Restful HTTP protocol. By default, it is parsed as a Restful HTTP URL, which can be controlled by the `as_is_grpc` option.
-- **`as_is_grpc`** (boolean, optional, default is false): If set to `true`, interprets `as_addr` as a gRPC URL.
-- **`policy_ids`** (array [string]): Specifies the list of policy IDs to use.
-- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the AS token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
-
-
-Example: Connecting to a Restful HTTP type AS service
-
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
-            }
-```
-
-Example: Connecting to a gRPC type AS service
-
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:5000/",
-                "as_is_grpc": true,
-                "policy_ids": [
-                    "default"
-                ]
-            }
-```
-
-Example: Specifying Root Certificate Paths for AS Token Verification
-
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ],
-                "trusted_certs_paths": [
-                    "/tmp/as-ca.pem"
-                ]
-            }
-```
 
 ## Attester and Verifier Combinations and Bidirectional Remote Attestation
 
@@ -549,6 +500,7 @@ By configuring different combinations of `attest` and `verify` properties at bot
 | (Reverse) Unidirectional | `attest` | `verify` | The TNG server is in a normal environment, and the TNG client is in a TEE. In this case, only the client certificate is verified. During the TLS handshake, the TNG server will use a fixed P256 X509 self-signed certificate embedded in the TNG code as its certificate. |
 | No TEE (For Debugging Purposes Only) | `no_ra` | `no_ra` | Both the TNG server and TNG client are in non-TEE environments. In this case, a normal TLS session is established between the TNG client and TNG server through unidirectional verification. |
 
+## Remote Attestation Models
 
 ### Background Check Model
 
@@ -563,9 +515,23 @@ In the Background Check model, the [Attest](#attest) configuration should includ
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
 - **`aa_addr`** (string): Address of the Attestation Agent
-- **`refresh_interval`** (integer, optional): Evidence refresh interval (seconds)
+- **`refresh_interval`** (int, optional, default value is 600): Specifies the cache time for obtaining evidence from the Attestation Agent (in seconds). If set to 0, it requests the latest evidence each time a secure session is established. In Background Check mode, this option only takes effect when communicating using the rats-tls protocol, affecting the frequency of updating its own X.509 certificate. This option has no effect when communicating using the OHTTP protocol.
 
 Example:
+
+```json
+"attest": {
+    // When model is not specified, Background Check mode is used by default
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+}
+```
+
+```json
+"attest": {
+    "model": "background_check",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+}
+```
 
 ```json
 "attest": {
@@ -583,17 +549,44 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 - **`as_addr`** (string): Address of the Attestation Service
 - **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
 - **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
+- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
 
-Example:
+Example: Connecting to a Restful HTTP type AS service
+
+```json
+"verify": {
+    // When model is not specified, Background Check mode is used by default
+    "as_addr": "http://127.0.0.1:8080/",
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+Example: Connecting to a gRPC type AS service
+
+```json
+"verify": {
+    "model": "background_check",
+    "as_addr": "http://127.0.0.1:5000/",
+    "as_is_grpc": true,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+Example: Specifying Root Certificate Paths for Attestation Token Verification
 
 ```json
 "verify": {
     "model": "background_check",
     "as_addr": "http://127.0.0.1:8080/",
-    "as_is_grpc": false,
     "policy_ids": [
         "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
     ]
 }
 ```
@@ -610,11 +603,10 @@ In the Passport model, the [Attest](#attest) configuration should include the fo
 
 - **`model`** (string): Set to "passport" to enable the Passport model
 - **`aa_addr`** (string): Address of the Attestation Agent
-- **`refresh_interval`** (integer, optional): Evidence refresh interval (seconds)
+- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
 - **`as_addr`** (string): Address of the Attestation Service
 - **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
 - **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
 
 Example:
 
@@ -637,7 +629,7 @@ In the Passport model, the [Verify](#verify) configuration should include the fo
 
 - **`model`** (string): Set to "passport" to enable the Passport model
 - **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional): List of trusted certificate paths
+- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
 
 Example:
 

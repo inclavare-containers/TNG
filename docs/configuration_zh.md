@@ -456,79 +456,34 @@ flowchart TD
 }
 ```
 
-## Attester
+## 远程证明
 
-将TNG端点配置为远程证明Attester角色所需的相关参数。
+远程证明是可信计算的核心安全机制之一，用于验证远程系统（如虚拟机、容器或边缘设备）的运行时完整性与可信状态。通过密码学手段，一个系统（**Attester**）可以生成描述其软硬件配置的“证据”（Evidence），另一个系统（**Verifier**）则可对该证据进行验证，确保其来自合法、未被篡改的可信执行环境（TEE，如 Intel TDX、AMD SEV-SNP、HYGON CSV 等）。
 
-> 目前只支持通过[Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent)获取evidence。
+在 TNG 架构中，我们集成了标准化的远程证明流程，支持将 TNG 端点灵活配置为 **Attester** 或 **Verifier** 角色，从而实现双向可信认证与安全通信链路的建立。
 
-### 字段说明
-- **`aa_addr`** (string)：指定Attestation Agent (AA) 的地址。
-- **`refresh_interval`** (int，可选，默认值为600)：指定从Attestation Agent获取证明材料（Evidence）并更新自身X.509证书的频率（单位为秒）。如果指定为0，则在每次安全会话建立时都请求获取最新的Evidence。
 
-示例：
+### Attester：证明自身可信性的发起方
 
-```json
-            "attest": {
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-            }
-```
+**Attester** 是指被验证的一方，负责收集本地平台的可信状态信息，并生成加密证据（Evidence）。该证据包含度量值（measurements）、签名、时间戳以及来自 TEE 的证明材料（如报告、证书等），可用于向远端证明自身的完整性和安全性。
 
-```json
-            "attest": {
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-                "refresh_interval": 600
-            }
-```
+在 TNG 中，您可以将任一端点配置为 Attester 角色，使其能够响应远程验证请求并提供可信证据。
 
-## Verifier
+> [!NOTE]
+> **当前实现说明**：  
+> 目前 TNG 仅支持通过 [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent) 获取 Evidence。  
+> Attestation Agent 运行在受保护的 guest 环境中，负责与底层 TEE 交互并封装标准化的证明数据，确保取证过程的安全性与可移植性。
 
-将TNG端点配置为远程证明Verifier角色所需的相关参数。
+## Verifier：验证对端可信性的决策方
 
-> 目前只支持通过[Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service)消费和验证对端发来的evidence。
+**Verifier** 是验证的一方，负责接收来自 Attester 的 Evidence，并对其进行完整性校验、策略比对和信任评估。只有当证据符合预设的信任策略（如特定的 PCR 值、固件版本或签名密钥）时，Verifier 才会认定该 Attester 是可信的，并允许后续的安全操作（如密钥释放、连接建立等）。
 
-### 字段说明
-- **`as_addr`** (string)：指定要连接到的Attestation Service (AS) 的URL。支持连接到以gRPC协议和Restful HTTP两种协议类型的Attestation Service。默认将其解析为Restful HTTP的URL，可通过`as_is_grpc`选项控制。
-- **`as_is_grpc`** (boolean, 可选，默认为false)：若设置为`true`，这将`as_addr`解释为gRPC URL。
-- **`policy_ids`** (array [string])：指定要使用的policy ID列表。
-- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证AS token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
+在 TNG 架构中，Verifier 可作为控制平面或服务网关的一部分，主动或被动地验证接入节点的身份与可信等级。
 
-示例：连接到Restful HTTP类型的AS服务
+> **当前实现说明**：  
+> 当前 TNG 的 Verifier 功能依赖于 [Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service) 来消费和验证接收到的 Evidence。  
+> Attestation Service 提供了统一的接口用于解析、校验不同 TEE 类型的证明数据，并支持与 Trustee Server 集成以实现集中式策略管理与信任根分发。
 
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
-            }
-```
-
-示例：连接到gRPC类型的AS服务
-
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:5000/",
-                "as_is_grpc": true,
-                "policy_ids": [
-                    "default"
-                ]
-            }
-```
-
-示例：指定验证AS token的根证书路径
-
-```json
-            "verify": {
-                "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ],
-                "trusted_certs_paths": [
-                    "/tmp/as-ca.pem"
-                ]
-            }
-```
 
 ## Attester和Verifier的组合与双向远程证明
 
@@ -541,6 +496,7 @@ flowchart TD
 |（逆）单向|`attest`|`verify`|tng server在普通环境，tng client在TEE中。此时等于只验证client证书，在tls握手中，tng server会用tng代码中内嵌的一个固定的P256 X509自签名证书来作为自己的证书|
 |无TEE（仅作调试用途）|`no_ra`|`no_ra`|tng server和tng client都在非TEE环境中，此时tng client和tng server之间通过单向验证建立普通的TLS会话|
 
+## 远程证明模式
 
 ### Background Check模式
 
@@ -558,9 +514,23 @@ flowchart TD
 
 - **`model`** (string，可选): 设置为"background_check"以启用Background Check模式
 - **`aa_addr`** (string): Attestation Agent的地址
-- **`refresh_interval`** (integer, 可选): 证明刷新间隔（秒）
+- **`refresh_interval`** (int，可选，默认值为600)：指定从Attestation Agent获取证明材料（Evidence）的缓存时间（单位为秒）。如果指定为0，则在每次安全会话建立时都请求获取最新的Evidence。在Background Check模式下，该选项只对使用rats-tls协议通信时起作用，影响更新自身X.509证书的频率。在使用OHTTP协议通信时该选项不起作用。
 
 示例：
+
+```json
+"attest": {
+    // 不指定model时，默认使用Background Check模式
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+}
+```
+
+```json
+"attest": {
+    "model": "background_check",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+}
+```
 
 ```json
 "attest": {
@@ -578,17 +548,45 @@ flowchart TD
 - **`as_addr`** (string): Attestation Service的地址
 - **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
 - **`policy_ids`** (array [string]): 策略ID列表
-- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
+- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
-示例：
+
+示例：连接到Restful HTTP类型的AS服务
+
+```json
+"verify": {
+    // 不指定model时，默认使用Background Check模式
+    "as_addr": "http://127.0.0.1:8080/",
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+示例：连接到gRPC类型的AS服务
+
+```json
+"verify": {
+    "model": "background_check",
+    "as_addr": "http://127.0.0.1:5000/",
+    "as_is_grpc": true,
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+示例：指定验证Attestation Token的根证书路径
 
 ```json
 "verify": {
     "model": "background_check",
     "as_addr": "http://127.0.0.1:8080/",
-    "as_is_grpc": false,
     "policy_ids": [
         "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
     ]
 }
 ```
@@ -608,11 +606,10 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 
 - **`model`** (string): 设置为"passport"以启用Passport模式
 - **`aa_addr`** (string): Attestation Agent的地址
-- **`refresh_interval`** (integer, 可选): 证明刷新间隔（秒）
+- **`refresh_interval`** (int，可选，默认值为600)：指定从Attestation Agent和Attestation Service获取证明凭据（Attestation Token）的频率（单位为秒）。如果指定为0，则在每次安全会话建立时都请求获取最新的Attestation Token。在Passport模式下，如果使用rats-tls协议通信，该选项影响更新自身X.509证书的频率，如果使用OHTTP协议通信，则该选项影响内部Attestation Token缓存更新频率，不影响OHTTP密钥轮换频率。
 - **`as_addr`** (string): Attestation Service的地址
 - **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
 - **`policy_ids`** (array [string]): 策略ID列表
-- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
 
 示例：
 
@@ -635,7 +632,7 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 
 - **`model`** (string): 设置为"passport"以启用Passport模式
 - **`policy_ids`** (array [string]): 策略ID列表
-- **`trusted_certs_paths`** (array [string], 可选): 受信任的证书路径列表
+- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
 示例：
 
