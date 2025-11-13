@@ -4,7 +4,7 @@ help:
 
 .PHONE: install-test-deps
 install-test-deps:
-	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset
+	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset jq
 
 .PHONE: run-test
 run-test: install-test-deps

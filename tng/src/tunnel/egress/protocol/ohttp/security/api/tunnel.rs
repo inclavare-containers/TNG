@@ -17,8 +17,9 @@ use tokio_util::io::ReaderStream;
 
 use crate::config::ra::{AttestationServiceArgs, RaArgs, VerifyArgs};
 use crate::error::TngError;
-use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
+use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
 use crate::tunnel::ohttp::protocol::header::{
     OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
 };
@@ -94,8 +95,13 @@ impl OhttpServerApi {
             .await
             .map_err(TngError::MetadataValidateError)?;
 
+        // Check key id
+        let header_decoded = ohttp::Server::decode_header(reader.compat()).await?;
+        let key_info = self.key_manager.get_key(header_decoded.key_id()).await?;
+
         // Decrypt the ohttp message
-        let plain_text = self.ohttp.decapsulate_stream(reader.compat());
+        let plain_text = header_decoded.into_server_request(key_info.key_config);
+
         // Decode the bhttp binary message
         let decode_result = BhttpDecoder::new(plain_text).decode_message().await?;
         let server_response_encapsulator = decode_result.reader_ref().response_encapsulator()?;

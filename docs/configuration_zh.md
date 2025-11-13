@@ -744,6 +744,7 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
     - **`expose_headers`** (array [string], 可选，默认为空)：浏览器被允许从响应中访问的头部列表。使用`["*"]`允许所有头。
     
     - **`allow_credentials`** (boolean, 可选，默认为false)：是否允许在跨域请求中包含凭证（cookies、authorization headers等）。
+- **`key`** (KeyArgs，可选)：OHTTP服务端的密钥配置。请阅读后续章节了解具体配置字段。
 
 > [!NOTE]
 > 关于正则表达式的语法，请参考 <a href="#regex">正则表达式</a> 章节中的说明
@@ -785,6 +786,60 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
     ]
 }
 ```
+
+
+#### OHTTP 密钥配置：`self_generated` 模式
+
+TNG 支持多种 OHTTP 密钥管理策略。当未通过外部机制提供密钥时，TNG 默认采用 **`self_generated` 模式**，即每个 TNG 实例自主生成 HPKE 密钥对，并自动进行轮换。
+
+在此模式下，TNG 会：
+- 在启动时自动生成 X25519 密钥对
+- 定期生成新密钥并保留旧密钥一段时间（用于处理延迟请求）
+- 确保至少有一个活跃密钥可用于解密客户端请求
+
+
+如果您希望显式配置，只需在 `ohttp` 配置中指定 `key.source = "self_generated"`：
+
+```json
+"ohttp": {
+    "key": {
+        "source": "self_generated",
+        "rotation_interval": 300
+    }
+}
+```
+
+##### 字段说明
+
+- **`key`** (KeyConfig)：OHTTP 密钥管理配置。
+    - **`source`** (`string`)：密钥来源类型。设为 `"self_generated"` 表示启用自动密钥生成功能。
+    - **`rotation_interval`** (`integer`, 可选, 默认 `300`)：密钥轮换周期（单位：秒）。
+
+示例配置：
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 8080
+                }
+            },
+            "ohttp": {
+                "key": {
+                    "source": "self_generated",
+                    "rotation_interval": 300
+                }
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
 
 ## Control Interface
 

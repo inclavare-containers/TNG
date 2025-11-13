@@ -96,6 +96,12 @@ pub enum TngError {
 
     #[error("Invalid x-tng-ohttp-api value")]
     InvalidOhttpApiHeaderValue,
+
+    #[error("The key does not exist: {key_id}")]
+    ServerKeyConfigNotFound { key_id: u8 },
+
+    #[error("The server has no active key")]
+    NoActiveKey,
 }
 
 /// Error response structure
@@ -168,6 +174,10 @@ impl IntoResponse for TngError {
             | TngError::ServerHpkeConfigurationSelectFailed(..)
             | TngError::GenServerHpkeConfigurationFailed(..)
             | TngError::CreateOHttpClientFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+
+            // See the RFC 9458 section 6.4. Key Management
+            TngError::ServerKeyConfigNotFound { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            TngError::NoActiveKey => StatusCode::UNPROCESSABLE_ENTITY,
         };
 
         (

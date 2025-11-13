@@ -15,7 +15,7 @@ impl TngStreamContext {
     pub async fn forward_request<B>(
         &self,
         req: http::Request<B>,
-        attestation_request: Option<AttestationResult>,
+        attestation_result: Option<AttestationResult>,
     ) -> Result<axum::response::Response, TngError>
     where
         B: http_body::Body + 'static,
@@ -28,7 +28,7 @@ impl TngStreamContext {
         let (s1, s2) = tokio::io::duplex(4096);
 
         self.sender
-            .send((StreamType::SecuredStream(Box::new(s2)), attestation_request))
+            .send((StreamType::SecuredStream(Box::new(s2)), attestation_result))
             .map_err(|_| TngError::ConnectUpstreamFailed)?;
 
         // TODO: support send both http1 and http2 payload

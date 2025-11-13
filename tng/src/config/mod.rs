@@ -114,6 +114,7 @@ mod tests {
                     ohttp: Some(egress::OHttpArgs {
                         allow_non_tng_traffic_regexes: None,
                         cors: None,
+                        key: Default::default(),
                     }),
                     ra_args: RaArgsUnchecked {
                         no_ra: false,

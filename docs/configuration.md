@@ -742,6 +742,8 @@ Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you c
     
     - **`allow_credentials`** (boolean, optional, default is false): Whether to allow credentials (cookies, authorization headers, etc.) to be included in cross-origin requests.
 
+- **`key`** (KeyArgs, optional): Key configuration for the OHTTP server. Refer to the following sections for detailed configuration fields.
+
 > [!NOTE]
 > For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
 
@@ -774,6 +776,57 @@ Example:
                     "http_path": "/api/builtin/.*"
                 }
             ],
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+#### OHTTP Key Configuration: `self_generated` Mode
+
+TNG supports multiple OHTTP key management strategies. When keys are not provided via external mechanisms, TNG defaults to the **`self_generated` mode**, where each TNG instance independently generates its own HPKE key pair and automatically rotates it.
+
+In this mode, TNG will:
+- Automatically generate an X25519 key pair at startup
+- Periodically generate new keys while retaining old keys for a certain period (to handle delayed requests)
+- Ensure that at least one active key is always available to decrypt client requests
+
+If you wish to configure this explicitly, simply set `key.source = "self_generated"` in the `ohttp` configuration:
+
+```json
+"ohttp": {
+    "key": {
+        "source": "self_generated",
+        "rotation_interval": 300
+    }
+}
+```
+
+##### Field Descriptions
+
+- **`key`** (KeyConfig): Configuration for OHTTP key management.
+    - **`source`** (`string`): The source type of the key. Set to `"self_generated"` to enable automatic key generation.
+    - **`rotation_interval`** (`integer`, optional, default `300`): Key rotation interval in seconds.
+
+Example configuration:
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 8080
+                }
+            },
+            "ohttp": {
+                "key": {
+                    "source": "self_generated",
+                    "rotation_interval": 300
+                }
+            },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }

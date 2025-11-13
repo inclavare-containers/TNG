@@ -24,6 +24,7 @@ use crate::{
         header::{OhttpApi, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
         AttestationVerifyRequest, KeyConfigRequest,
     },
+    TokioRuntime,
 };
 use crate::{
     tunnel::egress::protocol::ohttp::security::{api::OhttpServerApi, context::TngStreamContext},
@@ -43,7 +44,11 @@ pub struct OhttpServer {
 
 impl OhttpServer {
     /// Create a new TNG HTTP server instance
-    pub fn new(ra_args: RaArgs, ohttp_args: OHttpArgs) -> Result<Self> {
+    pub async fn new(
+        ra_args: RaArgs,
+        ohttp_args: OHttpArgs,
+        runtime: TokioRuntime,
+    ) -> Result<Self> {
         if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args })
         | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args }, ..) = &ra_args
         {
@@ -55,7 +60,7 @@ impl OhttpServer {
         }
 
         Ok(Self {
-            api: Arc::new(OhttpServerApi::new(ra_args)?),
+            api: Arc::new(OhttpServerApi::new(ra_args, ohttp_args.key, runtime).await?),
             cors_layer: match &ohttp_args.cors {
                 Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
                 None => None,

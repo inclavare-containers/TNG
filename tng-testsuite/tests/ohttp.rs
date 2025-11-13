@@ -654,12 +654,158 @@ async fn test_server_attest_passport_cache() -> Result<()> {
             script: r#"
                 # Reusable curl command
                 call_api() {
-                curl -s -X POST http://192.168.1.1:30001 \
-                    -H "x-tng-ohttp-api: /tng/key-config" \
-                    -H "Content-Type: application/json" \
-                    -H "Accept: */*" \
-                    -H "User-Agent: tng/2.2.6" \
-                    -d '{"attestation_request":{"model":"passport"}}'
+                    curl -s -X POST http://192.168.1.1:30001 \
+                        -H "x-tng-ohttp-api: /tng/key-config" \
+                        -H "Content-Type: application/json" \
+                        -H "Accept: */*" \
+                        -H "User-Agent: tng/2.2.6" \
+                        -d '{"attestation_request":{"model":"passport"}}'
+                }
+
+                echo "Request 1..."
+                r1=$(call_api) || { echo "Error: Request 1 failed"; exit 1; }
+
+                echo "Request 2..."
+                r2=$(call_api) || { echo "Error: Request 2 failed"; exit 1; }
+
+                [ "$r1" = "$r2" ] && echo "PASS: First two responses match" || { echo "FAIL: First two differ"; exit 1; }
+
+                echo "Waiting 5s..."
+                sleep 5
+
+                echo "Request 3..."
+                r3=$(call_api) || { echo "Error: Request 3 failed"; exit 1; }
+
+                [ "$r3" != "$r1" ] && echo "PASS: Third response differs" || { echo "FAIL: Third response is same"; exit 1; }
+
+                echo "SUCCESS: All tests passed"
+            "#
+            .to_owned(),
+            stop_test_on_finish: true,
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_server_attest_passport_rotation_interval() -> Result<()> {
+    run_test(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {
+                            "key": {
+                                "source": "self_generated",
+                                "rotation_interval": 3
+                            }
+                        },
+                        "attest": {
+                            "model": "passport",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        ShellTask {
+            name: "check_key_rotation".to_owned(),
+            node_type: NodeType::Client,
+            script: r#"
+                # Reusable curl command
+                call_api() {
+                    curl -s -X POST http://192.168.1.1:30001 \
+                        -H "x-tng-ohttp-api: /tng/key-config" \
+                        -H "Content-Type: application/json" \
+                        -H "Accept: */*" \
+                        -H "User-Agent: tng/2.2.6" \
+                        -d '{"attestation_request":{"model":"passport"}}'
+                }
+
+                echo "Request 1..."
+                r1=$(call_api) || { echo "Error: Request 1 failed"; exit 1; }
+
+                echo "Request 2..."
+                r2=$(call_api) || { echo "Error: Request 2 failed"; exit 1; }
+
+                [ "$r1" = "$r2" ] && echo "PASS: First two responses match" || { echo "FAIL: First two differ"; exit 1; }
+
+                echo "Waiting 5s..."
+                sleep 5
+
+                echo "Request 3..."
+                r3=$(call_api) || { echo "Error: Request 3 failed"; exit 1; }
+
+                [ "$r3" != "$r1" ] && echo "PASS: Third response differs" || { echo "FAIL: Third response is same"; exit 1; }
+
+                echo "SUCCESS: All tests passed"
+            "#
+            .to_owned(),
+            stop_test_on_finish: true,
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
+    run_test(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {
+                            "key": {
+                                "source": "self_generated",
+                                "rotation_interval": 3
+                            }
+                        },
+                        "attest": {
+                            "model": "background_check",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+            "#,
+        ).boxed(),
+        ShellTask {
+            name: "check_key_rotation".to_owned(),
+            node_type: NodeType::Client,
+            script: r#"
+                # Reusable curl command
+                call_api() {
+                    curl -s -X POST http://192.168.1.1:30001 \
+                        -H "x-tng-ohttp-api: /tng/key-config" \
+                        -H "Content-Type: application/json" \
+                        -H "Accept: */*" \
+                        -H "User-Agent: tng/2.2.6" \
+                        -d '{"attestation_request":{"model":"background_check","challenge_token":"dummy token"}}' | jq '.hpke_key_config.encoded_key_config_list'
                 }
 
                 echo "Request 1..."

@@ -240,8 +240,6 @@ impl TngRuntime {
     }
 
     pub async fn serve_with_ready(mut self, ready: tokio::sync::oneshot::Sender<()>) -> Result<()> {
-        tracing::info!("Starting tng instance now");
-
         let for_cancel_safity = self.canceller.clone();
         defer! {
             // Cancel-Safity: exit tng in case of the future of this function is dropped

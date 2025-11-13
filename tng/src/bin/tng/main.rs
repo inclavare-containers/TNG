@@ -87,6 +87,7 @@ async fn main() {
 
                 tracing::debug!("TNG config: {config:#?}");
 
+                tracing::info!("Starting tng instance now");
                 TngRuntime::from_config_with_reload_handle(config, &reload_handle)
                     .await?
                     .serve()

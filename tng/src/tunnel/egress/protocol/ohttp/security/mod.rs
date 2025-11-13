@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use hyper_util::rt::TokioIo;
 use tower::Service;
 use tracing::Instrument;
-pub mod server;
 
 use crate::{
     config::{egress::OHttpArgs, ra::RaArgs},
@@ -14,7 +13,10 @@ use crate::{
 };
 
 mod api;
-mod context;
+pub mod context;
+#[allow(dead_code)]
+pub mod key_manager;
+pub mod server;
 
 pub struct OHttpSecurityLayer {
     runtime: TokioRuntime,
@@ -28,8 +30,8 @@ impl OHttpSecurityLayer {
         runtime: TokioRuntime,
     ) -> Result<Self> {
         Ok(Self {
-            runtime,
-            ohttp_server: OhttpServer::new(ra_args, ohttp_args)?,
+            runtime: runtime.clone(),
+            ohttp_server: OhttpServer::new(ra_args, ohttp_args, runtime).await?,
         })
     }
     pub async fn handle_stream(

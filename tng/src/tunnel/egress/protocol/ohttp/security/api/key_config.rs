@@ -1,12 +1,12 @@
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
+use itertools::Itertools;
 use ohttp::KeyConfig;
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
@@ -16,14 +16,13 @@ use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyManager, KeyStatus};
 use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 use crate::tunnel::ohttp::protocol::{
     AttestationRequest, AttestationResultJwt, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse,
     ServerAttestationInfo,
 };
 use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached};
-
-const DEFAULT_KEY_CONFIG_EXPIRE_SECOND: u64 = 5 * 60; // 5 minutes
 
 impl OhttpServerApi {
     /// Interface 1: Get HPKE Configuration
@@ -42,6 +41,7 @@ impl OhttpServerApi {
         payload: Option<Json<KeyConfigRequest>>,
         context: TngStreamContext,
     ) -> Result<Response, TngError> {
+        // Check if hit the cache
         match (self.ra_args.as_ref(), &payload) {
             // If the server is set to be a attester with passport mode, and the client is requesting a passport response, we cache it and return the cached response
             (
@@ -52,29 +52,32 @@ impl OhttpServerApi {
                 })),
             ) => self
                 .passport_cache
+                .read()
+                .await
                 .get_or_try_init(|| async {
                     let ra_args = self.ra_args.clone();
-                    let ohttp = self.ohttp.clone();
+                    let key_manager = Arc::clone(&self.key_manager);
                     let payload = Arc::new(payload);
 
                     let refresh_strategy = aa_args.refresh_strategy();
 
                     MaybeCached::new(context.runtime.clone(), refresh_strategy, move || {
                         Box::pin({
+                            tracing::info!("Regenerating passport response");
+
                             let ra_args = ra_args.clone();
-                            let ohttp = ohttp.clone();
+                            let key_manager = key_manager.clone();
                             let payload = payload.clone();
 
                             async move {
-                                let (response, expire_time) =
-                                    Self::get_hpke_configuration_internal(
-                                        &ra_args,
-                                        &ohttp,
-                                        payload.as_ref().clone(),
-                                    )
-                                    .await?;
+                                let response = Self::get_hpke_configuration_internal(
+                                    &ra_args,
+                                    key_manager.as_ref(),
+                                    payload.as_ref().clone(),
+                                )
+                                .await?;
 
-                                Ok((response, Expire::ExpireAt(expire_time)))
+                                Ok((response, Expire::NoExpire))
                             }
                         }) as Pin<Box<_>>
                     })
@@ -87,47 +90,48 @@ impl OhttpServerApi {
                     IntoResponse::into_response(Json(response))
                 }),
             // Otherwise, we generate a new response
-            _ => Self::get_hpke_configuration_internal(&self.ra_args, &self.ohttp, payload)
-                .await
-                .map(|(response, _): (KeyConfigResponse, _)| {
-                    IntoResponse::into_response(Json(response))
-                }),
+            _ => Self::get_hpke_configuration_internal(
+                &self.ra_args,
+                self.key_manager.as_ref(),
+                payload,
+            )
+            .await
+            .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response))),
         }
     }
 
     async fn get_hpke_configuration_internal(
         ra_args: &RaArgs,
-        ohttp: &ohttp::Server,
+        key_manager: &impl KeyManager,
         payload: Option<Json<KeyConfigRequest>>,
-    ) -> Result<(KeyConfigResponse, SystemTime), TngError> {
-        let key_config_list = vec![ohttp.config()];
+    ) -> Result<KeyConfigResponse, TngError> {
+        // Collect all active keys, and create encoded_key_config_list
+        let all_keys = key_manager.get_all_keys().await?;
+        let keys_expire_time = all_keys
+            .iter()
+            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
+            .map(|(_, key_info)| key_info.expire_at)
+            .min()
+            .ok_or_else(|| TngError::NoActiveKey)?;
+
+        let key_config_list = all_keys
+            .into_iter()
+            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
+            .sorted_by_key(|(key_id, _)| *key_id)
+            .map(|(_, key_info)| key_info.key_config)
+            .collect_vec();
 
         let encoded_key_config_list = BASE64_STANDARD
             .encode(KeyConfig::encode_list(&key_config_list).map_err(TngError::from)?);
 
-        let (expire_time, expire_timestamp) = {
-            let expire_duration_second = DEFAULT_KEY_CONFIG_EXPIRE_SECOND;
+        let keys_expire_timestamp = keys_expire_time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(TngError::from)?
+            .as_secs();
 
-            let expire_time = std::time::SystemTime::now()
-                .checked_add(Duration::from_secs(expire_duration_second))
-                .with_context(|| {
-                    format!(
-                    "the expire duration is too far in the future to be represented: {expire_duration_second}s"
-                )
-                })
-                .map_err(TngError::GenServerHpkeConfigurationFailed)?;
-
-            (
-                expire_time,
-                expire_time
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(TngError::from)?
-                    .as_secs(),
-            )
-        };
-
+        // Generate final HpkeKeyConfig
         let hpke_key_config = HpkeKeyConfig {
-            expire_timestamp,
+            expire_timestamp: keys_expire_timestamp,
             encoded_key_config_list,
         };
 
@@ -221,6 +225,6 @@ impl OhttpServerApi {
         .await
         .map_err(TngError::GenServerHpkeConfigurationFailed)?;
 
-        Ok((response, expire_time))
+        Ok(response)
     }
 }
