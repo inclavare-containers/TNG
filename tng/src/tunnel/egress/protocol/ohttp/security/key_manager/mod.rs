@@ -8,6 +8,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_mana
 
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Result;
@@ -15,6 +16,7 @@ use async_trait::async_trait;
 use futures::Future;
 
 pub mod callback_manager;
+pub mod file;
 pub mod self_generated;
 
 /// Key status indicating whether a key is active or stale
@@ -60,10 +62,13 @@ pub trait KeyManager: Send + Sync {
     /// Register a callback that will be called whenever a key is created or modified.
     ///
     /// The callback receives a reference to the updated `KeyInfo`.
-    async fn register_callback<F>(&self, callback: F)
-    where
-        F: Fn(&'_ KeyChangeEvent<'_>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-            + Send
-            + Sync
-            + 'static;
+    async fn register_callback(
+        &self,
+        callback: Arc<
+            dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send>>
+                + Send
+                + Sync
+                + 'static,
+        >,
+    );
 }

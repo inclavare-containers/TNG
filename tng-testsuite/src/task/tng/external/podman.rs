@@ -18,7 +18,7 @@ impl TngInstance {
                 "-v", "/run/confidential-containers/attestation-agent/:/run/confidential-containers/attestation-agent/"
             ])
             .args([
-                "-v", "/tmp/as-ca.pem:/tmp/as-ca.pem"
+                "-v", "/tmp/:/tmp/"
             ])
             .arg(image_url)
             .arg("tng")

@@ -218,13 +218,15 @@ impl KeyManager for SelfGeneratedKeyManager {
         Ok(keys.clone())
     }
 
-    async fn register_callback<F>(&self, callback: F)
-    where
-        F: Fn(&'_ KeyChangeEvent<'_>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-            + Send
-            + Sync
-            + 'static,
-    {
+    async fn register_callback(
+        &self,
+        callback: Arc<
+            dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send>>
+                + Send
+                + Sync
+                + 'static,
+        >,
+    ) {
         self.inner
             .callback_manager
             .register_callback(callback)

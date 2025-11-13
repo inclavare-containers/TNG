@@ -165,6 +165,24 @@ pub enum KeyArgs {
         /// of the `/tng/key-config` endpoint.
         rotation_interval: u64,
     },
+
+    /// Load the HPKE private key from a PEM file on disk.
+    ///
+    /// The file must contain a PKCS#8 encoded X25519 private key.
+    /// The system watches the file and reloads it automatically when modified.
+    ///
+    /// Recommended for production environments integrated with external secret managers
+    /// (e.g., Hashicorp Vault, Kubernetes secrets, cert-manager).
+    ///
+    /// Example:
+    /// ```json
+    /// "key": {
+    ///   "source": "file",
+    ///   "path": "/etc/tng/ohttp-key.pem"
+    /// }
+    /// ```
+    #[serde(rename = "file")]
+    File { path: String },
 }
 
 // Default: rotate self-generated OHTTP keys every 5 minutes.

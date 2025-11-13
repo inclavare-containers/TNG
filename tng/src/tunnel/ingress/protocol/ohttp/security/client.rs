@@ -143,7 +143,7 @@ impl OHttpClient {
                     inner
                         .create_key_store_value()
                         .await
-                        .map_err(TngError::GenServerHpkeConfigurationFailed)
+                        .map_err(TngError::GenServerHpkeConfigurationResponseFailed)
                 }) as Pin<Box<_>>
             }
         })
@@ -499,7 +499,7 @@ impl OHttpClientInner {
         let mut key_config = server_key_config_list
             .first()
             .context("No key config found")
-            .map_err(TngError::ServerHpkeConfigurationSelectFailed)?
+            .map_err(TngError::ClientSelectHpkeConfigurationFailed)?
             .clone();
         let client = ohttp::ClientRequest::from_config(&mut key_config)?;
 

@@ -10,6 +10,7 @@ use tokio::sync::{OnceCell, RwLock};
 use crate::config::egress::KeyArgs;
 use crate::config::ra::RaArgs;
 use crate::error::TngError;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::file::FileBasedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     self_generated::SelfGeneratedKeyManager, KeyManager,
 };
@@ -29,7 +30,7 @@ pub struct OhttpServerApi {
     /// Remote Attestation arguments
     ra_args: Arc<RaArgs>,
     /// Key manager for OHTTP key configurations
-    pub(crate) key_manager: Arc<SelfGeneratedKeyManager>,
+    pub(crate) key_manager: Arc<dyn KeyManager>,
     /// Cache for storing passport mode key configuration responses
     ///
     /// In passport mode, the server generates an attestation (passport) that is cached
@@ -48,9 +49,16 @@ impl OhttpServerApi {
         runtime: TokioRuntime,
     ) -> Result<Self, TngError> {
         // Create a default random key manager
-        let KeyArgs::SelfGenerated { rotation_interval } = key;
-        let key_manager =
-            SelfGeneratedKeyManager::new_with_auto_refresh(runtime, rotation_interval)?;
+
+        // let KeyArgs::SelfGenerated { rotation_interval } = key;
+        let key_manager: Arc<dyn KeyManager> = match key {
+            KeyArgs::SelfGenerated { rotation_interval } => Arc::new(
+                SelfGeneratedKeyManager::new_with_auto_refresh(runtime, rotation_interval)?,
+            ),
+            KeyArgs::File { path } => {
+                Arc::new(FileBasedKeyManager::new(runtime, path.into()).await?)
+            }
+        };
 
         let passport_cache: Arc<RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>> =
             Default::default();
@@ -59,7 +67,7 @@ impl OhttpServerApi {
         {
             let passport_cache_cloned = passport_cache.clone();
             key_manager
-                .register_callback(move |event| {
+                .register_callback(Arc::new(move |event| {
                     tracing::debug!(?event, "Key change event");
 
                     let passport_cache_cloned = passport_cache_cloned.clone();
@@ -67,13 +75,13 @@ impl OhttpServerApi {
                         // Reset the passport cache
                         let _ = passport_cache_cloned.write().await.take();
                     })
-                })
+                }))
                 .await;
         }
 
         Ok(OhttpServerApi {
             ra_args: Arc::new(ra_args),
-            key_manager: Arc::new(key_manager),
+            key_manager,
             passport_cache,
         })
     }

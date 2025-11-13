@@ -841,6 +841,78 @@ TNG 支持多种 OHTTP 密钥管理策略。当未通过外部机制提供密钥
 ```
 
 
+#### OHTTP 密钥配置：`file` 模式
+
+TNG 支持从外部文件加载 OHTTP HPKE 私钥，适用于需要与外部密钥管理系统（如 Confidnetial Data Hub、Hashicorp、Kubernetes Secrets 或自定义轮换脚本）集成的生产环境。该模式通过设置 `key.source = "file"` 启用。
+
+在此模式下，TNG 会：
+- 在启动时从指定路径读取 PEM 格式的 PKCS#8 编码 X25519 私钥
+- 自动监控该文件的变化（包括内容修改和原子替换）
+- 当文件更新时，自动重新加载新密钥并触发密钥变更事件
+- 原子性地替换当前密钥，确保后续请求使用新密钥对应的公钥配置
+
+此模式允许运维系统在不重启 TNG 实例的情况下完成密钥轮换，提升安全性和可用性。
+
+如果您希望使用文件加载密钥，只需在 `ohttp` 配置中指定 `key.source = "file"` 并提供文件路径：
+
+```json
+"ohttp": {
+    "key": {
+        "source": "file",
+        "path": "/etc/tng/ohttp-key.pem"
+    }
+}
+```
+
+##### 字段说明
+
+- **`key`** (KeyConfig)：OHTTP 密钥管理配置。
+    - **`source`** (`string`)：密钥来源类型。设为 `"file"` 表示从本地文件加载私钥。
+    - **`path`** (`string`)：PEM 文件的绝对路径，必须指向一个有效的、可读的 PKCS#8 私钥文件。
+
+
+##### 文件格式要求
+
+文件必须为按照 PKCS#8 标准采用 PEM 格式编码的密钥，例如：
+```pem
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
+-----END PRIVATE KEY-----
+```
+
+且应使用 X25519 曲线生成。可通过 OpenSSL 生成示例密钥：
+```bash
+openssl genpkey -algorithm X25519 -outform PEM
+```
+
+TNG 将使用操作系统级别的文件变更通知机制（如 inotify on Linux）来监听文件变化，并触发密钥重新加载。
+
+##### 示例配置
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 8080
+                }
+            },
+            "ohttp": {
+                "key": {
+                    "source": "file",
+                    "path": "/etc/tng/ohttp-key.pem"
+                }
+            },
+            "attest": {
+                "model": "background_check",
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
 ## Control Interface
 
 > [!NOTE]

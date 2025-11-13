@@ -3,6 +3,8 @@ use tng::runtime::TngRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::task::Task;
+
 use super::TngInstance;
 
 impl TngInstance {
@@ -16,6 +18,7 @@ impl TngInstance {
             }
         }
         .to_string();
+        let name = self.name();
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
@@ -41,6 +44,7 @@ impl TngInstance {
 
             tng_runtime.serve_with_ready(sender).await?;
 
+            tracing::info!(name, "The TNG task normally exited");
             Ok::<_, anyhow::Error>(())
         });
 
