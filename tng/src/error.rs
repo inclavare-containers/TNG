@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Context as _;
 use async_trait::async_trait;
 use axum::http::StatusCode;
@@ -74,10 +76,10 @@ pub enum TngError {
     ConstructHttpResponseFailed(#[source] http::Error),
 
     #[error("Failed to select a hpke configuration: {0}")]
-    ServerHpkeConfigurationSelectFailed(#[source] anyhow::Error),
+    ClientSelectHpkeConfigurationFailed(#[source] anyhow::Error),
 
-    #[error("Failed to generate hpke configuration: {0}")]
-    GenServerHpkeConfigurationFailed(#[source] anyhow::Error),
+    #[error("Failed to generate hpke configuration response: {0}")]
+    GenServerHpkeConfigurationResponseFailed(#[source] anyhow::Error),
 
     #[error("Not a valid OHTTP request: {0}")]
     InvalidOHttpRequest(#[source] anyhow::Error),
@@ -102,6 +104,9 @@ pub enum TngError {
 
     #[error("The server has no active key")]
     NoActiveKey,
+
+    #[error("Failed to load private key {0}: {1}")]
+    LoadPrivateKeyFailed(PathBuf, #[source] anyhow::Error),
 }
 
 /// Error response structure
@@ -171,9 +176,10 @@ impl IntoResponse for TngError {
             | TngError::ServerVerifyClientGetChallengeTokenFailed(..)
             | TngError::ServerVerifyClientEvidenceFailed(..)
             | TngError::RequestKeyConfigFailed(..)
-            | TngError::ServerHpkeConfigurationSelectFailed(..)
-            | TngError::GenServerHpkeConfigurationFailed(..)
-            | TngError::CreateOHttpClientFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            | TngError::ClientSelectHpkeConfigurationFailed(..)
+            | TngError::GenServerHpkeConfigurationResponseFailed(..)
+            | TngError::CreateOHttpClientFailed(..)
+            | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
 
             // See the RFC 9458 section 6.4. Key Management
             TngError::ServerKeyConfigNotFound { .. } => StatusCode::UNPROCESSABLE_ENTITY,

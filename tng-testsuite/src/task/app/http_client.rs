@@ -100,7 +100,7 @@ pub async fn launch_http_client_common(
             }
         }
 
-        tracing::info!("The HTTP client task normally exit now");
+        tracing::info!("The HTTP client task normally exited");
         Ok(())
     }))
 }

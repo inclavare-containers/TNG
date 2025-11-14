@@ -56,7 +56,7 @@ pub async fn launch_http_server(
             }
         }
 
-        tracing::info!("The HTTP server task normally exit now");
+        tracing::info!("The HTTP server task normally exited");
         Ok(())
     }))
 }

@@ -835,6 +835,79 @@ Example configuration:
 }
 ```
 
+
+#### OHTTP Key Configuration: `file` Mode
+
+TNG supports loading the OHTTP HPKE private key from an external file, suitable for production environments that need to integrate with external key management systems (such as Confidential Data Hub, Hashicorp Vault, Kubernetes Secrets, or custom rotation scripts). This mode is enabled by setting `key.source = "file"`.
+
+In this mode, TNG will:
+- Read a PEM-encoded PKCS#8 X25519 private key from the specified path at startup
+- Automatically monitor the file for changes, including content modifications and atomic replacements
+- Automatically reload the new key when the file is updated and trigger key change events
+- Atomically replace the current key, ensuring that subsequent requests use the public key configuration corresponding to the new key
+
+This mode allows operations systems to rotate keys without restarting the TNG instance, improving both security and availability.
+
+To use file-based key loading, simply set `key.source = "file"` in the `ohttp` configuration and provide the file path:
+
+```json
+"ohttp": {
+    "key": {
+        "source": "file",
+        "path": "/etc/tng/ohttp-key.pem"
+    }
+}
+```
+
+##### Field Description
+
+- **`key`** (KeyConfig): OHTTP key management configuration.
+  - **`source`** (`string`): Type of key source. Set to `"file"` to indicate that the private key should be loaded from a local file.
+  - **`path`** (`string`): Absolute path to the PEM file. Must point to a valid, readable PKCS#8 private key file.
+
+##### File Format Requirements
+
+The file must be a PEM-formatted, PKCS#8–encoded key, for example:
+```pem
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
+-----END PRIVATE KEY-----
+```
+
+The key must be generated using the X25519 curve. You can generate a sample key using OpenSSL:
+```bash
+openssl genpkey -algorithm X25519 -outform PEM
+```
+
+TNG uses operating system-level file change notification mechanisms (e.g., inotify on Linux) to detect file modifications and trigger key reloading.
+
+##### Example Configuration
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 8080
+                }
+            },
+            "ohttp": {
+                "key": {
+                    "source": "file",
+                    "path": "/etc/tng/ohttp-key.pem"
+                }
+            },
+            "attest": {
+                "model": "background_check",
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+
 ## Control Interface
 
 > [!NOTE]

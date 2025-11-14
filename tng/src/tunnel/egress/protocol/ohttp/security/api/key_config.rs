@@ -102,7 +102,7 @@ impl OhttpServerApi {
 
     async fn get_hpke_configuration_internal(
         ra_args: &RaArgs,
-        key_manager: &impl KeyManager,
+        key_manager: &dyn KeyManager,
         payload: Option<Json<KeyConfigRequest>>,
     ) -> Result<KeyConfigResponse, TngError> {
         // Collect all active keys, and create encoded_key_config_list
@@ -223,7 +223,7 @@ impl OhttpServerApi {
             })
         }
         .await
-        .map_err(TngError::GenServerHpkeConfigurationFailed)?;
+        .map_err(TngError::GenServerHpkeConfigurationResponseFailed)?;
 
         Ok(response)
     }

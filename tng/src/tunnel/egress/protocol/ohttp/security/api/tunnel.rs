@@ -19,7 +19,6 @@ use crate::config::ra::{AttestationServiceArgs, RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
 use crate::tunnel::ohttp::protocol::header::{
     OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
 };
