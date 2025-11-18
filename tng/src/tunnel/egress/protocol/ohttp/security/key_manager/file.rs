@@ -23,6 +23,7 @@ use crate::{
             callback_manager::{CallbackManager, KeyChangeEvent},
             KeyInfo, KeyManager, KeyStatus,
         },
+        ohttp::key_config::{KeyConfigExtend, KeyConfigHash},
         utils::runtime::supervised_task::SupervisedTaskResult,
     },
     TokioRuntime,
@@ -58,7 +59,7 @@ struct FileBasedKeyManagerInner {
     ///
     /// Protected by a write lock during updates; readers can concurrently access the current key.
     /// When the file is modified, a new `KeyInfo` replaces the old one atomically.
-    key: RwLock<Option<KeyInfo>>,
+    key: RwLock<Option<(KeyConfigHash, KeyInfo)>>,
 
     /// Manages registration and invocation of callbacks on key lifecycle events (create/remove).
     ///
@@ -76,7 +77,7 @@ impl FileBasedKeyManager {
         let key_info = Self::load_key_from_pem(&path).await?;
 
         let inner = Arc::new(FileBasedKeyManagerInner {
-            key: RwLock::new(Some(key_info)),
+            key: RwLock::new(Some((key_info.key_config.key_config_hash()?, key_info))),
             callback_manager: CallbackManager::new(),
         });
 
@@ -122,7 +123,10 @@ impl FileBasedKeyManager {
                                     Ok(new_key_info) => {
                                         let old_key_info = {
                                             let mut write = inner_clone.key.write().await;
-                                            write.replace(new_key_info.clone())
+                                            write.replace((
+                                                new_key_info.key_config.key_config_hash()?,
+                                                new_key_info.clone(),
+                                            ))
                                         };
 
                                         // Trigger events
@@ -133,7 +137,7 @@ impl FileBasedKeyManager {
                                             })
                                             .await;
 
-                                        if let Some(old) = old_key_info {
+                                        if let Some((_, old)) = old_key_info {
                                             inner_clone
                                                 .callback_manager
                                                 .trigger(&KeyChangeEvent::Removed {
@@ -233,19 +237,31 @@ impl FileBasedKeyManager {
 
 #[async_trait]
 impl KeyManager for FileBasedKeyManager {
-    async fn get_key(&self, key_id: u8) -> Result<KeyInfo, TngError> {
+    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
         match key.as_ref() {
-            Some(k) if k.key_config.key_id() == key_id => Ok(k.clone()),
-            _ => Err(TngError::ServerKeyConfigNotFound { key_id }),
+            Some((_, k)) if k.key_config.key_id() == key_id => Ok(k.clone()),
+            _ => Err(TngError::ServerKeyConfigNotFound(either::Either::Left(
+                key_id,
+            ))),
         }
     }
 
-    async fn get_all_keys(&self) -> Result<HashMap<u8, KeyInfo>, TngError> {
+    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
-        if let Some(info) = key.as_ref() {
+        match key.as_ref() {
+            Some((h, k)) if h.as_slice() == hash => Ok(k.clone()),
+            _ => Err(TngError::ServerKeyConfigNotFound(either::Either::Right(
+                hash.to_vec(),
+            ))),
+        }
+    }
+
+    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError> {
+        let key = self.inner.key.read().await;
+        if let Some((hash, info)) = key.as_ref() {
             let mut map = HashMap::with_capacity(1);
-            map.insert(info.key_config.key_id(), info.clone());
+            map.insert(*hash, info.clone());
             Ok(map)
         } else {
             Ok(HashMap::new())

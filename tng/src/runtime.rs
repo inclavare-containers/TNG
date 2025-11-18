@@ -94,7 +94,7 @@ impl TngRuntime {
             let span = tracing::info_span!("ingress", id);
 
             let sevice = async {
-                Ok(match &add_ingress.ingress_mode {
+                Ok::<Box<_>, anyhow::Error>(match &add_ingress.ingress_mode {
                     IngressMode::Mapping(mapping_args) => {
                         Box::new(
                             IngressFlow::new(
@@ -118,7 +118,8 @@ impl TngRuntime {
                         )
                     }
                     IngressMode::Netfilter(netfilter_args) => {
-                        if !cfg!(target_os = "linux") {
+                        #[cfg(not(target_os = "linux"))]
+                        {
                             let _ = netfilter_args;
                             anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
                         }
@@ -159,7 +160,7 @@ impl TngRuntime {
             let span = tracing::info_span!("egress", id);
 
             let sevice = async {
-                Ok(match &add_egress.egress_mode {
+                Ok::<Box<_>, anyhow::Error>(match &add_egress.egress_mode {
                     EgressMode::Mapping(mapping_args) => Box::new(
                         EgressFlow::new(
                             MappingEgress::new(id, mapping_args).await?,
@@ -170,7 +171,8 @@ impl TngRuntime {
                         .await?,
                     ),
                     EgressMode::Netfilter(netfilter_args) => {
-                        if !cfg!(target_os = "linux") {
+                        #[cfg(not(target_os = "linux"))]
+                        {
                             let _ = netfilter_args;
                             anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
                         }

@@ -46,14 +46,20 @@ use std::{pin::Pin, sync::Arc};
 #[cfg(unix)]
 use crate::config::ra::AttestArgs;
 #[cfg(unix)]
-use crate::tunnel::ohttp::protocol::metadata::EncryptedWithClientAuthAsymmetricKey;
+use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
     config::ra::RaArgs,
     error::TngError,
-    tunnel::ohttp::protocol::header::{
-        OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+    tunnel::ohttp::{
+        key_config::KeyConfigExtend,
+        protocol::{
+            header::{
+                OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+            },
+            metadata::ServerKeyConfigHint,
+        },
     },
     AttestationResult, TokioRuntime,
 };
@@ -62,9 +68,7 @@ use crate::{
     error::CheckErrorResponse as _,
     tunnel::{
         ohttp::protocol::{
-            metadata::{
-                metadata::MetadataType, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
-            },
+            metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
             userdata::ServerUserData,
             AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
@@ -92,7 +96,7 @@ pub struct OHttpClientInner {
 }
 
 struct KeyStoreValue {
-    metadata: Metadata,
+    client_auth: ClientAuth,
 
     #[allow(unused)]
     client_key: Option<(
@@ -167,7 +171,7 @@ impl OHttpClient {
             .inner
             .send_encrypted_request(
                 &key_store_value.server_key_config_list,
-                &key_store_value.metadata,
+                &key_store_value.client_auth,
                 request,
             )
             .await?;
@@ -232,9 +236,8 @@ impl OHttpClientInner {
 
     async fn create_key_store_value(&self) -> Result<(KeyStoreValue, Expire)> {
         // Handle metatdata for self
-        let (client_key, metadata, mut expire) = self.create_attested_client_key().await?;
+        let (client_key, client_auth, mut expire) = self.create_attested_client_key().await?;
 
-        // TODO: use kbs protocol to get challenge token from trustee
         let (server_key_config, token) = {
             let verify = match &self.ra_args {
                 RaArgs::VerifyOnly(verify) => Some(verify),
@@ -342,7 +345,7 @@ impl OHttpClientInner {
 
         Ok((
             KeyStoreValue {
-                metadata,
+                client_auth,
                 client_key, // TODO: ohttp hpke setup with the client key
                 server_key_config_list,
                 server_attestation_result,
@@ -358,7 +361,7 @@ impl OHttpClientInner {
             <X25519HkdfSha256 as Kem>::PrivateKey,
             <X25519HkdfSha256 as Kem>::PublicKey,
         )>,
-        Metadata,
+        ClientAuth,
         Expire,
     )> {
         Ok(match &self.ra_args {
@@ -419,28 +422,16 @@ impl OHttpClientInner {
 
                 (
                     Some(client_key),
-                    Metadata {
-                        metadata_type: Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(
-                            EncryptedWithClientAuthAsymmetricKey {
-                                attestation_result: token.into_str(),
-                                pk_s,
-                            },
-                        )),
-                    },
+                    ClientAuth::AttestedPublicKey(AttestedPublicKey {
+                        attestation_result: token.into_str(),
+                        pk_s,
+                    }),
                     token_expire,
                 )
             }
             RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
                 // Not required
-                (
-                    None,
-                    Metadata {
-                        metadata_type: Some(MetadataType::EncryptedWithoutClientAuth(
-                            EncryptedWithoutClientAuth {},
-                        )),
-                    },
-                    Expire::NoExpire,
-                )
+                (None, ClientAuth::NoAuth(NoAuth {}), Expire::NoExpire)
             }
         })
     }
@@ -489,7 +480,7 @@ impl OHttpClientInner {
     async fn send_encrypted_request(
         &self,
         server_key_config_list: &[KeyConfig],
-        metadata: &Metadata,
+        client_auth: &ClientAuth,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
         // Encode the request to bhttp message
@@ -551,6 +542,13 @@ impl OHttpClientInner {
 
         let ohttp_request_body = {
             let metadata_buf = {
+                let metadata = Metadata {
+                    client_auth: Some(client_auth.clone()), // TODO: optimize this clone
+                    key_config_hint: Some(ServerKeyConfigHint {
+                        sha256: key_config.key_config_hash()?.to_vec(),
+                    }),
+                };
+
                 let metadata_len = metadata.encoded_len();
                 if metadata_len > METADATA_MAX_LEN {
                     return Err(TngError::MetadataTooLong);

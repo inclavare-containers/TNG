@@ -5,6 +5,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_mana
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
 };
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
@@ -28,7 +29,7 @@ pub struct SelfGeneratedKeyManager {
 
 pub struct RandomKeyManagerInner {
     /// Map of key IDs to key information
-    keys: tokio::sync::RwLock<HashMap<u8, KeyInfo>>,
+    keys: tokio::sync::RwLock<HashMap<KeyConfigHash, KeyInfo>>,
     /// List of registered callbacks triggered when a key is updated or created
     callback_manager: CallbackManager,
 
@@ -174,7 +175,11 @@ impl RandomKeyManagerInner {
         if !have_active_key {
             tracing::info!("Generating new OHTTP key");
             let new_key_id = (0..u8::MAX)
-                .find(|id| !keys.contains_key(id))
+                .find(|id| {
+                    !keys
+                        .values()
+                        .any(|key_info| key_info.key_config.key_id() == *id)
+                })
                 .unwrap_or_else(|| {
                     tracing::warn!("No unused key ID found, generating key with ID 0 instead");
                     0
@@ -197,7 +202,7 @@ impl RandomKeyManagerInner {
                     key_info: &key_info,
                 })
                 .await;
-            keys.insert(new_key_id, key_info);
+            keys.insert(key_info.key_config.key_config_hash()?, key_info);
         }
 
         Ok(())
@@ -206,14 +211,25 @@ impl RandomKeyManagerInner {
 
 #[async_trait]
 impl KeyManager for SelfGeneratedKeyManager {
-    async fn get_key(&self, key_id: u8) -> Result<KeyInfo, TngError> {
+    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
-        keys.get(&key_id)
+        keys.values()
+            .find(|key_info| key_info.key_config.key_id() == key_id)
             .cloned()
-            .ok_or(TngError::ServerKeyConfigNotFound { key_id })
+            .ok_or(TngError::ServerKeyConfigNotFound(either::Either::Left(
+                key_id,
+            )))
     }
 
-    async fn get_all_keys(&self) -> Result<HashMap<u8, KeyInfo>, TngError> {
+    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError> {
+        let keys = self.inner.keys.read().await;
+        keys.get(hash)
+            .cloned()
+            .ok_or(TngError::ServerKeyConfigNotFound(either::Either::Right(
+                hash.to_vec(),
+            )))
+    }
+    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError> {
         let keys = self.inner.keys.read().await;
         Ok(keys.clone())
     }

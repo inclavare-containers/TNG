@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use either::Either;
 use serde::{Deserialize, Serialize};
 use strum_macros::AsRefStr;
 use thiserror::Error;
@@ -99,8 +100,14 @@ pub enum TngError {
     #[error("Invalid x-tng-ohttp-api value")]
     InvalidOhttpApiHeaderValue,
 
-    #[error("The key does not exist: {key_id}")]
-    ServerKeyConfigNotFound { key_id: u8 },
+    #[error("The requested key does not exist: {}", match .0 {
+        Either::Left(key_id) => format!("key_id: {}", key_id),
+        Either::Right(key_config_sha256) => format!(
+            "key_config_sha256: {}",
+            hex::encode(key_config_sha256)
+        ),
+    })]
+    ServerKeyConfigNotFound(Either<u8 /* key_id */, Vec<u8> /* key_config_sha256 */>),
 
     #[error("The server has no active key")]
     NoActiveKey,

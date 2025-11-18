@@ -5,6 +5,7 @@
 
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeEvent;
+use crate::tunnel::ohttp::key_config::KeyConfigHash;
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -52,12 +53,17 @@ pub trait KeyManager: Send + Sync {
     /// Get an key info with their status by key ID
     ///
     /// Returns an key configuration for the given ID.
-    async fn get_key(&self, key_id: u8) -> Result<KeyInfo, TngError>;
+    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError>;
+
+    /// Get an key info with their status by key ID
+    ///
+    /// Returns an key configuration for the given ID.
+    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError>;
 
     /// Get all key info with their status
     ///
     /// Returns a map of key IDs to their corresponding key information including status
-    async fn get_all_keys(&self) -> Result<HashMap<u8, KeyInfo>, TngError>;
+    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError>;
 
     /// Register a callback that will be called whenever a key is created or modified.
     ///

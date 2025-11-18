@@ -22,9 +22,9 @@ use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
 use crate::tunnel::ohttp::protocol::header::{
     OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
 };
-use crate::tunnel::ohttp::protocol::metadata::metadata::MetadataType;
+use crate::tunnel::ohttp::protocol::metadata::metadata::ClientAuth;
 use crate::tunnel::ohttp::protocol::metadata::{
-    EncryptedWithClientAuthAsymmetricKey, EncryptedWithoutClientAuth, Metadata, METADATA_MAX_LEN,
+    AttestedPublicKey, Metadata, NoAuth, METADATA_MAX_LEN,
 };
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 
@@ -89,16 +89,28 @@ impl OhttpServerApi {
             Metadata::decode(buf.as_ref()).map_err(TngError::MetadataDecodeError)?
         };
 
-        tracing::debug!(?metadata, "Received OHTTP request");
+        let header_decoded = ohttp::Server::decode_header(reader.compat()).await?;
+
+        tracing::debug!(
+            ?metadata,
+            key_id = header_decoded.key_id(),
+            "Received OHTTP request"
+        );
 
         // Check metadata
-        self.validata_metadata(metadata)
+        self.validate_client_attestation_consistency(metadata.client_auth)
             .await
             .map_err(TngError::MetadataValidateError)?;
 
-        // Check key id
-        let header_decoded = ohttp::Server::decode_header(reader.compat()).await?;
-        let key_info = self.key_manager.get_key(header_decoded.key_id()).await?;
+        let key_info = if let Some(hint) = &metadata.key_config_hint {
+            // Get key by hash
+            self.key_manager.get_key_by_hash(&hint.sha256).await?
+        } else {
+            // Check key id, this make it compatible with old tng clients versions
+            self.key_manager
+                .get_fist_key_by_key_id(header_decoded.key_id())
+                .await?
+        };
 
         // Decrypt the ohttp message
         let plain_text = header_decoded.into_server_request(key_info.key_config);
@@ -172,15 +184,18 @@ impl OhttpServerApi {
         Ok(response)
     }
 
-    async fn validata_metadata(&self, metadata: Metadata) -> Result<()> {
-        match (metadata.metadata_type, self.ra_args.as_ref()) {
+    /// Validates that the provided client metadata type is consistent with the server's
+    /// remote attestation (RA) configuration.
+    async fn validate_client_attestation_consistency(
+        &self,
+        client_auth: Option<ClientAuth>,
+    ) -> Result<()> {
+        match (client_auth, self.ra_args.as_ref()) {
             (
-                Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(
-                    EncryptedWithClientAuthAsymmetricKey {
-                        attestation_result,
-                        pk_s,
-                    },
-                )),
+                Some(ClientAuth::AttestedPublicKey(AttestedPublicKey {
+                    attestation_result,
+                    pk_s,
+                })),
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify),
             ) => match verify {
                 VerifyArgs::Passport { token_verify }
@@ -205,28 +220,22 @@ impl OhttpServerApi {
                         .await?;
                 }
             },
-            (
-                Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth {})),
-                RaArgs::AttestOnly(..) | RaArgs::NoRa,
-            ) => {
+            (Some(ClientAuth::NoAuth(NoAuth {})), RaArgs::AttestOnly(..) | RaArgs::NoRa) => {
                 // Peace and love
             }
             (
-                Some(MetadataType::EncryptedWithoutClientAuth(EncryptedWithoutClientAuth {})),
+                Some(ClientAuth::NoAuth(NoAuth {})),
                 RaArgs::VerifyOnly(..) | RaArgs::AttestAndVerify(..),
             ) => {
                 bail!(
                     "client attestation is required but no attestation info was provided by client"
                 )
             }
-            (
-                Some(MetadataType::EncryptedWithClientAuthAsymmetricKey(..)),
-                RaArgs::AttestOnly(..) | RaArgs::NoRa,
-            ) => {
+            (Some(ClientAuth::AttestedPublicKey(..)), RaArgs::AttestOnly(..) | RaArgs::NoRa) => {
                 bail!("client attestation is not required but some attestation info ware provided by client")
             }
             (None, _) => {
-                bail!("metadata_type is empty")
+                bail!("client_auth is empty")
             }
         }
 
