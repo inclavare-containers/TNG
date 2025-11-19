@@ -34,7 +34,7 @@ impl CertManager {
 
         let cert = MaybeCached::new(runtime, refresh_strategy, move || {
             let attest_args = attest_args.clone();
-            Box::pin(async move { Ok(Self::fetch_new_cert(&attest_args).await?) }) as Pin<Box<_>>
+            Box::pin(async move { Self::fetch_new_cert(&attest_args).await }) as Pin<Box<_>>
         })
         .await?;
 
@@ -49,7 +49,6 @@ impl CertManager {
             .retry(|| async {
                 Self::fetch_new_cert_inner(attest_args)
                     .await
-                    .map_err(anyhow::Error::from)
                     .context("Failed to generate new cert")
             })
             .await

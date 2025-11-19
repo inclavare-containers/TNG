@@ -62,7 +62,7 @@ impl Serialize for FalconTags {
         let tags_str: String = self
             .0
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<String>>()
             .join(",");
         serializer.serialize_str(&tags_str)
@@ -98,8 +98,7 @@ impl<'de> serde::de::Visitor<'de> for FalconTagsVisitor {
 
             if parts.len() != 2 {
                 return Err(E::custom(format!(
-                    "Invalid tag format: \"{}\" (must be key=value)",
-                    pair
+                    "Invalid tag format: \"{pair}\" (must be key=value)"
                 )));
             }
 
@@ -111,7 +110,7 @@ impl<'de> serde::de::Visitor<'de> for FalconTagsVisitor {
             }
 
             if map.contains_key(&key) {
-                return Err(E::custom(format!("Duplicate key: {}", key)));
+                return Err(E::custom(format!("Duplicate key: {key}")));
             }
 
             map.insert(key, value);

@@ -106,13 +106,13 @@ impl FileBasedKeyManager {
                 if let Some(parent) = path.parent() {
                     watcher
                         .watch(parent, RecursiveMode::NonRecursive)
-                        .with_context(|| format!("Failed to watch directory {:?}", parent))?;
+                        .with_context(|| format!("Failed to watch directory {parent:?}"))?;
                 }
 
                 // Also watch the file directly (for non-atomic changes)
                 watcher
                     .watch(&path, RecursiveMode::NonRecursive)
-                    .with_context(|| format!("Failed to watch file {:?}", path))?;
+                    .with_context(|| format!("Failed to watch file {path:?}"))?;
 
                 while let Some(result) = rx.recv().await {
                     match result {

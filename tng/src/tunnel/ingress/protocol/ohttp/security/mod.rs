@@ -77,9 +77,9 @@ impl OHttpSecurityLayer {
         })
     }
 
-    pub async fn forward_http_request<'a>(
+    pub async fn forward_http_request(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
         async {
@@ -109,7 +109,7 @@ impl OHttpSecurityLayer {
                 .rewrite(original_path)
                 .unwrap_or_else(|| "/".to_string());
 
-            if !rewrited_path.starts_with("/") {
+            if !rewrited_path.starts_with('/') {
                 rewrited_path.insert(0, '/');
             }
 
@@ -120,24 +120,22 @@ impl OHttpSecurityLayer {
                 endpoint.host(),
                 endpoint.port()
             );
-            let url = url
-                .parse::<Url>()
-                .with_context(|| format!("Not a valid URL: {}", url))
-                .map_err(TngError::CreateOHttpClientFailed)?;
 
-            url
+            url.parse::<Url>()
+                .with_context(|| format!("Not a valid URL: {url}"))
+                .map_err(TngError::CreateOHttpClientFailed)?
         };
         Ok(base_url)
     }
 
-    async fn get_or_create_ohttp_client<'a>(
+    async fn get_or_create_ohttp_client(
         &self,
         base_url: Url,
     ) -> Result<Arc<OHttpClient>, TngError> {
         // Try to read the ohttp client entry.
         let cell = {
             let read = self.ohttp_clients.read().await;
-            read.get(&base_url).map(|v| v.clone())
+            read.get(&base_url).cloned()
         };
 
         // If no entry exists, create one with uninitialized value.

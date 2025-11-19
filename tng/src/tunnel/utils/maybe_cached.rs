@@ -33,25 +33,22 @@ pub enum Expire {
 }
 
 impl PartialOrd for Expire {
-    /// Compare two `Expire` values:
-    /// - `NoExpire` is considered greater than any `ExpireAt` (i.e., it expires later).
-    /// - Two `ExpireAt` times are compared using `SystemTime`.
-    /// - Returns `None` only if comparison between `SystemTime` values fails (rare).
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Expire::NoExpire, Expire::NoExpire) => Some(Ordering::Equal),
-            (Expire::NoExpire, Expire::ExpireAt(_)) => Some(Ordering::Greater), // Never expire > finite time
-            (Expire::ExpireAt(_), Expire::NoExpire) => Some(Ordering::Less), // Finite time < never expire
-            (Expire::ExpireAt(a), Expire::ExpireAt(b)) => a.partial_cmp(b), // Compare actual timestamps
-        }
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Expire {
-    /// Provides a total ordering by unwrapping the result of `partial_cmp`.
-    /// Since all cases are handled in `partial_cmp`, this will not panic in practice.
+    /// Compare two `Expire` values:
+    /// - `NoExpire` is considered greater than any `ExpireAt` (i.e., it expires later).
+    /// - Two `ExpireAt` times are compared using `SystemTime`.
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        match (self, other) {
+            (Expire::NoExpire, Expire::NoExpire) => Ordering::Equal,
+            (Expire::NoExpire, Expire::ExpireAt(_)) => Ordering::Greater, // Never expire > finite time
+            (Expire::ExpireAt(_), Expire::NoExpire) => Ordering::Less, // Finite time < never expire
+            (Expire::ExpireAt(a), Expire::ExpireAt(b)) => a.cmp(b),    // Compare actual timestamps
+        }
     }
 }
 
@@ -75,6 +72,13 @@ impl Expire {
     }
 }
 
+type MaybeCachedUpdateFunc<T, E> = Arc<
+    dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
+        + Send
+        + Sync
+        + 'static,
+>;
+
 pub enum MaybeCached<
     T: std::marker::Send + std::marker::Sync + 'static,
     E: Into<anyhow::Error> + std::marker::Send + std::marker::Sync + 'static,
@@ -89,20 +93,10 @@ pub enum MaybeCached<
         #[allow(unused)]
         refresh_task: RefreshTask,
         #[allow(unused)]
-        f: Arc<
-            dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
-                + Send
-                + Sync
-                + 'static,
-        >,
+        f: MaybeCachedUpdateFunc<T, E>,
     },
     NoCache {
-        f: Arc<
-            dyn Fn() -> Pin<Box<dyn TokioRuntimeSupportedFuture<Result<(T, Expire), E>>>>
-                + Send
-                + Sync
-                + 'static,
-        >,
+        f: MaybeCachedUpdateFunc<T, E>,
     },
 }
 
@@ -334,7 +328,7 @@ mod tests {
                     Box::pin(async move {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                        Ok((format!("value{}", count), Expire::NoExpire))
+                        Ok((format!("value{count}"), Expire::NoExpire))
                     })
                 })
                 .await
@@ -382,7 +376,7 @@ mod tests {
                     Box::pin(async move {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                        Ok((format!("value{}", count), Expire::NoExpire))
+                        Ok((format!("value{count}"), Expire::NoExpire))
                     })
                 },
             )
@@ -438,7 +432,7 @@ mod tests {
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
                         let expire_at = SystemTime::now() + tokio_time::Duration::from_millis(1000);
-                        Ok((format!("value{}", count), Expire::ExpireAt(expire_at)))
+                        Ok((format!("value{count}"), Expire::ExpireAt(expire_at)))
                     })
                 },
             )
@@ -496,7 +490,7 @@ mod tests {
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
                         let expire_at = SystemTime::now() + tokio_time::Duration::from_secs(1000); // Long expire time, rely on refresh interval instead.
-                        Ok((format!("value{}", count), Expire::ExpireAt(expire_at)))
+                        Ok((format!("value{count}"), Expire::ExpireAt(expire_at)))
                     })
                 },
             )

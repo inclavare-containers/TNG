@@ -53,13 +53,8 @@ impl HttpRequestInspector {
                         .await
                         .context("Failed to read from stream")?;
                     if read_bytes == 0 {
-                        if buf.len() == buf.capacity() {
-                            // buffer capacity reached, and we have to stop the multiplex task.
-                            break;
-                        } else {
-                            // The stream is closed, we can stop the multiplex task now.
-                            break;
-                        }
+                        // whatever the stream is closed or the buffer capacity reached, we can stop the multiplex task now.
+                        break;
                     }
 
                     // Send the data to the other two task and ignore all the errors.

@@ -135,9 +135,7 @@ impl OhttpServerApi {
             encoded_key_config_list,
         };
 
-        let attestation_request = payload
-            .map(|Json(payload)| payload.attestation_request)
-            .flatten();
+        let attestation_request = payload.and_then(|Json(payload)| payload.attestation_request);
 
         let response = async {
             Ok(match &ra_args {
@@ -197,7 +195,7 @@ impl OhttpServerApi {
                             }
                         }
                         (
-                            Some(AttestationRequest::Passport { .. }),
+                            Some(AttestationRequest::Passport),
                             AttestArgs::BackgroundCheck { .. },
                         ) => bail!("Background check model is expected but passport attestation is requested"),
                         (

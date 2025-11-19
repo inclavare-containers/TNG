@@ -46,7 +46,7 @@ impl TngStreamContext {
         send_request
             .send_request(req)
             .await
-            .map(|resopnse| axum::response::Response::into_response(resopnse))
+            .map(axum::response::Response::into_response)
             .map_err(TngError::HttpPlainTextForwardError)
     }
 }

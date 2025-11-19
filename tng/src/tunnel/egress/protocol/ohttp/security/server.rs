@@ -81,7 +81,7 @@ impl OhttpServer {
                 .map(|origin| {
                     origin
                         .parse::<HeaderValue>()
-                        .with_context(|| format!("Invalid origin '{}'", origin))
+                        .with_context(|| format!("Invalid origin '{origin}'"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             cors = cors.allow_origin(AllowOrigin::list(origins));
@@ -94,9 +94,7 @@ impl OhttpServer {
             let methods = cors_config
                 .allow_methods
                 .iter()
-                .map(|m| {
-                    Method::from_str(m).with_context(|| format!("Invalid HTTP method '{}'", m))
-                })
+                .map(|m| Method::from_str(m).with_context(|| format!("Invalid HTTP method '{m}'")))
                 .collect::<Result<Vec<_>, _>>()?;
             cors = cors.allow_methods(AllowMethods::list(methods));
         }
@@ -109,7 +107,7 @@ impl OhttpServer {
                 .allow_headers
                 .iter()
                 .map(|h| {
-                    HeaderName::from_str(h).with_context(|| format!("Invalid header name '{}'", h))
+                    HeaderName::from_str(h).with_context(|| format!("Invalid header name '{h}'"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             cors = cors.allow_headers(AllowHeaders::list(headers));
@@ -124,7 +122,7 @@ impl OhttpServer {
                 .iter()
                 .map(|h| {
                     HeaderName::from_str(h)
-                        .with_context(|| format!("Invalid expose header name '{}'", h))
+                        .with_context(|| format!("Invalid expose header name '{h}'"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             cors = cors.expose_headers(ExposeHeaders::list(headers));
@@ -255,8 +253,7 @@ pub async fn log_request(
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.parse::<u64>().ok())
-        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
 
     tracing::info!(

@@ -70,6 +70,7 @@ impl TraceExporterType {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum TraceExporterInstance {
     OpenTelemetryOltp(opentelemetry_otlp::SpanExporter),
     OpenTelemetryStdout(opentelemetry_stdout::SpanExporter),

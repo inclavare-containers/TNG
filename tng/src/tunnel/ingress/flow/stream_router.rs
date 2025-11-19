@@ -10,7 +10,7 @@ impl StreamRouter {
     }
 
     pub fn should_forward_via_tunnel(&self, endpoint: &TngEndpoint) -> bool {
-        let via_tunnel = self.endpoint_matcher.matches(&endpoint);
+        let via_tunnel = self.endpoint_matcher.matches(endpoint);
         tracing::debug!(
             endpoint=?endpoint,
             via_tunnel,

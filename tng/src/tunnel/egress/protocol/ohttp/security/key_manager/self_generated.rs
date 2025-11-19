@@ -156,7 +156,7 @@ impl RandomKeyManagerInner {
         for (_, key_info) in keys.iter_mut() {
             if key_info.stale_at <= now && matches!(key_info.status, KeyStatus::Active) {
                 self.callback_manager
-                    .trigger(&&KeyChangeEvent::StatusChanged {
+                    .trigger(&KeyChangeEvent::StatusChanged {
                         key_info,
                         old_status: key_info.status,
                         new_status: KeyStatus::Stale,
@@ -209,7 +209,7 @@ impl KeyManager for SelfGeneratedKeyManager {
     async fn get_key(&self, key_id: u8) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
         keys.get(&key_id)
-            .map(|key_info| key_info.clone())
+            .cloned()
             .ok_or(TngError::ServerKeyConfigNotFound { key_id })
     }
 

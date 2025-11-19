@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+
 use std::{fs::File, io::BufReader};
 
 use anyhow::{bail, Context};
@@ -17,6 +20,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize rustls crypto provider
+    #[allow(clippy::expect_used)]
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");

@@ -14,6 +14,7 @@ pub struct FirstByteReadTimeoutStream<
 }
 
 #[pin_project(project = StateProj)]
+#[allow(clippy::enum_variant_names)]
 enum State {
     BeforeFirstRead,
     InFirstRead(#[pin] tokio::time::Sleep),
@@ -49,7 +50,7 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> t
                 // Change the state to reading and install the timeout.
                 this.state
                     .as_mut()
-                    .set(State::InFirstRead(tokio::time::sleep(this.timeout.clone())));
+                    .set(State::InFirstRead(tokio::time::sleep(*this.timeout)));
             }
         }
 
