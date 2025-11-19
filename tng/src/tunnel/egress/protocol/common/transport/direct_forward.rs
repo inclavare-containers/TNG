@@ -14,7 +14,7 @@ impl DirectForwardTrafficDetector {
         let rule_matchers = rules
             .0
             .iter()
-            .map(|rule| RuleMatcher::new(rule))
+            .map(RuleMatcher::new)
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self { rule_matchers })
@@ -37,7 +37,7 @@ impl RuleMatcher {
 
         Ok(Self {
             http_path_regex: regex::Regex::new(regex)
-                .with_context(|| format!("Invalid regex: {}", regex))?,
+                .with_context(|| format!("Invalid regex: {regex}"))?,
         })
     }
 

@@ -186,3 +186,7 @@ www-demo:
 .PHONE: mac-cross-build
 mac-cross-build:
 	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin
+
+.PHONE: clippy
+clippy:
+	cargo clippy --all-targets --all-features -- -D warnings

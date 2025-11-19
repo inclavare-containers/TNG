@@ -45,7 +45,7 @@ impl IptablesExecutor {
 
     async fn execute_script(script: &str) -> Result<()> {
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&format!("set -e ; true ; {}", script));
+        cmd.arg("-c").arg(format!("set -e ; true ; {script}"));
         let output = cmd
             .output()
             .await
@@ -75,12 +75,12 @@ impl IptablesExecutor {
                 code.map(|code| code.to_string())
                     .unwrap_or("unknown".to_string()),
                 if stdout.contains('\n') {
-                    format!("(multi-line)\n\t{}", stdout.replace("\n", "\n\t"))
+                    format!("(multi-line)\n\t{}", stdout.replace('\n', "\n\t"))
                 } else {
                     stdout.into()
                 },
                 if stderr.contains('\n') {
-                    format!("(multi-line)\n\t{}", stderr.replace("\n", "\n\t"))
+                    format!("(multi-line)\n\t{}", stderr.replace('\n', "\n\t"))
                 } else {
                     stderr.into()
                 },

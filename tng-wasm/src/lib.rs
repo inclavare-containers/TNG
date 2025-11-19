@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+
 use tng::build;
 
 use tracing_subscriber::layer::SubscriberExt as _;

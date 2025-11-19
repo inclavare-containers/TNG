@@ -91,6 +91,7 @@ impl MetricExporterType {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum MetricExporterInstance {
     Simple(
         u64, /* step */

@@ -488,7 +488,7 @@ impl OHttpClientInner {
     /// and send the encrypted ciphertext as the request body to the server.
     async fn send_encrypted_request(
         &self,
-        server_key_config_list: &Vec<KeyConfig>,
+        server_key_config_list: &[KeyConfig],
         metadata: &Metadata,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
@@ -650,10 +650,8 @@ impl OHttpClientInner {
 
         // Decrypt the ohttp response message
         let decrypted_response = client_response_decapsulator.decapsulate_response(
-            StreamReader::new(response_body.map(|result| {
-                result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-            }))
-            .compat(),
+            StreamReader::new(response_body.map(|result| result.map_err(std::io::Error::other)))
+                .compat(),
         )?;
         // Decode the bhttp binary message
         let decode_result = BhttpDecoder::new(decrypted_response)

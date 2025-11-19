@@ -54,12 +54,10 @@ impl OHttpSecurityLayer {
                 },
             );
 
-            Ok(
-                hyper_util::server::conn::auto::Builder::new(self.runtime.clone())
-                    .serve_connection_with_upgrades(TokioIo::new(stream), hyper_service)
-                    .await
-                    .map_err(|error| anyhow!("failed to serve connection: {error:?}"))?,
-            )
+            hyper_util::server::conn::auto::Builder::new(self.runtime.clone())
+                .serve_connection_with_upgrades(TokioIo::new(stream), hyper_service)
+                .await
+                .map_err(|error| anyhow!("failed to serve connection: {error:?}"))
         }
         .instrument(tracing::info_span!("security"))
         .await

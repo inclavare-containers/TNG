@@ -441,7 +441,7 @@ mod tests {
                 );
                 assert_eq!(aa_args.refresh_interval, Some(3600));
                 assert_eq!(as_args.as_addr, "localhost:8081");
-                assert_eq!(as_args.as_is_grpc, false);
+                assert!(!as_args.as_is_grpc);
                 assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected Passport variant"),
@@ -535,7 +535,7 @@ mod tests {
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
                 assert_eq!(as_args.as_addr, "localhost:8081");
-                assert_eq!(as_args.as_is_grpc, false);
+                assert!(!as_args.as_is_grpc);
                 assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),
@@ -561,7 +561,7 @@ mod tests {
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args }) => {
                 assert_eq!(as_args.as_addr, "localhost:8081");
-                assert_eq!(as_args.as_is_grpc, false);
+                assert!(!as_args.as_is_grpc);
                 assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),

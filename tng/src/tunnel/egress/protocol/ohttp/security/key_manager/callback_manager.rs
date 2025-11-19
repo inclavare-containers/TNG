@@ -47,15 +47,7 @@ impl CallbackManager {
     /// Register a new callback
     ///
     /// The callback will be called whenever `trigger` is invoked.
-    pub async fn register_callback(
-        &self,
-        callback: Arc<
-            dyn Fn(&'_ KeyChangeEvent<'_>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    ) {
+    pub async fn register_callback(&self, callback: KeyChangeCallback) {
         let mut cbs = self.callbacks.write().await;
         cbs.push(callback);
     }

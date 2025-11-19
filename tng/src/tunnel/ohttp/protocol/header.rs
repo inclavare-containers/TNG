@@ -1,6 +1,6 @@
-pub const OHTTP_CHUNKED_REQUEST_CONTENT_TYPE: &'static str = "message/ohttp-chunked-req";
+pub const OHTTP_CHUNKED_REQUEST_CONTENT_TYPE: &str = "message/ohttp-chunked-req";
 
-pub const OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE: &'static str = "message/ohttp-chunked-res";
+pub const OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE: &str = "message/ohttp-chunked-res";
 
 #[derive(Debug, Clone)]
 #[allow(unused)]

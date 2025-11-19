@@ -6,7 +6,7 @@ pub struct PathRewriteGroup {
 }
 
 impl PathRewriteGroup {
-    pub fn new(path_rewrites_config: &Vec<crate::config::ingress::PathRewrite>) -> Result<Self> {
+    pub fn new(path_rewrites_config: &[crate::config::ingress::PathRewrite]) -> Result<Self> {
         Ok(Self {
             path_rewrites: path_rewrites_config
                 .iter()
@@ -45,12 +45,12 @@ pub enum PathRewriteResult {
 impl PathRewrite {
     pub fn new(match_regex: &str, substitution: &str) -> Result<Self> {
         let _re = regex::Regex::new(match_regex)
-            .with_context(|| format!("Failed to compile user provided regex: {}", match_regex))?;
+            .with_context(|| format!("Failed to compile user provided regex: {match_regex}"))?;
 
         // Let's wrap the match_regex to match the whole string.
         let match_whole_string = format!("^(?:{match_regex})$");
         let re = regex::Regex::new(&match_whole_string)
-            .with_context(|| format!("Failed to compile internal regex: {}", match_whole_string))?;
+            .with_context(|| format!("Failed to compile internal regex: {match_whole_string}"))?;
 
         Ok(Self {
             match_regex: re,
@@ -169,14 +169,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_rewrite_group() -> Result<()> {
-        let path_rewrite_group = PathRewriteGroup::new(&serde_json::from_value(json! {
+        let rewrites: Vec<_> = serde_json::from_value(json! {
             [
                 {
                     "match_regex": "^/foo/bar/([^/]+)([/]?.*)$",
                     "substitution": "/foo/bar/$1"
                 }
             ]
-        })?)?;
+        })?;
+        let path_rewrite_group = PathRewriteGroup::new(&rewrites)?;
 
         assert_eq!(path_rewrite_group.rewrite("/sss"), None);
         assert_eq!(
@@ -184,14 +185,15 @@ mod tests {
             Some(r"/foo/bar/user".to_string())
         );
 
-        let path_rewrite_group = PathRewriteGroup::new(&serde_json::from_value(json! {
+        let rewrites: Vec<_> = serde_json::from_value(json! {
             [
                 {
                     "match_regex": "/bar/([^/]+)([/]?.*)",
                     "substitution": "/bar/$1"
                 }
             ]
-        })?)?;
+        })?;
+        let path_rewrite_group = PathRewriteGroup::new(&rewrites)?;
 
         assert_eq!(path_rewrite_group.rewrite("/sss"), None);
         assert_eq!(

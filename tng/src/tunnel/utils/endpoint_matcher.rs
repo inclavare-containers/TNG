@@ -77,12 +77,10 @@ impl EnvoyDomainMatcher {
     pub fn new(domain: &str) -> Result<Self> {
         if domain == "*" {
             Ok(EnvoyDomainMatcher::MatchAny)
-        } else if domain.starts_with('*') {
-            Ok(EnvoyDomainMatcher::Suffix(domain[1..].to_owned()))
-        } else if domain.ends_with('*') {
-            Ok(EnvoyDomainMatcher::Prefix(
-                domain[..(domain.len() - 1)].to_owned(),
-            ))
+        } else if let Some(stripped) = domain.strip_prefix('*') {
+            Ok(EnvoyDomainMatcher::Suffix(stripped.to_owned()))
+        } else if let Some(stripped) = domain.strip_suffix('*') {
+            Ok(EnvoyDomainMatcher::Prefix(stripped.to_owned()))
         } else if !domain.contains('*') {
             Ok(EnvoyDomainMatcher::Exact(domain.to_owned()))
         } else {
