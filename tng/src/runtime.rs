@@ -21,7 +21,7 @@ use opentelemetry::trace::TracerProvider;
 use scopeguard::defer;
 use tokio_graceful::Shutdown;
 use tokio_util::sync::CancellationToken;
-use tracing::Span;
+use tracing::{Instrument, Span};
 
 pub struct TngRuntime {
     services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
@@ -91,9 +91,11 @@ impl TngRuntime {
 
         for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
             let add_ingress = add_ingress.clone();
-            match &add_ingress.ingress_mode {
-                IngressMode::Mapping(mapping_args) => {
-                    services.push((
+            let span = tracing::info_span!("ingress", id);
+
+            let sevice = async {
+                Ok(match &add_ingress.ingress_mode {
+                    IngressMode::Mapping(mapping_args) => {
                         Box::new(
                             IngressFlow::new(
                                 MappingIngress::new(id, mapping_args).await?,
@@ -102,12 +104,9 @@ impl TngRuntime {
                                 runtime.clone(),
                             )
                             .await?,
-                        ),
-                        tracing::info_span!("ingress", id),
-                    ));
-                }
-                IngressMode::HttpProxy(http_proxy_args) => {
-                    services.push((
+                        )
+                    }
+                    IngressMode::HttpProxy(http_proxy_args) => {
                         Box::new(
                             IngressFlow::new(
                                 HttpProxyIngress::new(id, http_proxy_args).await?,
@@ -116,20 +115,17 @@ impl TngRuntime {
                                 runtime.clone(),
                             )
                             .await?,
-                        ),
-                        tracing::info_span!("ingress", id),
-                    ));
-                }
-                IngressMode::Netfilter(netfilter_args) => {
-                    if !cfg!(target_os = "linux") {
-                        let _ = netfilter_args;
-                        anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                        )
                     }
+                    IngressMode::Netfilter(netfilter_args) => {
+                        if !cfg!(target_os = "linux") {
+                            let _ = netfilter_args;
+                            anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                        }
 
-                    #[cfg(target_os = "linux")]
-                    {
-                        use crate::tunnel::ingress::netfilter::NetfilterIngress;
-                        services.push((
+                        #[cfg(target_os = "linux")]
+                        {
+                            use crate::tunnel::ingress::netfilter::NetfilterIngress;
                             Box::new(
                                 IngressFlow::new(
                                     NetfilterIngress::new(id, netfilter_args).await?,
@@ -138,13 +134,10 @@ impl TngRuntime {
                                     runtime.clone(),
                                 )
                                 .await?,
-                            ),
-                            tracing::info_span!("ingress", id),
-                        ));
+                            )
+                        }
                     }
-                }
-                IngressMode::Socks5(socks5_args) => {
-                    services.push((
+                    IngressMode::Socks5(socks5_args) => {
                         Box::new(
                             IngressFlow::new(
                                 Socks5Ingress::new(id, socks5_args).await?,
@@ -153,40 +146,38 @@ impl TngRuntime {
                                 runtime.clone(),
                             )
                             .await?,
-                        ),
-                        tracing::info_span!("ingress", id),
-                    ));
-                }
-            }
+                        )
+                    }
+                })
+            }.instrument(span.clone()).await?;
+
+            services.push((sevice, span));
         }
 
         for (id, add_egress) in tng_config.add_egress.iter().enumerate() {
             let add_egress = add_egress.clone();
-            match &add_egress.egress_mode {
-                EgressMode::Mapping(mapping_args) => {
-                    services.push((
-                        Box::new(
-                            EgressFlow::new(
-                                MappingEgress::new(id, mapping_args).await?,
-                                &add_egress.common,
-                                &service_metrics_creator,
-                                runtime.clone(),
-                            )
-                            .await?,
-                        ),
-                        tracing::info_span!("egress", id),
-                    ));
-                }
-                EgressMode::Netfilter(netfilter_args) => {
-                    if !cfg!(target_os = "linux") {
-                        let _ = netfilter_args;
-                        anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
-                    }
+            let span = tracing::info_span!("egress", id);
 
-                    #[cfg(target_os = "linux")]
-                    {
-                        use crate::tunnel::egress::netfilter::NetfilterEgress;
-                        services.push((
+            let sevice = async {
+                Ok(match &add_egress.egress_mode {
+                    EgressMode::Mapping(mapping_args) => Box::new(
+                        EgressFlow::new(
+                            MappingEgress::new(id, mapping_args).await?,
+                            &add_egress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
+                        )
+                        .await?,
+                    ),
+                    EgressMode::Netfilter(netfilter_args) => {
+                        if !cfg!(target_os = "linux") {
+                            let _ = netfilter_args;
+                            anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                        }
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            use crate::tunnel::egress::netfilter::NetfilterEgress;
                             Box::new(
                                 EgressFlow::new(
                                     NetfilterEgress::new(id, netfilter_args).await?,
@@ -195,12 +186,13 @@ impl TngRuntime {
                                     runtime.clone(),
                                 )
                                 .await?,
-                            ),
-                            tracing::info_span!("egress", id),
-                        ));
+                            )
+                        }
                     }
-                }
-            }
+                })
+            }.instrument(span.clone()).await?;
+
+            services.push((sevice, span));
         }
 
         let state = Arc::new(TngState::new());
@@ -262,8 +254,6 @@ impl TngRuntime {
 
         // Setup all services
         let service_count = self.services.len();
-        tracing::info!("Starting all {service_count} services");
-
         let (mut ready_receiver, mut error_receiver) = {
             let (ready_sender, ready_receiver) = tokio::sync::mpsc::channel(service_count);
             let (error_sender, error_receiver) = tokio::sync::mpsc::channel(service_count);
@@ -301,7 +291,7 @@ impl TngRuntime {
 
         let maybe_err = tokio::select! {
             _ = check_services_ready => {
-                tracing::info!("All of the services are ready");
+                tracing::info!("All of the {service_count} services are ready");
                 live.record(1, &[]);
 
                 let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
@@ -317,9 +307,9 @@ impl TngRuntime {
         };
 
         if let Some(_e) = maybe_err {
-            tracing::error!("failed to serve all services, canceling and exiting now");
+            tracing::error!("Failed to serve all services, canceling and exiting now");
         } else {
-            tracing::info!("Now shutdown the instance gracefully");
+            tracing::info!("Shutting down the instance");
         }
 
         // Trigger the shutdown guard to gracefully shutdown all the tokio tasks.
