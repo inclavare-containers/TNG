@@ -139,7 +139,7 @@ Although we strive to maintain behavioral compatibility with older versions duri
 
 There are two versions of Rust toolchain required by this project:
 
-- `1.75.0`: This is the minimal supported Rust version for building TNG binary or RPM package (from the source code or the released source code tar ball).
+- `1.89.0`: This is the minimal supported Rust version for building TNG binary or RPM package (from the source code or the released source code tar ball).
 - `nightly-2025-07-07`: This is the requiestd Rust toolchain for:
     - Build the TNG Javascript SDK. See [./tng-wasm/README_zh.md](./tng-wasm/README_zh.md) for details.
     - Create the source code tar ball with `make create-tarball` command. That is because Some of our crate dependencies require a newer Rust toolchain to resolve.

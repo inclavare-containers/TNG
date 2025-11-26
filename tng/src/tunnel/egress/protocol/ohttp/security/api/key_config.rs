@@ -16,7 +16,7 @@ use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyManager, KeyStatus};
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
 use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 use crate::tunnel::ohttp::protocol::{
     AttestationRequest, AttestationResultJwt, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse,
@@ -105,20 +105,18 @@ impl OhttpServerApi {
         key_manager: &dyn KeyManager,
         payload: Option<Json<KeyConfigRequest>>,
     ) -> Result<KeyConfigResponse, TngError> {
-        // Collect all active keys, and create encoded_key_config_list
-        let all_keys = key_manager.get_all_keys().await?;
+        // Collect all client visible keys, and create encoded_key_config_list
+        let all_keys = key_manager.get_client_visible_keys().await?;
         let keys_expire_time = all_keys
             .iter()
-            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
-            .map(|(_, key_info)| key_info.expire_at)
+            .map(|key_info| key_info.expire_at)
             .min()
             .ok_or_else(|| TngError::NoActiveKey)?;
 
         let key_config_list = all_keys
             .into_iter()
-            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
-            .sorted_by_key(|(key_id, _)| *key_id)
-            .map(|(_, key_info)| key_info.key_config)
+            .sorted_by_key(|key_info| key_info.key_config.key_id())
+            .map(|key_info| key_info.key_config)
             .collect_vec();
 
         let encoded_key_config_list = BASE64_STANDARD

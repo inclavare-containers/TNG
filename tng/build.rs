@@ -16,4 +16,10 @@ fn main() {
         &["src/tunnel/ohttp/protocol/"],
     )
     .unwrap();
+
+    prost_build::compile_protos(
+        &["src/tunnel/egress/protocol/ohttp/security/key_manager/peer_shared/key_update.proto"],
+        &["src/tunnel/egress/protocol/ohttp/security/key_manager/peer_shared/"],
+    )
+    .unwrap();
 }

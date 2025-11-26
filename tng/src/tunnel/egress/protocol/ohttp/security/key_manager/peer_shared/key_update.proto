@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package tng.ohttp.key_update;
+
+import "google/protobuf/timestamp.proto";
+
+message KeyUpdateMessage {
+  string node_id = 1;
+
+  oneof event {
+    KeyEventCreated created = 2;
+    KeyEventRemoved removed = 3;
+    KeyEventStatusChanged status_changed = 4;
+  }
+}
+
+message KeyEventCreated { KeyInfo key_info = 1; }
+
+message KeyEventRemoved { KeyInfo key_info = 1; }
+
+message KeyEventStatusChanged {
+  KeyInfo key_info = 1;
+  KeyStatus old_status = 2;
+  KeyStatus new_status = 3;
+}
+
+message KeyInfo {
+  KeyConfig key_config = 1;
+  KeyStatus status = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp stale_at = 4;
+  google.protobuf.Timestamp expire_at = 5;
+}
+
+message KeyConfig {
+  uint32 key_id = 1;
+  Kem kem = 2;
+  repeated SymmetricSuite symmetric = 3;
+  string sk = 4;
+}
+
+enum Kem {
+  KEM_RESERVED = 0;
+  X25519_SHA256 = 32;
+}
+
+message SymmetricSuite {
+  Kdf kdf = 1;
+  Aead aead = 2;
+}
+
+enum Kdf {
+  KDF_RESERVED = 0;
+  HKDF_SHA256 = 1;
+  HKDF_SHA384 = 2;
+  HKDF_SHA512 = 3;
+}
+
+enum Aead {
+  AEAD_RESERVED = 0;
+  AES128_GCM = 1;
+  AES256_GCM = 2;
+  CHACHA20_POLY1305 = 3;
+}
+
+enum KeyStatus {
+  ACTIVE = 0;
+  STALE = 1;
+}

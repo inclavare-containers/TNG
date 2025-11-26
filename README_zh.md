@@ -133,7 +133,7 @@ rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
 
 本项目需要两个版本的 Rust 工具链：
 
-- `1.75.0`：这是构建 TNG 二进制文件或 RPM 包（无论是从源码还是发布的源码 tar 包构建）所要求的最低支持的 Rust 版本。
+- `1.89.0`：这是构建 TNG 二进制文件或 RPM 包（无论是从源码还是发布的源码 tar 包构建）所要求的最低支持的 Rust 版本。
 - `nightly-2025-07-07`：这是以下场景所需的 Rust 工具链：
     - 构建 TNG 的 JavaScript SDK。详细信息请参见 [[./tng-wasm/README_zh.md](file:///root/tng/tng-wasm/README_zh.md)](./tng-wasm/README_zh.md)。
     - 使用 `make create-tarball` 命令创建源代码 tar 包。这是因为我们的一些 crate 依赖项需要更新的 Rust 工具链才能解析。

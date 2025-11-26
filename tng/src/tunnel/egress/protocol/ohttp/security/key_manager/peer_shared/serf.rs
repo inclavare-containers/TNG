@@ -1,0 +1,317 @@
+use crate::config::egress::PeerSharedArgs;
+use crate::error::TngError;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
+    KeyChangeCallback, KeyChangeEvent,
+};
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
+use crate::tunnel::utils::runtime::TokioRuntime;
+
+use anyhow::{anyhow, Context, Result};
+use bytes::BytesMut;
+use prost::Message;
+use scopeguard::defer;
+use serf::delegate::CompositeDelegate;
+use serf::event::{Event, EventProducer};
+use serf::net::{NetTransportOptions, Node, NodeId};
+use serf::tokio::{TokioSocketAddrResolver, TokioTcpSerf};
+use serf::types::MaybeResolvedAddress;
+use serf::{MemberlistOptions, Options};
+use tokio::sync::RwLock;
+use uuid::Uuid;
+
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::ops::Deref;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+const SERF_USER_EVENT_KEY_UPDATE: &str = "key_update";
+
+pub struct PeerSharedKeyManager {
+    pub(super) inner: Arc<PeerSharedKeyManagerInner>,
+    serf: Arc<SerfGracefulShutdown>,
+}
+
+type Serf = TokioTcpSerf<NodeId, TokioSocketAddrResolver, CompositeDelegate<NodeId, SocketAddr>>;
+
+pub(super) struct PeerSharedKeyManagerInner {
+    pub(super) inner_key_manager: SelfGeneratedKeyManager,
+    pub(super) keys_from_peers: RwLock<HashMap<KeyConfigHash, KeyInfo>>,
+}
+
+impl PeerSharedKeyManager {
+    pub async fn new(runtime: TokioRuntime, peer_shared: PeerSharedArgs) -> Result<Self, TngError> {
+        let opts = Options::new()
+            .with_memberlist_options(MemberlistOptions::lan())
+            .with_event_buffer_size(256);
+        let node_id_str = Uuid::new_v4().to_string();
+        let node_id = NodeId::<255>::new(&node_id_str)
+            .with_context(|| format!("invalid node id {node_id_str}"))
+            .map_err(TngError::InvalidParameter)?;
+        tracing::info!(
+            ?node_id,
+            "Launching peer shared key manager with serf protocol"
+        );
+        let net_opts = NetTransportOptions::<_, TokioSocketAddrResolver, _>::new(node_id)
+            .with_bind_addresses(
+                [{
+                    let addr = format!("{}:{}", peer_shared.host, peer_shared.port);
+                    std::net::SocketAddr::from_str(&addr)
+                        .with_context(|| format!("invalid address {addr}"))
+                        .map_err(TngError::InvalidParameter)?
+                }]
+                .into_iter()
+                .collect(),
+            );
+
+        let (producer, subscriber) = EventProducer::unbounded();
+        // TODO: change to use rats-tls instead of TCP
+        let serf = TokioTcpSerf::with_event_producer(net_opts, opts, producer)
+            .await
+            .map_err(|error| TngError::SerfCrateError(anyhow!(error)))?;
+
+        let serf = Arc::new(SerfGracefulShutdown::new(serf, runtime.clone()));
+
+        // Join existing serf cluster
+        {
+            for (i, addr) in peer_shared.peers.iter().enumerate() {
+                let node = Node::new(
+                    #[allow(clippy::unwrap_used)]
+                    NodeId::<255>::new(format!("unresolved_peer_{i}")).unwrap(),
+                    MaybeResolvedAddress::unresolved(
+                        std::net::SocketAddr::from_str(addr)
+                            .with_context(|| format!("invalid peer address {addr}"))
+                            .map_err(TngError::InvalidParameter)?,
+                    ),
+                );
+
+                let _ = serf
+                    .join(node, false)
+                    .await
+                    .with_context(|| format!("Failed to join existing serf cluster {addr:?}"))
+                    .map_err(TngError::SerfCrateError)?;
+            }
+        }
+
+        let inner = Arc::new(PeerSharedKeyManagerInner {
+            inner_key_manager: SelfGeneratedKeyManager::new_with_auto_refresh(
+                runtime.clone(),
+                peer_shared.rotation_interval,
+            )?,
+            keys_from_peers: Default::default(),
+        });
+        let inner_clone = inner.clone();
+
+        // Register callback to broadcast key change event to all serf members
+        {
+            let node_id_str = node_id_str.clone();
+            // Here we use weak reference to avoid memory leak due to reference cycle
+            let serf_weak = Arc::downgrade(&serf);
+
+            let broadcast_func: KeyChangeCallback = Arc::new(move |event| {
+                let node_id_str = node_id_str.clone();
+                let serf_weak = serf_weak.clone();
+
+                Box::pin(async move {
+                    let Some(serf_clone) = serf_weak.upgrade() else {
+                        tracing::debug!(
+                            "stop broadcast key change event since inner has been dropped"
+                        );
+                        return;
+                    };
+
+                    tracing::info!(?event, "broadcast key change event to all serf members");
+
+                    let message_buf = async {
+                        let message = self::KeyUpdateMessage {
+                            node_id: node_id_str.clone(),
+                            event: event.clone(),
+                        };
+                        let message = super::key_update::pb::KeyUpdateMessage::try_from(message)?;
+
+                        let mut message_buf = BytesMut::new();
+                        message_buf.reserve(message.encoded_len()); // to prevent reallocations during encoding
+                        message.encode(&mut message_buf)?;
+                        Ok::<_, anyhow::Error>(message_buf)
+                    }
+                    .await;
+
+                    let message_buf = match message_buf {
+                        Ok(v) => v,
+                        Err(error) => {
+                            tracing::error!(?error, "Failed to encode key update message");
+                            return;
+                        }
+                    };
+
+                    // broadcast a key update event to all members
+                    if let Err(error) = serf_clone
+                        .user_event(SERF_USER_EVENT_KEY_UPDATE, message_buf, false)
+                        .await
+                    {
+                        tracing::error!(?error, "failed to send key update event");
+                    }
+                })
+            });
+
+            // We need to broadcast all key change events to the cluster
+            inner
+                .inner_key_manager
+                .register_callback(broadcast_func.clone())
+                .await;
+
+            // Make sure we have broadcast all existing keys to the cluster
+            for key_info in inner.inner_key_manager.get_client_visible_keys().await? {
+                broadcast_func(&KeyChangeEvent::Created {
+                    key_info: Cow::Owned(key_info),
+                })
+                .await;
+            }
+        }
+
+        let _peer_keys_sharing_task = runtime.spawn_unsupervised_task_current_span(async move {
+            defer! {
+                tracing::info!("Peer keys sharing stopped");
+            }
+
+            tracing::info!("Start Peer keys sharing");
+
+            loop {
+                let Ok(event) = subscriber.recv().await else {
+                    tracing::debug!("serf event channel closed, task quit now");
+                    break;
+                };
+
+                let fut = async {
+                    'skip: {
+                        match event {
+                            Event::User(ev) => match ev.name().as_str() {
+                                SERF_USER_EVENT_KEY_UPDATE => {
+                                    let payload = ev.payload();
+
+                                    let key_update: KeyUpdateMessage =
+                                        super::key_update::pb::KeyUpdateMessage::decode(
+                                            payload.as_ref(),
+                                        )
+                                        .context("decode protobuf data")
+                                        .map_err(TngError::KeyUpdateMessageDecodeError)?
+                                        .try_into()
+                                        .map_err(TngError::KeyUpdateMessageDecodeError)?;
+
+                                    if key_update.node_id == node_id_str {
+                                        break 'skip;
+                                    }
+
+                                    tracing::info!(
+                                        node_id = ?key_update.node_id,
+                                        event = ?key_update.event,
+                                        "Got key update serf event"
+                                    );
+
+                                    let now = SystemTime::now();
+
+                                    match key_update.event {
+                                        KeyChangeEvent::Created { key_info }
+                                        | KeyChangeEvent::StatusChanged { key_info, .. } => {
+                                            // Ignore the key if it has already expired yet
+                                            if now < key_info.expire_at {
+                                                inner_clone.keys_from_peers.write().await.insert(
+                                                    key_info.key_config.key_config_hash()?,
+                                                    key_info.into_owned(),
+                                                );
+                                            }
+                                        }
+                                        KeyChangeEvent::Removed { key_info } => {
+                                            inner_clone
+                                                .keys_from_peers
+                                                .write()
+                                                .await
+                                                .remove(&key_info.key_config.key_config_hash()?);
+                                        }
+                                    }
+
+                                    // Scan and remove all the expired keys
+                                    inner_clone
+                                        .keys_from_peers
+                                        .write()
+                                        .await
+                                        .retain(|_, key_info| now < key_info.expire_at)
+                                }
+                                event => {
+                                    tracing::warn!(event, "unknown user serf event");
+                                }
+                            },
+                            Event::Member(member_event) => {
+                                tracing::info!(?member_event, "serf member event")
+                            }
+                            _ => { /* ignore */ }
+                        }
+                    }
+
+                    Ok::<(), anyhow::Error>(())
+                };
+
+                if let Err(error) = fut.await {
+                    tracing::info!(?error, "Error during handling serf event");
+                }
+            }
+        });
+
+        Ok(Self { inner, serf })
+    }
+}
+
+struct SerfGracefulShutdown {
+    serf: Option<Serf>,
+    runtime: TokioRuntime,
+}
+
+impl SerfGracefulShutdown {
+    pub fn new(serf: Serf, runtime: TokioRuntime) -> Self {
+        Self {
+            serf: Some(serf),
+            runtime,
+        }
+    }
+}
+
+impl Deref for SerfGracefulShutdown {
+    type Target = Serf;
+
+    fn deref(&self) -> &Self::Target {
+        #[allow(clippy::unwrap_used)]
+        self.serf.as_ref().unwrap()
+    }
+}
+
+impl Drop for SerfGracefulShutdown {
+    fn drop(&mut self) {
+        if let Some(serf) = self.serf.take() {
+            tracing::info!("Start leaving the serf cluster");
+
+            self.runtime
+                .spawn_unsupervised_task_current_span(async move {
+                    match serf.leave().await {
+                        Ok(()) => {
+                            let _ = serf.shutdown().await;
+                            tracing::info!("Left the serf cluster gracefully");
+                        }
+                        Err(error) => {
+                            tracing::error!(?error, "Failed to leave the serf cluster gracefully");
+                            let _ = serf.shutdown().await;
+                        }
+                    }
+                });
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct KeyUpdateMessage<'a> {
+    pub node_id: String,
+    pub event: KeyChangeEvent<'a>,
+}

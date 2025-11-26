@@ -25,6 +25,7 @@ http = "1.3.1"
 http-body-util = "0.1.3"
 hyper = {version = "1", default-features = false, features = ["http1", "http2"]}
 hyper-util = {version = "=0.1.7", features = ["service", "client-legacy", "http1", "http2"]}
+itertools = "0.14.0"
 regex = "1.11.1"
 reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
 scopeguard = "1.2.0"
