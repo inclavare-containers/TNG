@@ -5420,9 +5420,9 @@ dependencies = [
 
 [[package]]
 name = "serf"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13861b6fced1ccca1689a0ada47656b69df380561b347c612288ccacff6d2b6"
+checksum = "baf47a472a1dc0b267e9adf3af704f44bb30479e18c34279cdb2237a3d7fa756"
 dependencies = [
  "memberlist",
  "serf-core",
@@ -5430,9 +5430,9 @@ dependencies = [
 
 [[package]]
 name = "serf-core"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba161e06d62df4e0eb63b7a273353cf10e15052c2883133a6fd27793b77438db"
+checksum = "1039fa465dcc7f49581b5df0457b1a6cd042e7125e04db7689cda54d82147a56"
 dependencies = [
  "arc-swap",
  "async-channel",
@@ -6039,6 +6039,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "peekable",
  "pin-project",
  "pin-project-lite",
  "portpicker",
