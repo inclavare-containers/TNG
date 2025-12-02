@@ -3,6 +3,7 @@ use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
     KeyChangeCallback, KeyChangeEvent,
 };
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_tls::RatsTls;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
@@ -15,7 +16,7 @@ use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
 use serf::event::{Event, EventProducer};
 use serf::net::{NetTransportOptions, Node, NodeId};
-use serf::tokio::{TokioSocketAddrResolver, TokioTcpSerf};
+use serf::tokio::TokioSocketAddrResolver;
 use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
@@ -36,7 +37,14 @@ pub struct PeerSharedKeyManager {
     serf: Arc<SerfGracefulShutdown>,
 }
 
-type Serf = TokioTcpSerf<NodeId, TokioSocketAddrResolver, CompositeDelegate<NodeId, SocketAddr>>;
+type Serf = serf::Serf<
+    serf::net::TokioNetTransport<
+        NodeId,
+        TokioSocketAddrResolver,
+        RatsTls<serf::agnostic::tokio::TokioRuntime>,
+    >,
+    CompositeDelegate<NodeId, SocketAddr>,
+>;
 
 pub(super) struct PeerSharedKeyManagerInner {
     pub(super) inner_key_manager: SelfGeneratedKeyManager,
@@ -56,7 +64,11 @@ impl PeerSharedKeyManager {
             ?node_id,
             "Launching peer shared key manager with serf protocol"
         );
-        let net_opts = NetTransportOptions::<_, TokioSocketAddrResolver, _>::new(node_id)
+        let net_opts =
+            NetTransportOptions::<_, TokioSocketAddrResolver, _>::with_stream_layer_options(
+                node_id,
+                (peer_shared.ra_args.into_checked()?, runtime.clone()),
+            )
             .with_bind_addresses(
                 [{
                     let addr = format!("{}:{}", peer_shared.host, peer_shared.port);
@@ -69,8 +81,7 @@ impl PeerSharedKeyManager {
             );
 
         let (producer, subscriber) = EventProducer::unbounded();
-        // TODO: change to use rats-tls instead of TCP
-        let serf = TokioTcpSerf::with_event_producer(net_opts, opts, producer)
+        let serf = Serf::with_event_producer(net_opts, opts, producer)
             .await
             .map_err(|error| TngError::SerfCrateError(anyhow!(error)))?;
 
