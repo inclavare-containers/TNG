@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -11,7 +12,6 @@ use tokio::sync::mpsc::Sender;
 
 use crate::config::egress::CommonArgs;
 use crate::tunnel::access_log::AccessLog;
-use crate::tunnel::egress::stream_manager::trusted::StreamType;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
@@ -45,7 +45,7 @@ pub(super) trait EgressTrait: Sync + Send {
 pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
 
 pub(super) struct AcceptedStream {
-    pub stream: Box<dyn CommonStreamTrait + Send>,
+    pub stream: Box<dyn CommonStreamTrait + Sync>,
     pub src: SocketAddr,
     pub dst: TngEndpoint,
 }
@@ -133,79 +133,77 @@ impl EgressFlow {
 
         // TODO: stop all task when downstream is already closed
 
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(StreamType, _)>();
-
         let span = tracing::info_span!("serve", client=?src);
+        let runtime_cloned = runtime.clone();
+        runtime.spawn_supervised_task_with_span(span, async move {
+            tracing::debug!("Start serving new connection from client");
 
-        runtime.spawn_supervised_task_fn_with_span(span.clone(), move |shutdown_guard| {
-            async move {
-                tracing::debug!("Start serving new connection from client");
+            // Consume streams come from downstream
+            let mut pending = match trusted_stream_manager.consume_stream(stream).await {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::error!(?error, "Failed to consume stream from client");
+                    return;
+                }
+            };
 
-                // Consume streams come from downstream
-                match trusted_stream_manager.consume_stream(stream, sender).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::error!(error=?e, "Failed to consume stream from client");
+            while let Some(next_stream) = pending.next().await {
+                let next_stream = match next_stream {
+                    Ok(next_stream) => next_stream,
+                    Err(error) => {
+                        tracing::error!(?error, "Failed to get next stream");
+                        continue;
                     }
-                }
-                // Ensure the shutdown_guard is used to prevent warning
-                drop(shutdown_guard);
-            }
-        });
+                };
 
-        let runtime_cloned2 = runtime.clone();
-        runtime.spawn_supervised_task_fn_with_span(span, move |shutdown_guard| {
-            async move {
-                while let Some((stream_type, attestation_result)) = receiver.recv().await {
-                    let metrics = metrics.clone();
+                let metrics = metrics.clone();
 
-                    // Spawn a task to handle the connection
-                    runtime_cloned2.spawn_supervised_task_current_span({
-                        let dst = dst.clone();
+                // Spawn a task to handle the connection
+                runtime_cloned.spawn_supervised_task_current_span({
+                    let dst = dst.clone();
 
-                        async move {
-                            let fut = async {
-                                let active_cx = metrics.new_cx();
+                    async move {
+                        let fut = async {
+                            let active_cx = metrics.new_cx();
 
-                                // Print access log
-                                let access_log = AccessLog::Egress {
-                                    downstream: src,
-                                    upstream: &dst,
-                                    from_trusted_tunnel: stream_type.is_secured(),
-                                    peer_attested: attestation_result,
-                                };
-                                tracing::info!(?access_log);
-
-                                let downstream = stream_type.into_stream();
-
-                                let upstream = tcp_connect(
-                                    (dst.host(), dst.port()),
-                                    #[cfg(any(
-                                        target_os = "android",
-                                        target_os = "fuchsia",
-                                        target_os = "linux"
-                                    ))]
-                                    transport_so_mark,
-                                )
-                                .await
-                                .context("Failed to connect to upstream")?;
-
-                                let downstream = metrics.new_wrapped_stream(downstream);
-
-                                utils::forward::forward_stream(upstream, downstream).await?;
-
-                                active_cx.mark_finished_successfully();
-                                Ok::<_, anyhow::Error>(())
+                            // Print access log
+                            let access_log = AccessLog::Egress {
+                                downstream: src,
+                                upstream: &dst,
+                                from_trusted_tunnel: next_stream.is_secured(),
+                                attestation_info: next_stream
+                                    .attestation_result()
+                                    .map(Cow::Borrowed),
                             };
+                            tracing::info!(?access_log);
 
-                            if let Err(e) = fut.await {
-                                tracing::error!(error=?e, "Failed to forward stream");
-                            }
+                            let downstream = next_stream.into_stream();
+
+                            let upstream = tcp_connect(
+                                (dst.host(), dst.port()),
+                                #[cfg(any(
+                                    target_os = "android",
+                                    target_os = "fuchsia",
+                                    target_os = "linux"
+                                ))]
+                                transport_so_mark,
+                            )
+                            .await
+                            .context("Failed to connect to upstream")?;
+
+                            let downstream = metrics.new_wrapped_stream(downstream);
+
+                            utils::forward::forward_stream(upstream, downstream).await?;
+
+                            active_cx.mark_finished_successfully();
+                            Ok::<_, anyhow::Error>(())
+                        };
+
+                        if let Err(e) = fut.await {
+                            tracing::error!(error=?e, "Failed to forward stream");
                         }
-                    });
-                }
-                // Ensure the shutdown_guard is used to prevent warning
-                drop(shutdown_guard);
+                    }
+                });
             }
         });
     }

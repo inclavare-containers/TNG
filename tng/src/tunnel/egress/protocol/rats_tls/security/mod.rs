@@ -16,7 +16,7 @@ use rustls_config::OnetimeTlsServerConfig;
 use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
-pub struct RatsTlsSecurityLayer {
+pub(super) struct RatsTlsSecurityLayer {
     tls_config_generator: TlsConfigGenerator,
 }
 
@@ -29,10 +29,13 @@ impl RatsTlsSecurityLayer {
         })
     }
 
-    pub async fn handshake(
+    pub async fn handshake<T: CommonStreamTrait + std::marker::Sync>(
         &self,
-        stream: impl CommonStreamTrait,
-    ) -> Result<(impl CommonStreamTrait, Option<AttestationResult>)> {
+        stream: T,
+    ) -> Result<(
+        tokio_rustls::server::TlsStream<T>,
+        Option<AttestationResult>,
+    )> {
         async {
             // Prepare TLS config
             let OnetimeTlsServerConfig(tls_server_config, verifier) = self
@@ -60,7 +63,7 @@ impl RatsTlsSecurityLayer {
                 Ok::<_, anyhow::Error>((security_layer_stream, attestation_result))
             }
             .await
-            .context("Failed to setup rats-tls connection")
+            .context("Failed to accept rats-tls connection from downstream")
         }
         .instrument(tracing::info_span!("security"))
         .await

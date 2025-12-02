@@ -1,14 +1,14 @@
 use axum::response::IntoResponse;
 
-use crate::{
-    error::TngError, tunnel::egress::stream_manager::trusted::StreamType, AttestationResult,
-    TokioIo, TokioRuntime,
-};
+use crate::{error::TngError, AttestationResult, CommonStreamTrait, TokioIo, TokioRuntime};
 
 #[derive(Clone)]
 pub struct TngStreamContext {
     pub runtime: TokioRuntime,
-    pub sender: tokio::sync::mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>,
+    pub sender: tokio::sync::mpsc::UnboundedSender<(
+        Box<dyn CommonStreamTrait + Sync>,
+        Option<AttestationResult>,
+    )>,
 }
 
 impl TngStreamContext {
@@ -28,7 +28,7 @@ impl TngStreamContext {
         let (s1, s2) = tokio::io::duplex(4096);
 
         self.sender
-            .send((StreamType::SecuredStream(Box::new(s2)), attestation_result))
+            .send((Box::new(s2), attestation_result))
             .map_err(|_| TngError::ConnectUpstreamFailed)?;
 
         // TODO: support send both http1 and http2 payload

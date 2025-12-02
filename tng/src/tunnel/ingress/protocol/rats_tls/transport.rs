@@ -52,10 +52,8 @@ pub struct RatsTlsTransportLayerConnector {
     pub transport_layer_span: Span,
 }
 
-pub type RatsTlsTransportLayerStream = tokio::net::TcpStream;
-
 impl<Req> tower::Service<Req> for RatsTlsTransportLayerConnector {
-    type Response = TokioIo<RatsTlsTransportLayerStream>;
+    type Response = TokioIo<tokio::net::TcpStream>;
     type Error = anyhow::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 

@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::tunnel::utils::maybe_cached::RefreshStrategy;
+use crate::{error::TngError, tunnel::utils::maybe_cached::RefreshStrategy};
 
 /// Remote Attestation configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,15 +34,19 @@ pub enum RaArgs {
 }
 
 impl RaArgsUnchecked {
-    pub fn into_checked(self) -> Result<RaArgs> {
+    pub fn into_checked(self) -> Result<RaArgs, TngError> {
         let ra_args = if self.no_ra {
             // Sanity check
             if self.verify.is_some() {
-                bail!("The 'no_ra: true' flag should not be used with 'verify' field");
+                return Err(TngError::InvalidParameter(anyhow!(
+                    "The 'no_ra: true' flag should not be used with 'verify' field"
+                )));
             }
 
             if self.attest.is_some() {
-                bail!("The 'no_ra: true' flag should not be used with 'attest' field");
+                return Err(TngError::InvalidParameter(anyhow!(
+                    "The 'no_ra: true' flag should not be used with 'attest' field"
+                )));
             }
 
             tracing::warn!("The 'no_ra: true' flag was set, please note that SHOULD NOT be used in production environment");
@@ -51,7 +55,7 @@ impl RaArgsUnchecked {
         } else {
             match (self.attest, self.verify) {
                 (None, None) => {
-                    bail!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'");
+                    return Err(TngError::InvalidParameter(anyhow!("At least one of 'attest' and 'verify' field and '\"no_ra\": true' should be set for 'add_egress'")));
                 }
                 (None, Some(verify)) => RaArgs::VerifyOnly(verify),
                 #[cfg(unix)]
@@ -60,7 +64,7 @@ impl RaArgsUnchecked {
                 (Some(attest), Some(verify)) => RaArgs::AttestAndVerify(attest, verify),
                 #[cfg(wasm)]
                 (Some(..), _) => {
-                    bail!("`attest` option is not supported since attestation is not supported on this platform.")
+                    return Err(TngError::InvalidParameter(anyhow!("`attest` option is not supported since attestation is not supported on this platform.")));
                 }
             }
         };
@@ -79,10 +83,13 @@ impl RaArgsUnchecked {
                 } => {
                     let aa_sock_file = aa_addr
                         .strip_prefix("unix:///")
-                        .context("AA address must start with unix:///")?;
+                        .context("AA address must start with unix:///")
+                        .map_err(TngError::InvalidParameter)?;
                     let aa_sock_file = Path::new("/").join(aa_sock_file);
                     if !Path::new(&aa_sock_file).exists() {
-                        bail!("AA socket file {aa_sock_file:?} not found")
+                        return Err(TngError::InvalidParameter(anyhow!(
+                            "AA socket file {aa_sock_file:?} not found"
+                        )));
                     }
                 }
             };
@@ -107,7 +114,7 @@ impl RaArgsUnchecked {
                     if let Some(paths) = &token_verify.trusted_certs_paths {
                         for path in paths {
                             if !Path::new(path).exists() {
-                                bail!("Attestation service trusted certificate path does not exist: {}", path);
+                                return Err(TngError::InvalidParameter(anyhow!("Attestation service trusted certificate path does not exist: {}", path)));
                             }
                         }
                     }
@@ -116,9 +123,11 @@ impl RaArgsUnchecked {
 
             // Check if as_addr is a valid URL
             if let VerifyArgs::BackgroundCheck { as_args } = verify_args {
-                Url::parse(&as_args.as_addr).with_context(|| {
-                    format!("Invalid attestation service address: {}", &as_args.as_addr)
-                })?;
+                Url::parse(&as_args.as_addr)
+                    .with_context(|| {
+                        format!("Invalid attestation service address: {}", &as_args.as_addr)
+                    })
+                    .map_err(TngError::InvalidParameter)?;
             }
         }
         Ok(ra_args)

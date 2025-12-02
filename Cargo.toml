@@ -52,6 +52,10 @@ rev = "edd4658e698a030ff04bbb62e954f363b31a25c8"
 branch = "wasm"
 git = "https://github.com/inclavare-containers/tokio-graceful.git"
 
+[patch.crates-io.hyper]
+git = "https://github.com/inclavare-containers/hyper.git"
+rev = "59b43a6315a8f48ebfa4d12bbcd80cc0b1969a26"
+
 [patch.crates-io]
 hyper-util = {path = "./deps/hyper-util-shim"}
 

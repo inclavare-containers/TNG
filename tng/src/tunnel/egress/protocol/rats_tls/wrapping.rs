@@ -10,13 +10,11 @@ use tower::ServiceBuilder;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
-use crate::tunnel::egress::stream_manager::{
-    trusted::StreamType, trusted::TrustedStreamManager, StreamManager,
-};
 use crate::tunnel::{
     attestation_result::AttestationResult,
-    utils::{runtime::TokioRuntime, tokio::TokioIo},
+    utils::{self, runtime::TokioRuntime, tokio::TokioIo},
 };
+use crate::CommonStreamTrait;
 
 fn error_response(code: StatusCode, msg: String) -> Response {
     tracing::error!(?code, ?msg, "responding errors to downstream");
@@ -27,9 +25,12 @@ pub struct RatsTlsWrappingLayer {}
 
 impl RatsTlsWrappingLayer {
     pub async fn unwrap_stream(
-        tls_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+        tls_stream: impl CommonStreamTrait + Sync,
         attestation_result: Option<AttestationResult>,
-        channel: <TrustedStreamManager as StreamManager>::Sender,
+        channel: tokio::sync::mpsc::UnboundedSender<(
+            Box<dyn CommonStreamTrait + Sync>,
+            Option<AttestationResult>,
+        )>,
         runtime: TokioRuntime,
     ) {
         let runtime_cloned = runtime.clone();
@@ -59,7 +60,6 @@ impl RatsTlsWrappingLayer {
         let svc = TowerToHyperService::new(svc);
 
         if let Err(error) = hyper::server::conn::http2::Builder::new(runtime_cloned)
-            // hyper::server::conn::http1::Builder::new()
             .serve_connection(TokioIo::new(tls_stream), svc)
             .instrument(span)
             .await
@@ -71,7 +71,10 @@ impl RatsTlsWrappingLayer {
     async fn terminate_http_connect_svc(
         req: Request<Incoming>,
         attestation_result: Option<AttestationResult>,
-        channel: <TrustedStreamManager as StreamManager>::Sender,
+        channel: tokio::sync::mpsc::UnboundedSender<(
+            Box<dyn CommonStreamTrait + Sync>,
+            Option<AttestationResult>,
+        )>,
         runtime: TokioRuntime,
     ) -> Result<Response> {
         tracing::trace!("Handling new wrapping stream");
@@ -84,10 +87,12 @@ impl RatsTlsWrappingLayer {
                     Ok(upgraded) => {
                         tracing::debug!("Trusted tunnel established");
 
-                        if let Err(e) = channel.send((
-                            StreamType::SecuredStream(Box::new(TokioIo::new(upgraded))),
-                            attestation_result,
-                        )) {
+                        let Ok(io) = utils::hyper::downcast_h2upgraded(upgraded) else {
+                            tracing::error!("failed to downcast to inner stream");
+                            return;
+                        };
+
+                        if let Err(e) = channel.send((Box::new(io), attestation_result)) {
                             tracing::error!("Failed to send stream via channel: {e:#}");
                         }
                     }

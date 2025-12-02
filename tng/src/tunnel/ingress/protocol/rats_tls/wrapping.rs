@@ -1,9 +1,16 @@
+use std::net::SocketAddr;
+
 use anyhow::{bail, Context as _, Result};
 use http::{Request, StatusCode, Version};
 use http_body_util::combinators::BoxBody;
-use hyper::upgrade::Upgraded;
 
-use crate::tunnel::{attestation_result::AttestationResult, utils::tokio::TokioIo};
+use crate::{
+    tunnel::{
+        attestation_result::AttestationResult,
+        utils::{self},
+    },
+    CommonStreamTrait,
+};
 
 use super::security::RatsTlsClient;
 
@@ -12,7 +19,11 @@ pub struct RatsTlsWrappingLayer {}
 impl RatsTlsWrappingLayer {
     pub async fn create_stream_from_hyper(
         client: &RatsTlsClient,
-    ) -> Result<(TokioIo<Upgraded>, Option<AttestationResult>)> {
+    ) -> Result<(
+        impl CommonStreamTrait + Sync,
+        /* local_addr */ SocketAddr,
+        Option<AttestationResult>,
+    )> {
         let req = Request::connect("https://tng.internal/")
             .version(Version::HTTP_2)
             // .version(Version::HTTP_11)
@@ -39,12 +50,23 @@ impl RatsTlsWrappingLayer {
                 resp
             );
         }
+
+        let local_addr = resp
+            .extensions()
+            .get::<hyper_util::client::legacy::connect::HttpInfo>()
+            .context("Can not get local addr")?
+            .local_addr();
+
         let upgraded = hyper::upgrade::on(&mut resp)
             .await
             .context("Failed to establish HTTP/2 CONNECT tunnel")?;
 
+        let Ok(stream) = utils::hyper::downcast_h2upgraded(upgraded) else {
+            bail!("failed to downcast to inner stream");
+        };
+
         tracing::debug!("Trusted tunnel established");
 
-        Ok((TokioIo::new(upgraded), attestation_result))
+        Ok((stream, local_addr, attestation_result))
     }
 }

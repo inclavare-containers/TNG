@@ -59,11 +59,11 @@ impl TransportLayer {
 }
 
 impl TransportLayer {
-    pub async fn decode(
+    pub async fn check_direct_forward(
         &self,
-        in_stream: Box<dyn CommonStreamTrait>,
+        in_stream: Box<dyn CommonStreamTrait + Sync>,
         _runtime: TokioRuntime,
-    ) -> Result<DecodeResult> {
+    ) -> Result<MaybeDirectlyForward> {
         let span = tracing::info_span!("transport");
 
         // Set timeout for underly tcp stream
@@ -91,21 +91,24 @@ impl TransportLayer {
                 let request_info =
                     result.context("Failed during inspecting http request from downstream")?;
 
-                let unmodified_stream = Box::new(unmodified_stream) as Box<dyn CommonStreamTrait>;
+                let unmodified_stream =
+                    Box::new(unmodified_stream) as Box<dyn CommonStreamTrait + Sync>;
 
                 // If it should be forwarded directly, we just do that.
                 if direct_forward_traffic_detector.should_forward_directly(&request_info) {
                     // Bypass the security layer and wrapping layer, forward the stream to upstream directly.
                     tracing::debug!("Forwarding directly");
-                    DecodeResult::DirectlyForward(unmodified_stream)
+                    MaybeDirectlyForward::DirectlyForward(unmodified_stream)
                 } else {
                     tracing::debug!("Try to decode as TNG traffic");
                     // If not, we try to treat it as tng traffic, it is determined by the configuration of transport layer.
-                    DecodeResult::ContinueAsTngTraffic(unmodified_stream)
+                    MaybeDirectlyForward::ContinueAsTngTraffic(unmodified_stream)
                 }
             } else {
                 // Treat it as a valid tng traffic and try to decode from it.
-                DecodeResult::ContinueAsTngTraffic(Box::new(in_stream) as Box<dyn CommonStreamTrait>)
+                MaybeDirectlyForward::ContinueAsTngTraffic(
+                    Box::new(in_stream) as Box<dyn CommonStreamTrait + Sync>
+                )
             };
 
             Ok(state)
@@ -115,7 +118,7 @@ impl TransportLayer {
     }
 }
 
-pub enum DecodeResult {
-    ContinueAsTngTraffic(Box<dyn CommonStreamTrait>),
-    DirectlyForward(Box<dyn CommonStreamTrait>),
+pub enum MaybeDirectlyForward {
+    DirectlyForward(Box<dyn CommonStreamTrait + Sync>),
+    ContinueAsTngTraffic(Box<dyn CommonStreamTrait + Sync>),
 }
