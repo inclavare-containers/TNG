@@ -263,17 +263,13 @@ impl TngRuntime {
             for (service, span) in self.services.drain(..) {
                 let ready_sender = ready_sender.clone();
                 let error_sender = error_sender.clone();
-                self.runtime.spawn_supervised_task_fn_with_span(
-                    span,
-                    move |shutdown_guard| async move {
+                self.runtime
+                    .spawn_supervised_task_with_span(span, async move {
                         if let Err(e) = service.serve(ready_sender).await {
                             tracing::error!(error=?e, "service failed");
                             let _ = error_sender.send(e).await;
                         }
-                        // Ensure the shutdown_guard is used to prevent warning
-                        drop(shutdown_guard);
-                    },
-                );
+                    });
             }
             (ready_receiver, error_receiver)
         };

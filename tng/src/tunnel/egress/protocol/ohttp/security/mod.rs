@@ -5,10 +5,7 @@ use tracing::Instrument;
 
 use crate::{
     config::{egress::OHttpArgs, ra::RaArgs},
-    tunnel::egress::{
-        protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
-        stream_manager::trusted::StreamType,
-    },
+    tunnel::egress::protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
     AttestationResult, CommonStreamTrait, TokioRuntime,
 };
 
@@ -37,7 +34,10 @@ impl OHttpSecurityLayer {
     pub async fn handle_stream(
         &self,
         stream: impl CommonStreamTrait,
-        sender: tokio::sync::mpsc::UnboundedSender<(StreamType, Option<AttestationResult>)>,
+        sender: tokio::sync::mpsc::UnboundedSender<(
+            Box<dyn CommonStreamTrait + Sync>,
+            Option<AttestationResult>,
+        )>,
     ) -> Result<()> {
         async {
             let app = self

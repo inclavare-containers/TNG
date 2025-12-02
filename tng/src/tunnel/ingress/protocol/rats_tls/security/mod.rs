@@ -5,6 +5,7 @@ mod rustls_config;
 use std::{
     collections::HashMap,
     future::Future,
+    net::SocketAddr,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -35,9 +36,7 @@ use crate::{
     CommonStreamTrait,
 };
 
-use super::transport::{
-    RatsTlsTransportLayerConnector, RatsTlsTransportLayerCreator, RatsTlsTransportLayerStream,
-};
+use super::transport::{RatsTlsTransportLayerConnector, RatsTlsTransportLayerCreator};
 
 #[derive(Clone)]
 pub struct RatsTlsClient {
@@ -158,7 +157,11 @@ impl RatsTlsSecurityLayer {
     pub async fn allocate_secured_stream(
         &self,
         endpoint: TngEndpoint,
-    ) -> Result<(impl CommonStreamTrait, Option<AttestationResult>)> {
+    ) -> Result<(
+        impl CommonStreamTrait + Sync,
+        /* local_addr */ SocketAddr,
+        Option<AttestationResult>,
+    )> {
         let pool_key = PoolKey::new(endpoint);
 
         let client = self.get_client(&pool_key).await?;
@@ -178,9 +181,7 @@ pub struct SecurityConnector {
 impl SecurityConnector {}
 
 impl tower::Service<Uri> for SecurityConnector {
-    type Response = SecurityConnection<
-        TokioIo<tokio_rustls::client::TlsStream<super::transport::RatsTlsTransportLayerStream>>,
-    >;
+    type Response = RatsTlsConnection;
 
     type Error = anyhow::Error;
 
@@ -228,27 +229,32 @@ impl tower::Service<Uri> for SecurityConnector {
                     };
 
                     tracing::debug!("New rats-tls connection established");
-                    Ok::<_, anyhow::Error>(SecurityConnection::wrap_with_attestation_result(
-                        security_layer_stream,
-                        attestation_result,
-                    ))
+                    Ok::<_, anyhow::Error>(
+                        StreamWithAttestationResult::wrap_with_attestation_result(
+                            security_layer_stream,
+                            attestation_result,
+                        ),
+                    )
                 }
                 .await
-                .context("Failed to setup rats-tls connection")
+                .context("Failed to establish rats-tls connection as client")
             }
             .instrument(self.security_layer_span.clone()),
         )
     }
 }
 
+pub type RatsTlsConnection =
+    StreamWithAttestationResult<TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>>;
+
 #[pin_project]
-pub struct SecurityConnection<T> {
+pub struct StreamWithAttestationResult<T> {
     #[pin]
     inner: T,
     attestation_result: Option<AttestationResult>,
 }
 
-impl<T> SecurityConnection<T> {
+impl<T> StreamWithAttestationResult<T> {
     pub fn wrap_with_attestation_result(
         inner: T,
         attestation_result: Option<AttestationResult>,
@@ -260,9 +266,7 @@ impl<T> SecurityConnection<T> {
     }
 }
 
-impl hyper_util::client::legacy::connect::Connection
-    for SecurityConnection<TokioIo<tokio_rustls::client::TlsStream<RatsTlsTransportLayerStream>>>
-{
+impl hyper_util::client::legacy::connect::Connection for RatsTlsConnection {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         let (tcp, tls) = self.inner.inner().get_ref();
         let connected = if tls.alpn_protocol() == Some(b"h2") {
@@ -274,7 +278,9 @@ impl hyper_util::client::legacy::connect::Connection
     }
 }
 
-impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for SecurityConnection<T> {
+impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read
+    for StreamWithAttestationResult<T>
+{
     #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
@@ -285,7 +291,9 @@ impl<T: hyper::rt::Read + hyper::rt::Write + Unpin> hyper::rt::Read for Security
     }
 }
 
-impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write for SecurityConnection<T> {
+impl<T: hyper::rt::Write + hyper::rt::Read + Unpin> hyper::rt::Write
+    for StreamWithAttestationResult<T>
+{
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,

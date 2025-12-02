@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -144,9 +145,9 @@ impl IngressFlow {
 
         // TODO: stop all task when downstream is already closed
 
-        runtime.spawn_supervised_task_fn_with_span(
+        runtime.spawn_supervised_task_with_span(
             tracing::info_span!("serve", client=?src),
-            move |shutdown_guard| async move {
+            async move {
                 let fut = async move {
                     tracing::debug!(%src, %dst, via_tunnel, "Acquire connection to upstream");
 
@@ -158,7 +159,7 @@ impl IngressFlow {
                     let forward_stream_task = if !via_tunnel {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att) = unprotected_stream_manager
-                            .forward_stream(&dst, stream)
+                            .forward_stream(&dst, Box::new(stream))
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via unprotected tcp")
@@ -169,7 +170,7 @@ impl IngressFlow {
                     } else {
                         // Forward via trusted tunnel
                         let (forward_stream_task, att) = trusted_stream_manager
-                            .forward_stream(&dst, stream)
+                            .forward_stream(&dst, Box::new(stream))
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via trusted tunnel")
@@ -184,7 +185,7 @@ impl IngressFlow {
                         downstream: src,
                         upstream: &dst,
                         to_trusted_tunnel: via_tunnel,
-                        peer_attested: attestation_result,
+                        attestation_result: attestation_result.map(Cow::Owned),
                     };
                     tracing::info!(?access_log);
 
@@ -209,8 +210,6 @@ impl IngressFlow {
                 if let Err(e) = fut.await {
                     tracing::error!(error=?e, "Failed to forward stream");
                 }
-                // Ensure the shutdown_guard is used to prevent warning
-                drop(shutdown_guard);
             },
         );
     }

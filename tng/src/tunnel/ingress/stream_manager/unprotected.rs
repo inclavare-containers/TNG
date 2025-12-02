@@ -2,10 +2,13 @@ use std::{future::Future, pin::Pin};
 
 use anyhow::{Context as _, Result};
 
-use crate::tunnel::{
-    attestation_result::AttestationResult,
-    endpoint::TngEndpoint,
-    utils::{self, socket::tcp_connect},
+use crate::{
+    tunnel::{
+        attestation_result::AttestationResult,
+        endpoint::TngEndpoint,
+        utils::{self, socket::tcp_connect},
+    },
+    CommonStreamTrait,
 };
 
 use super::StreamManager;
@@ -31,11 +34,7 @@ impl StreamManager for UnprotectedStreamManager {
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
-        downstream: impl tokio::io::AsyncRead
-            + tokio::io::AsyncWrite
-            + std::marker::Unpin
-            + std::marker::Send
-            + 'static,
+        downstream: Box<dyn CommonStreamTrait + 'static>,
     ) -> Result<(
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
