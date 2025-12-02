@@ -61,7 +61,7 @@ async fn test() -> Result<()> {
                                     "port": 10001
                                 },
                                 "out": {
-                                    "host": "192.168.1.3",
+                                    "host": "192.168.1.252",
                                     "port": 20001
                                 }
                             },
@@ -82,7 +82,7 @@ async fn test() -> Result<()> {
         .boxed(),
         AppType::LoadBalancer {
             listen_port: 20001,
-            upstream_servers: vec![("192.168.1.1", 20001)],
+            upstream_servers: vec![("192.168.1.1".into(), 20001)],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
         }

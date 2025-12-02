@@ -15,18 +15,19 @@ pub mod supervised_task;
 
 /// This is a wrapper around tokio::runtime::Runtime, to make it easier to manage the shutdown of the task.
 ///
-/// A supervised task is a task that will be cancelled immediately when the shutdown guard is
-/// cancelled. In this case, all the tasks can be cancelled quickly and cleanly when the tng instance
-/// is shutting down.
+/// It enables fine-grained control over how tasks behave during shutdown of the tng instance:
 ///
-/// # Drop
-/// It us shutdown_background() to make prevent the following error:
+/// - A **supervised task** is tied to the lifetime of this runtime wrapper. It will be cancelled
+///   immediately when the shutdown guard is dropped. This allows the entire instance to shut down
+///   quickly and cleanly.
 ///
-/// ```text
-/// thread 'tokio-runtime-worker' panicked at /root/.cargo/registry/src/mirrors.ustc.edu.cn-4affec411d11e50f/tokio-1.45.1/src/runtime/blocking/shutdown.rs:51:21:
-/// Cannot drop a runtime in a context where blocking is not allowed. This happens when a runtime is dropped from within an asynchronous context.
-/// note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-/// ```
+/// - An **unsupervised task**, in contrast, is spawned independently (e.g., via `tokio::spawn` on
+///   a long-lived handle) and may continue running even after shutdown has begun. Such tasks can
+///   prevent the tng instance from exiting until they complete on their own.
+///
+/// By ensuring most work is done in supervised contexts, we minimize graceful shutdown time and
+/// avoid lingering tasks. Critical background operations that must finish can remain unsupervised,
+/// at the cost of longer shutdown latency.
 #[derive(Debug, Clone)]
 pub struct TokioRuntime {
     inner: Arc<TokioRuntimeInner>,
@@ -101,7 +102,7 @@ impl TokioRuntime {
         T: TokioRuntimeSupportedFuture<O>,
         O: Send + 'static,
     {
-        let guard = self.shutdown_guard.clone();
+        let this = self.clone();
         let handle = match self.inner.as_ref() {
             #[cfg(unix)]
             TokioRuntimeInner::Owned { rt: _, rt_handle }
@@ -113,7 +114,7 @@ impl TokioRuntime {
                     .spawn_on(
                         async move {
                             let output = task.await;
-                            drop(guard);
+                            drop(this);
                             output
                         },
                         rt_handle,
@@ -125,7 +126,7 @@ impl TokioRuntime {
                     let _ = name;
                     rt_handle.spawn(async move {
                         let output = task.await;
-                        drop(guard);
+                        drop(this);
                         output
                     })
                 };
@@ -137,7 +138,7 @@ impl TokioRuntime {
                 let _ = name;
                 tokio::spawn(async move {
                     let output = task.await;
-                    drop(guard);
+                    drop(this);
                     output
                 })
             }
@@ -148,12 +149,52 @@ impl TokioRuntime {
 }
 
 impl Drop for TokioRuntimeInner {
+    /// Safely drops the owned runtime by handling the complexities of async context restrictions.
+    ///
+    /// # The Problem
+    ///
+    /// Directly dropping a `tokio::runtime::Runtime` from within an asynchronous context (e.g., inside
+    /// another spawned task or future) causes a panic:
+    ///
+    /// ```text
+    /// thread 'tokio-runtime-worker' panicked at ...:
+    /// Cannot drop a runtime in a context where blocking is not allowed. This happens when a runtime is dropped from within an asynchronous context.
+    /// ```
+    ///
+    /// This happens because the runtime may need to perform blocking operations during shutdown,
+    /// which are disallowed in non-blocking contexts.
+    ///
+    /// # Previous Solution: `shutdown_background()`
+    ///
+    /// We previously used `rt.shutdown_background()` to avoid this panic. However, that approach
+    /// does **not wait** for ongoing work to finish — it detaches the runtime abruptly, increasing
+    /// the risk of resource leaks or incomplete cleanup.
+    ///
+    /// # Current Solution: `spawn_blocking`
+    ///
+    /// To ensure safe and clean shutdown:
+    ///
+    /// - If we're currently on a Tokio runtime (`try_current()` succeeds), we use `spawn_blocking`
+    ///   to move the actual drop of the `Runtime` into a blocking context where it's allowed.
+    /// - Otherwise, we drop the runtime directly (e.g., in a sync context or during program teardown).
+    ///
+    /// This approach avoids the panic *and* allows proper finalization of any remaining work,
+    /// making it safer than `shutdown_background()`.
+    ///
+    /// Note: Only the `Owned` variant holds a `Runtime`; other variants require no special handling.
     fn drop(&mut self) {
         match self {
             #[cfg(unix)]
             TokioRuntimeInner::Owned { rt, rt_handle: _ } => {
-                if let Some(rt) = rt.take() {
-                    rt.shutdown_background();
+                if let Some(rt_to_drop) = rt.take() {
+                    match tokio::runtime::Handle::try_current() {
+                        Ok(rt_in_drop_context) => {
+                            rt_in_drop_context.spawn_blocking(|| drop(rt_to_drop));
+                        }
+                        Err(_) => {
+                            drop(rt_to_drop);
+                        }
+                    }
                 }
             }
             _ => { /* nothing to do */ }

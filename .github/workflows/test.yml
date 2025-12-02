@@ -50,7 +50,7 @@ jobs:
 
           yum install -y git make
 
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.89.0
 
       - uses: actions/checkout@v4
         with:

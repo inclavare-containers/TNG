@@ -43,7 +43,7 @@ pub enum AppType {
     #[allow(dead_code)]
     LoadBalancer {
         listen_port: u16,
-        upstream_servers: Vec<(&'static str, u16)>,
+        upstream_servers: Vec<(String, u16)>,
         path_matcher: &'static str,
         rewrite_to: &'static str,
     },
@@ -146,7 +146,7 @@ impl Task for AppType {
                 load_balancer::launch_load_balancer(
                     token,
                     *listen_port,
-                    upstream_servers.clone(),
+                    upstream_servers,
                     path_matcher,
                     rewrite_to,
                 )

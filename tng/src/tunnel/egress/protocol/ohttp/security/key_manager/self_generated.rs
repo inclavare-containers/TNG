@@ -1,6 +1,6 @@
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
-    CallbackManager, KeyChangeEvent,
+    CallbackManager, KeyChangeCallback, KeyChangeEvent,
 };
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
@@ -9,14 +9,13 @@ use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::Future;
 
 /// Implementation of KeyManager that generates random keys with automatic rotation
 pub struct SelfGeneratedKeyManager {
@@ -44,6 +43,14 @@ impl SelfGeneratedKeyManager {
     pub fn new_with_auto_refresh(
         runtime: TokioRuntime,
         rotation_interval: u64,
+        // callbacks: Option<&[Arc<
+        //     dyn for<'a, 'b> Fn(
+        //             &'a KeyChangeEvent<'b>,
+        //         ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>
+        //         + Send
+        //         + Sync
+        //         + 'static,
+        // >]>
     ) -> Result<Self, TngError> {
         let inner = Arc::new(RandomKeyManagerInner {
             keys: tokio::sync::RwLock::new(HashMap::new()),
@@ -147,7 +154,9 @@ impl RandomKeyManagerInner {
             // first, nofity the callbacks
             if key_info.expire_at <= now {
                 self.callback_manager
-                    .trigger(&KeyChangeEvent::Removed { key_info })
+                    .trigger(&KeyChangeEvent::Removed {
+                        key_info: Cow::Borrowed(key_info),
+                    })
                     .await;
             }
         }
@@ -158,7 +167,7 @@ impl RandomKeyManagerInner {
             if key_info.stale_at <= now && matches!(key_info.status, KeyStatus::Active) {
                 self.callback_manager
                     .trigger(&KeyChangeEvent::StatusChanged {
-                        key_info,
+                        key_info: Cow::Borrowed(key_info),
                         old_status: key_info.status,
                         new_status: KeyStatus::Stale,
                     })
@@ -199,7 +208,7 @@ impl RandomKeyManagerInner {
             };
             self.callback_manager
                 .trigger(&KeyChangeEvent::Created {
-                    key_info: &key_info,
+                    key_info: Cow::Borrowed(&key_info),
                 })
                 .await;
             keys.insert(key_info.key_config.key_config_hash()?, key_info);
@@ -229,20 +238,17 @@ impl KeyManager for SelfGeneratedKeyManager {
                 hash.to_vec(),
             )))
     }
-    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError> {
+
+    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
         let keys = self.inner.keys.read().await;
-        Ok(keys.clone())
+        Ok(keys
+            .values()
+            .filter(|key_info| matches!(key_info.status, KeyStatus::Active))
+            .cloned()
+            .collect())
     }
 
-    async fn register_callback(
-        &self,
-        callback: Arc<
-            dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    ) {
+    async fn register_callback(&self, callback: KeyChangeCallback) {
         self.inner
             .callback_manager
             .register_callback(callback)

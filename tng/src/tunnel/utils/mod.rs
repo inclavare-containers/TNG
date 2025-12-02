@@ -7,6 +7,8 @@ pub mod endpoint_matcher;
 pub mod forward;
 #[cfg(unix)]
 pub mod http_inspector;
+#[cfg(unix)]
+pub mod hyper;
 #[cfg(target_os = "linux")]
 pub mod iptables;
 pub mod maybe_cached;

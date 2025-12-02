@@ -114,6 +114,19 @@ pub enum TngError {
 
     #[error("Failed to load private key {0}: {1}")]
     LoadPrivateKeyFailed(PathBuf, #[source] anyhow::Error),
+
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(#[source] anyhow::Error),
+
+    #[cfg(feature = "egress")]
+    #[error("Error from serf crate: {0}")]
+    SerfCrateError(#[source] anyhow::Error),
+
+    #[error("Failed to decode KeyUpdateMessage: {0}")]
+    KeyUpdateMessageDecodeError(#[source] anyhow::Error),
+
+    #[error("Failed to encode KeyUpdateMessage: {0}")]
+    KeyUpdateMessageEncodeError(#[source] prost::EncodeError),
 }
 
 /// Error response structure
@@ -187,6 +200,11 @@ impl IntoResponse for TngError {
             | TngError::GenServerHpkeConfigurationResponseFailed(..)
             | TngError::CreateOHttpClientFailed(..)
             | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            #[cfg(feature = "egress")]
+            TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::KeyUpdateMessageEncodeError(..)
+            | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
 
             // See the RFC 9458 section 6.4. Key Management
             TngError::ServerKeyConfigNotFound { .. } => StatusCode::UNPROCESSABLE_ENTITY,

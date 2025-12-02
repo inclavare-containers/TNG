@@ -1,28 +1,22 @@
-use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
-use axum::response::IntoResponse;
-use tracing::Instrument;
+use anyhow::{bail, Result};
 
-use crate::tunnel::ingress::protocol::ohttp::security::OHttpSecurityLayer;
+use crate::tunnel::ingress::protocol::ohttp::OHttpStreamForwarder;
+use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
+use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
-use crate::tunnel::utils;
-use crate::TokioIo;
+use crate::CommonStreamTrait;
 use crate::{
     config::ingress::CommonArgs,
-    tunnel::{
-        attestation_result::AttestationResult,
-        ingress::protocol::rats_tls::security::RatsTlsSecurityLayer, utils::runtime::TokioRuntime,
-    },
+    tunnel::{attestation_result::AttestationResult, utils::runtime::TokioRuntime},
 };
 
 use super::StreamManager;
 
 pub struct TrustedStreamManager {
-    security_layer: SecurityLayer,
+    stream_forwarder: Box<dyn ProtocolStreamForwarder + Send + Sync + 'static>,
 
     #[allow(unused)]
     runtime: TokioRuntime,
@@ -42,10 +36,10 @@ impl TrustedStreamManager {
         let ra_args = common_args.ra_args.clone().into_checked()?;
 
         Ok(Self {
-            security_layer: {
+            stream_forwarder: {
                 match &common_args.ohttp {
-                    Some(ohttp_args) => SecurityLayer::OHttp(Arc::new(
-                        OHttpSecurityLayer::new(
+                    Some(ohttp_args) => Box::new(
+                        OHttpStreamForwarder::new(
                             #[cfg(any(
                                 target_os = "android",
                                 target_os = "fuchsia",
@@ -57,9 +51,10 @@ impl TrustedStreamManager {
                             runtime.clone(),
                         )
                         .await?,
-                    )),
-                    None => SecurityLayer::RatsTls(Arc::new(
-                        RatsTlsSecurityLayer::new(
+                    ),
+
+                    None => Box::new(
+                        RatsTlsStreamForwarder::new(
                             #[cfg(any(
                                 target_os = "android",
                                 target_os = "fuchsia",
@@ -70,7 +65,7 @@ impl TrustedStreamManager {
                             runtime.clone(),
                         )
                         .await?,
-                    )),
+                    ),
                 }
             },
             runtime,
@@ -82,76 +77,13 @@ impl StreamManager for TrustedStreamManager {
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
-        downstream: impl tokio::io::AsyncRead
-            + tokio::io::AsyncWrite
-            + std::marker::Unpin
-            + std::marker::Send
-            + 'static,
+        downstream: Box<dyn CommonStreamTrait + 'static>,
     ) -> Result<(
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
     )> {
-        match &self.security_layer {
-            SecurityLayer::RatsTls(security_layer) => {
-                let (upstream, attestation_result) = security_layer
-                    .allocate_secured_stream(endpoint.clone())
-                    .await?;
-                Ok((
-                    Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })
-                        as Pin<Box<_>>,
-                    attestation_result,
-                ))
-            }
-            SecurityLayer::OHttp(security_layer) => {
-                async {
-                    let endpoint = Arc::new(endpoint.clone());
-                    let security_layer = security_layer.clone();
-
-                    let hyper_service = hyper::service::service_fn(
-                        move |request: http::Request<hyper::body::Incoming>| {
-                            let security_layer = security_layer.clone();
-                            let endpoint = endpoint.clone();
-                            async move {
-                                Ok::<_, Infallible>(
-                                    match security_layer
-                                        .forward_http_request(
-                                            &endpoint,
-                                            request.map(axum::body::Body::new),
-                                        )
-                                        .await
-                                    {
-                                        Ok((response, _attestation_result)) => response,
-                                        Err(error) => error.into_response(),
-                                    },
-                                )
-                            }
-                        },
-                    );
-
-                    let runtime = self.runtime.clone();
-
-                    Ok((
-                        Box::pin(async move {
-                            hyper_util::server::conn::auto::Builder::new(runtime)
-                                .serve_connection_with_upgrades(
-                                    TokioIo::new(downstream),
-                                    hyper_service,
-                                )
-                                .await
-                                .map_err(|error| anyhow!("failed to serve connection: {error:?}"))
-                        }) as Pin<Box<_>>,
-                        // TODO: ohttp always return None attestation result in stream level, which may cause misunderstanding when user is reading the logs.
-                        None,
-                    ))
-                }
-                .instrument(tracing::info_span!("security"))
-                .await
-            }
-        }
+        self.stream_forwarder
+            .forward_stream(endpoint, downstream)
+            .await
     }
-}
-
-pub enum SecurityLayer {
-    RatsTls(Arc<RatsTlsSecurityLayer>),
-    OHttp(Arc<OHttpSecurityLayer>),
 }

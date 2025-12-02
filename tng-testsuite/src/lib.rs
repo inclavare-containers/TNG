@@ -1,7 +1,7 @@
 pub mod netns;
 pub mod task;
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use futures::StreamExt as _;
@@ -18,9 +18,9 @@ static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<
     >,
 > = OnceCell::const_new();
 
-/// This is a common function to run bin tests. For each test, it will create two virtual nodes under
-/// a bridge network (192.168.1.0/24), one act as the server side (192.168.1.1), the other act as
-/// the client side (192.168.1.2). And the attestation service will be at `http://192.168.1.254:8080`.
+/// This is a common function to run bin tests. For each test, it will create many virtual nodes under
+/// a bridge network (192.168.1.0/24), at least there will be one node act as the server side, the other act as
+/// the client side. And the attestation service will be at `http://192.168.1.254:8080`.
 /// And all the test will be run in those two virtual nodes one by one.
 pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
     let token = CancellationToken::new();
@@ -63,9 +63,8 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
 
         // Create a virtual network with two nodes connected to a bridge
         let network = BridgeNetwork::new("192.168.1.254", 24).await?;
-        let server_node = network.new_node("192.168.1.1").await?;
-        let client_node = network.new_node("192.168.1.2").await?;
-        let middleware_node = network.new_node("192.168.1.3").await?;
+
+        let mut ip_to_nodes = HashMap::new();
 
         // Launch all tasks in order and get the join handles
         let mut sub_tasks = futures::stream::FuturesUnordered::new();
@@ -76,11 +75,12 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
                 let task_result = {
                     let task_name = task_name.clone();
 
-                    let node = match task.node_type() {
-                        task::NodeType::Client => &client_node,
-                        task::NodeType::Server => &server_node,
-                        task::NodeType::Middleware => &middleware_node,
-                    };
+                    let ip = task.node_type().ip();
+                    if !ip_to_nodes.contains_key(&ip) {
+                        let new_node = network.new_node(&ip).await?;
+                        ip_to_nodes.insert(ip.clone(), new_node);
+                    }
+                    let node = ip_to_nodes.get(&ip).unwrap();
 
                     let token = token.clone();
                     node.run(async move {

@@ -28,6 +28,7 @@ pub type OltpTraceExporterConfig = OltpCommonExporterConfig;
 mod tests {
 
     use anyhow::Result;
+    use futures::StreamExt as _;
     use scopeguard::defer;
     use serde_json::json;
     use tokio::select;
@@ -149,10 +150,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_multi_tng_instance() -> Result<()> {
-        let mut set = tokio::task::JoinSet::new();
+        let mut tasks = futures::stream::FuturesUnordered::new();
 
         for _ in 0..5 {
-            set.spawn(async {
+            tasks.push(async {
                 let config: TngConfig = serde_json::from_value(json!(
                     {
                         "metric": {
@@ -208,7 +209,7 @@ mod tests {
             });
         }
 
-        for res in set.join_all().await {
+        while let Some(res) = tasks.next().await {
             res?;
         }
 
