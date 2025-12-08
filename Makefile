@@ -8,9 +8,15 @@ install-test-deps:
 
 .PHONE: run-test
 run-test: install-test-deps
-	yum-builddep -y ./trusted-network-gateway.spec
+	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
 
 	./tng-testsuite/run-test.sh
+
+.PHONE: run-test-coverage
+run-test-coverage: install-test-deps
+	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
+
+	./tng-testsuite/run-test.sh --coverage
 
 .PHONE: run-test-on-bin
 run-test-on-bin: install-test-deps
@@ -93,11 +99,11 @@ rpm-build:
 	# copy sources
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
 
-	# install build dependencies yum-utils
-	yum-builddep -y ./trusted-network-gateway.spec
+	# install build dependencies
+	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
 	
 	# build
-	rpmbuild -ba ./trusted-network-gateway.spec
+	rpmbuild -ba ./trusted-network-gateway.spec --define 'with_rustup 1'
 	@echo "RPM package is:" ~/rpmbuild/RPMS/*/trusted-network-gateway-*
 
 .PHONE: rpm-build-in-docker
@@ -106,7 +112,7 @@ rpm-build-in-docker:
 	mkdir -p ~/rpmbuild/SOURCES/
 	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
 
-	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec"
+	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none ; source \"\$$HOME/.cargo/env\" ; sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec --define 'with_rustup 1'"
 
 .PHONE: rpm-install
 rpm-install: rpm-build

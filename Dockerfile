@@ -1,12 +1,20 @@
 FROM registry.openanolis.cn/openanolis/anolisos:8 AS builder
 
-RUN yum install -y git cargo protobuf-compiler
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain none
 
 WORKDIR /code/
 
+COPY rust-toolchain.toml .
+
+# install toolchain and cache it
+RUN . "$HOME/.cargo/env" && rustup show
+
+RUN yum install -y git protobuf-devel gcc
+
 COPY . .
 
-RUN env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root /usr/local/cargo/
+RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root /usr/local/cargo/
 
 
 FROM registry.openanolis.cn/openanolis/anolisos:8 AS release

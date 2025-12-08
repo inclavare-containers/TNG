@@ -50,7 +50,9 @@ jobs:
 
           yum install -y git make
 
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: llvm-tools  # for providing llvm-profdata and llvm-cov
 
       - uses: actions/checkout@v4
         with:
@@ -66,7 +68,7 @@ jobs:
           # Append dns server
           echo "nameserver 8.8.8.8" >> /etc/resolv.conf
           # Run test
-          make run-test
+          make run-test-coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

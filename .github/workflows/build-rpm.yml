@@ -37,7 +37,7 @@ jobs:
           echo "prerelease=$prerelease"
           echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
 
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.89.0
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -115,7 +115,7 @@ jobs:
           yum install -y ./rpm-packages/RPMS/*/trusted-network-gateway-*.rpm
           tng --version
 
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.89.0
 
       - uses: actions/checkout@v4
         with:

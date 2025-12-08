@@ -59,14 +59,14 @@ jobs:
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
 
-          yum install -y git make clang protobuf-compiler npm jq openssl-devel
+          yum install -y git make clang protobuf-devel npm jq openssl-devel
 
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: "true"
 
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.89.0
 
       - uses: dtolnay/rust-toolchain@master
         with:

@@ -26,7 +26,7 @@ The above command will create a container named tng-dev based on the Alibaba Clo
 Install dependencies:
 
 ```sh
-yum install -y git make clang protobuf-compiler npm
+yum install -y git make clang protobuf-devel npm
 ```
 
 #### Pull the Source Code

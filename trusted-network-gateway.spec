@@ -16,7 +16,7 @@ BuildRequires: make
 BuildRequires: git
 BuildRequires: gcc
 BuildRequires: pkg-config
-BuildRequires: protobuf-compiler
+BuildRequires: protobuf-devel
 BuildRequires: cmake
 BuildRequires: wget
 BuildRequires: net-tools
@@ -31,8 +31,13 @@ BuildRequires: binutils-devel
 BuildRequires: protobuf-devel
 BuildRequires: clang
 BuildRequires: jq
-BuildRequires: cargo
-BuildRequires: rust
+
+%{!?with_rustup:%global use_system_rust 1}
+%if 0%{?use_system_rust}
+BuildRequires: cargo >= 1.89.0
+BuildRequires: rust >= 1.89.0
+%endif
+
 
 ExclusiveArch: x86_64
 
