@@ -23,7 +23,7 @@ impl<O> SupervisedTaskResult<O> {
     }
 }
 
-/// Methods for spawning supervised tasks
+/// Methods for spawning supervised and unsupervised tasks
 impl super::TokioRuntime {
     #[inline]
     #[track_caller]
@@ -130,5 +130,34 @@ impl super::TokioRuntime {
                 }
             }
         })
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn spawn_unsupervised_task_current_span<T, O: std::marker::Send + 'static>(
+        &self,
+        task: T,
+    ) -> tokio::task::JoinHandle<O>
+    where
+        T: TokioRuntimeSupportedFuture<O>,
+    {
+        let span = Span::current();
+        self.spawn_unsupervised_task_with_span(span, task)
+    }
+
+    #[inline]
+    #[track_caller]
+    pub fn spawn_unsupervised_task_with_span<T, O: std::marker::Send + 'static>(
+        &self,
+        span: Span,
+        task: T,
+    ) -> tokio::task::JoinHandle<O>
+    where
+        T: TokioRuntimeSupportedFuture<O>,
+    {
+        self.spawn_task_named(
+            &format!("{span:?}"),
+            async move { task.instrument(span).await },
+        )
     }
 }

@@ -97,7 +97,7 @@ async fn main() {
                     .serve()
                     .await?;
 
-                tracing::info!("Gracefully exit now");
+                tracing::info!("Exited gracefully");
             }
         }
 

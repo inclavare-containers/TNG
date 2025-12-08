@@ -4,20 +4,15 @@
 //! It defines traits and implementations for different key management strategies:
 
 use crate::error::TngError;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeEvent;
-use crate::tunnel::ohttp::key_config::KeyConfigHash;
-
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeCallback;
 use std::time::SystemTime;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::Future;
 
 pub mod callback_manager;
 pub mod file;
+pub mod peer_shared;
 pub mod self_generated;
 
 /// Key status indicating whether a key is active or stale
@@ -60,21 +55,13 @@ pub trait KeyManager: Send + Sync {
     /// Returns an key configuration for the given ID.
     async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError>;
 
-    /// Get all key info with their status
+    /// Get a list of keys that are visible and intended to be shared with clients
     ///
-    /// Returns a map of key IDs to their corresponding key information including status
-    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError>;
+    /// Returns only keys that are active, valid, and safe to expose.
+    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError>;
 
     /// Register a callback that will be called whenever a key is created or modified.
     ///
     /// The callback receives a reference to the updated `KeyInfo`.
-    async fn register_callback(
-        &self,
-        callback: Arc<
-            dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    );
+    async fn register_callback(&self, callback: KeyChangeCallback);
 }

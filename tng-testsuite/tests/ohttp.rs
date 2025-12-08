@@ -43,7 +43,7 @@ async fn test_ingress_mapping() -> Result<()> {
                                 "port": 10001
                             },
                             "out": {
-                                "host": "192.168.1.3",
+                                "host": "192.168.1.252",
                                 "port": 30001
                             }
                         },
@@ -69,7 +69,7 @@ async fn test_ingress_mapping() -> Result<()> {
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -276,7 +276,7 @@ async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -287,7 +287,7 @@ async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
-            host: "192.168.1.3",
+            host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
@@ -358,7 +358,7 @@ async fn test_ra_model_matrix_server_attest_with_passport() -> Result<()> {
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -369,7 +369,7 @@ async fn test_ra_model_matrix_server_attest_with_passport() -> Result<()> {
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
-            host: "192.168.1.3",
+            host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
@@ -437,7 +437,7 @@ async fn test_ra_model_matrix_server_attest_with_background_check() -> Result<()
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -448,7 +448,7 @@ async fn test_ra_model_matrix_server_attest_with_background_check() -> Result<()
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
-            host: "192.168.1.3",
+            host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
@@ -518,7 +518,7 @@ async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -529,7 +529,7 @@ async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
-            host: "192.168.1.3",
+            host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
@@ -597,7 +597,7 @@ async fn test_ra_model_matrix_client_attest_with_background_check() -> Result<()
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: vec![
-                ("192.168.1.1", 30001),
+                ("192.168.1.1".into(), 30001),
             ],
             path_matcher: r"^/foo/(.*)$",
             rewrite_to: r"/baz/$1",
@@ -608,7 +608,7 @@ async fn test_ra_model_matrix_client_attest_with_background_check() -> Result<()
             expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
-            host: "192.168.1.3",
+            host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
             path_and_query: "/foo/bar/www?type=1&case=1",
@@ -1019,7 +1019,7 @@ EOF
 
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-async fn test_ingress_key_from_file() -> Result<()> {
+async fn test_egress_key_from_file() -> Result<()> {
     let key_path = "/tmp/ohttp-key.pem";
 
     // Write initial private key to a temporary file
@@ -1099,6 +1099,118 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
     // Optional: Clean up key file after test
     let _ = tokio::fs::remove_file(key_path).await;
+
+    Ok(())
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_egress_key_from_peer_shared() -> Result<()> {
+    let mut tasks = Vec::default();
+
+    let (ips,  tng_tasks,  server_tasks):(Vec<_>,Vec<_>,Vec<_>) = itertools::multiunzip((1..=3).into_iter().map(|i|{
+            let node_type = NodeType::Customized { host_num: i };
+            (
+                node_type.ip(),
+                TngInstance::TngServer(
+                    r#"
+                    {
+                        "add_egress": [
+                            {
+                                "netfilter": {
+                                    "capture_dst": {
+                                        "port": 30001
+                                    }
+                                },
+                                "ohttp": {
+                                    "key": {
+                                        "source": "peer_shared",
+                                        "peers": [
+                                            "192.168.1.1:8301"
+                                        ],
+                                        "rotation_interval": 3,
+                                        "attest": {
+                                            "model": "background_check",
+                                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                        },
+                                        "verify": {
+                                            "model": "background_check",
+                                            "as_addr": "http://192.168.1.254:8080/",
+                                            "policy_ids": [
+                                                "default"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "attest": {
+                                    "model": "background_check",
+                                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                }
+                            }
+                        ]
+                    }
+                    "#,
+                ).with_overwrite_node_type(node_type).boxed(),
+                AppType::HttpServer {
+                    port: 30001,
+                    expected_host_header: "example.com",
+                    expected_path_and_query: "/foo/bar/www?type=1&case=1",
+                }.with_overwrite_node_type(node_type).boxed(),
+            )
+        }));
+
+    tasks.extend(tng_tasks);
+    tasks.extend(server_tasks);
+
+    tasks.extend(vec![
+        AppType::LoadBalancer {
+            listen_port: 30001,
+            upstream_servers: ips.into_iter().map(|ip| (ip, 30001)).collect(),
+            path_matcher: r"^/foo/(.*)$",
+            rewrite_to: r"/baz/$1",
+        }
+        .boxed(),
+        TngInstance::TngClient(
+            r#"
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {
+                            "path_rewrites": [
+                                {
+                                    "match_regex": "^/foo/([^/]+)([/]?.*)$",
+                                    "substitution": "/foo/\\1"
+                                }
+                            ]
+                        },
+                        "verify": {
+                            "model": "background_check",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }
+            "#,
+        )
+        .boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.252",
+            port: 30001,
+            host_header: "example.com",
+            path_and_query: "/foo/bar/www?type=1&case=1",
+        }
+        .boxed(),
+    ]);
+
+    run_test(tasks).await?;
 
     Ok(())
 }

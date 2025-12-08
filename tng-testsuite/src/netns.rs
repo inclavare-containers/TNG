@@ -510,7 +510,7 @@ mod tests {
     async fn test_single_bridge_network() -> Result<()> {
         let network1 = BridgeNetwork::new("192.168.1.254", 24).await?;
         let network1_node1 = network1.new_node("192.168.1.1").await?;
-        let network1_node2 = network1.new_node("192.168.1.2").await?;
+        let network1_node2 = network1.new_node("192.168.1.253").await?;
 
         for node in [&network1_node1, &network1_node2] {
             node.run(async move {
@@ -524,7 +524,7 @@ mod tests {
                         ip -4 a | grep 192.168.1. ;
                         ip route show | grep default ;
                         ping 192.168.1.1 -c 1 -W 5 ;
-                        ping 192.168.1.2 -c 1 -W 5 ;
+                        ping 192.168.1.253 -c 1 -W 5 ;
                         ping 192.168.1.254 -c 1 -W 5 ;
                         cat /etc/resolv.conf
 

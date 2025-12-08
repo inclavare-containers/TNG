@@ -138,51 +138,97 @@ pub struct OHttpArgs {
 /// Only one variant can be active at a time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "source")]
+#[allow(clippy::large_enum_variant)]
 pub enum KeyArgs {
     /// The TNG instance generates its own HPKE key pair (X25519) at startup
     /// and automatically rotates it on a periodic basis.
-    ///
-    /// This is the **default and recommended mode** for standalone or development deployments.
-    ///
-    /// - A new key is generated every `rotation_interval` seconds.
-    /// - Old keys are retained briefly (grace period) to handle delayed or replayed requests.
-    /// - Each node operates independently; clients must fetch updated public keys regularly.
-    ///
-    /// Example:
-    /// ```json
-    /// "key": {
-    ///   "source": "self_generated",
-    ///   "rotation_interval": 300
-    /// }
-    /// ```
     #[serde(rename = "self_generated")]
     SelfGenerated {
         /// Interval (in seconds) between automatic key rotations.
         ///
-        /// Optional. If not provided, defaults to 300 seconds (5 minutes).
-        ///
-        /// Smaller values increase security but may cause more frequent client re-fetching
-        /// of the `/tng/key-config` endpoint.
+        /// Optional. Defaults to 300 seconds (5 minutes).
         rotation_interval: u64,
     },
 
     /// Load the HPKE private key from a PEM file on disk.
     ///
-    /// The file must contain a PKCS#8 encoded X25519 private key.
-    /// The system watches the file and reloads it automatically when modified.
-    ///
-    /// Recommended for production environments integrated with external secret managers
-    /// (e.g., Hashicorp Vault, Kubernetes secrets, cert-manager).
-    ///
-    /// Example:
-    /// ```json
-    /// "key": {
-    ///   "source": "file",
-    ///   "path": "/etc/tng/ohttp-key.pem"
-    /// }
-    /// ```
+    /// Recommended for integration with external secret managers.
     #[serde(rename = "file")]
-    File { path: String },
+    File {
+        /// Path to the PKCS#8 encoded X25519 private key file.
+        path: String,
+    },
+
+    #[serde(rename = "peer_shared")]
+    PeerShared(PeerSharedArgs),
+}
+
+/// Enable decentralized key sharing among TNG peers.
+///
+/// Each node generates its own key and securely shares it with other nodes
+/// via authenticated, encrypted peer-to-peer channels.
+/// All nodes maintain a local "key ring" of valid private keys from all peers,
+/// allowing any node to decrypt requests encrypted under any peer's public key.
+///
+/// This mode requires:
+/// - A list of initial peers to join the network
+/// - Remote attestation setup for mutual identity verification
+///
+/// Example:
+/// ```json
+/// "key": {
+///   "source": "peer_shared",
+///   "peers": [
+///     "192.168.10.1:8301",
+///     "tng-service.default.svc.cluster.local:8301"
+///   ],
+///   "rotation_interval": 300,
+///   "attest": {
+///     "model": "background_check",
+///     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+///   },
+///   "verify": {
+///     "model": "background_check",
+///     "as_addr": "http://as.example.com:8080/",
+///     "as_is_grpc": false,
+///     "policy_ids": ["default"]
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeerSharedArgs {
+    /// Interval (in seconds) between automatic key rotations.
+    ///
+    /// Each node independently rotates its own key.
+    /// Old keys are retained for up to 2 * rotation_interval to ensure availability.
+    pub rotation_interval: u64,
+
+    /// Listen address used for inter-node secure communication (default: 0.0.0.0)
+    #[serde(default = "default_peer_host")]
+    pub host: String,
+
+    /// Listen port used for inter-node secure communication (default: 8301)
+    #[serde(default = "default_peer_port")]
+    pub port: u16,
+
+    /// List of initial peer addresses (IP:port or DNS name) to discover and connect to.
+    ///
+    /// At least one peer should be reachable to join the cluster.
+    #[serde(default = "Default::default")]
+    pub peers: Vec<String>,
+
+    /// Define how this node proves its identity when connecting to others, and how to verify
+    /// the identity of remote peers.
+    #[serde(flatten)]
+    pub ra_args: RaArgsUnchecked,
+}
+
+fn default_peer_host() -> String {
+    "0.0.0.0".into()
+}
+
+fn default_peer_port() -> u16 {
+    8301
 }
 
 // Default: rotate self-generated OHTTP keys every 5 minutes.

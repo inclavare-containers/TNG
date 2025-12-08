@@ -23,9 +23,9 @@ pub struct UpstreamBalancer {
 
 impl UpstreamBalancer {
     /// Create a new balancer from a list of (host, port) tuples.
-    pub fn new(upstreams: Vec<(&'static str, u16)>) -> Self {
+    pub fn new(upstreams: &[(String, u16)]) -> Self {
         let servers = upstreams
-            .into_iter()
+            .iter()
             .map(|(host, port)| format!("{}:{}", host, port))
             .collect();
 
@@ -61,7 +61,7 @@ impl UpstreamBalancer {
 pub async fn launch_load_balancer(
     token: CancellationToken,
     listen_port: u16,
-    upstream_servers: Vec<(&'static str, u16)>,
+    upstream_servers: &[(String, u16)],
     path_matcher: &'static str,
     rewrite_to: &'static str,
 ) -> Result<tokio::task::JoinHandle<Result<()>>> {

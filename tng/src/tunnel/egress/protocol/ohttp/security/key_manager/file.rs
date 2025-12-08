@@ -1,14 +1,12 @@
 use std::{
-    collections::HashMap,
+    borrow::Cow,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use anyhow::Context;
 use async_trait::async_trait;
-use futures::Future;
 use notify::{
     event::{DataChange, EventKind, ModifyKind},
     Event, RecommendedWatcher, RecursiveMode, Watcher,
@@ -20,7 +18,7 @@ use crate::{
     error::TngError,
     tunnel::{
         egress::protocol::ohttp::security::key_manager::{
-            callback_manager::{CallbackManager, KeyChangeEvent},
+            callback_manager::{CallbackManager, KeyChangeCallback, KeyChangeEvent},
             KeyInfo, KeyManager, KeyStatus,
         },
         ohttp::key_config::{KeyConfigExtend, KeyConfigHash},
@@ -133,7 +131,7 @@ impl FileBasedKeyManager {
                                         inner_clone
                                             .callback_manager
                                             .trigger(&KeyChangeEvent::Created {
-                                                key_info: &new_key_info,
+                                                key_info: Cow::Borrowed(&new_key_info),
                                             })
                                             .await;
 
@@ -141,7 +139,7 @@ impl FileBasedKeyManager {
                                             inner_clone
                                                 .callback_manager
                                                 .trigger(&KeyChangeEvent::Removed {
-                                                    key_info: &old,
+                                                    key_info: Cow::Borrowed(&old),
                                                 })
                                                 .await;
                                         }
@@ -257,26 +255,19 @@ impl KeyManager for FileBasedKeyManager {
         }
     }
 
-    async fn get_all_keys(&self) -> Result<HashMap<KeyConfigHash, KeyInfo>, TngError> {
+    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
         let key = self.inner.key.read().await;
-        if let Some((hash, info)) = key.as_ref() {
-            let mut map = HashMap::with_capacity(1);
-            map.insert(*hash, info.clone());
-            Ok(map)
+        if let Some((_hash, info)) = key
+            .as_ref()
+            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
+        {
+            Ok(vec![info.clone()])
         } else {
-            Ok(HashMap::new())
+            Ok(Default::default())
         }
     }
 
-    async fn register_callback(
-        &self,
-        callback: Arc<
-            dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    ) {
+    async fn register_callback(&self, callback: KeyChangeCallback) {
         self.inner
             .callback_manager
             .register_callback(callback)

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package tng.ohttp;
+package tng.ohttp.metadata;
 
 // Metadata for encrypted requests, including client authentication method
 // and optional hints for server key selection.

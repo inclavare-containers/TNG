@@ -11,6 +11,7 @@ use crate::config::egress::KeyArgs;
 use crate::config::ra::RaArgs;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::file::FileBasedKeyManager;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::PeerSharedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     self_generated::SelfGeneratedKeyManager, KeyManager,
 };
@@ -58,6 +59,9 @@ impl OhttpServerApi {
             KeyArgs::File { path } => {
                 Arc::new(FileBasedKeyManager::new(runtime, path.into()).await?)
             }
+            KeyArgs::PeerShared(peer_shared_args) => {
+                Arc::new(PeerSharedKeyManager::new(runtime, peer_shared_args).await?)
+            }
         };
 
         let passport_cache: Arc<RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>> =
@@ -67,9 +71,7 @@ impl OhttpServerApi {
         {
             let passport_cache_cloned = passport_cache.clone();
             key_manager
-                .register_callback(Arc::new(move |event| {
-                    tracing::debug!(?event, "Key change event");
-
+                .register_callback(Arc::new(move |_event| {
                     let passport_cache_cloned = passport_cache_cloned.clone();
                     Box::pin(async move {
                         // Reset the passport cache
