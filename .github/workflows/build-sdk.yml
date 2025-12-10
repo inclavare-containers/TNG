@@ -85,7 +85,7 @@ jobs:
           # Append dns server
           echo "nameserver 8.8.8.8" >> /etc/resolv.conf
           # Run test
-          make wasm-integration-test
+          env TNG_WASM_TEST_CHROMEDRIVER_LOG_ALL=true make wasm-integration-test
 
       - name: Build JS SDK
         run: |

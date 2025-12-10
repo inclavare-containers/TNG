@@ -41,8 +41,17 @@ pub async fn launch_browser_client(
             // Launch chromedriver on port 9515
             let driver_port = portpicker::pick_unused_port()
                 .context("Failed to pick a free port for chromedriver")?;
+            let (log_level, log_level_all) =
+                match std::env::var("TNG_WASM_TEST_CHROMEDRIVER_LOG_ALL")
+                    .ok()
+                    .as_deref()
+                {
+                    Some("true") | Some("True") | Some("TRUE") => (LogLevel::All, true),
+                    _ => (LogLevel::Warning, false),
+                };
+
             let mut chromedriver = Handler::new()
-                .launch_chromedriver(&mut caps, &driver_port.to_string(), LogLevel::Warning)
+                .launch_chromedriver(&mut caps, &driver_port.to_string(), log_level)
                 .await
                 .context("Failed to launch chromedriver")?;
 
@@ -50,10 +59,13 @@ pub async fn launch_browser_client(
                 let _ = chromedriver.kill();
             }
 
+            // Wait for chromedriver to be ready
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
             // Connect to chrome on the same`` port
             let driver = WebDriver::new(format!("http://127.0.0.1:{driver_port}"), caps)
                 .await
-                .context("Failed to connect to chromedriver. You may need to launch chromedriver with LogLevel::All to see all the logs")?;
+                .context(if log_level_all { "Failed to connect to chromedriver" } else {"Failed to connect to chromedriver. Set TNG_WASM_TEST_CHROMEDRIVER_LOG_ALL=true to see all chromedriver logs"})?;
 
             let res = async {
                 for i in 1..6 {
