@@ -151,5 +151,6 @@ jobs:
           prerelease: ${{ env.PRE_RELEASE }}
           files: |
             ./rpm-packages/SOURCES/trusted-network-gateway-*.tar.gz
-            ./rpm-packages/SRPMS/*.src.rpm
-            ./rpm-packages/RPMS/*/*.rpm
+          # use rpms from release-rpm.yml
+            # ./rpm-packages/SRPMS/*.src.rpm
+            # ./rpm-packages/RPMS/*/*.rpm
