@@ -119,7 +119,6 @@ jobs:
   push:
     runs-on: ubuntu-latest
     needs:
-      - test
       - build
     steps:
       - name: Download artifacts
