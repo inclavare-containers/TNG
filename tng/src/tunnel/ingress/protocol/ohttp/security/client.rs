@@ -9,6 +9,7 @@ use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
 #[cfg(unix)]
 use hpke::Serializable;
 use hpke::{kem::X25519HkdfSha256, Kem};
+use http::StatusCode;
 use ohttp::KeyConfig;
 use prost::Message;
 #[cfg(unix)]
@@ -167,16 +168,27 @@ impl OHttpClient {
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
         let key_store_value = self.key_store_value.get_latest().await?;
 
-        let response = self
+        match self
             .inner
             .send_encrypted_request(
                 &key_store_value.server_key_config_list,
                 &key_store_value.client_auth,
                 request,
             )
-            .await?;
-
-        Ok((response, key_store_value.server_attestation_result.clone()))
+            .await
+        {
+            Ok(response) => Ok((response, key_store_value.server_attestation_result.clone())),
+            Err(error) => {
+                // When the key config is expired, we should invalidate the key config cache. So that the next request will get the new key config.
+                if matches!(
+                    error,
+                    TngError::ShouldRequestNewKeyConfigFromServerError(..)
+                ) {
+                    self.key_store_value.invalidate();
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -609,10 +621,14 @@ impl OHttpClientInner {
         );
 
         // Check the response status code
-        let response = response
-            .check_error_response()
-            .await
-            .map_err(TngError::HttpCipherTextBadResponse)?;
+        let status_code = response.status();
+        let response = response.check_error_response().await.map_err(|error| {
+            if status_code == StatusCode::UNPROCESSABLE_ENTITY {
+                TngError::ShouldRequestNewKeyConfigFromServerError(error)
+            } else {
+                TngError::HttpCipherTextBadResponse(error)
+            }
+        })?;
 
         // Check content-type
         match response.headers().get(http::header::CONTENT_TYPE) {

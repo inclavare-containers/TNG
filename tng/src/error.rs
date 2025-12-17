@@ -127,6 +127,9 @@ pub enum TngError {
 
     #[error("Failed to encode KeyUpdateMessage: {0}")]
     KeyUpdateMessageEncodeError(#[source] prost::EncodeError),
+
+    #[error("Should request new KeyConfig from server because: {0}")]
+    ShouldRequestNewKeyConfigFromServerError(#[source] anyhow::Error),
 }
 
 /// Error response structure
@@ -207,8 +210,12 @@ impl IntoResponse for TngError {
             | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
 
             // See the RFC 9458 section 6.4. Key Management
+            // The client should request new KeyConfig from server when got UNPROCESSABLE_ENTITY from server.
             TngError::ServerKeyConfigNotFound { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             TngError::NoActiveKey => StatusCode::UNPROCESSABLE_ENTITY,
+            TngError::ShouldRequestNewKeyConfigFromServerError { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
 
         (

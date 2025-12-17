@@ -93,6 +93,8 @@ pub enum MaybeCached<
         #[allow(unused)]
         refresh_task: RefreshTask,
         #[allow(unused)]
+        invalidator_tx: tokio::sync::watch::Sender<()>,
+        #[allow(unused)]
         f: MaybeCachedUpdateFunc<T, E>,
     },
     NoCache {
@@ -122,6 +124,8 @@ impl<
                 let (init_value, init_expire) = f().await?;
 
                 let latest = tokio::sync::watch::channel(Arc::new(init_value));
+
+                let (invalidator_tx, mut invalidator_rx) = tokio::sync::watch::channel(());
 
                 let f = Arc::new(f);
                 let refresh_task = {
@@ -166,6 +170,9 @@ impl<
                                     () = expire_fut => {
                                         expire = Expire::NoExpire;
                                     }
+                                    Ok(()) = invalidator_rx.changed() => { // Only error when sender is dropped
+                                        let _ = invalidator_rx.borrow_and_update(); // consume the change
+                                    }
                                     () = periodically_fut=> { /* nothing */ }
                                 }
 
@@ -190,6 +197,7 @@ impl<
                     interval,
                     latest,
                     refresh_task,
+                    invalidator_tx,
                     f,
                 })
             }
@@ -201,6 +209,15 @@ impl<
         match self {
             MaybeCached::UpdatePeriodically { latest, .. } => Ok(latest.1.borrow().clone()),
             MaybeCached::NoCache { f } => Ok(Arc::new(f().await?.0)),
+        }
+    }
+
+    pub fn invalidate(&self) {
+        match self {
+            MaybeCached::UpdatePeriodically { invalidator_tx, .. } => {
+                let _ = invalidator_tx.send(()); // Ignore the error
+            }
+            MaybeCached::NoCache { .. } => {}
         }
     }
 }
