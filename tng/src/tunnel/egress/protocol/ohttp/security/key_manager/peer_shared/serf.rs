@@ -11,12 +11,14 @@ use crate::tunnel::utils::runtime::TokioRuntime;
 
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
+use futures::StreamExt;
 use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
 use serf::event::{Event, EventProducer, MemberEventType};
+use serf::net::hostaddr::Host;
 use serf::net::{HostAddr, NetTransportOptions, Node, NodeId};
-use serf::tokio::TokioHostAddrResolver;
+use serf::tokio::TokioSocketAddrResolver;
 use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
@@ -40,7 +42,7 @@ pub struct PeerSharedKeyManager {
 type Serf = serf::Serf<
     serf::net::TokioNetTransport<
         NodeId,
-        TokioHostAddrResolver,
+        TokioSocketAddrResolver,
         RatsTls<serf::agnostic::tokio::TokioRuntime>,
     >,
     CompositeDelegate<NodeId, SocketAddr>,
@@ -65,18 +67,16 @@ impl PeerSharedKeyManager {
             "Launching peer shared key manager with serf protocol"
         );
         let net_opts =
-            NetTransportOptions::<_, TokioHostAddrResolver, _>::with_stream_layer_options(
+            NetTransportOptions::<_, TokioSocketAddrResolver, _>::with_stream_layer_options(
                 node_id,
                 (peer_shared.ra_args.into_checked()?, runtime.clone()),
             )
             .with_bind_addresses(
                 [{
                     let addr = format!("{}:{}", peer_shared.host, peer_shared.port);
-                    HostAddr::from_sock_addr(
-                        std::net::SocketAddr::from_str(&addr)
-                            .with_context(|| format!("invalid address {addr}"))
-                            .map_err(TngError::InvalidParameter)?,
-                    )
+                    std::net::SocketAddr::from_str(&addr)
+                        .with_context(|| format!("invalid address {addr}"))
+                        .map_err(TngError::InvalidParameter)?
                 }]
                 .into_iter()
                 .collect(),
@@ -91,24 +91,57 @@ impl PeerSharedKeyManager {
 
         // Join existing serf cluster
         {
-            for (i, addr) in peer_shared.peers.iter().enumerate() {
-                tracing::info!(?addr, "Joining existing serf cluster");
+            for (i, peer) in peer_shared.peers.iter().enumerate() {
+                tracing::info!(?peer, "Joining existing serf cluster");
 
-                let node = Node::new(
-                    #[allow(clippy::unwrap_used)]
-                    NodeId::<255>::new(format!("unresolved_peer_{i}")).unwrap(),
-                    MaybeResolvedAddress::unresolved(
-                        HostAddr::from_str(addr)
-                            .with_context(|| format!("invalid peer address {addr}"))
-                            .map_err(TngError::InvalidParameter)?,
-                    ),
-                );
+                let socket_addrs = resolve_peer_addresses(peer).await?;
+                let serf = &serf;
 
-                let _ = serf
-                    .join(node, false)
-                    .await
-                    .with_context(|| format!("Failed to join existing serf cluster {addr:?}"))
-                    .map_err(TngError::SerfCrateError)?;
+                // Attempt to join the cluster using every resolved socket address for this host.
+                // Since a hostname (e.g., via DNS) may resolve to multiple IPs (A/AAAA records),
+                // we try each one to maximize the chance of successful connectivity.
+                // It's sufficient to successfully join via at least one address.
+                let count_success = futures::stream::iter(socket_addrs.into_iter()).filter_map(|socket_addr| async move {
+                    tracing::debug!(
+                        ?peer,
+                        resolved_address = %socket_addr,
+                        "Attempting to join serf cluster using resolved socket address"
+                    );
+
+                    let node = Node::new(
+                        #[allow(clippy::unwrap_used)]
+                        NodeId::<255>::new(format!("unresolved_peer_{i}")).unwrap(),
+                        MaybeResolvedAddress::resolved(socket_addr),
+                    );
+
+                    match serf.join(node, false).await {
+                        Ok(_) => {
+                            tracing::info!(
+                                ?peer,
+                                via = %socket_addr,
+                                "Successfully joined serf cluster via resolved address"
+                            );
+                            Some(())
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                ?peer,
+                                failed_address = %socket_addr,
+                                ?error,
+                                "Failed to join serf cluster via this address, will try next if available"
+                            );
+                            None
+                        }
+                    }
+                }).count().await;
+
+                if count_success > 0 {
+                    continue;
+                } else {
+                    return Err(TngError::SerfCrateError(anyhow!(
+                        "Failed to join serf cluster via any address of peer {peer}"
+                    )));
+                }
             }
         }
 
@@ -307,6 +340,29 @@ impl PeerSharedKeyManager {
 
         Ok(Self { inner, serf })
     }
+}
+
+async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngError> {
+    let host_addr = HostAddr::from_str(addr)
+        .with_context(|| format!("invalid peer address {addr}"))
+        .map_err(TngError::InvalidParameter)?;
+    let port = host_addr
+        .port()
+        .context("peer address missing port")
+        .map_err(TngError::InvalidParameter)?;
+    let host = host_addr.host();
+    let socket_addrs = match host {
+        Host::Ip(ip) => vec![SocketAddr::new(*ip, port)],
+        Host::Domain(name) => {
+            // Finally, try to find the socket addr locally
+            serf::agnostic::net::ToSocketAddrs::<serf::agnostic::tokio::TokioRuntime>::to_socket_addrs(&(
+                name.as_str(),
+                port,
+            ))
+            .await.with_context(||format!("failed to resolve {}", name)).map_err(TngError::InvalidParameter)?.collect()
+        }
+    };
+    Ok(socket_addrs)
 }
 
 struct SerfGracefulShutdown {
