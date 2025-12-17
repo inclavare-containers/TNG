@@ -43,17 +43,20 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
                             |_| "info,tokio_graceful=off,rats_cert=trace,tng=trace".into(),
                         ),
                     ))
-                    .with(tracing_subscriber::fmt::layer().with_filter(
-                        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
-                            |_| {
-                                format!(
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_ansi(atty::is(atty::Stream::Stdout))
+                            .with_filter(
+                                tracing_subscriber::EnvFilter::try_from_default_env()
+                                    .unwrap_or_else(|_| {
+                                        format!(
                                     "info,tokio_graceful=off,rats_cert=debug,tng=debug,{}=debug",
                                     std::module_path!().split("::").next().unwrap()
                                 )
-                                .into()
-                            },
-                        ),
-                    ))
+                                        .into()
+                                    }),
+                            ),
+                    )
                     // .with(console_subscriber::spawn()) // Initialize tokio console
                     .init();
 
