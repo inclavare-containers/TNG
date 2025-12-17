@@ -15,8 +15,8 @@ use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
 use serf::event::{Event, EventProducer};
-use serf::net::{NetTransportOptions, Node, NodeId};
-use serf::tokio::TokioSocketAddrResolver;
+use serf::net::{HostAddr, NetTransportOptions, Node, NodeId};
+use serf::tokio::TokioHostAddrResolver;
 use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
@@ -40,7 +40,7 @@ pub struct PeerSharedKeyManager {
 type Serf = serf::Serf<
     serf::net::TokioNetTransport<
         NodeId,
-        TokioSocketAddrResolver,
+        TokioHostAddrResolver,
         RatsTls<serf::agnostic::tokio::TokioRuntime>,
     >,
     CompositeDelegate<NodeId, SocketAddr>,
@@ -65,16 +65,18 @@ impl PeerSharedKeyManager {
             "Launching peer shared key manager with serf protocol"
         );
         let net_opts =
-            NetTransportOptions::<_, TokioSocketAddrResolver, _>::with_stream_layer_options(
+            NetTransportOptions::<_, TokioHostAddrResolver, _>::with_stream_layer_options(
                 node_id,
                 (peer_shared.ra_args.into_checked()?, runtime.clone()),
             )
             .with_bind_addresses(
                 [{
                     let addr = format!("{}:{}", peer_shared.host, peer_shared.port);
-                    std::net::SocketAddr::from_str(&addr)
-                        .with_context(|| format!("invalid address {addr}"))
-                        .map_err(TngError::InvalidParameter)?
+                    HostAddr::from_sock_addr(
+                        std::net::SocketAddr::from_str(&addr)
+                            .with_context(|| format!("invalid address {addr}"))
+                            .map_err(TngError::InvalidParameter)?,
+                    )
                 }]
                 .into_iter()
                 .collect(),
@@ -90,11 +92,13 @@ impl PeerSharedKeyManager {
         // Join existing serf cluster
         {
             for (i, addr) in peer_shared.peers.iter().enumerate() {
+                tracing::info!(?addr, "Joining existing serf cluster");
+
                 let node = Node::new(
                     #[allow(clippy::unwrap_used)]
                     NodeId::<255>::new(format!("unresolved_peer_{i}")).unwrap(),
                     MaybeResolvedAddress::unresolved(
-                        std::net::SocketAddr::from_str(addr)
+                        HostAddr::from_str(addr)
                             .with_context(|| format!("invalid peer address {addr}"))
                             .map_err(TngError::InvalidParameter)?,
                     ),

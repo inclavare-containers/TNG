@@ -1126,7 +1126,7 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
                                     "key": {
                                         "source": "peer_shared",
                                         "peers": [
-                                            "192.168.1.1:8301"
+                                            "192.168.1.1.nip.io:8301"
                                         ],
                                         "rotation_interval": 3,
                                         "attest": {
