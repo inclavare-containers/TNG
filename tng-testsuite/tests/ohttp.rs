@@ -682,6 +682,7 @@ async fn test_server_attest_passport_cache() -> Result<()> {
             "#
             .to_owned(),
             stop_test_on_finish: true,
+            run_in_foreground: false,
         }
         .boxed(),
     ])
@@ -757,6 +758,7 @@ async fn test_server_attest_passport_rotation_interval() -> Result<()> {
             "#
             .to_owned(),
             stop_test_on_finish: true,
+            run_in_foreground: false,
         }
         .boxed(),
     ])
@@ -828,6 +830,7 @@ async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
             "#
             .to_owned(),
             stop_test_on_finish: true,
+            run_in_foreground: false,
         }
         .boxed(),
     ])
@@ -1006,6 +1009,7 @@ EOF
                 )
             },
             stop_test_on_finish: true,
+            run_in_foreground: false,
         }
         .boxed(),
     ])
@@ -1163,6 +1167,22 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
     tasks.extend(server_tasks);
 
     tasks.extend(vec![
+        ShellTask {
+            name: "waiting for tng cluster keys sharing".to_owned(),
+            node_type: NodeType::Client,
+            script: {
+                format!(
+                    r#"
+                    set -euo pipefail
+                    
+                    sleep 3
+                    "#
+                )
+            },
+            stop_test_on_finish: false,
+            run_in_foreground: true,
+        }
+        .boxed(),
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: ips.into_iter().map(|ip| (ip, 30001)).collect(),
