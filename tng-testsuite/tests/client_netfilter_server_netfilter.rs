@@ -264,6 +264,7 @@ async fn test_ipset_and_port() -> Result<()> {
                 "#
             .to_owned(),
             stop_test_on_finish: false,
+            run_in_foreground: false,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -321,6 +322,7 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
                 "#
             .to_owned(),
             stop_test_on_finish: false,
+            run_in_foreground: false,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -380,6 +382,7 @@ async fn test_ipset_only() -> Result<()> {
                 "#
             .to_owned(),
             stop_test_on_finish: false,
+            run_in_foreground: false,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),

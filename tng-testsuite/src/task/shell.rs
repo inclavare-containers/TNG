@@ -10,6 +10,7 @@ pub struct ShellTask {
     pub node_type: NodeType,
     pub script: String,
     pub stop_test_on_finish: bool,
+    pub run_in_foreground: bool,
 }
 
 #[async_trait]
@@ -26,7 +27,7 @@ impl Task for ShellTask {
         let script = self.script.clone();
         let stop_test_on_finish = self.stop_test_on_finish;
 
-        Ok(tokio::task::spawn(async move {
+        let shell_task = async move {
             let task = async move {
                 let mut cmd = Command::new("sh");
                 cmd.arg("-c").arg(&format!("set -e ; true ; {}", script));
@@ -68,6 +69,17 @@ impl Task for ShellTask {
             }
 
             Ok(())
-        }))
+        };
+
+        if self.run_in_foreground {
+            shell_task.await?;
+
+            return Ok(tokio::task::spawn(async move {
+                /* empty task */
+                Ok(())
+            }));
+        } else {
+            Ok(tokio::task::spawn(shell_task))
+        }
     }
 }

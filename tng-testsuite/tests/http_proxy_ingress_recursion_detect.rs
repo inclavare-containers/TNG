@@ -49,6 +49,7 @@ async fn test() -> Result<()> {
             "#
             .to_owned(),
             stop_test_on_finish: true,
+            run_in_foreground: false,
         }
         .boxed(),
     ])

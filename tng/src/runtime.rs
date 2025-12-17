@@ -67,8 +67,12 @@ impl TngRuntime {
             tokio_graceful::Shutdown::builder()
                 .with_signal(async move {
                     tokio::select! {
-                        _ = canceller.cancelled() => {}
-                        _ = tokio_graceful::default_signal() => {}
+                        _ = canceller.cancelled() => {
+                            tracing::info!("Instance cancelled by caller")
+                        }
+                        _ = tokio_graceful::default_signal() => {
+                            tracing::info!("Instance cancelled by SIGTERM or Ctrl+C")
+                        }
                     }
                 })
                 .with_overwrite_fn(tokio::signal::ctrl_c)
