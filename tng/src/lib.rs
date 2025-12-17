@@ -71,11 +71,13 @@ mod tests {
                 ),
             )
             .with(
-                tracing_subscriber::fmt::layer().with_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                        "info,tokio_graceful=off,rats_cert=debug,tng=debug".into()
-                    }),
-                ),
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(atty::is(atty::Stream::Stdout))
+                    .with_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
+                            |_| "info,tokio_graceful=off,rats_cert=debug,tng=debug".into(),
+                        ),
+                    ),
             )
             .init();
         // Set the reload handle to the global static variable so that we can use it in tests
