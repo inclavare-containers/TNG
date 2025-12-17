@@ -14,7 +14,7 @@ use bytes::BytesMut;
 use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
-use serf::event::{Event, EventProducer};
+use serf::event::{Event, EventProducer, MemberEventType};
 use serf::net::{HostAddr, NetTransportOptions, Node, NodeId};
 use serf::tokio::TokioHostAddrResolver;
 use serf::types::MaybeResolvedAddress;
@@ -121,13 +121,12 @@ impl PeerSharedKeyManager {
         });
         let inner_clone = inner.clone();
 
-        // Register callback to broadcast key change event to all serf members
-        {
+        let broadcast_func: KeyChangeCallback = {
             let node_id_str = node_id_str.clone();
             // Here we use weak reference to avoid memory leak due to reference cycle
             let serf_weak = Arc::downgrade(&serf);
 
-            let broadcast_func: KeyChangeCallback = Arc::new(move |event| {
+            Arc::new(move |event| {
                 let node_id_str = node_id_str.clone();
                 let serf_weak = serf_weak.clone();
 
@@ -171,8 +170,11 @@ impl PeerSharedKeyManager {
                         tracing::error!(?error, "failed to send key update event");
                     }
                 })
-            });
+            })
+        };
 
+        // Register callback to broadcast self generated key change event to all serf members
+        {
             // We need to broadcast all key change events to the cluster
             inner
                 .inner_key_manager
@@ -261,7 +263,34 @@ impl PeerSharedKeyManager {
                                 }
                             },
                             Event::Member(member_event) => {
-                                tracing::info!(?member_event, "serf member event")
+                                tracing::debug!(?member_event, "serf member event");
+                                if matches!(member_event.ty(), MemberEventType::Join) {
+                                    tracing::info!(
+                                        ?member_event,
+                                        "New serf node joined, start sharing keys"
+                                    );
+                                    // Notify self generated keys as key update event to all peers, when a new node joins
+                                    async {
+                                        for key_info in inner_clone
+                                            .inner_key_manager
+                                            .get_client_visible_keys()
+                                            .await?
+                                        {
+                                            broadcast_func(&KeyChangeEvent::Created {
+                                                key_info: Cow::Owned(key_info),
+                                            })
+                                            .await;
+                                        }
+                                        Ok::<(), TngError>(())
+                                    }
+                                    .await
+                                    .unwrap_or_else(|error| {
+                                        tracing::warn!(
+                                            ?error,
+                                            "Error during broadcasting keys to peers"
+                                        )
+                                    });
+                                }
                             }
                             _ => { /* ignore */ }
                         }
