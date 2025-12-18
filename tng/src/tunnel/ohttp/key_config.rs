@@ -1,17 +1,30 @@
-use hpke::generic_array::GenericArray;
-use sha2::Digest;
-
 use crate::error::TngError;
 
-pub type KeyConfigHash =
-    GenericArray<u8, <sha2::Sha256 as sha2::digest::OutputSizeUser>::OutputSize>;
+#[derive(Eq, Hash, PartialEq, Clone)]
+pub struct PublicKeyData(Vec<u8>);
+
+impl PublicKeyData {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self(data)
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for PublicKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
 
 pub(crate) trait KeyConfigExtend {
-    fn key_config_hash(&self) -> Result<KeyConfigHash, TngError>;
+    fn public_key_data(&self) -> Result<PublicKeyData, TngError>;
 }
 
 impl KeyConfigExtend for ohttp::KeyConfig {
-    fn key_config_hash(&self) -> Result<KeyConfigHash, TngError> {
-        Ok(sha2::Sha256::digest(self.encode()?))
+    fn public_key_data(&self) -> Result<PublicKeyData, TngError> {
+        Ok(PublicKeyData::new(self.pk_data()?))
     }
 }

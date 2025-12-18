@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use strum_macros::AsRefStr;
 use thiserror::Error;
 
+use crate::tunnel::ohttp::key_config::PublicKeyData;
+
 /// Custom error type
 #[derive(Error, Debug, AsRefStr)]
 pub enum TngError {
@@ -102,12 +104,12 @@ pub enum TngError {
 
     #[error("The requested key does not exist: {}", match .0 {
         Either::Left(key_id) => format!("key_id: {}", key_id),
-        Either::Right(key_config_sha256) => format!(
-            "key_config_sha256: {}",
-            hex::encode(key_config_sha256)
+        Either::Right(public_key) => format!(
+            "public_key: {:?}",
+            public_key
         ),
     })]
-    ServerKeyConfigNotFound(Either<u8 /* key_id */, Vec<u8> /* key_config_sha256 */>),
+    ServerKeyConfigNotFound(Either<u8 /* key_id */, PublicKeyData /* public_key_data */>),
 
     #[error("The server has no active key")]
     NoActiveKey,

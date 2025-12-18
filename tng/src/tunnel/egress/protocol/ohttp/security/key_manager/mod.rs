@@ -5,6 +5,7 @@
 
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeCallback;
+use crate::tunnel::ohttp::key_config::PublicKeyData;
 use std::time::SystemTime;
 
 use anyhow::Result;
@@ -53,7 +54,10 @@ pub trait KeyManager: Send + Sync {
     /// Get an key info with their status by key ID
     ///
     /// Returns an key configuration for the given ID.
-    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError>;
+    async fn get_key_by_public_key_data(
+        &self,
+        public_key_data: &PublicKeyData,
+    ) -> Result<KeyInfo, TngError>;
 
     /// Get a list of keys that are visible and intended to be shared with clients
     ///

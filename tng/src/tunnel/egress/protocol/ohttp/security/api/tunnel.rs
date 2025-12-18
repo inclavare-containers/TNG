@@ -19,6 +19,7 @@ use crate::config::ra::{AttestationServiceArgs, RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
+use crate::tunnel::ohttp::key_config::PublicKeyData;
 use crate::tunnel::ohttp::protocol::header::{
     OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
 };
@@ -102,9 +103,11 @@ impl OhttpServerApi {
             .await
             .map_err(TngError::MetadataValidateError)?;
 
-        let key_info = if let Some(hint) = &metadata.key_config_hint {
-            // Get key by hash
-            self.key_manager.get_key_by_hash(&hint.sha256).await?
+        let key_info = if let Some(hint) = metadata.key_config_hint {
+            // Get key by hint
+            self.key_manager
+                .get_key_by_public_key_data(&PublicKeyData::new(hint.public_key))
+                .await?
         } else {
             // Check key id, this make it compatible with old tng clients versions
             self.key_manager
