@@ -3,13 +3,14 @@
 //! This module provides abstractions for managing OHTTP key configurations.
 //! It defines traits and implementations for different key management strategies:
 
-use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeCallback;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
+use crate::{error::TngError, tunnel::ohttp::key_config::KeyConfigExtend};
 use std::time::SystemTime;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 pub mod callback_manager;
 pub mod file;
@@ -26,7 +27,7 @@ pub enum KeyStatus {
 }
 
 /// Information about a key including the key config and its status
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KeyInfo {
     /// The OHTTP key configuration (not the full server)
     pub key_config: ohttp::KeyConfig,
@@ -38,6 +39,25 @@ pub struct KeyInfo {
     pub stale_at: SystemTime,
     /// Time when the key will expire
     pub expire_at: SystemTime,
+}
+
+impl std::fmt::Debug for KeyInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut st = f.debug_struct("KeyInfo");
+        match self.key_config.public_key_data() {
+            Ok(public_key_data) => {
+                st.field("public_key", &public_key_data);
+            }
+            Err(error) => {
+                st.field("public_key", &error);
+            }
+        }
+        st.field("status", &self.status)
+            .field("created_at", &DateTime::<Utc>::from(self.created_at))
+            .field("stale_at", &DateTime::<Utc>::from(self.stale_at))
+            .field("expire_at", &DateTime::<Utc>::from(self.expire_at))
+            .finish()
+    }
 }
 
 /// Trait for managing OHTTP key configurations

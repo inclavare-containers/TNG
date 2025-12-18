@@ -504,6 +504,12 @@ impl OHttpClientInner {
             .context("No key config found")
             .map_err(TngError::ClientSelectHpkeConfigurationFailed)?
             .clone();
+
+        tracing::debug!(
+            public_key = ?key_config.public_key_data(),
+            "Encrypting request with HPKE key"
+        );
+
         let client = ohttp::ClientRequest::from_config(&mut key_config)?;
 
         let (encrypted_request, client_response_decapsulator) = {
@@ -572,7 +578,7 @@ impl OHttpClientInner {
                 metadata
                     .encode(&mut metadata_buf)
                     .map_err(TngError::MetadataEncodeError)?;
-                tracing::debug!("metadata length: {:?}", metadata_buf.len());
+                tracing::trace!("metadata length: {:?}", metadata_buf.len());
                 metadata_buf
             };
 

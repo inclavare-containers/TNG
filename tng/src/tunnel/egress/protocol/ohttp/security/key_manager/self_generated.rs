@@ -182,7 +182,7 @@ impl RandomKeyManagerInner {
             .any(|key_info| matches!(key_info.status, KeyStatus::Active));
 
         if !have_active_key {
-            tracing::info!("Generating new OHTTP key");
+            tracing::debug!("Generating new OHTTP key");
             let new_key_id = (0..u8::MAX)
                 .find(|id| {
                     !keys
@@ -206,6 +206,7 @@ impl RandomKeyManagerInner {
                 stale_at,
                 expire_at,
             };
+            tracing::info!(?key_info, "New OHTTP key generated");
             self.callback_manager
                 .trigger(&KeyChangeEvent::Created {
                     key_info: Cow::Borrowed(&key_info),
