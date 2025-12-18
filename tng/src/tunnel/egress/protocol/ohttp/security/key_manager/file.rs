@@ -21,7 +21,7 @@ use crate::{
             callback_manager::{CallbackManager, KeyChangeCallback, KeyChangeEvent},
             KeyInfo, KeyManager, KeyStatus,
         },
-        ohttp::key_config::{KeyConfigExtend, KeyConfigHash},
+        ohttp::key_config::{KeyConfigExtend, PublicKeyData},
         utils::runtime::supervised_task::SupervisedTaskResult,
     },
     TokioRuntime,
@@ -57,7 +57,7 @@ struct FileBasedKeyManagerInner {
     ///
     /// Protected by a write lock during updates; readers can concurrently access the current key.
     /// When the file is modified, a new `KeyInfo` replaces the old one atomically.
-    key: RwLock<Option<(KeyConfigHash, KeyInfo)>>,
+    key: RwLock<Option<(PublicKeyData, KeyInfo)>>,
 
     /// Manages registration and invocation of callbacks on key lifecycle events (create/remove).
     ///
@@ -75,7 +75,7 @@ impl FileBasedKeyManager {
         let key_info = Self::load_key_from_pem(&path).await?;
 
         let inner = Arc::new(FileBasedKeyManagerInner {
-            key: RwLock::new(Some((key_info.key_config.key_config_hash()?, key_info))),
+            key: RwLock::new(Some((key_info.key_config.public_key_data()?, key_info))),
             callback_manager: CallbackManager::new(),
         });
 
@@ -122,7 +122,7 @@ impl FileBasedKeyManager {
                                         let old_key_info = {
                                             let mut write = inner_clone.key.write().await;
                                             write.replace((
-                                                new_key_info.key_config.key_config_hash()?,
+                                                new_key_info.key_config.public_key_data()?,
                                                 new_key_info.clone(),
                                             ))
                                         };
@@ -245,19 +245,22 @@ impl KeyManager for FileBasedKeyManager {
         }
     }
 
-    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError> {
+    async fn get_key_by_public_key_data(
+        &self,
+        public_key_data: &PublicKeyData,
+    ) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
         match key.as_ref() {
-            Some((h, k)) if h.as_slice() == hash => Ok(k.clone()),
+            Some((p, k)) if p == public_key_data => Ok(k.clone()),
             _ => Err(TngError::ServerKeyConfigNotFound(either::Either::Right(
-                hash.to_vec(),
+                public_key_data.clone(),
             ))),
         }
     }
 
     async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
         let key = self.inner.key.read().await;
-        if let Some((_hash, info)) = key
+        if let Some((_, info)) = key
             .as_ref()
             .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
         {

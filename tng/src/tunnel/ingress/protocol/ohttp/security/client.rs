@@ -557,7 +557,7 @@ impl OHttpClientInner {
                 let metadata = Metadata {
                     client_auth: Some(client_auth.clone()), // TODO: optimize this clone
                     key_config_hint: Some(ServerKeyConfigHint {
-                        sha256: key_config.key_config_hash()?.to_vec(),
+                        public_key: key_config.public_key_data()?.into_vec(),
                     }),
                 };
 

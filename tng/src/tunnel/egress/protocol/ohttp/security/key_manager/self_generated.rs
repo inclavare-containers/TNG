@@ -5,7 +5,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_mana
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
 };
-use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
@@ -28,7 +28,7 @@ pub struct SelfGeneratedKeyManager {
 
 pub struct RandomKeyManagerInner {
     /// Map of key IDs to key information
-    keys: tokio::sync::RwLock<HashMap<KeyConfigHash, KeyInfo>>,
+    keys: tokio::sync::RwLock<HashMap<PublicKeyData, KeyInfo>>,
     /// List of registered callbacks triggered when a key is updated or created
     callback_manager: CallbackManager,
 
@@ -211,7 +211,7 @@ impl RandomKeyManagerInner {
                     key_info: Cow::Borrowed(&key_info),
                 })
                 .await;
-            keys.insert(key_info.key_config.key_config_hash()?, key_info);
+            keys.insert(key_info.key_config.public_key_data()?, key_info);
         }
 
         Ok(())
@@ -230,12 +230,15 @@ impl KeyManager for SelfGeneratedKeyManager {
             )))
     }
 
-    async fn get_key_by_hash(&self, hash: &[u8]) -> Result<KeyInfo, TngError> {
+    async fn get_key_by_public_key_data(
+        &self,
+        public_key_data: &PublicKeyData,
+    ) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
-        keys.get(hash)
+        keys.get(public_key_data)
             .cloned()
             .ok_or(TngError::ServerKeyConfigNotFound(either::Either::Right(
-                hash.to_vec(),
+                public_key_data.clone(),
             )))
     }
 

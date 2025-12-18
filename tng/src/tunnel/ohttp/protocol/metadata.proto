@@ -10,19 +10,22 @@ message Metadata {
     // No client authentication; the client is treated as anonymous.
     NoAuth no_auth = 1;
 
-    // Client authenticates using a public key that has been attested by a trusted service.
+    // Client authenticates using a public key that has been attested by a
+    // trusted service.
     AttestedPublicKey attested_public_key = 2;
   }
 
-  // Optional hint: provides a cryptographic identifier to help the server locate 
-  // the correct key configuration for decryption.
+  // Optional hint: provides a cryptographic identifier to help the server
+  // locate the correct key configuration for decryption.
   //
-  // Although key_config contains an 'id' field (1-byte u8), it only allows 256 unique values,
-  // which is insufficient for large-scale or dynamic deployments.
-  // This SHA-256 hash offers a 32-byte globally unique identifier to avoid collisions.
+  // Although key_config contains an 'id' field (1-byte u8), it only allows 256
+  // unique values, which is insufficient for large-scale or dynamic
+  // deployments. This SHA-256 hash offers a 32-byte globally unique identifier
+  // to avoid collisions.
   //
-  // Servers SHOULD use this hint to select the appropriate key_config, if a matching one exists.
-  // If not present, the server may fall back to other mechanisms (e.g., default key, ID-based lookup).
+  // Servers SHOULD use this hint to select the appropriate key_config, if a
+  // matching one exists. If not present, the server may fall back to other
+  // mechanisms (e.g., default key, ID-based lookup).
   ServerKeyConfigHint key_config_hint = 3;
 }
 
@@ -32,14 +35,16 @@ message NoAuth {
   // Empty message as there are no additional fields
 }
 
-// Represents client authentication via a public key that has been attested (e.g., via Intel SGX, AMD SEV, etc.)
+// Represents client authentication via a public key that has been attested
+// (e.g., via Intel SGX, AMD SEV, etc.)
 //
 // This includes:
 // - The attestation evidence (e.g., JWT token from attestation service)
 // - The client's public key, used for key exchange or signing
 message AttestedPublicKey {
-  // The attestation result of the client, typically a JWT or CBOR token issued by an attestation service.
-  // This proves that the client is running in a trusted execution environment (TEE).
+  // The attestation result of the client, typically a JWT or CBOR token issued
+  // by an attestation service. This proves that the client is running in a
+  // trusted execution environment (TEE).
   string attestation_result = 1;
 
   // The client(sender)'s public key, encoded in binary format
@@ -47,13 +52,16 @@ message AttestedPublicKey {
   bytes pk_s = 2;
 }
 
-// Hint for the server to identify the key configuration needed to decrypt the request.
+// Hint for the server to identify the key configuration needed to decrypt the
+// request.
 message ServerKeyConfigHint {
-  // SHA-256 hash of the key_config, represented as exactly 32 bytes of binary data.
+  // Raw binary representation of the public key.
   //
-  // This value MUST be the full SHA-256 digest in raw (not hex-encoded) format.
+  // This value MUST be the public key in its original binary format,
+  // such as an uncompressed EC point, depending on the cryptographic algorithm
+  // in use.
   //
-  // Servers SHOULD attempt to match this digest against known key_config instances
-  // to efficiently retrieve the correct decryption key material.
-  bytes sha256 = 1;  // Must be exactly 32 bytes
+  // Servers SHOULD use this public key to look up the corresponding private key
+  // required to decrypt the request.
+  bytes public_key = 1; // Variable length; depends on key type and encoding
 }

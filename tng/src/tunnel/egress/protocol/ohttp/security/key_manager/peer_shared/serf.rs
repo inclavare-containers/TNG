@@ -6,7 +6,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_mana
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_tls::RatsTls;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
-use crate::tunnel::ohttp::key_config::{KeyConfigExtend, KeyConfigHash};
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::TokioRuntime;
 
 use anyhow::{anyhow, Context, Result};
@@ -50,7 +50,7 @@ type Serf = serf::Serf<
 
 pub(super) struct PeerSharedKeyManagerInner {
     pub(super) inner_key_manager: SelfGeneratedKeyManager,
-    pub(super) keys_from_peers: RwLock<HashMap<KeyConfigHash, KeyInfo>>,
+    pub(super) keys_from_peers: RwLock<HashMap<PublicKeyData, KeyInfo>>,
 }
 
 impl PeerSharedKeyManager {
@@ -270,7 +270,7 @@ impl PeerSharedKeyManager {
                                             // Ignore the key if it has already expired yet
                                             if now < key_info.expire_at {
                                                 inner_clone.keys_from_peers.write().await.insert(
-                                                    key_info.key_config.key_config_hash()?,
+                                                    key_info.key_config.public_key_data()?,
                                                     key_info.into_owned(),
                                                 );
                                             }
@@ -280,7 +280,7 @@ impl PeerSharedKeyManager {
                                                 .keys_from_peers
                                                 .write()
                                                 .await
-                                                .remove(&key_info.key_config.key_config_hash()?);
+                                                .remove(&key_info.key_config.public_key_data()?);
                                         }
                                     }
 
