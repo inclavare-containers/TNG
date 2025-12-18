@@ -12,6 +12,7 @@ use crate::tunnel::utils::runtime::TokioRuntime;
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
 use futures::StreamExt;
+use itertools::Itertools;
 use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
@@ -296,10 +297,13 @@ impl PeerSharedKeyManager {
                                 }
                             },
                             Event::Member(member_event) => {
-                                tracing::debug!(?member_event, "serf member event");
                                 if matches!(member_event.ty(), MemberEventType::Join) {
                                     tracing::info!(
-                                        ?member_event,
+                                        nodes=?member_event
+                                            .members()
+                                            .iter()
+                                            .map(|member| member.node())
+                                            .collect_vec(),
                                         "New serf node joined, start sharing keys"
                                     );
                                     // Notify self generated keys as key update event to all peers, when a new node joins

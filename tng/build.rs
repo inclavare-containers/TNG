@@ -11,11 +11,16 @@ fn main() {
     ShadowBuilder::builder().build().unwrap();
 
     // For protoc
-    prost_build::compile_protos(
-        &["src/tunnel/ohttp/protocol/metadata.proto"],
-        &["src/tunnel/ohttp/protocol/"],
-    )
-    .unwrap();
+    prost_build::Config::new()
+        .skip_debug([
+            "tng.ohttp.metadata.ServerKeyConfigHint",
+            "tng.ohttp.metadata.AttestedPublicKey",
+        ])
+        .compile_protos(
+            &["src/tunnel/ohttp/protocol/metadata.proto"],
+            &["src/tunnel/ohttp/protocol/"],
+        )
+        .unwrap();
 
     prost_build::compile_protos(
         &["src/tunnel/egress/protocol/ohttp/security/key_manager/peer_shared/key_update.proto"],
