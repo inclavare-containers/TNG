@@ -4,6 +4,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_mana
     KeyChangeCallback, KeyChangeEvent,
 };
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_tls::RatsTls;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::runtime::InstrumentedRuntime;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
@@ -18,8 +19,8 @@ use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
 use serf::event::{Event, EventProducer, MemberEventType};
 use serf::net::hostaddr::Host;
-use serf::net::{HostAddr, NetTransportOptions, Node, NodeId};
-use serf::tokio::TokioSocketAddrResolver;
+use serf::net::resolver::socket_addr::SocketAddrResolver;
+use serf::net::{HostAddr, NetTransport, NetTransportOptions, Node, NodeId};
 use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
@@ -40,11 +41,14 @@ pub struct PeerSharedKeyManager {
     serf: Arc<SerfGracefulShutdown>,
 }
 
+type InstrumentedTokioRuntime = InstrumentedRuntime<serf::agnostic::tokio::TokioRuntime>;
+
 type Serf = serf::Serf<
-    serf::net::TokioNetTransport<
+    NetTransport<
         NodeId,
-        TokioSocketAddrResolver,
-        RatsTls<serf::agnostic::tokio::TokioRuntime>,
+        SocketAddrResolver<InstrumentedTokioRuntime>,
+        RatsTls<InstrumentedTokioRuntime>,
+        InstrumentedTokioRuntime,
     >,
     CompositeDelegate<NodeId, SocketAddr>,
 >;
@@ -68,7 +72,7 @@ impl PeerSharedKeyManager {
             "Launching peer shared key manager with serf protocol"
         );
         let net_opts =
-            NetTransportOptions::<_, TokioSocketAddrResolver, _>::with_stream_layer_options(
+            NetTransportOptions::<_, SocketAddrResolver<InstrumentedTokioRuntime>, _>::with_stream_layer_options(
                 node_id,
                 (peer_shared.ra_args.into_checked()?, runtime.clone()),
             )
