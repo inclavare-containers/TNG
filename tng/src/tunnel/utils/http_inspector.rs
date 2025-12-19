@@ -337,6 +337,7 @@ mod tests {
             HttpVersion::Http1 => {
                 let (mut sender, conn) =
                     hyper::client::conn::http1::handshake(TokioIo::new(s1)).await?;
+                #[allow(clippy::disallowed_methods)]
                 tokio::spawn(async move {
                     conn.await
                         .context("The HTTP connection with upstream is broken")?;
@@ -349,6 +350,7 @@ mod tests {
                 let (mut sender, conn) =
                     hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(s1))
                         .await?;
+                #[allow(clippy::disallowed_methods)]
                 tokio::spawn(async move {
                     conn.await
                         .context("The HTTP connection with upstream is broken")?;
@@ -371,6 +373,7 @@ mod tests {
 
         // Setup a http server to handle the request.
         let expected_request_cloned = expected_request.clone();
+        #[allow(clippy::disallowed_methods)]
         tokio::spawn(async {
             let svc = {
                 ServiceBuilder::new().service(tower::service_fn(
