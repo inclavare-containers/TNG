@@ -1112,7 +1112,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 async fn test_egress_key_from_peer_shared() -> Result<()> {
     let mut tasks = Vec::default();
 
-    let (ips,  tng_tasks,  server_tasks):(Vec<_>,Vec<_>,Vec<_>) = itertools::multiunzip((1..=3).into_iter().map(|i|{
+    let (ips,  tng_tasks,  server_tasks):(Vec<_>,Vec<_>,Vec<_>) = itertools::multiunzip((1..=10).into_iter().map(|i|{
             let node_type = NodeType::Customized { host_num: i };
             (
                 node_type.ip(),
