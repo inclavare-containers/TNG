@@ -18,17 +18,17 @@ TNG RPM 包的构建分为两个主要阶段：
 
 ### 2. 下载构建材料
 
-从 GitHub Release 页面下载 `build-materials-*.tar.gz` 文件：
+从 GitHub Release 页面下载 `rb-build-materials-*.tar.gz` 文件：
 
 ```bash
 # 替换 ${RELEASE_VERSION} 为实际的版本标签，例如 v1.7.0
-wget https://github.com/inclavare-containers/TNG/releases/download/${RELEASE_VERSION}/build-materials-${RELEASE_VERSION}.tar.gz
+wget https://github.com/inclavare-containers/TNG/releases/download/${RELEASE_VERSION}/rb-build-materials-${RELEASE_VERSION}.tar.gz
 ```
 
 ### 3. 提取构建材料
 
 ```bash
-tar -xzf build-materials-${RELEASE_VERSION}.tar.gz
+tar -xzf rb-build-materials-${RELEASE_VERSION}.tar.gz
 ```
 
 提取后，您将看到 AnolisOS23 目录，其中包含：
@@ -109,7 +109,7 @@ sha256sum rpm-out/RPMS/x86_64/*.rpm
 ### 哈希值不匹配
 
 如果本地构建的 RPM 包与官方发布的版本哈希值不匹配：
-1. 确认使用的 `build-materials-*.tar.gz` 文件版本与官方发布版本一致
+1. 确认使用的 `rb-build-materials-*.tar.gz` 文件版本与官方发布版本一致
 2. 确认严格按照本文档步骤执行构建过程
 3. 检查构建环境是否与官方构建环境一致
 
@@ -117,7 +117,7 @@ sha256sum rpm-out/RPMS/x86_64/*.rpm
 
 ### 构建材料包内容
 
-`build-materials-*.tar.gz` 文件包含：
+`rb-build-materials-*.tar.gz` 文件包含：
 - 所有源代码和资源文件
 - 预编译的依赖项（如 Rust 依赖）
 - RPM 构建所需的 SPEC 文件

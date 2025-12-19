@@ -44,7 +44,7 @@ jobs:
           cd rpm/AnolisOS23
           tar -czf build-artifacts-${{ env.TAG_NAME }}.tar.gz -C rpmbuild-layout .
           cd ..
-          tar -czf build-materials-${{ env.TAG_NAME }}.tar.gz --exclude='AnolisOS23/rpmbuild-layout' AnolisOS23
+          tar -czf rb-build-materials-${{ env.TAG_NAME }}.tar.gz --exclude='AnolisOS23/rpmbuild-layout' AnolisOS23
 
       - name: Generate materials hashes
         id: generate-materials-hashes
@@ -52,8 +52,8 @@ jobs:
           cd rpm
           # Generate hashes for build materials
           echo "Generating hashes for build materials..."
-          ls -la build-materials-*.tar.gz || echo "No build materials found"
-          sha256sum build-materials-*.tar.gz > materials-hash.txt
+          ls -la rb-build-materials-*.tar.gz || echo "No build materials found"
+          sha256sum rb-build-materials-*.tar.gz > materials-hash.txt
           # Output as base64 subjects
           echo "subjects=$(base64 -w0 < "materials-hash.txt")" >> $GITHUB_OUTPUT
 
@@ -64,7 +64,7 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: false
           tag_name: ${{ env.TAG_NAME }}
-          files: rpm/build-materials-*.tar.gz
+          files: rpm/rb-build-materials-*.tar.gz
 
   build-rpm:
     name: Build RPM Package
@@ -76,7 +76,7 @@ jobs:
       - name: Download and extract build materials from release
         run: |
           # Download the total build artifacts tarball from the release
-          build_materials_filename=build-materials-${{ env.TAG_NAME }}.tar.gz
+          build_materials_filename=rb-build-materials-${{ env.TAG_NAME }}.tar.gz
           wget -O ${build_materials_filename} "https://github.com/${{ github.repository }}/releases/download/${{ env.TAG_NAME }}/${build_materials_filename}"
           tar -xzf ${build_materials_filename}
       - name: Build builder image
@@ -277,6 +277,7 @@ jobs:
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       compile-generator: false
+      provenance-name: rb-multiple.intoto.jsonl
       base64-subjects: ${{ needs.combine-subjects.outputs.combined_subjects }}
       upload-assets: true
 
