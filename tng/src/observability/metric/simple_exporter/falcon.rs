@@ -353,6 +353,7 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        #[allow(clippy::disallowed_methods)]
         tokio::spawn(async move {
             async fn handler(
                 State(tx): State<tokio::sync::mpsc::UnboundedSender<()>>,
@@ -423,6 +424,7 @@ mod tests {
         let tng_runtime = TngRuntime::from_config(config).await?;
         let canceller = tng_runtime.canceller();
 
+        #[allow(clippy::disallowed_methods)]
         let join_handle =
             tokio::task::spawn(async move { tng_runtime.serve_with_ready(ready_sender).await });
 

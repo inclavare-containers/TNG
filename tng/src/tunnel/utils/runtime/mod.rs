@@ -109,6 +109,7 @@ impl TokioRuntime {
             | TokioRuntimeInner::Reference { rt_handle } => {
                 // Spawn a task with a name is a unstable feature
                 #[cfg(tokio_unstable)]
+                #[allow(clippy::disallowed_methods)]
                 let handle = tokio::task::Builder::new()
                     .name(name)
                     .spawn_on(
@@ -124,6 +125,7 @@ impl TokioRuntime {
                 #[cfg(not(tokio_unstable))]
                 let handle = {
                     let _ = name;
+                    #[allow(clippy::disallowed_methods)]
                     rt_handle.spawn(async move {
                         let output = task.await;
                         drop(this);
@@ -136,6 +138,7 @@ impl TokioRuntime {
             #[cfg(wasm)]
             TokioRuntimeInner::WasmMainThread => {
                 let _ = name;
+                #[allow(clippy::disallowed_methods)]
                 tokio::spawn(async move {
                     let output = task.await;
                     drop(this);

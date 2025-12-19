@@ -1,2 +1,7 @@
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
+disallowed-methods = [
+  {path = "tokio::task::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
+  {path = "tokio::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
+  {path = "tokio::runtime::handle::Handle::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
+]
