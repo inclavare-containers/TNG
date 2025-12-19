@@ -1,7 +1,7 @@
 pub mod netns;
 pub mod task;
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use futures::StreamExt as _;
@@ -67,23 +67,28 @@ pub async fn run_test(tasks: Vec<Box<dyn Task>>) -> Result<()> {
         // Create a virtual network with two nodes connected to a bridge
         let network = BridgeNetwork::new("192.168.1.254", 24).await?;
 
+        // Create required Node for each task
         let mut ip_to_nodes = HashMap::new();
+        let mut tasks_with_nodes = vec![];
+        for task in tasks {
+            let ip = task.node_type().ip();
+            if !ip_to_nodes.contains_key(&ip) {
+                let new_node = Arc::new(network.new_node(&ip).await?);
+                ip_to_nodes.insert(ip.clone(), Arc::clone(&new_node));
+            }
+            let node = ip_to_nodes.get(&ip).unwrap();
+
+            tasks_with_nodes.push((task, Arc::clone(node)));
+        }
 
         // Launch all tasks in order and get the join handles
         let mut sub_tasks = futures::stream::FuturesUnordered::new();
-        for task in tasks {
+        for (task, node) in tasks_with_nodes {
             sub_tasks.push({
                 let task_name = task.name();
 
                 let task_result = {
                     let task_name = task_name.clone();
-
-                    let ip = task.node_type().ip();
-                    if !ip_to_nodes.contains_key(&ip) {
-                        let new_node = network.new_node(&ip).await?;
-                        ip_to_nodes.insert(ip.clone(), new_node);
-                    }
-                    let node = ip_to_nodes.get(&ip).unwrap();
 
                     let token = token.clone();
                     node.run(async move {
