@@ -841,6 +841,78 @@ TNG 支持多种 OHTTP 密钥管理策略。当未通过外部机制提供密钥
 ```
 
 
+
+#### OHTTP 密钥配置：`peer_shared` 模式
+
+TNG 支持在多个 TNG 实例之间共享 OHTTP 私钥的去中心化密钥管理模式。该模式构建于 [self_generated](#ohttp-密钥配置self_generated-模式) 模式基础之上，通过引入基于 serf 的 Gossip 分布式协议，实现了跨节点的密钥同步机制。在该模式下，每个 TNG 实例独立生成自身的 OHTTP 密钥对，并通过安全的点对点通道与其他集群成员共享密钥信息。这种设计使得即便在无状态服务部署场景下（例如使用 HTTP 负载均衡器分发请求），集群中的任意节点都能够解密原本由其他节点公钥加密的流量，从而显著提升了系统的可用性和伸缩性。
+
+Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提供了去中心化的节点通信能力。在 TNG 的 `peer_shared` 模式中，每个 TNG 实例都会启动一个 Serf 客户端，并通过双向的远程证明技术建立通信信道，确保只有经过验证的可信节点才能参与密钥共享过程。
+
+在此模式下，TNG 会：
+- 每个节点独立生成自己的密钥对
+- 通过基于远程证明的安全 serf 协议与其他节点交换密钥
+- 维护一个包含所有节点有效私钥的本地"密钥环"
+- 允许任何节点解密使用其他节点公钥加密的请求
+
+如果您希望启用此模式，只需在 `ohttp` 配置中指定 `key.source = "peer_shared"`：
+
+```
+"ohttp": {
+    "key": {
+        "source": "peer_shared",
+        "rotation_interval": 300,
+        "host": "0.0.0.0",
+        "port": 8301,
+        "peers": [
+            "192.168.10.1:8301",
+            "tng-service.default.svc.cluster.local:8301"
+        ]
+    }
+}
+```
+
+##### 字段说明
+
+- **`key`** (KeyConfig)：OHTTP 密钥管理配置。
+    - **`source`** (`string`)：密钥来源类型。设为 `"peer_shared"` 表示启用去中心化的密钥共享模式。
+    - **`rotation_interval`** (`integer`, 可选, 默认 `300`)：密钥轮换周期（单位：秒）。每个节点独立轮换自己的密钥。
+    - **`host`** (`string`, 可选, 默认 `0.0.0.0`)：用于节点间安全通信的本地监听地址。
+    - **`port`** (`integer`, 可选, 默认 `8301`)：用于节点间安全通信的本地监听端口。
+    - **`peers`** (`array of strings`)：初始连接的节点地址列表（IP或域名:端口）。至少需要能够访问其中一个节点才能加入集群。当指定的节点地址为域名时，TNG 会尝试解析该域名并将其返回的所有 IP 地址依次作为 peer 节点进行连接尝试，而非仅仅使用第一个解析结果，这提高了在复杂网络环境下的连接成功率。
+
+示例配置：
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": {
+                    "port": 8080
+                }
+            },
+            "ohttp": {
+                "key": {
+                    "source": "peer_shared",
+                    "rotation_interval": 300,
+                    "host": "0.0.0.0",
+                    "port": 8301,
+                    "peers": [
+                        "192.168.10.1:8301",
+                        "tng-service.default.svc.cluster.local:8301"
+                    ]
+                }
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+
+
 #### OHTTP 密钥配置：`file` 模式
 
 TNG 支持从外部文件加载 OHTTP HPKE 私钥，适用于需要与外部密钥管理系统（如 Confidnetial Data Hub、Hashicorp、Kubernetes Secrets 或自定义轮换脚本）集成的生产环境。该模式通过设置 `key.source = "file"` 启用。
