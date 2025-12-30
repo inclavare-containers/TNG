@@ -34,6 +34,7 @@ impl OhttpServerApi {
                             &as_args.as_addr,
                             &as_args.token_verify.policy_ids,
                             as_args.as_is_grpc,
+                            &as_args.as_headers,
                         )?;
 
                         let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
@@ -77,6 +78,7 @@ impl OhttpServerApi {
                             &as_args.as_addr,
                             &as_args.token_verify.policy_ids,
                             as_args.as_is_grpc,
+                            &as_args.as_headers,
                         )?;
 
                         let token  = coco_converter.convert(&coco_evidence).await?;

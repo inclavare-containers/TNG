@@ -71,6 +71,7 @@ impl CertManager {
                     &as_args.as_addr,
                     &as_args.token_verify.policy_ids,
                     as_args.as_is_grpc,
+                    &as_args.as_headers,
                 )?;
                 let attester_pipeline = AttesterPipeline::new(coco_attester, coco_converter);
                 let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)

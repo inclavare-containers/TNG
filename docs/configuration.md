@@ -548,6 +548,7 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
 - **`as_addr`** (string): Address of the Attestation Service
 - **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully. If this field is not specified or is set to an empty array, certificate verification is skipped.
 
@@ -557,6 +558,10 @@ Example: Connecting to a Restful HTTP type AS service
 "verify": {
     // When model is not specified, Background Check mode is used by default
     "as_addr": "http://127.0.0.1:8080/",
+    "as_headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+    },
     "policy_ids": [
         "default"
     ]
@@ -570,6 +575,9 @@ Example: Connecting to a gRPC type AS service
     "model": "background_check",
     "as_addr": "http://127.0.0.1:5000/",
     "as_is_grpc": true,
+    "as_headers": {
+        "Authorization": "Bearer your-grpc-token"
+    },
     "policy_ids": [
         "default"
     ]
@@ -606,6 +614,7 @@ In the Passport model, the [Attest](#attest) configuration should include the fo
 - **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
 - **`as_addr`** (string): Address of the Attestation Service
 - **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
 - **`policy_ids`** (array [string]): List of policy IDs
 
 Example:
@@ -617,6 +626,10 @@ Example:
     "refresh_interval": 3600,
     "as_addr": "http://127.0.0.1:8080/",
     "as_is_grpc": false,
+    "as_headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+    },
     "policy_ids": [
         "default"
     ]

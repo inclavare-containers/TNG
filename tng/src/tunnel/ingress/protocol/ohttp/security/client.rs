@@ -226,6 +226,7 @@ impl OHttpClientInner {
             &as_args.as_addr,
             &as_args.token_verify.policy_ids,
             as_args.as_is_grpc,
+            &as_args.as_headers,
         )?;
         let token = coco_converter.convert(&coco_evidence).await?;
 
@@ -291,6 +292,7 @@ impl OHttpClientInner {
                         &as_args.as_addr,
                         &as_args.token_verify.policy_ids,
                         as_args.as_is_grpc,
+                        &as_args.as_headers,
                     )?;
 
                     // fetch a challenge token from attestation service
@@ -389,6 +391,7 @@ impl OHttpClientInner {
                             &as_args.as_addr,
                             &as_args.token_verify.policy_ids,
                             as_args.as_is_grpc,
+                            &as_args.as_headers,
                         )?;
 
                         // fetch a challenge token from attestation service
