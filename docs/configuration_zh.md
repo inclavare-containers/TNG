@@ -547,6 +547,7 @@ flowchart TD
 - **`model`** (string，可选): 设置为"background_check"以启用Background Check模式
 - **`as_addr`** (string): Attestation Service的地址
 - **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
+- **`as_headers`** (object, 可选，默认为{}): 发送到attestation service请求中的自定义头部。这在attestation service部署在需要额外认证头（如Authorization头或其他自定义头部）的认证机制后面时非常有用。
 - **`policy_ids`** (array [string]): 策略ID列表
 - **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
 
@@ -557,6 +558,10 @@ flowchart TD
 "verify": {
     // 不指定model时，默认使用Background Check模式
     "as_addr": "http://127.0.0.1:8080/",
+    "as_headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+    },
     "policy_ids": [
         "default"
     ]
@@ -570,6 +575,9 @@ flowchart TD
     "model": "background_check",
     "as_addr": "http://127.0.0.1:5000/",
     "as_is_grpc": true,
+    "as_headers": {
+        "Authorization": "Bearer your-grpc-token"
+    },
     "policy_ids": [
         "default"
     ]
@@ -609,6 +617,7 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 - **`refresh_interval`** (int，可选，默认值为600)：指定从Attestation Agent和Attestation Service获取证明凭据（Attestation Token）的频率（单位为秒）。如果指定为0，则在每次安全会话建立时都请求获取最新的Attestation Token。在Passport模式下，如果使用rats-tls协议通信，该选项影响更新自身X.509证书的频率，如果使用OHTTP协议通信，则该选项影响内部Attestation Token缓存更新频率，不影响OHTTP密钥轮换频率。
 - **`as_addr`** (string): Attestation Service的地址
 - **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
+- **`as_headers`** (object, 可选，默认为{}): 发送到attestation service请求中的自定义头部。这在attestation service部署在需要额外认证头（如Authorization头或其他自定义头部）的认证机制后面时非常有用。
 - **`policy_ids`** (array [string]): 策略ID列表
 
 示例：
@@ -620,6 +629,10 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
     "refresh_interval": 3600,
     "as_addr": "http://127.0.0.1:8080/",
     "as_is_grpc": false,
+    "as_headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+    },
     "policy_ids": [
         "default"
     ]

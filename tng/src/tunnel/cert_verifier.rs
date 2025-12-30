@@ -45,11 +45,13 @@ impl CoCoCommonCertVerifier {
                         as_addr,
                         as_is_grpc,
                         token_verify,
+                        as_headers,
                     },
             } => (
                 CocoVerifyMode::Evidence {
                     as_addr: as_addr.to_owned(),
                     as_is_grpc: *as_is_grpc,
+                    as_headers: as_headers.clone(),
                 },
                 token_verify.policy_ids.clone(),
                 token_verify.trusted_certs_paths.clone(),

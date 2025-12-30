@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -345,6 +345,10 @@ pub struct AttestationServiceArgs {
     /// Whether attestation service uses gRPC protocol, default is false (using REST API)
     #[serde(default = "bool::default")]
     pub as_is_grpc: bool,
+
+    /// Custom headers to be sent with attestation service requests
+    #[serde(default = "Default::default")]
+    pub as_headers: HashMap<String, String>,
 
     /// Attestation service token verification parameters
     #[serde(flatten)]
