@@ -82,9 +82,9 @@ create-tarball:
 	sed -i 's/checksum = ".*//g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/Cargo.lock
 
 	# create tarball
-	tar -czf /tmp/trusted-network-gateway-${VERSION}.tar.gz -C /tmp/trusted-network-gateway-tarball/ trusted-network-gateway-${VERSION}
+	tar -czf /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz -C /tmp/trusted-network-gateway-tarball/ trusted-network-gateway-${VERSION}
 
-	@echo "Tarball generated:" /tmp/trusted-network-gateway-${VERSION}.tar.gz
+	@echo "Tarball generated:" /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz
 
 
 .PHONE: bin-build
@@ -97,7 +97,7 @@ rpm-build:
 	rpmdev-setuptree
 
 	# copy sources
-	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+	cp /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz ~/rpmbuild/SOURCES/
 
 	# install build dependencies
 	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
@@ -110,7 +110,7 @@ rpm-build:
 rpm-build-in-docker:
 	# copy sources
 	mkdir -p ~/rpmbuild/SOURCES/
-	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+	cp /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz ~/rpmbuild/SOURCES/
 
 	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none ; source \"\$$HOME/.cargo/env\" ; sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec --define 'with_rustup 1'"
 
@@ -123,7 +123,7 @@ rpm-install: rpm-build
 update-rpm-tree:
 	# copy sources
 	rm -f ../rpm-tree-tng/trusted-network-gateway-*.tar.gz
-	cp /tmp/trusted-network-gateway-${VERSION}.tar.gz ../rpm-tree-tng/
+	cp /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz ../rpm-tree-tng/
 	cp ./trusted-network-gateway.spec ../rpm-tree-tng/
 
 .PHONE: docker-build

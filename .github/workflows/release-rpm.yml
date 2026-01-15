@@ -34,7 +34,7 @@ jobs:
           make create-tarball
           mkdir -p rpm/AnolisOS23/rpmbuild-layout/
           mkdir -p rpm/AnolisOS23/rpmbuild-layout/SOURCES/
-          mv /tmp/trusted-network-gateway-*.tar.gz rpm/AnolisOS23/rpmbuild-layout/SOURCES/
+          mv /tmp/trusted-network-gateway-*-vendored-source.tar.gz rpm/AnolisOS23/rpmbuild-layout/SOURCES/
           mkdir -p rpm/AnolisOS23/rpmbuild-layout/SPECS/
           mv trusted-network-gateway.spec rpm/AnolisOS23/rpmbuild-layout/SPECS/trusted-network-gateway.spec
 

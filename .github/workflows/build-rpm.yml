@@ -51,7 +51,7 @@ jobs:
           cp -r ~/rpmbuild/SRPMS/ $GITHUB_WORKSPACE/rpmbuild/
           cp -r ~/rpmbuild/RPMS/ $GITHUB_WORKSPACE/rpmbuild/
           mkdir -p $GITHUB_WORKSPACE/rpmbuild/SOURCES/
-          cp -r /tmp/trusted-network-gateway-*.tar.gz $GITHUB_WORKSPACE/rpmbuild/SOURCES/
+          cp -r /tmp/trusted-network-gateway-*-vendored-source.tar.gz $GITHUB_WORKSPACE/rpmbuild/SOURCES/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -59,7 +59,7 @@ jobs:
           name: rpm-packages
           if-no-files-found: error
           path: |
-            ./rpmbuild/SOURCES/trusted-network-gateway-*.tar.gz
+            ./rpmbuild/SOURCES/trusted-network-gateway-*-vendored-source.tar.gz
             ./rpmbuild/SRPMS/*.src.rpm
             ./rpmbuild/RPMS/*/*.rpm
 
@@ -150,7 +150,7 @@ jobs:
           fail_on_unmatched_files: true
           prerelease: ${{ env.PRE_RELEASE }}
           files: |
-            ./rpm-packages/SOURCES/trusted-network-gateway-*.tar.gz
+            ./rpm-packages/SOURCES/trusted-network-gateway-*-vendored-source.tar.gz
           # use rpms from release-rpm.yml
             # ./rpm-packages/SRPMS/*.src.rpm
             # ./rpm-packages/RPMS/*/*.rpm
