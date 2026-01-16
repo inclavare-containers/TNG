@@ -209,7 +209,8 @@ impl OhttpServerApi {
                     let verifier = CocoVerifier::new(
                         &token_verify.trusted_certs_paths,
                         &token_verify.policy_ids,
-                    )?;
+                    )
+                    .await?;
 
                     let userdata = ClientUserData {
                         // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.

@@ -29,7 +29,7 @@ use rats_cert::tee::{
         evidence::{CocoAsToken, CocoEvidence},
         verifier::CocoVerifier,
     },
-    GenericConverter, GenericEvidence as _, GenericVerifier as _,
+    GenericConverter, GenericVerifier as _,
 };
 #[cfg(unix)]
 use tokio::io::AsyncReadExt;
@@ -200,7 +200,7 @@ impl OHttpClientInner {
     ) -> Result<CocoAsToken> {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
         let verifier =
-            CocoVerifier::new(&token_verify.trusted_certs_paths, &token_verify.policy_ids)?;
+            CocoVerifier::new(&token_verify.trusted_certs_paths, &token_verify.policy_ids).await?;
 
         let userdata = ServerUserData {
             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
@@ -233,7 +233,8 @@ impl OHttpClientInner {
         let verifier = CocoVerifier::new(
             &as_args.token_verify.trusted_certs_paths,
             &as_args.token_verify.policy_ids,
-        )?;
+        )
+        .await?;
 
         let userdata = ServerUserData {
             challenge_token: Some(challenge_token),
@@ -346,7 +347,7 @@ impl OHttpClientInner {
         let server_attestation_result = match token {
             Some(token) => {
                 expire = std::cmp::min(expire, Expire::from_timestamp(token.exp()?)?);
-                Some(AttestationResult::from_claims(token.get_claims()?))
+                Some(AttestationResult::from_coco_as_token(token))
             }
             None => None,
         };

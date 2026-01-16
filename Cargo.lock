@@ -3117,6 +3117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "9.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
+dependencies = [
+ "base64 0.22.1",
+ "js-sys",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4801,7 +4814,7 @@ dependencies = [
 [[package]]
 name = "rats-cert"
 version = "0.1.0"
-source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=d97415f5f56169f66f679563c0b2481bd6305537#d97415f5f56169f66f679563c0b2481bd6305537"
+source = "git+https://github.com/inclavare-containers/rats-rs.git?rev=80122b9545054bac50c120ae66b8c48ec54a8ccc#80122b9545054bac50c120ae66b8c48ec54a8ccc"
 dependencies = [
  "anyhow",
  "as-any",
@@ -4815,6 +4828,7 @@ dependencies = [
  "flatten-json-object",
  "futures",
  "itertools 0.14.0",
+ "jsonwebtoken",
  "p256",
  "pkcs8",
  "prost 0.13.5",
@@ -4822,6 +4836,8 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rsa",
+ "rustls-pki-types",
+ "rustls-webpki",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -4841,7 +4857,6 @@ dependencies = [
  "ttrpc",
  "ttrpc-codegen",
  "web-time",
- "webpki",
  "x509-cert",
  "zeroize",
 ]
@@ -5726,6 +5741,9 @@ name = "strum"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+dependencies = [
+ "strum_macros 0.26.4",
+]
 
 [[package]]
 name = "strum"
@@ -7151,16 +7169,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webpki"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed63aea5ce73d0ff405984102c42de94fc55a6b75765d621c65262469b3c9b53"
-dependencies = [
- "ring",
- "untrusted",
 ]
 
 [[package]]

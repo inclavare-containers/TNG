@@ -1,7 +1,5 @@
-use anyhow::{bail, Context, Result};
-use rats_cert::cert::verify::{
-    CertVerifier, ClaimsCheck, CocoVerifyMode, VerifyPolicy, VerifyPolicyOutput,
-};
+use anyhow::{Context, Result};
+use rats_cert::cert::verify::{CertVerifier, CocoVerifyMode, CocoVerifyPolicy};
 
 use crate::{
     config::ra::{AttestationServiceArgs, VerifyArgs},
@@ -31,8 +29,6 @@ impl CoCoCommonCertVerifier {
             .take()
             .context("No rats-tls cert received")?;
 
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
-
         let (verify_mode, policy_ids, trusted_certs_paths) = match &self.verify_args {
             VerifyArgs::Passport { token_verify } => (
                 CocoVerifyMode::Token,
@@ -58,32 +54,18 @@ impl CoCoCommonCertVerifier {
             ),
         };
 
-        let res = CertVerifier::new(VerifyPolicy::Coco {
+        let res = CertVerifier::new(CocoVerifyPolicy {
             verify_mode,
             policy_ids,
             trusted_certs_paths,
-            claims_check: ClaimsCheck::Custom(Box::new(move |claims| {
-                let claims = claims.to_owned();
-                let _ = tx.send(AttestationResult::from_claims(claims)); // Ignore the error here.
-                Box::pin(async move {
-                    // We do not check the claims here, just leave it to be checked by attestation service.
-                    VerifyPolicyOutput::Passed
-                })
-            })),
         })
         .verify_der(&pending_cert)
         .await;
 
-        tracing::debug!(result=?res, "rats-rs cert verify finished");
+        tracing::debug!(passed = res.is_ok(), "rats-rs cert verify finished");
 
-        match res? {
-            VerifyPolicyOutput::Passed => {
-                Ok(rx.try_recv().context("Failed to get attestation result")?)
-            }
-            VerifyPolicyOutput::Failed => {
-                bail!("Verify failed because denied by attestation policy")
-            }
-        }
+        res.map(AttestationResult::from_coco_as_token)
+            .map_err(|e| anyhow::anyhow!("Verify failed: {:?}", e))
     }
 
     pub fn verify_cert(

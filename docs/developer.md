@@ -205,13 +205,16 @@ cargo install --path . --bin restful-as --features restful-bin --locked
 4. Prepare Certificates
 
 ```sh
-openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -keyout /tmp/as-ca.key -out /tmp/as-ca.pem -nodes -subj "/O=Trustee CA" \
+openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key
+openssl req -x509 -sha256 -nodes -days 365 -key /tmp/as-ca.key -out /tmp/as-ca.pem -subj "/O=Trustee CA" \
       -addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature
-openssl genrsa -out /tmp/as.key 2048
+openssl ecparam -genkey -name prime256v1 -out /tmp/as.key
 openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"
 openssl x509 -req -in /tmp/as.csr -CA /tmp/as-ca.pem -CAkey /tmp/as-ca.key -CAcreateserial -out /tmp/as.pem -days 365 -extensions v3_req -extfile <(echo -e "[v3_req]\nsubjectKeyIdentifier = hash") -sha256
 
-cat config.json | jq '.attestation_token_config.signer.cert_path="/tmp/as.pem" | .attestation_token_config.signer.key_path="/tmp/as.key"' > config_with_cert.json
+cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem
+
+cat config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > config_with_cert.json
 ```
 
 4. Run
