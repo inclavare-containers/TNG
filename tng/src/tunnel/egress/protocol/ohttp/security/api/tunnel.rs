@@ -15,7 +15,10 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
-use crate::config::ra::{AttestationServiceArgs, RaArgs, VerifyArgs};
+use crate::config::ra::{
+    AttestationServiceArgs, AttestationServiceTokenVerifyAdditionalArgs,
+    AttestationServiceTokenVerifyArgs, RaArgs, VerifyArgs,
+};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -200,30 +203,46 @@ impl OhttpServerApi {
                     pk_s,
                 })),
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify),
-            ) => match verify {
-                VerifyArgs::Passport { token_verify }
-                | VerifyArgs::BackgroundCheck {
-                    as_args: AttestationServiceArgs { token_verify, .. },
-                } => {
-                    let token = CocoAsToken::new(attestation_result)?;
-                    let verifier = CocoVerifier::new(
-                        &token_verify.trusted_certs_paths,
-                        &token_verify.policy_ids,
-                    )
-                    .await?;
-
-                    let userdata = ClientUserData {
-                        // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
-                        challenge_token: None,
-                        pk_s: BASE64_STANDARD.encode(&pk_s),
+            ) => {
+                let verifier = match verify {
+                    VerifyArgs::Passport {
+                        token_verify:
+                            AttestationServiceTokenVerifyArgs {
+                                policy_ids,
+                                trusted_certs_paths,
+                                as_addr,
+                            },
+                    } => CocoVerifier::new(as_addr, trusted_certs_paths, policy_ids).await?,
+                    VerifyArgs::BackgroundCheck {
+                        as_args:
+                            AttestationServiceArgs {
+                                as_addr,
+                                policy_ids,
+                                ..
+                            },
+                        token_verify:
+                            AttestationServiceTokenVerifyAdditionalArgs {
+                                trusted_certs_paths,
+                            },
+                    } => {
+                        CocoVerifier::new(&Some(as_addr.clone()), trusted_certs_paths, policy_ids)
+                            .await?
                     }
-                    .to_claims()?;
+                };
 
-                    verifier
-                        .verify_evidence(&token, &ReportData::Claims(userdata))
-                        .await?;
+                let token = CocoAsToken::new(attestation_result)?;
+
+                let userdata = ClientUserData {
+                    // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
+                    challenge_token: None,
+                    pk_s: BASE64_STANDARD.encode(&pk_s),
                 }
-            },
+                .to_claims()?;
+
+                verifier
+                    .verify_evidence(&token, &ReportData::Claims(userdata))
+                    .await?;
+            }
             (Some(ClientAuth::NoAuth(NoAuth {})), RaArgs::AttestOnly(..) | RaArgs::NoRa) => {
                 // Peace and love
             }

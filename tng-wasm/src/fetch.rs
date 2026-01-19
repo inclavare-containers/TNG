@@ -199,24 +199,24 @@ fn bind_attestation_result(
     };
 
     match ra_args {
-        RaArgs::VerifyOnly(verify_args) => {
-            let token_verify = match verify_args {
-                VerifyArgs::Passport { token_verify } => token_verify,
-                VerifyArgs::BackgroundCheck {
-                    as_args:
-                        tng::config::ra::AttestationServiceArgs {
-                            as_addr,
-                            token_verify,
-                            ..
-                        },
-                } => {
-                    attest_info.as_addr = Some(as_addr.clone());
-                    token_verify
-                }
-            };
-
-            attest_info.policy_ids = Some(token_verify.policy_ids.clone());
-        }
+        RaArgs::VerifyOnly(verify_args) => match verify_args {
+            VerifyArgs::Passport { token_verify } => {
+                attest_info.as_addr = token_verify.as_addr.clone();
+                attest_info.policy_ids = Some(token_verify.policy_ids.clone());
+            }
+            VerifyArgs::BackgroundCheck {
+                as_args:
+                    tng::config::ra::AttestationServiceArgs {
+                        as_addr,
+                        policy_ids,
+                        ..
+                    },
+                ..
+            } => {
+                attest_info.as_addr = Some(as_addr.clone());
+                attest_info.policy_ids = Some(policy_ids.clone());
+            }
+        },
         RaArgs::NoRa => { /* nothing */ }
     }
 

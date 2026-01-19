@@ -29,38 +29,37 @@ impl CoCoCommonCertVerifier {
             .take()
             .context("No rats-tls cert received")?;
 
-        let (verify_mode, policy_ids, trusted_certs_paths) = match &self.verify_args {
-            VerifyArgs::Passport { token_verify } => (
-                CocoVerifyMode::Token,
-                token_verify.policy_ids.clone(),
-                token_verify.trusted_certs_paths.clone(),
-            ),
+        let verify_policy = match &self.verify_args {
+            VerifyArgs::Passport { token_verify } => CocoVerifyPolicy {
+                verify_mode: CocoVerifyMode::Token,
+                policy_ids: token_verify.policy_ids.clone(),
+                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
+                as_addr: token_verify.as_addr.clone(),
+            },
             VerifyArgs::BackgroundCheck {
                 as_args:
                     AttestationServiceArgs {
                         as_addr,
                         as_is_grpc,
-                        token_verify,
                         as_headers,
+                        policy_ids,
                     },
-            } => (
-                CocoVerifyMode::Evidence {
+                token_verify,
+            } => CocoVerifyPolicy {
+                verify_mode: CocoVerifyMode::Evidence {
                     as_addr: as_addr.to_owned(),
                     as_is_grpc: *as_is_grpc,
                     as_headers: as_headers.clone(),
                 },
-                token_verify.policy_ids.clone(),
-                token_verify.trusted_certs_paths.clone(),
-            ),
+                policy_ids: policy_ids.clone(),
+                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
+                as_addr: Some(as_addr.clone()),
+            },
         };
 
-        let res = CertVerifier::new(CocoVerifyPolicy {
-            verify_mode,
-            policy_ids,
-            trusted_certs_paths,
-        })
-        .verify_der(&pending_cert)
-        .await;
+        let res = CertVerifier::new(verify_policy)
+            .verify_der(&pending_cert)
+            .await;
 
         tracing::debug!(passed = res.is_ok(), "rats-rs cert verify finished");
 

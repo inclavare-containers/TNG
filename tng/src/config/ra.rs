@@ -106,12 +106,37 @@ impl RaArgsUnchecked {
 
             // Check token_verify
             match verify_args {
-                VerifyArgs::Passport { token_verify }
+                VerifyArgs::Passport {
+                    token_verify:
+                        AttestationServiceTokenVerifyArgs {
+                            trusted_certs_paths,
+                            ..
+                        },
+                }
                 | VerifyArgs::BackgroundCheck {
-                    as_args: AttestationServiceArgs { token_verify, .. },
+                    token_verify:
+                        AttestationServiceTokenVerifyAdditionalArgs {
+                            trusted_certs_paths,
+                            ..
+                        },
+                    ..
                 } => {
+                    // Additional checks for Passport mode
+                    let has_as_addr = if let VerifyArgs::Passport {
+                        token_verify: AttestationServiceTokenVerifyArgs { as_addr, .. },
+                    } = verify_args
+                    {
+                        as_addr.is_some()
+                    } else {
+                        true
+                    };
+
+                    if !has_as_addr && trusted_certs_paths.is_none() {
+                        return Err(TngError::InvalidParameter(anyhow!("At least one of 'as_addr' or 'trusted_certs_paths' must be set to verify attestation token")));
+                    }
+
                     // Check if trusted certificate paths exist
-                    if let Some(paths) = &token_verify.trusted_certs_paths {
+                    if let Some(paths) = &trusted_certs_paths {
                         for path in paths {
                             if !Path::new(path).exists() {
                                 return Err(TngError::InvalidParameter(anyhow!("Attestation service trusted certificate path does not exist: {}", path)));
@@ -122,7 +147,7 @@ impl RaArgsUnchecked {
             };
 
             // Check if as_addr is a valid URL
-            if let VerifyArgs::BackgroundCheck { as_args } = verify_args {
+            if let VerifyArgs::BackgroundCheck { as_args, .. } = verify_args {
                 Url::parse(&as_args.as_addr)
                     .with_context(|| {
                         format!("Invalid attestation service address: {}", &as_args.as_addr)
@@ -267,6 +292,9 @@ pub enum VerifyArgs {
     BackgroundCheck {
         #[serde(flatten)]
         as_args: AttestationServiceArgs,
+
+        #[serde(flatten)]
+        token_verify: AttestationServiceTokenVerifyAdditionalArgs,
     },
 }
 
@@ -278,6 +306,8 @@ mod maybe_tagged_verify_args {
     use anyhow::bail;
     use serde::{Deserialize, Serialize};
 
+    use crate::config::ra::AttestationServiceTokenVerifyAdditionalArgs;
+
     use super::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs};
 
     #[derive(Serialize, Deserialize)]
@@ -287,6 +317,9 @@ mod maybe_tagged_verify_args {
         Untagged {
             #[serde(flatten)]
             as_args: AttestationServiceArgs,
+
+            #[serde(flatten)]
+            token_verify: AttestationServiceTokenVerifyAdditionalArgs,
 
             #[serde(flatten)]
             other: HashMap<String, serde_json::Value>,
@@ -304,6 +337,9 @@ mod maybe_tagged_verify_args {
         BackgroundCheck {
             #[serde(flatten)]
             as_args: AttestationServiceArgs,
+
+            #[serde(flatten)]
+            token_verify: AttestationServiceTokenVerifyAdditionalArgs,
         },
 
         #[serde(other)]
@@ -314,14 +350,25 @@ mod maybe_tagged_verify_args {
         type Error = anyhow::Error;
         fn try_from(args: MaybeTaggedVerifyArgs) -> Result<VerifyArgs, Self::Error> {
             Ok(match args {
-                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::BackgroundCheck { as_args }) => {
-                    VerifyArgs::BackgroundCheck { as_args }
-                }
-                MaybeTaggedVerifyArgs::Untagged { as_args, other } => {
+                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::BackgroundCheck {
+                    as_args,
+                    token_verify,
+                }) => VerifyArgs::BackgroundCheck {
+                    as_args,
+                    token_verify,
+                },
+                MaybeTaggedVerifyArgs::Untagged {
+                    as_args,
+                    token_verify,
+                    other,
+                } => {
                     if let Some(v) = other.get("model") {
                         bail!(r#"missing field for "model": {v}"#);
                     }
-                    VerifyArgs::BackgroundCheck { as_args }
+                    VerifyArgs::BackgroundCheck {
+                        as_args,
+                        token_verify,
+                    }
                 }
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Passport { token_verify }) => {
                     VerifyArgs::Passport { token_verify }
@@ -350,9 +397,8 @@ pub struct AttestationServiceArgs {
     #[serde(default = "Default::default")]
     pub as_headers: HashMap<String, String>,
 
-    /// Attestation service token verification parameters
-    #[serde(flatten)]
-    pub token_verify: AttestationServiceTokenVerifyArgs,
+    /// Policy ID list
+    pub policy_ids: Vec<String>,
 }
 
 /// Attestation service token verification parameters configuration
@@ -361,6 +407,17 @@ pub struct AttestationServiceTokenVerifyArgs {
     /// Policy ID list
     pub policy_ids: Vec<String>,
 
+    /// Trusted certificate paths list, optional
+    #[serde(default = "Default::default")]
+    pub trusted_certs_paths: Option<Vec<String>>,
+
+    /// Attestation service address, used for fetching attestation service certificate, optional
+    pub as_addr: Option<String>,
+}
+
+/// Attestation service token verification parameters additional configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttestationServiceTokenVerifyAdditionalArgs {
     /// Trusted certificate paths list, optional
     #[serde(default = "Default::default")]
     pub trusted_certs_paths: Option<Vec<String>>,
@@ -455,7 +512,7 @@ mod tests {
                 assert_eq!(aa_args.refresh_interval, Some(3600));
                 assert_eq!(as_args.as_addr, "localhost:8081");
                 assert!(!as_args.as_is_grpc);
-                assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
+                assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected Passport variant"),
         }
@@ -546,10 +603,10 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
-            Some(VerifyArgs::BackgroundCheck { as_args }) => {
+            Some(VerifyArgs::BackgroundCheck { as_args, .. }) => {
                 assert_eq!(as_args.as_addr, "localhost:8081");
                 assert!(!as_args.as_is_grpc);
-                assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
+                assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),
         }
@@ -572,10 +629,10 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
-            Some(VerifyArgs::BackgroundCheck { as_args }) => {
+            Some(VerifyArgs::BackgroundCheck { as_args, .. }) => {
                 assert_eq!(as_args.as_addr, "localhost:8081");
                 assert!(!as_args.as_is_grpc);
-                assert_eq!(as_args.token_verify.policy_ids, vec!["policy1", "policy2"]);
+                assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),
         }

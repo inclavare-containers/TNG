@@ -28,11 +28,12 @@ impl OhttpServerApi {
                     }
                     VerifyArgs::BackgroundCheck {
                         as_args,
+                        ..
                     } => {
                         // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
                         let coco_converter = CocoConverter::new(
                             &as_args.as_addr,
-                            &as_args.token_verify.policy_ids,
+                            &as_args.policy_ids,
                             as_args.as_is_grpc,
                             &as_args.as_headers,
                         )?;
@@ -71,12 +72,13 @@ impl OhttpServerApi {
                     }
                     VerifyArgs::BackgroundCheck {
                         as_args,
+                        ..
                     } => {
                         let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
 
                         let coco_converter = CocoConverter::new(
                             &as_args.as_addr,
-                            &as_args.token_verify.policy_ids,
+                            &as_args.policy_ids,
                             as_args.as_is_grpc,
                             &as_args.as_headers,
                         )?;

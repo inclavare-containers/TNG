@@ -549,7 +549,7 @@ flowchart TD
 - **`as_is_grpc`** (boolean, 可选，默认为false): Attestation Service是否使用gRPC协议
 - **`as_headers`** (object, 可选，默认为{}): 发送到attestation service请求中的自定义头部。这在attestation service部署在需要额外认证头（如Authorization头或其他自定义头部）的认证机制后面时非常有用。
 - **`policy_ids`** (array [string]): 策略ID列表
-- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
+- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。
 
 
 示例：连接到Restful HTTP类型的AS服务
@@ -644,16 +644,21 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 在Passport模式下，[Verify](#verify)配置需要包含以下字段：
 
 - **`model`** (string): 设置为"passport"以启用Passport模式
+- **`as_addr`** (string, 可选): Attestation Service的地址，用于获取其证书。`as_addr` 和 `trusted_certs_paths` 至少需要指定其中之一。
 - **`policy_ids`** (array [string]): 策略ID列表
-- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。如果不指定该字段或指定为空，则跳过证书验证。
+- **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。
 
 示例：
 
 ```json
 "verify": {
     "model": "passport",
+    "as_addr": "http://127.0.0.1:8080/",
     "policy_ids": [
         "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
     ]
 }
 ```

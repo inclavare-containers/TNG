@@ -57,6 +57,7 @@ async fn test_ingress_mapping() -> Result<()> {
                         },
                         "verify": {
                             "model": "passport",
+                            "as_addr": "http://192.168.1.254:8080/",
                             "policy_ids": [
                                 "default"
                             ]
@@ -134,7 +135,8 @@ async fn test_ingress_netfilter() -> Result<()> {
                             "model": "passport",
                             "policy_ids": [
                                 "default"
-                            ]
+                            ],
+                            "as_addr": "http://192.168.1.254:8080/"
                         }
                     }
                 ]
@@ -264,6 +266,7 @@ async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
                         },
                         "verify": {
                             "model": "passport",
+                            "as_addr": "http://192.168.1.254:8080/",
                             "policy_ids": [
                                 "default"
                             ]
@@ -346,6 +349,7 @@ async fn test_ra_model_matrix_server_attest_with_passport() -> Result<()> {
                         },
                         "verify": {
                             "model": "passport",
+                            "as_addr": "http://192.168.1.254:8080/",
                             "policy_ids": [
                                 "default"
                             ]
@@ -475,6 +479,7 @@ async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
                         "ohttp": {},
                         "verify": {
                             "model": "passport",
+                            "as_addr": "http://192.168.1.254:8080/",
                             "policy_ids": [
                                 "default"
                             ]
@@ -1078,6 +1083,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
                         "ohttp": {},
                         "verify": {
                             "model": "passport",
+                            "as_addr": "http://192.168.1.254:8080/",
                             "policy_ids": [
                                 "default"
                             ]

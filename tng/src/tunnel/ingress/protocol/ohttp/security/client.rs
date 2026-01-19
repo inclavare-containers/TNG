@@ -51,20 +51,6 @@ use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
-    config::ra::RaArgs,
-    error::TngError,
-    tunnel::ohttp::{
-        key_config::KeyConfigExtend,
-        protocol::{
-            header::{
-                OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
-            },
-            metadata::ServerKeyConfigHint,
-        },
-    },
-    AttestationResult, TokioRuntime,
-};
-use crate::{
     config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
     error::CheckErrorResponse as _,
     tunnel::{
@@ -77,6 +63,20 @@ use crate::{
         },
         utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
     },
+};
+use crate::{
+    config::ra::{AttestationServiceTokenVerifyAdditionalArgs, RaArgs},
+    error::TngError,
+    tunnel::ohttp::{
+        key_config::KeyConfigExtend,
+        protocol::{
+            header::{
+                OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+            },
+            metadata::ServerKeyConfigHint,
+        },
+    },
+    AttestationResult, TokioRuntime,
 };
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
@@ -199,8 +199,12 @@ impl OHttpClientInner {
         token_verify: &AttestationServiceTokenVerifyArgs,
     ) -> Result<CocoAsToken> {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
-        let verifier =
-            CocoVerifier::new(&token_verify.trusted_certs_paths, &token_verify.policy_ids).await?;
+        let verifier = CocoVerifier::new(
+            &token_verify.as_addr,
+            &token_verify.trusted_certs_paths,
+            &token_verify.policy_ids,
+        )
+        .await?;
 
         let userdata = ServerUserData {
             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
@@ -220,19 +224,21 @@ impl OHttpClientInner {
         challenge_token: String,
         evidence: serde_json::Value,
         as_args: &AttestationServiceArgs,
+        token_verify: &AttestationServiceTokenVerifyAdditionalArgs,
     ) -> Result<CocoAsToken> {
         let coco_evidence = CocoEvidence::deserialize_from_json(evidence)?;
         let coco_converter = CocoConverter::new(
             &as_args.as_addr,
-            &as_args.token_verify.policy_ids,
+            &as_args.policy_ids,
             as_args.as_is_grpc,
             &as_args.as_headers,
         )?;
         let token = coco_converter.convert(&coco_evidence).await?;
 
         let verifier = CocoVerifier::new(
-            &as_args.token_verify.trusted_certs_paths,
-            &as_args.token_verify.policy_ids,
+            &Some(as_args.as_addr.clone()),
+            &token_verify.trusted_certs_paths,
+            &as_args.policy_ids,
         )
         .await?;
 
@@ -288,10 +294,13 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                Some(VerifyArgs::BackgroundCheck { as_args }) => {
+                Some(VerifyArgs::BackgroundCheck {
+                    as_args,
+                    token_verify,
+                }) => {
                     let coco_converter = CocoConverter::new(
                         &as_args.as_addr,
-                        &as_args.token_verify.policy_ids,
+                        &as_args.policy_ids,
                         as_args.as_is_grpc,
                         &as_args.as_headers,
                     )?;
@@ -315,6 +324,7 @@ impl OHttpClientInner {
                                 challenge_token,
                                 evidence,
                                 as_args,
+                                token_verify,
                             )
                             .await?
                         }
@@ -390,7 +400,7 @@ impl OHttpClientInner {
                         let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                         let coco_converter = CocoConverter::new(
                             &as_args.as_addr,
-                            &as_args.token_verify.policy_ids,
+                            &as_args.policy_ids,
                             as_args.as_is_grpc,
                             &as_args.as_headers,
                         )?;

@@ -120,6 +120,7 @@ async fn server_passport() -> Result<()> {
                     ohttp: {},
                     verify: {
                         model: "passport",
+                        as_addr: "http://192.168.1.254:8080/",
                         policy_ids: ["default"]
                     }
                 };

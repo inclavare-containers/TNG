@@ -69,7 +69,7 @@ impl CertManager {
 
                 let coco_converter = CocoConverter::new(
                     &as_args.as_addr,
-                    &as_args.token_verify.policy_ids,
+                    &as_args.policy_ids,
                     as_args.as_is_grpc,
                     &as_args.as_headers,
                 )?;
