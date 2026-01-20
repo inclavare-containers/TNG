@@ -456,6 +456,7 @@ flowchart TD
 }
 ```
 
+<a name="远程证明"></a>
 ## 远程证明
 
 远程证明是可信计算的核心安全机制之一，用于验证远程系统（如虚拟机、容器或边缘设备）的运行时完整性与可信状态。通过密码学手段，一个系统（**Attester**）可以生成描述其软硬件配置的“证据”（Evidence），另一个系统（**Verifier**）则可对该证据进行验证，确保其来自合法、未被篡改的可信执行环境（TEE，如 Intel TDX、AMD SEV-SNP、HYGON CSV 等）。
@@ -463,6 +464,7 @@ flowchart TD
 在 TNG 架构中，我们集成了标准化的远程证明流程，支持将 TNG 端点灵活配置为 **Attester** 或 **Verifier** 角色，从而实现双向可信认证与安全通信链路的建立。
 
 
+<a name="attest"></a>
 ### Attester：证明自身可信性的发起方
 
 **Attester** 是指被验证的一方，负责收集本地平台的可信状态信息，并生成加密证据（Evidence）。该证据包含度量值（measurements）、签名、时间戳以及来自 TEE 的证明材料（如报告、证书等），可用于向远端证明自身的完整性和安全性。
@@ -474,7 +476,8 @@ flowchart TD
 > 目前 TNG 仅支持通过 [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent) 获取 Evidence。  
 > Attestation Agent 运行在受保护的 guest 环境中，负责与底层 TEE 交互并封装标准化的证明数据，确保取证过程的安全性与可移植性。
 
-## Verifier：验证对端可信性的决策方
+<a name="verify"></a>
+### Verifier：验证对端可信性的决策方
 
 **Verifier** 是验证的一方，负责接收来自 Attester 的 Evidence，并对其进行完整性校验、策略比对和信任评估。只有当证据符合预设的信任策略（如特定的 PCR 值、固件版本或签名密钥）时，Verifier 才会认定该 Attester 是可信的，并允许后续的安全操作（如密钥释放、连接建立等）。
 
@@ -487,7 +490,9 @@ flowchart TD
 
 ## Attester和Verifier的组合与双向远程证明
 
-通过在隧道两端（包括ingress和egress）上配置不同的`attest`和`verify`属性组合，可以实现灵活的信任模型
+TNG在每个Ingress/Egress上通过 `no_ra`、`attest`、`verify` 三类字段来控制是否启用远程证明以及扮演的角色，通过配置不同的`attest`和`verify`属性，可以实现灵活的信任模型。
+
+常见的组合方式包括：
 
 |远程证明场景|tng client配置|tng server配置|说明|
 |---|---|---|---|
@@ -644,7 +649,7 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 在Passport模式下，[Verify](#verify)配置需要包含以下字段：
 
 - **`model`** (string): 设置为"passport"以启用Passport模式
-- **`as_addr`** (string, 可选): Attestation Service的地址，用于获取其证书。`as_addr` 和 `trusted_certs_paths` 至少需要指定其中之一。
+- **`as_addr`** (string, 可选): 仅用于获取Attestation Service的证书，不用于远程证明验证。`as_addr` 和 `trusted_certs_paths` 至少需要指定其中之一。
 - **`policy_ids`** (array [string]): 策略ID列表
 - **`trusted_certs_paths`** (array [string], 可选，默认为空)：指定用于验证Attestation Token中的签名和证书链的根CA证书路径。如果指定多个根CA证书，只要其中一个能够验证即通过。
 
@@ -806,6 +811,7 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 ```
 
 
+<a name="ohttp-密钥配置self_generated-模式"></a>
 #### OHTTP 密钥配置：`self_generated` 模式
 
 TNG 支持多种 OHTTP 密钥管理策略。当未通过外部机制提供密钥时，TNG 默认采用 **`self_generated` 模式**，即每个 TNG 实例自主生成 HPKE 密钥对，并自动进行轮换。

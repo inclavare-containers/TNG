@@ -315,7 +315,7 @@ This will produce the corresponding `.wasm` and `.js` files in the `tng-wasm/pkg
 
 ### 7. Modify the Frontend Page Code
 
-Please modify the following content in [tng-wasm/pkg/index.html](./pkg/index.html) as needed:
+Please modify the following content in [index.html](pkg/index.html) as needed:
 
 URL of the backend service to access:
 

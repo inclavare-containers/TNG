@@ -461,12 +461,14 @@ Example:
 }
 ```
 
+<a name="remote-attestation"></a>
 ## Remote Attestation
 
 Remote attestation is one of the core security mechanisms of trusted computing, used to verify the runtime integrity and trusted state of remote systems (such as virtual machines, containers, or edge devices). Through cryptographic means, a system (**Attester**) can generate "evidence" describing its hardware and software configuration, and another system (**Verifier**) can verify this evidence to ensure it comes from a legitimate, untampered trusted execution environment (TEE, such as Intel TDX, AMD SEV-SNP, HYGON CSV, etc.).
 
 In the TNG architecture, we have integrated a standardized remote attestation process that supports flexibly configuring TNG endpoints as either **Attester** or **Verifier** roles, thus achieving bidirectional trusted authentication and establishing secure communication links.
 
+<a name="attest"></a>
 ### Attester: The Initiator Proving Its Trustworthiness
 
 **Attester** refers to the party being verified, responsible for collecting trusted state information of the local platform and generating cryptographic evidence. This evidence contains measurements, signatures, timestamps, and attestation materials from the TEE (such as reports and certificates), which can be used to prove its integrity and security to remote parties.
@@ -478,6 +480,7 @@ In TNG, you can configure any endpoint as an Attester role, enabling it to respo
 > Currently, TNG only supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent).  
 > The Attestation Agent runs in a protected guest environment, responsible for interacting with the underlying TEE and encapsulating standardized attestation data, ensuring the security and portability of the attestation process.
 
+<a name="verify"></a>
 ### Verifier: The Decision Maker Verifying Peer Trustworthiness
 
 **Verifier** is the verifying party, responsible for receiving Evidence from the Attester and performing integrity verification, policy comparison, and trust assessment. Only when the evidence complies with preset trust policies (such as specific PCR values, firmware versions, or signing keys) will the Verifier recognize the Attester as trusted and allow subsequent security operations (such as key release or connection establishment).
@@ -641,7 +644,7 @@ Example:
 In the Passport model, the [Verify](#verify) configuration should include the following fields:
 
 - **`model`** (string): Set to "passport" to enable the Passport model
-- **`as_addr`** (string, optional): Address of the Attestation Service, used to obtain its certificate. At least one of `as_addr` or `trusted_certs_paths` must be specified.
+- **`as_addr`** (string, optional): Only used to obtain the certificate of the Attestation Service, not for remote attestation verification. At least one of `as_addr` or `trusted_certs_paths` must be specified.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
 
@@ -802,6 +805,7 @@ Example:
 }
 ```
 
+<a name="ohttp-key-configuration-self_generated-mode"></a>
 #### OHTTP Key Configuration: `self_generated` Mode
 
 TNG supports multiple OHTTP key management strategies. When keys are not provided via external mechanisms, TNG defaults to the **`self_generated` mode**, where each TNG instance independently generates its own HPKE key pair and automatically rotates it.

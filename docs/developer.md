@@ -1,6 +1,25 @@
 # Developer Guide
 
-This guide will introduce the composition of this project and how to set up a source code development environment for TNG from scratch.
+This guide is intended for developers who need to modify the TNG source code or debug/run integration tests locally. It introduces the project structure and how to set up a source code development environment for TNG from scratch.
+
+## Project Structure Overview
+
+- **tng/**: Core service implementation, including command-line entry, configuration parsing, tunnel (Ingress/Egress), remote attestation, observability, and other main logic.
+- **tng-testsuite/**: Integration test suite, providing orchestratable "scenario tasks" covering typical usage such as HTTP proxy, transparent proxy, Socks5, and unidirectional/bidirectional remote attestation.
+- **tng-wasm/**: Browser-side JavaScript SDK, providing interfaces like `tng_fetch`, used in conjunction with OHTTP and remote attestation. For specific usage, see `tng-wasm/README.md`.
+- **docs/**: User and development documentation, including the configuration manual (`configuration.md`) and this developer guide.
+- **rpm/**: RPM packaging scripts and Dockerfiles used for building distribution packages.
+
+If you only want to compile and run TNG locally, you can focus on the `tng/` directory. If you need to debug a complete end-to-end scenario (e.g., "HTTP proxy + unidirectional remote attestation"), it is recommended to prioritize running the corresponding `tng-testsuite` case for reproduction.
+
+## Minimum Supported Rust Version (MSRV)
+
+This project requires two versions of the Rust toolchain:
+
+- `1.89.0`: This is the minimum supported Rust version required to build TNG binaries or RPM packages (whether from source or the released source tarball).
+- `nightly-2025-07-07`: This is the Rust toolchain required for the following scenarios:
+    - Building the TNG JavaScript SDK. For details, see [tng-wasm/README.md](../tng-wasm/README.md).
+    - Creating the source code tarball using the `make create-tarball` command. This is because some of our crate dependencies require a newer Rust toolchain to resolve.
 
 ## Setting Up the Development Environment
 
@@ -124,7 +143,6 @@ First, uninstall the old version of TNG
 yum remove trusted-network-gateway -y
 ```
 Then, install the new version
-
 ```sh
 yum install -y <path-to-rpm-package-on-target-environment>
 ```
@@ -135,31 +153,23 @@ Now, you can directly use the `tng` command to start a TNG instance.
 
 Some tests depend on attestation-agent and attestation-service instances. The following steps will introduce how to set them up.
 
-### Compile and Run attestation-agent
+In this repository, integration tests are mainly concentrated in the `tng-testsuite` crate, covering common scenarios through different test files, such as:
 
-1. Clone the Code
+- **`tcp_two_way_ra.rs`**: Verifies TCP scenarios where both the client and server have remote attestation enabled (mutual RA).
+- **`http_encapulation_with_ingress_httpproxy.rs`**: Verifies encrypted HTTP scenarios where the client accesses via HTTP proxy and the server uses netfilter.
+- **`js_sdk_http.rs`**: Verifies scenarios using the browser-side JavaScript SDK (`tng-wasm`) with OHTTP and remote attestation.
 
-```sh
-cd /
-git clone https://github.com/inclavare-containers/guest-components.git
-```
+### Running attestation-agent
 
-2. Compile
+1. Obtain the latest attestation-agent RPM package from [here](https://github.com/inclavare-containers/guest-components/releases) and install it using yum.
 
-```sh
-cd guest-components/attestation-agent
-make ATTESTER=none ttrpc=true
-```
+> [!TIP]
+> If you are using the Alibaba Cloud Linux distribution, you can directly install our provided version from the yum repository:
+> ```sh
+> yum install -y attestation-agent
+> ```
 
-Here, we will build an attestation-agent that can generate fake evidence materials, which is convenient for testing in a development environment without TEE hardware.
-
-3. Install
-
-```sh
-make install
-```
-
-4. Run
+2. Run
 
 ```sh
 RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock
@@ -167,42 +177,17 @@ RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-con
 
 This will run an attestation-agent instance and create a ttrpc listener at `/run/confidential-containers/attestation-agent/attestation-agent.sock`.
 
-### Compile and Run attestation-service
+### Running attestation-service
 
-1. Install Dependencies
+1. Obtain the latest trustee RPM package from [here](https://github.com/openanolis/trustee/releases) and install it using yum.
 
-```sh
-# Update apt sources
-KUBIC_REPO_URL="https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/xUbuntu_20.04"
-echo "deb ${KUBIC_REPO_URL} /" \
-    | tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
-curl -fsSL "${KUBIC_REPO_URL}/Release.key" \
-    | gpg --dearmor \
-    | tee /etc/apt/trusted.gpg.d/devel_kubic_libcontainers_stable.gpg \
-            > /dev/null
+> [!TIP]
+> If you are using the Alibaba Cloud Linux distribution, you can directly install our provided version from the yum repository:
+> ```sh
+> yum install -y trustee
+> ```
 
-# Install dependencies
-apt update && apt install -y gcc perl wget make gnupg openssl curl protobuf-compiler git clang libtss2-dev libudev-dev pkg-config && \
-    curl -L https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | tee intel-sgx-deb.key | apt-key add - && \
-    echo 'deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu focal main' | tee /etc/apt/sources.list.d/intel-sgx.list && \
-    apt-get update && apt-get install -y libsgx-dcap-default-qpl libsgx-dcap-quote-verify libsgx-dcap-quote-verify-dev
-```
-
-2. Clone the Code
-
-```sh
-cd /
-git clone https://github.com/openanolis/trustee.git
-```
-
-3. Compile and Install
-
-```sh
-cd trustee/attestation-service
-cargo install --path . --bin restful-as --features restful-bin --locked
-```
-
-4. Prepare Certificates
+2. Prepare Certificates
 
 ```sh
 openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key
@@ -217,7 +202,7 @@ cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem
 cat config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > config_with_cert.json
 ```
 
-5. Configure Debug Policy (Optional)
+3. Configure Debug Policy (Optional)
 
 If you want to skip strict Attestation checks during development or testing, you can configure a default-allow OPA policy. **Note: This should absolutely not be used in production.**
 
@@ -233,7 +218,7 @@ default file_system := 2
 EOF
 ```
 
-6. Run
+4. Run
 
 ```sh
 RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /trustee/attestation-service/config_with_cert.json
@@ -254,3 +239,77 @@ apt-get update && apt-get install -y curl iptables && update-alternatives --set 
 ```sh
 make run-test
 ```
+
+## Build and Deployment
+
+TNG has two common running forms: it can be deployed as a container image or by building an RPM package. The following recommended build process is suitable for release or installation in a target environment.
+
+### Build and Deploy TNG as a Container Image
+
+1. Pull the Code
+
+```sh
+git clone git@github.com:inclavare-containers/tng.git --branch <tag-name>
+cd tng
+git submodule update --init
+```
+
+2. Build with Docker
+
+This will completely recompile TNG and its dependencies from source:
+
+```sh
+docker build -t tng:latest --target release -f Dockerfile .
+```
+
+3. Run TNG as a Container
+
+```sh
+docker run -it --rm --privileged --network host --cgroupns=host tng:latest tng launch --config-content='<your config json string>'
+```
+
+### Build and Deploy TNG as an RPM Package
+
+The following steps describe how to build an RPM package from source and install it in a target environment (applicable to distributions using yum as a package manager).
+
+1. Pull the Code
+
+```sh
+git clone git@github.com:inclavare-containers/tng.git --branch <tag-name>
+cd tng
+git submodule update --init
+```
+
+2. Install Dependencies
+
+Please install the [Rust toolchain](https://rustup.rs/) and Docker (or Podman) first.
+
+3. Create the source tarball required for RPM building
+
+```sh
+make create-tarball
+```
+
+4. Build the RPM Package
+
+You can choose to build the RPM package in a fresh Anolis8 distribution Docker container. This RPM package is compatible with both [Anolis8](https://openanolis.cn/anolisos) and [ALinux3](https://help.aliyun.com/zh/alinux/product-overview/alibaba-cloud-linux-overview) distributions:
+
+```sh
+make rpm-build-in-docker
+```
+
+Alternatively, you can build directly in your current distribution environment:
+
+```sh
+make rpm-build
+```
+
+The build artifacts will be located in the `~/rpmbuild/RPMS/x86_64/` directory.
+
+5. Install the RPM Package
+
+```sh
+rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
+```
+
+After installation, you can directly use the `tng` command to start a TNG instance.

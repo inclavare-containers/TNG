@@ -314,7 +314,7 @@ make wasm-build-debug
 
 ### 7. 修改前端页面中的代码
 
-请按需修改[tng-wasm/pkg/index.html](./pkg/index.html)中的如下内容
+请按需修改[index.html](pkg/index.html)中的如下内容
 
 访问的后端服务的 URL：
 

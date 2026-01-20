@@ -2,16 +2,62 @@
 [![Docker](/../../actions/workflows/build-docker.yml/badge.svg)](/../../actions/workflows/build-docker.yml)
 [![RPM](/../../actions/workflows/build-rpm.yml/badge.svg)](/../../actions/workflows/build-rpm.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![rust version](https://img.shields.io/badge/rustc-1.75+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![rust version](https://img.shields.io/badge/rustc-1.89.0+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![codecov](https://codecov.io/gh/inclavare-containers/TNG/graph/badge.svg?token=7CUZW26SH6)](https://codecov.io/gh/inclavare-containers/TNG)
 
 ## What is TNG?
 
-TNG (Trusted Network Gateway) 是一个用于建立安全通信隧道的工具，支持多种流量入站和出站方式，并且能够提供基于远程证明（Remote Attestation）的安全会话能力。通过配置不同的入口（Ingress）和出口（Egress）端点，用户可以在无需修改已有应用程序的同时，根据自己的需求灵活地控制流量的加密和解密过程。
+TNG (Trusted Network Gateway) 是一个用于在机密计算环境下建立安全通信隧道的透明网关工具。它能够在无需修改已有应用程序的同时，通过配置不同的入口（Ingress）和出口（Egress）端点，利用远程证明（Remote Attestation）机制自动验证通信对端环境的可信度，并建立端到端的加密通道。
 
-## 使用方法
+## 机密计算的传输中数据安全 (Data in Transit)
 
-TNG的最主要部分是其 launch 子命令。以下是其用法：
+在机密计算环境中，隐私数据的处理安全已由硬件环境本身提供保障，但在网络传输环节，数据的安全性仍然存在不足。IETF 在 RFC 9334 中对远程证明（RATS）的整体架构和参与角色做了标准化定义，为“如何证明一个运行环境是可信的”提供了通用模型。结合这一模型，对于运行在机密计算环境中的服务，我们可以利用“实例自身的状态（包括运行代码和执行环境）”来证明它是谁、处在什么环境，而不仅仅是依赖一张X.509证书。通过在通信双方的密钥协商过程中引入远程证明（Remote Attestation）机制，配合适当的远程证明策略（Policy），可以实现对服务端运行环境的身份验证以及安全性检查。这种方法能够有效替代传统的PKI信任体系，消除其潜在的信任弱点，从而弥补机密计算场景下数据传输安全的短板，显著提升整体安全水平。
+
+TNG 正是为了将上述基于 RFC 9334 标准的“远程证明 + 加密隧道”能力打包成一个易部署、业务透明的网关组件。如下方部署场景示意图所示，通过在通信双方的可信域内分别部署 TNG 实例（分别配置为Ingress 与 Egress），即可在**无需修改业务代码**的前提下，在网络层自动完成对端环境验证与端到端的数据加密传输。
+
+```mermaid
+graph LR
+    subgraph ClientEnv [客户端环境]
+        App[应用程序]
+        TNG_In[TNG Ingress]
+    end
+
+    subgraph TrustedEnv ["TEE（TDX / SEV-SNP / CSV）"]
+        TNG_Eg[TNG Egress]
+        Service[业务服务]
+    end
+
+    App -- 原始流量 --> TNG_In
+    TNG_In -. 远程证明 + 加密隧道 .-> TNG_Eg
+    TNG_Eg -- 解密转发 --> Service
+
+    style TrustedEnv fill:#ffd700,stroke:#d4af37,stroke-width:2px
+    linkStyle 1 stroke:#d4af37,stroke-width:2px
+```
+
+## 与其他方案的对比
+
+- **传统 TLS (PKI)**：依赖证书颁发机构（CA）为每个服务签发 X.509 证书，通过证书链来建立信任关系。实际运维中，证书的申请、分发、安装和定期轮换都比较繁琐，一旦配置错误或证书私钥泄露，就会在信任链中形成难以及时发现的薄弱环节；同时，这类方案只验证“证书是谁的”，很难直接反映当前运行环境是否真实、未被篡改。
+- **各种 RA TLS 实现 (如 [rats-tls](https://github.com/inclavare-containers/rats-tls), [attested_tls](https://github.com/openenclave/openenclave/tree/master/samples/attested_tls))**：通常需要用户程序手动集成相应的 library，接入成本较高。在对内部软件环境做精细验证时配置也会变得十分复杂。而 TNG 可以与 Confidential Containers 社区的开源远程证明组件 [`guest-components`](https://github.com/confidential-containers/guest-components)、远程证明服务 [`trustee`](https://github.com/confidential-containers/trustee) 配合，支持细粒度、可配置的远程证明策略定义；同时，我们也提供了内建的 RA TLS 协议支持，采用纯 Rust 实现，更加安全。如果您准备或正在使用 RA TLS，可以切换到本项目，无需在业务代码中集成 RA TLS 库。
+- **Service Mesh 网关**：一些方案（如 Envoy / Istio 结合 SPIFFE）可以通过为工作负载颁发 X.509 证书，在节点间建立端到端 TLS 隧道，但它们并未把远程证明纳入信任根，仍然主要依赖证书本身的有效性；相比之下，TNG 在支持基于 TLS 的隧道之外，还支持消息级加密的 OHTTP，并通过远程证明直接验证对端运行环境是否可信，更适合需要端到端“环境可信 + 数据加密”的场景。
+
+## 关键特性
+
+- **支持多种加密传输协议**：提供面向任意 TCP 流量的 RA-TLS 以及面向 HTTP 消息级加密的 Oblivious HTTP 等协议支持，让各种类型的应用都能统一接入基于远程证明的安全通信体系。
+- **对业务无侵入**：通过透明代理（netfilter）或应用层代理（HTTP 代理、Socks5 等）方式，TNG 可以尽量不改动现有业务代码和部署结构，在网络层把明文流量接入隧道、完成加解密和远程证明。
+- **多种部署形态**：我们提供二进制程序、SDK等方式集成，可以根据不同的业务架构灵活选择部署方案，例如：
+  - 在 IaaS 场景可以作为守护进程运行在虚拟机或容器实例中。
+  - 在 Kubernetes / Service Mesh 中可以以 Sidecar 容器的方式为每个 Pod 提供透明加密。
+  - 对于浏览器等客户端，还可以通过 SDK在端侧直接发起加密请求。
+- **灵活的远程证明模型**：支持单向、双向以及“逆单向”的远程证明组合，您可根据业务信任关系编写配置文件，自由选择是“客户端验证服务端”、“双方互相验证”还是“服务端验证客户端”。
+
+如果希望了解更具体的部署方式和配置示例，可以查看 [docs/scenarios/](docs/scenarios/) 目录下的典型场景说明文档。
+
+## 安装与使用
+
+### 基本命令行用法
+
+TNG 主要通过 `launch` 子命令来启动网关服务。你可以通过加载 JSON 配置文件或直接在命令行中传入配置内容来运行：
 
 ```txt
 Usage: tng launch [OPTIONS]
@@ -22,121 +68,56 @@ Options:
   -h, --help                             Print help
 ```
 
-在开始之前，需要提供一个 JSON 配置文件，或者直接从命令行参数中提供 JSON 格式的配置内容，这些配置将被用来配置 TNG 实例。
+你需要准备一个 JSON 格式的配置文件用来启动TNG。
 
-启动 TNG 实例最简单的方法是使用我们预构建好的Docker镜像：
+> [!TIP]
+> 在开始之前，建议您先阅读 [核心概念与工作原理](docs/architecture_zh.md) 以了解 TNG 的工作模型、远程证明角色及加密协议，之后您可以参考 [详细配置手册](docs/configuration_zh.md)了解如何编写配置文件。
+> 
+> 此外，我们还提供了一些典型场景的[示例](docs/scenarios/)供您参考
 
-```sh
-docker run -it --rm --privileged --network host --cgroupns=host ghcr.io/inclavare-containers/tng:latest tng launch --config-content='<your config json string>'
-```
+### 使用容器镜像运行 TNG
 
-请参考[配置文档](docs/configuration_zh.md)获取详细的配置说明。
-
-## 构建
-
-TNG有两种常见的运行形态，您可以以容器形式部署和运行TNG，或者，也可以通过构建rpm包来部署TNG。
-
-如果你希望修改后编译TNG，请参考[开发人员文档](docs/developer_zh.md)。
-
-### 构建并以容器镜像形式部署TNG
-
-推荐使用 Docker 来构建 TNG。以下是步骤：
-
-1. 拉取代码
+可以直接使用我们提供的预构建镜像，例如：
 
 ```sh
-git clone git@github.com:inclavare-containers/tng.git --branch <编译的版本tag名>
-cd tng
-git submodule update --init
-```
-
-2. 使用 Docker 构建
-
-这将从源码完全重新编译tng及其依赖项
-
-```sh
-docker build -t tng:latest --target release -f Dockerfile .
-```
-
-现在我们已经得到了 `tng:latest` 的 Docker 镜像，您可以直接部署运行该镜像。
-
-3. 以容器形式运行 tng
-
-```sh
-docker run -it --rm --privileged --network host --cgroupns=host tng:latest tng launch --config-content='<your config json string>'
+docker run -it --rm --privileged --network host --cgroupns=host \
+  ghcr.io/inclavare-containers/tng:latest \
+  tng launch --config-content='<your config json string>'
 ```
 
 
-### 构建并以RPM包形式部署TNG
+### 通过软件包或二进制文件安装 TNG
 
-该步骤介绍如何从源码构建rpm包，并安装rpm包。这仅适用于使用yum作为包管理的发行版。
+你可以从项目的 [Releases](https://github.com/inclavare-containers/TNG/releases) 页面获取预编译的 RPM 包或二进制可执行文件。
 
-1. 拉取代码
-
-```sh
-git clone git@github.com:inclavare-containers/tng.git --branch <编译的版本tag名>
-cd tng
-git submodule update --init
-```
-
-2. 请先[安装rust工具链](https://rustup.rs/)，以及docker（或podman）。
-
-3. 创建rpm构建所需的源码tar包
+- **二进制文件**：下载并解压后即可直接运行。
+- **RPM 包**：适合在支持 RPM 的发行版（如 Anolis OS、CentOS 等）上运行：
 
 ```sh
-make create-tarball
+sudo rpm -ivh tng-<version>.rpm
+sudo tng launch --config-file=/etc/tng/config.json
 ```
 
-4. 构建rpm包
+### 获取 JavaScript SDK（浏览器侧）
 
-您可以选择在全新的Anolis8发行版docker容器中构建rpm包，该rpm包同时适用于[Anolis8](https://openanolis.cn/anolisos)发行版和[ALinux3](https://help.aliyun.com/zh/alinux/product-overview/alibaba-cloud-linux-overview)发行版
+浏览器环境可以使用 `tng-wasm` 提供的 JavaScript SDK，获取方式和更完整的示例见 [tng-wasm/README_zh.md](tng-wasm/README_zh.md)。下面是一个简单的安装示例：
 
 ```sh
-make rpm-build-in-docker
+# 假设已经在 tng-wasm/pkg 下构建出了 tng-<version>.tgz
+npm install tng-<version>.tgz
 ```
 
-或者，您也可以直接在当前发行版环境中构建rpm包：
 
-```sh
-make rpm-build
-```
+## 更多参考文档
 
-产物将存放在`~/rpmbuild/RPMS/x86_64/`目录中
+- **详细配置手册**：关于每个配置字段的含义及常用模板，请参考 [docs/configuration_zh.md](docs/configuration_zh.md)。
+- **核心概念与工作原理**：详细介绍 TNG 的 Ingress/Egress 模型、远程证明角色 (AA/AS) 以及 RATS-TLS/OHTTP 等加密协议原理，请参考 [docs/architecture_zh.md](docs/architecture_zh.md)。
+- **典型场景详解**：包含拓扑图和完整配置说明的场景文档，请参考 [docs/scenarios/](docs/scenarios/) 目录。
+- **开发者指南**：关于构建（Docker/RPM）、部署、集成测试的说明，请参考 [docs/developer_zh.md](docs/developer_zh.md)。
+- **版本兼容性**：详细的版本兼容性说明（包括不同大版本的数据面实现变更），请参考 [docs/version_compatibility_zh.md](docs/version_compatibility_zh.md)。
+- **集成测试用例**：更多端到端的测试场景，可参考 [tng-testsuite/](tng-testsuite/) 目录下的源代码。
+- **JavaScript SDK**：浏览器环境下的获取与使用方式，请参考 [tng-wasm/README_zh.md](tng-wasm/README_zh.md)。
 
-5. 安装rpm包
-
-```sh
-rpm -ivh ~/rpmbuild/RPMS/*/trusted-network-gateway-*.rpm
-```
-
-现在，你可以直接使用`tng`命令来启动一个TNG实例。
-
-
-## 示例
-
-你可以从[集成测试用例](./tests/)中获取一些示例。
-
-
-## 版本兼容性
-
-尽管我们在研发过程中尽量保持对旧版本行为的兼容性，但有些情况下仍不可避免地存在兼容性变更。我们建议您在client侧和server侧部署相同的最新的 TNG 稳定版本，下表是两个TNG实例之间的版本兼容性表。
-
-| 兼容版本范围 | 说明 |
-| --- | --- |
-| >= 1.0.0, < 2.0.0 | 这些版本使用Envoy作为数据面 |
-| >= 2.0.0, <= 2.2.4 | 从2.0.0开始，TNG转向基于[rustls](https://github.com/rustls/rustls)和[hyper](https://github.com/hyperium/hyper)实现的数据面 |
-| 2.2.5 | 从该版本开始，TNG使用OHTTP替代了之前的 rats-tls over HTTP CONNECT 协议的组合，并且引入了护照模型支持 |
-| >= 2.2.6 | 从该版本开始，TNG对使用的OHTTP协议进行了调整，解决2.2.5版本在HTTP路由场景下的设计问题 |
-
-
-## 最低支持的 Rust 版本（MSRV）
-
-本项目需要两个版本的 Rust 工具链：
-
-- `1.89.0`：这是构建 TNG 二进制文件或 RPM 包（无论是从源码还是发布的源码 tar 包构建）所要求的最低支持的 Rust 版本。
-- `nightly-2025-07-07`：这是以下场景所需的 Rust 工具链：
-    - 构建 TNG 的 JavaScript SDK。详细信息请参见 [[./tng-wasm/README_zh.md](file:///root/tng/tng-wasm/README_zh.md)](./tng-wasm/README_zh.md)。
-    - 使用 `make create-tarball` 命令创建源代码 tar 包。这是因为我们的一些 crate 依赖项需要更新的 Rust 工具链才能解析。
 
 ## 贡献
 
