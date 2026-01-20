@@ -36,14 +36,14 @@ impl Task for ShellTask {
                 match output {
                     Ok(output) => {
                         tracing::debug!(
-                            "execute iptable script:\n{cmd:?}\nstdout:\n{}\nstderr:\n{}",
+                            "execute shell script:\n{cmd:?}\nstdout:\n{}\nstderr:\n{}",
                             String::from_utf8_lossy(&output.stdout),
                             String::from_utf8_lossy(&output.stderr)
                         );
 
                         if !output.status.success() {
                             bail!(
-                                "failed to execute iptables script, stderr: {}",
+                                "failed to execute shell script, stderr: {}",
                                 String::from_utf8_lossy(&output.stderr)
                             );
                         }
