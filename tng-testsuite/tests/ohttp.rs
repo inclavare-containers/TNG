@@ -1148,7 +1148,7 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
                                         "peers": [
                                             "192.168.1.1.nip.io:8301"
                                         ],
-                                        "rotation_interval": 3,
+                                        "rotation_interval": 10,
                                         "attest": {
                                             "model": "background_check",
                                             "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
