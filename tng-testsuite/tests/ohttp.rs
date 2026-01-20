@@ -847,7 +847,12 @@ async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_server_attest_background_check_key_from_file() -> Result<()> {
-    let key_path = "/tmp/ohttp-key.pem";
+    let key_dir = "/tmp/tng-test";
+    let key_path = "/tmp/tng-test/ohttp-key.pem";
+
+    tokio::fs::create_dir_all(key_dir)
+        .await
+        .context("Failed to create directory /tmp/tng-test")?;
 
     // Write initial private key to a temporary file
     let initial_key = "-----BEGIN PRIVATE KEY-----
@@ -856,7 +861,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
     tokio::fs::write(key_path, initial_key)
         .await
-        .context("Failed to write initial key to /tmp/ohttp-key.pem")?;
+        .context("Failed to write initial key to /tmp/tng-test/ohttp-key.pem")?;
 
     run_test(vec![
         TngInstance::TngServer(
@@ -872,7 +877,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
                         "ohttp": {
                             "key": {
                                 "source": "file",
-                                "path": "/tmp/ohttp-key.pem"
+                                "path": "/tmp/tng-test/ohttp-key.pem"
                             }
                         },
                         "attest": {
@@ -1029,7 +1034,12 @@ EOF
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_key_from_file() -> Result<()> {
-    let key_path = "/tmp/ohttp-key.pem";
+    let key_dir = "/tmp/tng-test";
+    let key_path = "/tmp/tng-test/ohttp-key.pem";
+
+    tokio::fs::create_dir_all(key_dir)
+        .await
+        .context("Failed to create directory /tmp/tng-test")?;
 
     // Write initial private key to a temporary file
     let initial_key = "-----BEGIN PRIVATE KEY-----
@@ -1038,7 +1048,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
     tokio::fs::write(key_path, initial_key)
         .await
-        .context("Failed to write initial key to /tmp/ohttp-key.pem")?;
+        .context("Failed to write initial key to /tmp/tng-test/ohttp-key.pem")?;
 
     run_test(vec![
         TngInstance::TngServer(
@@ -1054,7 +1064,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
                         "ohttp": {
                             "key": {
                                 "source": "file",
-                                "path": "/tmp/ohttp-key.pem"
+                                "path": "/tmp/tng-test/ohttp-key.pem"
                             }
                         },
                         "attest": {
