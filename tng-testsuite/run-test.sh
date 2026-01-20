@@ -48,7 +48,6 @@ export RUST_BACKTRACE=1
 
 failed=0
 test_result_msgs=""
-tool_cmd="cargo test"
 
 install_cargo_llvm_cov() {
     if command -v cargo-llvm-cov &>/dev/null; then
@@ -90,15 +89,16 @@ install_cargo_llvm_cov() {
 run_tests() {
     local args=("$@")
     if $ENABLE_COVERAGE; then
+        echo cargo llvm-cov "${args[@]}"
         cargo llvm-cov "${args[@]}"
     else
+        echo cargo test "${args[@]#--no-report}"
         cargo test "${args[@]#--no-report}"
     fi
 }
 
 # Prepare command
 if $ENABLE_COVERAGE; then
-    tool_cmd="cargo llvm-cov"
     install_cargo_llvm_cov || exit 1
 
     # Clean previous coverage data
@@ -120,7 +120,6 @@ unit_args=(
     --nocapture
 )
 
-echo "$tool_cmd ${unit_args[*]}"
 if run_tests "${unit_args[@]}"; then
     test_result_msgs="${test_result_msgs}\nunit test:\tPASS"
 else
@@ -152,7 +151,6 @@ for case_name in $test_cases; do
         --nocapture
     )
 
-    echo "$tool_cmd ${integ_args[*]}"
     if run_tests "${integ_args[@]}"; then
         test_result_msgs="${test_result_msgs}\n${case_name}:\tPASS"
     else
