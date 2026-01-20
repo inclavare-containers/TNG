@@ -217,7 +217,23 @@ cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem
 cat config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > config_with_cert.json
 ```
 
-4. Run
+5. Configure Debug Policy (Optional)
+
+If you want to skip strict Attestation checks during development or testing, you can configure a default-allow OPA policy. **Note: This should absolutely not be used in production.**
+
+```sh
+mkdir -p /opt/trustee/attestation-service/policies/opa
+cat <<EOF > /opt/trustee/attestation-service/policies/opa/default.rego
+package policy
+
+default executables := 3
+default hardware := 2
+default configuration := 2
+default file_system := 2
+EOF
+```
+
+6. Run
 
 ```sh
 RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /trustee/attestation-service/config_with_cert.json
