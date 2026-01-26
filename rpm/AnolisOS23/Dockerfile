@@ -8,7 +8,7 @@ ENV SOURCE_DATE_EPOCH=1672531200
 ENV RPM_BUILD_NCPUS=1
 
 # 安装基本构建依赖
-RUN dnf install -y \
+RUN dnf install -y --releasever 23.3 \
     anolis-epao-release-23-4.an23.noarch \
     rpm-build-4.18.2-4.an23.x86_64 \
     rpmdevtools-9.6-5.an23.noarch \
