@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.3.0
+Version: 2.4.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -77,6 +77,23 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Mon Jan 26 2026 Kun Lai <laikun@linux.alibaba.com> - 2.4.0-1
+- ohttp: add configurable key management with self-generated default keys and file-based HPKE key loading with auto-reload
+- ohttp: support key lookup by SHA-256 hash and hostname-based peer_shared cluster connections
+- ohttp: implement serf-based distributed key sharing over Rats-TLS with graceful cluster exit and key broadcasting on node join
+- ohttp: trigger key config refresh when server rejects request due to missing key and improve key expiration logic and debugging identifiers
+- serf: support multiple addresses per hostname in cluster join
+- tng: enable colored CLI output automatically when running in a TTY
+- logging: fix missing span in serf logs and remove unnecessary fields from structured log output
+- ra: support EAR format tokens from trustee and fetching AS certificate for token verification with custom attestation service headers
+- build: upgrade minimal Rust version to 1.89.0, adjust source tarball naming (-vendored-source suffix), and rename release artifacts and SLSA provenance
+- build: allow uploading Docker image without waiting for tests and add GitHub Actions workflow for cargo fmt checking
+- tests: stabilize OHTTP and egress key rotation tests, fix flaky WASM browser test, and adjust test suite tooling and options
+- shell: fix iptables typo in ShellTask and move OHTTP test keys out of /tmp to avoid unintended file watching
+- spec: fix incorrect source download URL in RPM spec file
+- misc: rename maybe_cached variants and refactor OHTTP security module and internal protocol forwarding abstractions for clarity
+
+
 * Wed Nov  5 2025 Kun Lai <laikun@linux.alibaba.com> - 2.3.0-1
 - Fix TDX attestation failure: use canonical JSON serialization to ensure REPORT_DATA hash consistency in rats-cert
 - Enable TCP keepalive (10s idle, 10s interval, 3 probes) for OHTTP tunnel connections to improve connection stability
