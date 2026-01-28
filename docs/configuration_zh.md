@@ -899,10 +899,13 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
 
 - **`key`** (KeyConfig)：OHTTP 密钥管理配置。
     - **`source`** (`string`)：密钥来源类型。设为 `"peer_shared"` 表示启用去中心化的密钥共享模式。
-    - **`rotation_interval`** (`integer`, 可选, 默认 `300`)：密钥轮换周期（单位：秒）。每个节点独立轮换自己的密钥。
+    - **`rotation_interval`** (`integer`, 可选, 默认 `300`)：密钥轮换周期(单位:秒)。每个节点独立轮换自己的密钥。
     - **`host`** (`string`, 可选, 默认 `0.0.0.0`)：用于节点间安全通信的本地监听地址。
     - **`port`** (`integer`, 可选, 默认 `8301`)：用于节点间安全通信的本地监听端口。
-    - **`peers`** (`array of strings`)：初始连接的节点地址列表（IP或域名:端口）。至少需要能够访问其中一个节点才能加入集群。当指定的节点地址为域名时，TNG 会尝试解析该域名并将其返回的所有 IP 地址依次作为 peer 节点进行连接尝试，而非仅仅使用第一个解析结果，这提高了在复杂网络环境下的连接成功率。
+    - **`peers`** (`array of strings`)：初始连接的节点地址列表(IP或域名:端口)。至少需要能够访问其中一个节点才能加入集群。当指定的节点地址为域名时,TNG 会尝试解析该域名并将其返回的所有 IP 地址依次作为 peer 节点进行连接尝试,而非仅仅使用第一个解析结果,这提高了在复杂网络环境下的连接成功率。
+    - **`attest`** (object, 可选)：定义节点在连接到其他节点时如何证明自身身份。详细配置请参考[Attest配置](#attest)章节。
+    - **`verify`** (object, 可选)：定义节点如何验证远程对等节点的身份。详细配置请参考[Verify配置](#verify)章节。
+    - **`no_ra`** (boolean, 可选, 默认 `false`)：是否禁用远程证明功能。设置为 `true` 时,节点间通信将不进行远程证明验证。
 
 示例配置：
 
@@ -924,7 +927,15 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
                     "peers": [
                         "192.168.10.1:8301",
                         "tng-service.default.svc.cluster.local:8301"
-                    ]
+                    ],
+                    "attest": {
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                    },
+                    "verify": {
+                        "as_addr": "http://as.example.com:8080/",
+                        "as_is_grpc": false,
+                        "policy_ids": ["default"]
+                    }
                 }
             },
             "attest": {

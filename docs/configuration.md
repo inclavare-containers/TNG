@@ -964,6 +964,9 @@ If you wish to enable this mode, simply specify `key.source = "peer_shared"` in 
     - **`host`** (`string`, optional, default `0.0.0.0`): Local listening address for inter-node secure communication.
     - **`port`** (`integer`, optional, default `8301`): Local listening port for inter-node secure communication.
     - **`peers`** (`array of strings`): List of initial node addresses (IP or DNS name:port) to connect to. At least one node must be accessible to join the cluster. When a node address is specified as a domain name, TNG will attempt to resolve that domain name and try all returned IP addresses as peer nodes in sequence (rather than just trying the first IP), which improves connection success rate in complex network environments.
+    - **`attest`** (object, optional): Defines how this node proves its identity when connecting to other nodes. See [Attest Configuration](#attest) section for detailed configuration.
+    - **`verify`** (object, optional): Defines how this node verifies the identity of remote peer nodes. See [Verify Configuration](#verify) section for detailed configuration.
+    - **`no_ra`** (boolean, optional, default `false`): Whether to disable remote attestation functionality. When set to `true`, inter-node communication will not perform remote attestation verification.
 
 Example configuration:
 
@@ -985,7 +988,15 @@ Example configuration:
                     "peers": [
                         "192.168.10.1:8301",
                         "tng-service.default.svc.cluster.local:8301"
-                    ]
+                    ],
+                    "attest": {
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                    },
+                    "verify": {
+                        "as_addr": "http://as.example.com:8080/",
+                        "as_is_grpc": false,
+                        "policy_ids": ["default"]
+                    }
                 }
             },
             "attest": {
