@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+    outputs:
+      rpm_name_an8: ${{ steps.extract-rpm-name.outputs.rpm_name_an8 }}
+      PRE_RELEASE: ${{ steps.check-pre-release.outputs.PRE_RELEASE }}
 
     steps:
       - name: Checkout repository
@@ -25,6 +28,7 @@ jobs:
           submodules: 'true'
 
       - name: Check pre-release
+        id: check-pre-release
         run: |
           tag="${GITHUB_REF#refs/*/}"
           echo "tag=$tag"
@@ -35,7 +39,7 @@ jobs:
               prerelease=false
           fi
           echo "prerelease=$prerelease"
-          echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
+          echo "PRE_RELEASE=$prerelease" >> $GITHUB_OUTPUT
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
@@ -43,25 +47,62 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
-      - name: Build RPM package
+      - name: Create build tarball
         run: |
           make create-tarball
-          make rpm-build-in-docker
-          mkdir -p $GITHUB_WORKSPACE/rpmbuild
-          cp -r ~/rpmbuild/SRPMS/ $GITHUB_WORKSPACE/rpmbuild/
-          cp -r ~/rpmbuild/RPMS/ $GITHUB_WORKSPACE/rpmbuild/
-          mkdir -p $GITHUB_WORKSPACE/rpmbuild/SOURCES/
-          cp -r /tmp/trusted-network-gateway-*-vendored-source.tar.gz $GITHUB_WORKSPACE/rpmbuild/SOURCES/
+          mv /tmp/trusted-network-gateway-*-vendored-source.tar.gz ./
 
-      - name: Upload artifact
+      - name: Prepare AnolisOS8 buildspec and export version info
+        id: extract-rpm-name
+        run: |
+          GITHUB_RELEASE="${{ github.ref_name || 'no_tag' }}"
+          VERSION=$(grep -m1 '^Version:' trusted-network-gateway.spec | awk '{print $2}')
+          RELEASE="1"
+          
+          echo "Using GITHUB_RELEASE: $GITHUB_RELEASE"
+          echo "Using VERSION: $VERSION"
+          echo "Using RELEASE: $RELEASE"
+
+          # Create buildspec for release
+          export GITHUB_RELEASE VERSION RELEASE
+          envsubst '$GITHUB_RELEASE $VERSION $RELEASE' \
+            < rpm/AnolisOS8/trusted-network-gateway.an8.buildspec.yaml.template \
+            > ./trusted-network-gateway-${VERSION}-${RELEASE}.an8.buildspec.yaml
+
+          # Copy buildspec for local build
+          # Install yq
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          cp ./trusted-network-gateway-${VERSION}-${RELEASE}.an8.buildspec.yaml rpm/AnolisOS8/trusted-network-gateway.an8.buildspec.yaml
+          # Replace URL with local path for local build
+          yq -i ".inputs.vendored-source.url = \"file://${GITHUB_WORKSPACE}/trusted-network-gateway-${VERSION}-vendored-source.tar.gz\"" rpm/AnolisOS8/trusted-network-gateway.an8.buildspec.yaml
+
+          # Export rpm_name for use in other steps and jobs
+          echo "rpm_name_an8=trusted-network-gateway-${VERSION}-${RELEASE}.an8" >> $GITHUB_OUTPUT
+
+      - name: Upload build input artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-packages
+          name: build-input
           if-no-files-found: error
           path: |
-            ./rpmbuild/SOURCES/trusted-network-gateway-*-vendored-source.tar.gz
-            ./rpmbuild/SRPMS/*.src.rpm
-            ./rpmbuild/RPMS/*/*.rpm
+            ./trusted-network-gateway-*-vendored-source.tar.gz
+            ./trusted-network-gateway-*.an8.buildspec.yaml
+
+      - name: Build RPM package
+        uses: 1570005763/GuanFu@v1
+        with:
+          spec_path: rpm/AnolisOS8/trusted-network-gateway.an8.buildspec.yaml
+
+      - name: Upload build output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          if-no-files-found: error
+          path: |
+            /tmp/rpmbuild/SRPMS/trusted-network-gateway-*.an8.src.rpm
+            /tmp/rpmbuild/RPMS/x86_64/trusted-network-gateway-*.an8.x86_64.rpm
 
   test:
     strategy:
@@ -103,6 +144,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          name: build-output
           path: ./
           merge-multiple: false
 
@@ -112,7 +154,7 @@ jobs:
           set -x
 
           # test rpm package install
-          yum install -y ./rpm-packages/RPMS/*/trusted-network-gateway-*.rpm
+          yum install -y ./RPMS/*/trusted-network-gateway-*.rpm
           tng --version
 
       - uses: dtolnay/rust-toolchain@1.89.0
@@ -135,22 +177,20 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./
-          merge-multiple: false
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          fail_on_unmatched_files: true
-          prerelease: ${{ env.PRE_RELEASE }}
-          files: |
-            ./rpm-packages/SOURCES/trusted-network-gateway-*-vendored-source.tar.gz
-          # use rpms from release-rpm.yml
-            # ./rpm-packages/SRPMS/*.src.rpm
-            # ./rpm-packages/RPMS/*/*.rpm
+    needs: 
+      - build
+      - test
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    uses: 1570005763/GuanFu/.github/workflows/release.yml@v1
+    with:
+      input_artifact: build-input
+      output_artifact: build-output
+      release_slsa_provenance: true
+      provenance_name: "${{ needs.build.outputs.rpm_name_an8 }}.intoto.jsonl"
+      rpm_detail_provenance: true
+      upload_provenance_to_rekor: true
+      release_tag_name: "${{ github.ref_name }}"
+      prerelease: "${{ needs.build.outputs.PRE_RELEASE == 'true' }}"
