@@ -1,0 +1,78 @@
+version: 1
+
+container:
+  image: "openanolis/anolisos@sha256:b5aceb026244814de1a1ab62a8cc3dc322fcff1578c58de2722035ef47669da5"
+
+inputs:
+  vendored-source:
+    url: "https://github.com/inclavare-containers/TNG/releases/download/${GITHUB_RELEASE}/trusted-network-gateway-${VERSION}-vendored-source.tar.gz"
+    targetPath: "/tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz"
+
+environment:
+  systemPackages:
+    - name: "make"
+      version: "4.2.1-11.0.1.an8"
+    - name: "pkgconf-pkg-config"
+      version: "1.4.2-1.el8"
+    - name: "git"
+      version: "2.43.7-1.0.1.an8"
+    - name: "protobuf-devel"
+      version: "3.5.0-17.an8"
+    - name: "cmake"
+      version: "3.26.5-2.0.2.an8"
+    - name: "wget"
+      version: "1.19.5-12.0.1.an8"
+    - name: "net-tools"
+      version: "2.0-0.52.20160912git.an8"
+    - name: "curl"
+      version: "7.61.1-35.0.2.an8.9"
+    - name: "file"
+      version: "5.33-27.an8"
+    - name: "gnupg2"
+      version: "2.2.20-4.an8"
+    - name: "tree"
+      version: "1.7.0-15.0.1.an8"
+    - name: "libcurl-devel"
+      version: "7.61.1-35.0.2.an8.9"
+    - name: "openssl-devel"
+      version: "1:1.1.1k-14.0.1.an8.0.1"
+    - name: "libseccomp-devel"
+      version: "2.5.2-1.0.9.an8"
+    - name: "binutils-devel"
+      version: "2.30-128.0.1.an8"
+    - name: "jq"
+      version: "1.6-17.an8.2"
+    - name: "rpmdevtools"
+      version: "8.10-8.0.1.an8"
+    - name: "yum-utils"
+      version: "4.0.21-25.an8"
+
+  tools:
+    - name: "clang"
+      version: "18.1.8-1.0.1.module+an8.9.0+11287+9d0292d3"
+    # cargo and rust are installed by rustup in prepare phase
+    # - name: "cargo"
+    #   version: ""
+    # - name: "rust"
+    #   version: ""
+
+phases:
+  prepare:
+    commands:
+      - mkdir -p /tmp/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+      - cp "/tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz" /tmp/rpmbuild/SOURCES/
+      - tar -xzf /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz -C /tmp/rpmbuild/SPECS --strip-components=2 trusted-network-gateway-${VERSION}/src/trusted-network-gateway.spec
+      # Prepare rust-1.91.1 toolchain
+      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none
+      - echo '. "$HOME/.cargo/env"' >> ~/.bashrc
+      - rustup toolchain install 1.91.1 --profile minimal --component rustc,cargo
+      - rustup default 1.91.1
+      # Change yum source from Anolis to Alinux
+      - sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+  build:
+    commands:
+      - rpmbuild --define "_topdir /tmp/rpmbuild" -ba /tmp/rpmbuild/SPECS/trusted-network-gateway.spec --define 'with_rustup 1'
+
+outputs:
+  - path: /tmp/rpmbuild/SRPMS/trusted-network-gateway-${VERSION}-${RELEASE}.an8.src.rpm
+  - path: /tmp/rpmbuild/RPMS/x86_64/trusted-network-gateway-${VERSION}-${RELEASE}.an8.x86_64.rpm
