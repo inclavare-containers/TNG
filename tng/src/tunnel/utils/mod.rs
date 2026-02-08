@@ -18,3 +18,6 @@ pub mod rustls_config;
 #[cfg(unix)]
 pub mod socket;
 pub mod tokio;
+
+#[cfg(unix)]
+pub mod file_watcher;

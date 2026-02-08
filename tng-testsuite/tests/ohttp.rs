@@ -901,7 +901,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
                     # Function to call the key config API
                     call_api() {{
-                        curl -s -X POST http://192.168.1.1:30001 \
+                        curl -X POST http://192.168.1.1:30001 \
                             -H "x-tng-ohttp-api: /tng/key-config" \
                             -H "Content-Type: application/json" \
                             -H "Accept: */*" \
@@ -934,10 +934,9 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
                     fi
 
                     # ——————————————————————————————
-                    # PHASE 2: Replace file with new key
+                    # PHASE 2: Replace file with new key (via cat)
                     # ——————————————————————————————
                     echo "PHASE 2: Rotating key via file replacement"
-
 
                     echo "Replacing key file with new private key..."
                     cat > "$KEY_PATH" << 'EOF'
@@ -962,7 +961,6 @@ EOF
 
                     echo "SUCCESS: Key change detected correctly"
 
-
                     # ——————————————————————————————
                     # PHASE 3: Delete the file and verify it becomes unavailable
                     # ——————————————————————————————
@@ -980,9 +978,8 @@ EOF
                         echo "System still serving old key — acceptable"
                     fi
 
-
                     # ——————————————————————————————
-                    # PHASE 4: Recreate file with another new key
+                    # PHASE 4: Recreate file with another new key (via cat)
                     # ——————————————————————————————
                     echo "PHASE 4: Recreating file with third key"
 
@@ -1014,7 +1011,43 @@ EOF
                         echo "PASS: Successfully loaded new key after recreate"
                     fi
 
-                    echo "SUCCESS: All phases passed including file deletion and recreation"
+                    # ——————————————————————————————
+                    # PHASE 5: Replace key using `mv` (simulate atomic update)
+                    # ——————————————————————————————
+                    echo "PHASE 5: Replacing key via 'mv' (atomic replacement)"
+
+                    TEMP_KEY="$(mktemp)"
+                    echo "Creating temporary key file: $TEMP_KEY"
+                    cat > "$TEMP_KEY" << 'EOF'
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEIBg3c5YNL6uuhL0YqGdc1hJPBnReEMbTlrMZiHryomdL
+-----END PRIVATE KEY-----
+EOF
+
+                    echo "Moving temp file to $KEY_PATH..."
+                    mv "$TEMP_KEY" "$KEY_PATH"
+
+                    echo "Waiting 3 seconds for TNG to detect and reload after mv..."
+                    sleep 3
+
+                    echo "Request 5..."
+                    r5=$(call_api) || {{ echo "Error: Request 5 failed"; exit 1; }}
+                    echo "Response 5: $r5"
+
+                    if [ -z "$r5" ]; then
+                        echo "FAIL: Empty response after mv-based update"
+                        exit 1
+                    fi
+
+                    # It must be different from all previous keys
+                    if [ "$r5" = "$r4" ] || [ "$r5" = "$r3" ] || [ "$r5" = "$r1" ]; then
+                        echo "FAIL: Fifth response matches a previous key — expected new key"
+                        exit 1
+                    else
+                        echo "PASS: Successfully detected key updated via 'mv'"
+                    fi
+
+                    echo "SUCCESS: All phases passed including mv-based rotation"
                     "#
                 )
             },

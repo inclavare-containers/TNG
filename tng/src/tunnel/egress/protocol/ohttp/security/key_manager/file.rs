@@ -5,13 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::Context;
 use async_trait::async_trait;
-use notify::{
-    event::{DataChange, EventKind, ModifyKind},
-    Event, RecommendedWatcher, RecursiveMode, Watcher,
-};
-use scopeguard::defer;
 use tokio::sync::RwLock;
 
 use crate::{
@@ -22,7 +16,7 @@ use crate::{
             KeyInfo, KeyManager, KeyStatus,
         },
         ohttp::key_config::{KeyConfigExtend, PublicKeyData},
-        utils::runtime::supervised_task::SupervisedTaskResult,
+        utils::{file_watcher::FileWatcher, runtime::supervised_task::SupervisedTaskResult},
     },
     TokioRuntime,
 };
@@ -65,12 +59,39 @@ struct FileBasedKeyManagerInner {
     /// changes due to file reloads.
     callback_manager: CallbackManager,
 }
-
 impl FileBasedKeyManager {
     /// Create a new FileBasedKeyManager and start watching the file.
     ///
     /// Loads the initial key from the given PEM file and spawns a background task
     /// to monitor file changes using `notify`.
+    ///
+    /// The background watcher monitors both:
+    /// - The target file directly, for in-place modifications.
+    /// - The parent directory, to catch atomic rename operations (e.g. `mv` from outside editor).
+    ///
+    /// When a relevant change is detected (create, modify data/name), the key is reloaded
+    /// asynchronously. If reload succeeds, the old key is replaced and callbacks are triggered.
+    /// Failed reloads are logged but do not stop the watcher.
+    ///
+    /// The file watching logic is delegated to the [`FileWatcher`] module for better
+    /// separation of concerns and testability.
+    ///
+    /// # Arguments
+    ///
+    /// * `runtime` - The Tokio runtime used to spawn the background watch task.
+    /// * `path` - Path to the PEM-encoded PKCS#8 private key file.
+    ///
+    /// # Returns
+    ///
+    /// A `Result<Self, TngError>`:
+    /// - `Ok` contains the initialized key manager with active watch task.
+    /// - `Err` if the initial key load failed or file watching could not be started.
+    ///
+    /// # Errors
+    ///
+    /// - `TngError::LoadPrivateKeyFailed` if the initial PEM file cannot be read or parsed.
+    /// - `TngError::WatchFileFailed` if the file watcher cannot be initialized.
+    ///
     pub async fn new(runtime: TokioRuntime, path: PathBuf) -> Result<Self, TngError> {
         let key_info = Self::load_key_from_pem(&path).await?;
 
@@ -81,122 +102,72 @@ impl FileBasedKeyManager {
 
         let inner_clone = inner.clone();
 
-        // Spawn file watcher task
+        // Start the file watcher and receive events indicating when the file changes.
+        let mut file_watcher = FileWatcher::new(path.clone())
+            .map_err(|e| TngError::WatchFileFailed(path.clone(), e))?;
+
         let watch_task = runtime.spawn_supervised_task_current_span(async move {
-            defer! {
-                tracing::info!(?path, "Stop watching for OHTTP key updates");
-            }
+            while let Some(result) = file_watcher.recv().await {
+                match result {
+                    Ok(()) => {
+                        tracing::info!(?path, "Key file changed, attempting to reload OHTTP key");
 
-            let fut = async {
-                tracing::info!(?path, "Start watching for OHTTP key updates");
-
-                // Use blocking channel since notify is not async-native
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-                let mut watcher: RecommendedWatcher = Watcher::new(
-                    move |res| {
-                        let _ = tx.send(res); // ignore errors
-                    },
-                    notify::Config::default(),
-                )
-                .context("Failed to initialize file watcher")?;
-
-                // Watch the parent directory to catch atomic renames
-                if let Some(parent) = path.parent() {
-                    watcher
-                        .watch(parent, RecursiveMode::NonRecursive)
-                        .with_context(|| format!("Failed to watch directory {parent:?}"))?;
-                }
-
-                // Also watch the file directly (for non-atomic changes)
-                watcher
-                    .watch(&path, RecursiveMode::NonRecursive)
-                    .with_context(|| format!("Failed to watch file {path:?}"))?;
-
-                while let Some(result) = rx.recv().await {
-                    match result {
-                        Ok(event) => {
-                            if Self::is_relevant_event(&event, &path) {
-                                match Self::load_key_from_pem(&path).await {
-                                    Ok(new_key_info) => {
-                                        let old_key_info = {
-                                            let mut write = inner_clone.key.write().await;
-                                            write.replace((
-                                                new_key_info.key_config.public_key_data()?,
-                                                new_key_info.clone(),
-                                            ))
+                        match Self::load_key_from_pem(&path).await {
+                            Ok(new_key_info) => {
+                                let old_key_info = {
+                                    let mut write = inner_clone.key.write().await;
+                                    let public_key_data =
+                                        match new_key_info.key_config.public_key_data() {
+                                            Ok(public_key_data) => public_key_data,
+                                            Err(error) => {
+                                                tracing::error!(
+                                                    ?path,
+                                                    ?error,
+                                                    "Failed to get public key data"
+                                                );
+                                                continue;
+                                            }
                                         };
+                                    write.replace((public_key_data, new_key_info.clone()))
+                                };
 
-                                        // Trigger events
-                                        inner_clone
-                                            .callback_manager
-                                            .trigger(&KeyChangeEvent::Created {
-                                                key_info: Cow::Borrowed(&new_key_info),
-                                            })
-                                            .await;
+                                // Trigger creation event for the new key
+                                inner_clone
+                                    .callback_manager
+                                    .trigger(&KeyChangeEvent::Created {
+                                        key_info: Cow::Borrowed(&new_key_info),
+                                    })
+                                    .await;
 
-                                        if let Some((_, old)) = old_key_info {
-                                            inner_clone
-                                                .callback_manager
-                                                .trigger(&KeyChangeEvent::Removed {
-                                                    key_info: Cow::Borrowed(&old),
-                                                })
-                                                .await;
-                                        }
-
-                                        tracing::info!(
-                                            ?path,
-                                            "Successfully reloaded OHTTP key from file"
-                                        );
-                                    }
-                                    Err(error) => {
-                                        tracing::error!(
-                                            ?path,
-                                            ?error,
-                                            "Failed to reload OHTTP key from file ",
-                                        );
-                                    }
+                                // Trigger removal event for the old key, if exists
+                                if let Some((_, old)) = old_key_info {
+                                    inner_clone
+                                        .callback_manager
+                                        .trigger(&KeyChangeEvent::Removed {
+                                            key_info: Cow::Borrowed(&old),
+                                        })
+                                        .await;
                                 }
+
+                                tracing::info!(?path, "Successfully reloaded OHTTP key from file");
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    ?path,
+                                    ?error,
+                                    "Failed to reload OHTTP key from file"
+                                );
                             }
                         }
-                        Err(error) => {
-                            tracing::error!(?error, "File watch error");
-                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(?path, ?error, "Internal error in file watcher");
                     }
                 }
-
-                Ok::<_, anyhow::Error>(())
-            };
-
-            if let Err(error) = fut.await {
-                tracing::error!(?error, "File watch task failed");
             }
         });
 
         Ok(FileBasedKeyManager { inner, watch_task })
-    }
-
-    /// Determines whether a filesystem event should trigger a key reload.
-    fn is_relevant_event(event: &Event, target_path: &Path) -> bool {
-        // Check path
-        if !event.paths.iter().any(|p| p == target_path) {
-            return false;
-        }
-
-        // Check kind
-        match &event.kind {
-            EventKind::Modify(ModifyKind::Data(change)) => matches!(change, DataChange::Any),
-            EventKind::Modify(_) => false, // Ignore other kinds of modifications
-            EventKind::Create(_) => true,
-            EventKind::Access(_) => false, // Ignore access events
-            EventKind::Remove(_) => {
-                tracing::warn!(
-                    "OHTTP key file removed, will keep using the old key before recreation"
-                );
-                false
-            }
-            _ => true, // Be conservative: treat other events as relevant
-        }
     }
 
     /// Loads and parses a PEM-encoded PKCS#8 private key into a usable `KeyInfo` structure.

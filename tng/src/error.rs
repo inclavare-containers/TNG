@@ -132,6 +132,9 @@ pub enum TngError {
 
     #[error("Should request new KeyConfig from server because: {0}")]
     ShouldRequestNewKeyConfigFromServerError(#[source] anyhow::Error),
+
+    #[error("Failed to watch file {0}: {1}")]
+    WatchFileFailed(PathBuf, #[source] anyhow::Error),
 }
 
 /// Error response structure
@@ -206,6 +209,7 @@ impl IntoResponse for TngError {
             | TngError::CreateOHttpClientFailed(..)
             | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             #[cfg(feature = "egress")]
             TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::KeyUpdateMessageEncodeError(..)
