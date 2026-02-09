@@ -878,7 +878,7 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
 - 维护一个包含所有节点有效私钥的本地"密钥环"
 - 允许任何节点解密使用其他节点公钥加密的请求
 
-如果您希望启用此模式，只需在 `ohttp` 配置中指定 `key.source = "peer_shared"`：
+如果您希望启用此模式，只需在 `ohttp` 配置中指定 `key.source = "peer_shared"`，然后配置`peers`或者`peers_file`字段：
 
 ```
 "ohttp": {
@@ -890,7 +890,8 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
         "peers": [
             "192.168.10.1:8301",
             "tng-service.default.svc.cluster.local:8301"
-        ]
+        ],
+        "peers_file": "/etc/tng/peers.json"
     }
 }
 ```
@@ -903,6 +904,7 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
     - **`host`** (`string`, 可选, 默认 `0.0.0.0`)：用于节点间安全通信的本地监听地址。
     - **`port`** (`integer`, 可选, 默认 `8301`)：用于节点间安全通信的本地监听端口。
     - **`peers`** (`array of strings`)：初始连接的节点地址列表(IP或域名:端口)。至少需要能够访问其中一个节点才能加入集群。当指定的节点地址为域名时,TNG 会尝试解析该域名并将其返回的所有 IP 地址依次作为 peer 节点进行连接尝试,而非仅仅使用第一个解析结果,这提高了在复杂网络环境下的连接成功率。
+    - **`peers_file`** (`string`, 可选)：包含节点地址列表的 JSON 文件路径。这允许在不重启服务的情况下动态更新节点列表。文件应包含一个字符串数组，代表 IP:端口 或 域名:端口 格式的节点地址。TNG 将监控此文件的变化并在文件更新时自动加入新的节点。
     - **`attest`** (object, 可选)：定义节点在连接到其他节点时如何证明自身身份。详细配置请参考[Attest配置](#attest)章节。
     - **`verify`** (object, 可选)：定义节点如何验证远程对等节点的身份。详细配置请参考[Verify配置](#verify)章节。
     - **`no_ra`** (boolean, 可选, 默认 `false`)：是否禁用远程证明功能。设置为 `true` 时,节点间通信将不进行远程证明验证。
@@ -928,6 +930,7 @@ Serf 是一种基于 Gossip 协议的成员发现和消息传播系统，它提�
                         "192.168.10.1:8301",
                         "tng-service.default.svc.cluster.local:8301"
                     ],
+                    "peers_file": "/etc/tng/peers.json",
                     "attest": {
                         "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     },

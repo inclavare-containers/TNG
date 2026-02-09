@@ -1158,6 +1158,221 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_egress_key_from_peer_shared_with_peers_file() -> Result<()> {
+    let peers_file_path = "/tmp/tng-test/peers.json";
+    let peers_dir = "/tmp/tng-test";
+
+    // Create directory for peers file
+    tokio::fs::create_dir_all(peers_dir)
+        .await
+        .context("Failed to create directory /tmp/tng-test")?;
+
+    // Create initial peers file with addresses of nodes that will use peers_file
+    let initial_peers = serde_json::json!(["192.168.1.1.nip.io:8301"]);
+    tokio::fs::write(
+        peers_file_path,
+        serde_json::to_string_pretty(&initial_peers)?,
+    )
+    .await
+    .context("Failed to write initial peers file")?;
+
+    let mut tasks = Vec::default();
+
+    // Create multiple TNG server instances using peers_file
+    let (ips, tng_tasks, server_tasks):(Vec<_>,Vec<_>,Vec<_>) = itertools::multiunzip((1..=3).into_iter().map(|i|{
+        let node_type = NodeType::Customized { host_num: i };
+
+        (
+            node_type.ip(),
+            TngInstance::TngServer({
+                if i == 1 {
+                    // First node - use static peers to bootstrap the cluster
+                    r#"{
+                        "add_egress": [
+                            {
+                                "netfilter": {
+                                    "capture_dst": {
+                                        "port": 30001
+                                    }
+                                },
+                                "ohttp": {
+                                    "key": {
+                                        "source": "peer_shared",
+                                        "peers_file": "/tmp/tng-test/peers.json",
+                                        "rotation_interval": 10,
+                                        "attest": {
+                                            "model": "background_check",
+                                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                        },
+                                        "verify": {
+                                            "model": "background_check",
+                                            "as_addr": "http://192.168.1.254:8080/",
+                                            "policy_ids": [
+                                                "default"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "attest": {
+                                    "model": "background_check",
+                                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                }
+                            }
+                        ]
+                    }"#
+                } else {
+                    // Other nodes - no initial peers
+                    r#"{
+                        "add_egress": [
+                            {
+                                "netfilter": {
+                                    "capture_dst": {
+                                        "port": 30001
+                                    }
+                                },
+                                "ohttp": {
+                                    "key": {
+                                        "source": "peer_shared",
+                                        "peers": [],
+                                        "rotation_interval": 10,
+                                        "attest": {
+                                            "model": "background_check",
+                                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                        },
+                                        "verify": {
+                                            "model": "background_check",
+                                            "as_addr": "http://192.168.1.254:8080/",
+                                            "policy_ids": [
+                                                "default"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "attest": {
+                                    "model": "background_check",
+                                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                }
+                            }
+                        ]
+                    }"#
+                }
+            }).with_overwrite_node_type(node_type).boxed(),
+            AppType::HttpServer {
+                port: 30001,
+                expected_host_header: "example.com",
+                expected_path_and_query: "/foo/bar/www?type=1&case=1",
+            }.with_overwrite_node_type(node_type).boxed(),
+        )
+    }));
+
+    tasks.extend(tng_tasks);
+    tasks.extend(server_tasks);
+
+    tasks.extend(vec![
+        ShellTask {
+            name: "waiting for tng cluster keys sharing and peers file monitoring".to_owned(),
+            node_type: NodeType::Client,
+            script: {
+                format!(
+                    r#"
+                    set -euo pipefail
+                    
+                    echo "Waiting 5 seconds for TNG cluster to establish and file watcher to start..."
+                    sleep 3
+                    
+                    echo "Initial cluster setup complete"
+                    "#
+                )
+            },
+            stop_test_on_finish: false,
+            run_in_foreground: true,
+        }
+        .boxed(),
+        ShellTask {
+            name: "update peers file and verify new peer joins".to_owned(),
+            node_type: NodeType::Client,
+            script: {
+                format!(
+                    r#"
+                    set -euo pipefail
+                    
+                    PEERS_FILE="{}"
+                    
+                    echo "Updating peers file to add new peer..."
+                    cat > "$PEERS_FILE" << 'EOF'
+[
+  "192.168.1.2.nip.io:8301",
+  "192.168.1.3.nip.io:8301"
+]
+EOF
+                    
+                    echo "Waiting 3 seconds for file watcher to detect changes and join new peer..."
+                    sleep 3
+                    
+                    echo "Peers file updated successfully"
+                    "#,
+                    peers_file_path
+                )
+            },
+            stop_test_on_finish: false,
+            run_in_foreground: true,
+        }
+        .boxed(),
+        AppType::LoadBalancer {
+            listen_port: 30001,
+            upstream_servers: ips.into_iter().map(|ip| (ip, 30001)).collect(),
+            path_matcher: r"^/foo/(.*)$",
+            rewrite_to: r"/baz/$1",
+        }
+        .boxed(),
+        TngInstance::TngClient(
+            r#"{
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
+                            }
+                        },
+                        "ohttp": {
+                            "path_rewrites": [
+                                {
+                                    "match_regex": "^/foo/([^/]+)([/]?.*)$",
+                                    "substitution": "/foo/\\1"
+                                }
+                            ]
+                        },
+                        "verify": {
+                            "model": "background_check",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": [
+                                "default"
+                            ]
+                        }
+                    }
+                ]
+            }"#
+        )
+        .boxed(),
+        AppType::HttpClient {
+            host: "192.168.1.252",
+            port: 30001,
+            host_header: "example.com",
+            path_and_query: "/foo/bar/www?type=1&case=1",
+        }
+        .boxed(),
+    ]);
+
+    run_test(tasks).await?;
+
+    // Clean up peers file
+    let _ = tokio::fs::remove_file(peers_file_path).await;
+
+    Ok(())
+}
+
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_key_from_peer_shared() -> Result<()> {
     let mut tasks = Vec::default();
 

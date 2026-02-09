@@ -217,6 +217,11 @@ pub struct PeerSharedArgs {
     #[serde(default = "Default::default")]
     pub peers: Vec<String>,
 
+    /// Optional file path that contains a JSON array of peer addresses.
+    /// This allows dynamic updates to the peer list without restarting the service.
+    #[serde(default = "Default::default")]
+    pub peers_file: Option<String>,
+
     /// Define how this node proves its identity when connecting to others, and how to verify
     /// the identity of remote peers.
     #[serde(flatten)]
