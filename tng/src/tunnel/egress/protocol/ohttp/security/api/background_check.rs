@@ -32,10 +32,10 @@ impl OhttpServerApi {
                     } => {
                         // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
                         let coco_converter = CocoConverter::new(
-                            &as_args.as_addr,
+                            &as_args.as_addr_config.as_addr,
                             &as_args.policy_ids,
-                            as_args.as_is_grpc,
-                            &as_args.as_headers,
+                            as_args.as_addr_config.as_is_grpc,
+                            &as_args.as_addr_config.as_headers,
                         )?;
 
                         let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
@@ -77,10 +77,10 @@ impl OhttpServerApi {
                         let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
 
                         let coco_converter = CocoConverter::new(
-                            &as_args.as_addr,
+                            &as_args.as_addr_config.as_addr,
                             &as_args.policy_ids,
-                            as_args.as_is_grpc,
-                            &as_args.as_headers,
+                            as_args.as_addr_config.as_is_grpc,
+                            &as_args.as_addr_config.as_headers,
                         )?;
 
                         let token  = coco_converter.convert(&coco_evidence).await?;

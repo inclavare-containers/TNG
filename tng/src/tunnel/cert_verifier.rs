@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
-use rats_cert::cert::verify::{CertVerifier, CocoVerifyMode, CocoVerifyPolicy};
+use rats_cert::cert::verify::{
+    AttestationServiceConfig, CertVerifier, CocoVerifyMode, CocoVerifyPolicy,
+};
 
 use crate::{
-    config::ra::{AttestationServiceArgs, VerifyArgs},
+    config::ra::{AttestationServiceAddrArgs, AttestationServiceArgs, VerifyArgs},
     tunnel::attestation_result::AttestationResult,
 };
 
@@ -34,26 +36,39 @@ impl CoCoCommonCertVerifier {
                 verify_mode: CocoVerifyMode::Token,
                 policy_ids: token_verify.policy_ids.clone(),
                 trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr: token_verify.as_addr.clone(),
+                as_addr_config: token_verify.as_addr_config.as_ref().map(|addr_config| {
+                    AttestationServiceConfig {
+                        as_addr: addr_config.as_addr.clone(),
+                        as_is_grpc: addr_config.as_is_grpc,
+                        as_headers: addr_config.as_headers.clone(),
+                    }
+                }),
             },
             VerifyArgs::BackgroundCheck {
                 as_args:
                     AttestationServiceArgs {
-                        as_addr,
-                        as_is_grpc,
-                        as_headers,
+                        as_addr_config:
+                            AttestationServiceAddrArgs {
+                                as_addr,
+                                as_is_grpc,
+                                as_headers,
+                            },
                         policy_ids,
                     },
                 token_verify,
             } => CocoVerifyPolicy {
-                verify_mode: CocoVerifyMode::Evidence {
-                    as_addr: as_addr.to_owned(),
+                verify_mode: CocoVerifyMode::Evidence(AttestationServiceConfig {
+                    as_addr: as_addr.clone(),
                     as_is_grpc: *as_is_grpc,
                     as_headers: as_headers.clone(),
-                },
+                }),
                 policy_ids: policy_ids.clone(),
                 trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr: Some(as_addr.clone()),
+                as_addr_config: Some(AttestationServiceConfig {
+                    as_addr: as_addr.clone(),
+                    as_is_grpc: *as_is_grpc,
+                    as_headers: as_headers.clone(),
+                }),
             },
         };
 

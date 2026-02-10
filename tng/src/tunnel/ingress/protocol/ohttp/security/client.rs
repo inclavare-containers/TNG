@@ -78,6 +78,7 @@ use crate::{
     },
     AttestationResult, TokioRuntime,
 };
+use rats_cert::cert::verify::AttestationServiceConfig;
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -200,7 +201,14 @@ impl OHttpClientInner {
     ) -> Result<CocoAsToken> {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
         let verifier = CocoVerifier::new(
-            &token_verify.as_addr,
+            token_verify
+                .as_addr_config
+                .as_ref()
+                .map(|addr_config| AttestationServiceConfig {
+                    as_addr: addr_config.as_addr.clone(),
+                    as_is_grpc: addr_config.as_is_grpc,
+                    as_headers: addr_config.as_headers.clone(),
+                }),
             &token_verify.trusted_certs_paths,
             &token_verify.policy_ids,
         )
@@ -228,15 +236,19 @@ impl OHttpClientInner {
     ) -> Result<CocoAsToken> {
         let coco_evidence = CocoEvidence::deserialize_from_json(evidence)?;
         let coco_converter = CocoConverter::new(
-            &as_args.as_addr,
+            &as_args.as_addr_config.as_addr,
             &as_args.policy_ids,
-            as_args.as_is_grpc,
-            &as_args.as_headers,
+            as_args.as_addr_config.as_is_grpc,
+            &as_args.as_addr_config.as_headers,
         )?;
         let token = coco_converter.convert(&coco_evidence).await?;
 
         let verifier = CocoVerifier::new(
-            &Some(as_args.as_addr.clone()),
+            Some(AttestationServiceConfig {
+                as_addr: as_args.as_addr_config.as_addr.clone(),
+                as_is_grpc: as_args.as_addr_config.as_is_grpc,
+                as_headers: as_args.as_addr_config.as_headers.clone(),
+            }),
             &token_verify.trusted_certs_paths,
             &as_args.policy_ids,
         )
@@ -299,10 +311,10 @@ impl OHttpClientInner {
                     token_verify,
                 }) => {
                     let coco_converter = CocoConverter::new(
-                        &as_args.as_addr,
+                        &as_args.as_addr_config.as_addr,
                         &as_args.policy_ids,
-                        as_args.as_is_grpc,
-                        &as_args.as_headers,
+                        as_args.as_addr_config.as_is_grpc,
+                        &as_args.as_addr_config.as_headers,
                     )?;
 
                     // fetch a challenge token from attestation service
@@ -399,10 +411,10 @@ impl OHttpClientInner {
                     AttestArgs::Passport { aa_args, as_args } => {
                         let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                         let coco_converter = CocoConverter::new(
-                            &as_args.as_addr,
+                            &as_args.as_addr_config.as_addr,
                             &as_args.policy_ids,
-                            as_args.as_is_grpc,
-                            &as_args.as_headers,
+                            as_args.as_addr_config.as_is_grpc,
+                            &as_args.as_addr_config.as_headers,
                         )?;
 
                         // fetch a challenge token from attestation service

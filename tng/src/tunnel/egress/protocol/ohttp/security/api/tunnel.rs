@@ -16,8 +16,9 @@ use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
 use crate::config::ra::{
-    AttestationServiceArgs, AttestationServiceTokenVerifyAdditionalArgs,
-    AttestationServiceTokenVerifyArgs, RaArgs, VerifyArgs,
+    AttestationServiceAddrArgs, AttestationServiceArgs,
+    AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceTokenVerifyArgs, RaArgs,
+    VerifyArgs,
 };
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
@@ -31,6 +32,7 @@ use crate::tunnel::ohttp::protocol::metadata::{
     AttestedPublicKey, Metadata, NoAuth, METADATA_MAX_LEN,
 };
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
+use rats_cert::cert::verify::AttestationServiceConfig;
 
 impl OhttpServerApi {
     /// Interface 2: Process Encrypted Request
@@ -210,13 +212,27 @@ impl OhttpServerApi {
                             AttestationServiceTokenVerifyArgs {
                                 policy_ids,
                                 trusted_certs_paths,
-                                as_addr,
+                                as_addr_config,
+                                ..
                             },
-                    } => CocoVerifier::new(as_addr, trusted_certs_paths, policy_ids).await?,
+                    } => {
+                        CocoVerifier::new(
+                            as_addr_config
+                                .as_ref()
+                                .map(|addr_config| AttestationServiceConfig {
+                                    as_addr: addr_config.as_addr.clone(),
+                                    as_is_grpc: addr_config.as_is_grpc,
+                                    as_headers: addr_config.as_headers.clone(),
+                                }),
+                            trusted_certs_paths,
+                            policy_ids,
+                        )
+                        .await?
+                    }
                     VerifyArgs::BackgroundCheck {
                         as_args:
                             AttestationServiceArgs {
-                                as_addr,
+                                as_addr_config: AttestationServiceAddrArgs { as_addr, .. },
                                 policy_ids,
                                 ..
                             },
@@ -225,8 +241,16 @@ impl OhttpServerApi {
                                 trusted_certs_paths,
                             },
                     } => {
-                        CocoVerifier::new(&Some(as_addr.clone()), trusted_certs_paths, policy_ids)
-                            .await?
+                        CocoVerifier::new(
+                            Some(AttestationServiceConfig {
+                                as_addr: as_addr.clone(),
+                                as_is_grpc: false,              // default value
+                                as_headers: Default::default(), // default value
+                            }),
+                            trusted_certs_paths,
+                            policy_ids,
+                        )
+                        .await?
                     }
                 };
 

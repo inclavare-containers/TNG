@@ -644,7 +644,9 @@ Example:
 In the Passport model, the [Verify](#verify) configuration should include the following fields:
 
 - **`model`** (string): Set to "passport" to enable the Passport model
-- **`as_addr`** (string, optional): Only used to obtain the certificate of the Attestation Service, not for remote attestation verification. At least one of `as_addr` or `trusted_certs_paths` must be specified.
+- **`as_addr`** (string, optional): Attestation service address, used for fetching attestation service certificate, optional. At least one of `as_addr` (or the combination of `as_addr`, `as_is_grpc`, `as_headers` fields) or `trusted_certs_paths` must be specified.
+- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
 

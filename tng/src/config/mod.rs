@@ -55,7 +55,7 @@ mod tests {
     use crate::config::{
         egress::EgressMappingArgs,
         ra::{
-            AttestationAgentArgs, AttestationServiceArgs,
+            AttestationAgentArgs, AttestationServiceAddrArgs, AttestationServiceArgs,
             AttestationServiceTokenVerifyAdditionalArgs,
         },
     };
@@ -93,9 +93,11 @@ mod tests {
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
                             as_args: AttestationServiceArgs{
-                                as_addr: "http://127.0.0.1:8080/".to_owned(),
-                                as_is_grpc: false,
-                                as_headers: Default::default(),
+                                as_addr_config: AttestationServiceAddrArgs {
+                                    as_addr: "http://127.0.0.1:8080/".to_owned(),
+                                    as_is_grpc: false,
+                                    as_headers: Default::default(),
+                                },
                                 policy_ids: vec!["default".to_owned()],
                             },
                             token_verify: AttestationServiceTokenVerifyAdditionalArgs {

@@ -68,10 +68,10 @@ impl CertManager {
                 )?;
 
                 let coco_converter = CocoConverter::new(
-                    &as_args.as_addr,
+                    &as_args.as_addr_config.as_addr,
                     &as_args.policy_ids,
-                    as_args.as_is_grpc,
-                    &as_args.as_headers,
+                    as_args.as_addr_config.as_is_grpc,
+                    &as_args.as_addr_config.as_headers,
                 )?;
                 let attester_pipeline = AttesterPipeline::new(coco_attester, coco_converter);
                 let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)

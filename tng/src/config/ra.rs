@@ -123,10 +123,10 @@ impl RaArgsUnchecked {
                 } => {
                     // Additional checks for Passport mode
                     let has_as_addr = if let VerifyArgs::Passport {
-                        token_verify: AttestationServiceTokenVerifyArgs { as_addr, .. },
+                        token_verify: AttestationServiceTokenVerifyArgs { as_addr_config, .. },
                     } = verify_args
                     {
-                        as_addr.is_some()
+                        as_addr_config.is_some()
                     } else {
                         true
                     };
@@ -148,9 +148,12 @@ impl RaArgsUnchecked {
 
             // Check if as_addr is a valid URL
             if let VerifyArgs::BackgroundCheck { as_args, .. } = verify_args {
-                Url::parse(&as_args.as_addr)
+                Url::parse(&as_args.as_addr_config.as_addr)
                     .with_context(|| {
-                        format!("Invalid attestation service address: {}", &as_args.as_addr)
+                        format!(
+                            "Invalid attestation service address: {}",
+                            &as_args.as_addr_config.as_addr
+                        )
                     })
                     .map_err(TngError::InvalidParameter)?;
             }
@@ -383,9 +386,9 @@ mod maybe_tagged_verify_args {
     }
 }
 
-/// Attestation service parameters configuration
+/// Attestation service address configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AttestationServiceArgs {
+pub struct AttestationServiceAddrArgs {
     /// Attestation service address
     pub as_addr: String,
 
@@ -396,6 +399,13 @@ pub struct AttestationServiceArgs {
     /// Custom headers to be sent with attestation service requests
     #[serde(default = "Default::default")]
     pub as_headers: HashMap<String, String>,
+}
+
+/// Attestation service parameters configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttestationServiceArgs {
+    #[serde(flatten)]
+    pub as_addr_config: AttestationServiceAddrArgs,
 
     /// Policy ID list
     pub policy_ids: Vec<String>,
@@ -411,8 +421,9 @@ pub struct AttestationServiceTokenVerifyArgs {
     #[serde(default = "Default::default")]
     pub trusted_certs_paths: Option<Vec<String>>,
 
-    /// Attestation service address, used for fetching attestation service certificate, optional
-    pub as_addr: Option<String>,
+    /// Attestation service address configuration, used for fetching attestation service certificate, optional
+    #[serde(flatten)]
+    pub as_addr_config: Option<AttestationServiceAddrArgs>,
 }
 
 /// Attestation service token verification parameters additional configuration
@@ -510,8 +521,8 @@ mod tests {
                     "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                 );
                 assert_eq!(aa_args.refresh_interval, Some(3600));
-                assert_eq!(as_args.as_addr, "localhost:8081");
-                assert!(!as_args.as_is_grpc);
+                assert_eq!(as_args.as_addr_config.as_addr, "localhost:8081");
+                assert!(!as_args.as_addr_config.as_is_grpc);
                 assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected Passport variant"),
@@ -604,8 +615,8 @@ mod tests {
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args, .. }) => {
-                assert_eq!(as_args.as_addr, "localhost:8081");
-                assert!(!as_args.as_is_grpc);
+                assert_eq!(as_args.as_addr_config.as_addr, "localhost:8081");
+                assert!(!as_args.as_addr_config.as_is_grpc);
                 assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),
@@ -630,8 +641,8 @@ mod tests {
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { as_args, .. }) => {
-                assert_eq!(as_args.as_addr, "localhost:8081");
-                assert!(!as_args.as_is_grpc);
+                assert_eq!(as_args.as_addr_config.as_addr, "localhost:8081");
+                assert!(!as_args.as_addr_config.as_is_grpc);
                 assert_eq!(as_args.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected BackgroundCheck variant"),
