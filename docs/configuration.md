@@ -29,7 +29,7 @@ In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and enc
 
 #### Field Descriptions
 
-- **`r#in`** (Endpoint):
+- **`in`** (Endpoint):
     - **`host`** (string, optional, default is `0.0.0.0`): The host address to listen on.
     - **`port`** (integer): The port number to listen on.
 - **`out`** (Endpoint):
