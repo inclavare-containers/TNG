@@ -29,7 +29,7 @@
 
 #### 字段说明
 
-- **`r#in`** (Endpoint)：
+- **`in`** (Endpoint)：
     - **`host`** (string, 可选，默认为`0.0.0.0`)：监听的主机地址。
     - **`port`** (integer)：监听的端口号。
 - **`out`** (Endpoint)：
