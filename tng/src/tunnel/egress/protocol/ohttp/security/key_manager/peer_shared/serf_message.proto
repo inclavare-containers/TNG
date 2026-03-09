@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package tng.ohttp.serf_message;
+
+import "google/protobuf/timestamp.proto";
+
+// ========== QUERY_CLUSTER_KEY_SET ==========
+// Request: Empty request
+message QueryClusterKeySetRequest {
+}
+
+// Response: Full cluster key set
+message QueryClusterKeySetResponse {
+  ClusterKeySet cluster_key_set = 1;
+}
+
+// ========== QUERY_KEY ==========
+// Request: Query a specific key by public key
+message QueryKeyRequest {
+  bytes public_key = 1; // Variable length; depends on key type and encoding
+}
+
+// Response: The key if found, empty if not found
+message QueryKeyResponse {
+  KeyInfo key_info = 1;
+}
+
+// ========== BROADCAST_CLUSTER_KEY_SET ==========
+// UserEvent: Broadcast full cluster key set to all members
+// Note: Serf automatically includes the sender's node_id in UserEvents
+message BroadcastClusterKeySetEvent {
+  ClusterKeySet cluster_key_set = 1;
+}
+
+// ========== Shared Data Structures ==========
+
+// Complete cluster key set maintained by each node
+message ClusterKeySet {
+  repeated KeyInfo pending = 1;
+  repeated KeyInfo active = 2;
+  repeated KeyInfo stale = 3;
+  uint64 rotation_interval = 4;
+}
+
+// Key information with status and timestamps
+message KeyInfo {
+  KeyConfig key_config = 1;
+  KeyStatus status = 2;
+  google.protobuf.Timestamp actived_at = 3;
+  google.protobuf.Timestamp stale_at = 4;
+  google.protobuf.Timestamp expire_at = 5;
+}
+
+// OHTTP key configuration with private key
+message KeyConfig {
+  uint32 key_id = 1;
+  Kem kem = 2;
+  repeated SymmetricSuite symmetric = 3;
+  string sk = 4;
+}
+
+// Key status enum
+enum KeyStatus {
+  PENDING = 0;
+  ACTIVE = 1;
+  STALE = 2;
+}
+
+// KEM algorithm
+enum Kem {
+  KEM_RESERVED = 0;
+  X25519_SHA256 = 32;
+}
+
+// Symmetric cipher suite
+message SymmetricSuite {
+  Kdf kdf = 1;
+  Aead aead = 2;
+}
+
+// KDF algorithm
+enum Kdf {
+  KDF_RESERVED = 0;
+  HKDF_SHA256 = 1;
+  HKDF_SHA384 = 2;
+  HKDF_SHA512 = 3;
+}
+
+// AEAD algorithm
+enum Aead {
+  AEAD_RESERVED = 0;
+  AES128_GCM = 1;
+  AES256_GCM = 2;
+  CHACHA20_POLY1305 = 3;
+}
