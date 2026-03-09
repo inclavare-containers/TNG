@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
@@ -172,35 +171,11 @@ impl FileBasedKeyManager {
 
     /// Loads and parses a PEM-encoded PKCS#8 private key into a usable `KeyInfo` structure.
     async fn load_key_from_pem(path: &Path) -> Result<KeyInfo, TngError> {
-        use ohttp::hpke;
-
         let pem_data = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| TngError::LoadPrivateKeyFailed(path.into(), anyhow::Error::from(e)))?;
 
-        let key_config = ohttp::KeyConfig::new_from_pkcs8_pem(
-            0,
-            hpke::Kem::X25519Sha256,
-            vec![
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::ChaCha20Poly1305),
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes256Gcm),
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes128Gcm),
-            ],
-            &pem_data,
-        )
-        .map_err(TngError::from)?;
-
-        let created_at = SystemTime::now();
-        let expire_at = created_at + Duration::from_secs(86400 * 365 * 30); // 30 years, far future
-        let stale_at = expire_at; // 30 years, far future
-
-        Ok(KeyInfo {
-            key_config,
-            status: KeyStatus::Active,
-            created_at,
-            stale_at,
-            expire_at,
-        })
+        KeyInfo::from_pkcs8_pem(&pem_data)
     }
 }
 

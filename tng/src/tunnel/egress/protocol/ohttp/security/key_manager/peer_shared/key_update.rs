@@ -28,7 +28,7 @@ impl TryFrom<key_manager::KeyInfo> for pb::KeyInfo {
         Ok(Self {
             key_config: Some(value.key_config.try_into()?),
             status: value.status as i32,
-            created_at: Some(Self::system_time_to_timestamp(value.created_at)),
+            actived_at: Some(Self::system_time_to_timestamp(value.actived_at)),
             stale_at: Some(Self::system_time_to_timestamp(value.stale_at)),
             expire_at: Some(Self::system_time_to_timestamp(value.expire_at)),
         })
@@ -133,8 +133,8 @@ impl TryFrom<pb::KeyInfo> for key_manager::KeyInfo {
 
         let status = value.status.try_into().context("invalid KeyStatus")?;
 
-        let created_at =
-            timestamp_to_system_time(value.created_at).context("invalid created_at timestamp")?;
+        let actived_at =
+            timestamp_to_system_time(value.actived_at).context("invalid actived_at timestamp")?;
         let stale_at =
             timestamp_to_system_time(value.stale_at).context("invalid stale_at timestamp")?;
         let expire_at =
@@ -143,7 +143,7 @@ impl TryFrom<pb::KeyInfo> for key_manager::KeyInfo {
         Ok(Self {
             key_config,
             status,
-            created_at,
+            actived_at,
             stale_at,
             expire_at,
         })
@@ -197,8 +197,9 @@ impl TryFrom<i32> for key_manager::KeyStatus {
 
     fn try_from(v: i32) -> Result<Self, Self::Error> {
         match v {
-            0 => Ok(key_manager::KeyStatus::Active),
-            1 => Ok(key_manager::KeyStatus::Stale),
+            0 => Ok(key_manager::KeyStatus::Pending),
+            1 => Ok(key_manager::KeyStatus::Active),
+            2 => Ok(key_manager::KeyStatus::Stale),
             _ => Err(anyhow!("unknown KeyStatus value: {}", v)),
         }
     }

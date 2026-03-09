@@ -27,7 +27,7 @@ message KeyEventStatusChanged {
 message KeyInfo {
   KeyConfig key_config = 1;
   KeyStatus status = 2;
-  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp actived_at = 3;
   google.protobuf.Timestamp stale_at = 4;
   google.protobuf.Timestamp expire_at = 5;
 }
@@ -64,6 +64,7 @@ enum Aead {
 }
 
 enum KeyStatus {
-  ACTIVE = 0;
-  STALE = 1;
+  PENDING = 0;
+  ACTIVE = 1;
+  STALE = 2;
 }

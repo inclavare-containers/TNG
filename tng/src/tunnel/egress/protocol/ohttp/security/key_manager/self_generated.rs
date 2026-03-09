@@ -105,32 +105,6 @@ impl RandomKeyManagerInner {
         Duration::from_secs(1) // at least 1 second
     }
 
-    /// Generate a new key with the specified ID
-    fn generate_key_config(&self, key_id: u8) -> Result<ohttp::KeyConfig, TngError> {
-        // Create key config with X25519Sha256 KEM and multiple symmetric algorithms
-        let config = ohttp::KeyConfig::new(
-            key_id,
-            ohttp::hpke::Kem::X25519Sha256,
-            vec![
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::ChaCha20Poly1305,
-                ),
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::Aes256Gcm,
-                ),
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::Aes128Gcm,
-                ),
-            ],
-        )
-        .map_err(TngError::from)?;
-
-        Ok(config)
-    }
-
     /// Refresh keys based on their expiration times
     ///
     /// This method should be called periodically to manage key lifecycle:
@@ -186,18 +160,12 @@ impl RandomKeyManagerInner {
                     0
                 });
 
-            let key_config = self.generate_key_config(new_key_id)?;
-            let created_at = now;
-            let stale_at = created_at + Duration::from_secs(self.rotation_interval);
-            let expire_at = created_at + Duration::from_secs(self.rotation_interval * 2);
-
-            let key_info = KeyInfo {
-                key_config,
-                status: KeyStatus::Active,
-                created_at,
-                stale_at,
-                expire_at,
-            };
+            let key_info = KeyInfo::generate(
+                new_key_id,
+                KeyStatus::Active,
+                now,
+                self.rotation_interval,
+            )?;
             tracing::info!(?key_info, "New OHTTP key generated");
             self.callback_manager
                 .trigger(&KeyChangeEvent::Created {
