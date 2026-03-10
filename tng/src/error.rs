@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use either::Either;
 use serde::{Deserialize, Serialize};
 use strum_macros::AsRefStr;
 use thiserror::Error;
@@ -105,14 +104,11 @@ pub enum TngError {
     #[error("Invalid x-tng-ohttp-api value")]
     InvalidOhttpApiHeaderValue,
 
-    #[error("The requested key does not exist: {}", match .0 {
-        Either::Left(key_id) => format!("key_id: {}", key_id),
-        Either::Right(public_key) => format!(
-            "public_key: {:?}",
-            public_key
-        ),
-    })]
-    ServerKeyConfigNotFound(Either<u8 /* key_id */, PublicKeyData /* public_key_data */>),
+    #[error("The requested key does not exist, public_key: {0:?}")]
+    ServerKeyConfigNotFound(PublicKeyData /* public_key_data */),
+
+    #[error("Server key config hint not specified")]
+    ServerKeyConfigHintNotSpecified,
 
     #[error("The server has no active key")]
     NoActiveKey,
@@ -160,6 +156,7 @@ impl IntoResponse for TngError {
             TngError::InvalidHttpResponse => StatusCode::BAD_REQUEST,
             TngError::InvalidOHttpRequest(..) => StatusCode::BAD_REQUEST,
             TngError::InvalidOHttpResponse(..) => StatusCode::BAD_REQUEST,
+            TngError::ServerKeyConfigHintNotSpecified => StatusCode::BAD_REQUEST,
 
             // Validation / Decode errors → 400 Bad Request
             TngError::Base64DecodeError(..) => StatusCode::BAD_REQUEST,

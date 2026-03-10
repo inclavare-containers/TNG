@@ -112,10 +112,7 @@ impl KeyInfo {
             0,
             hpke::Kem::X25519Sha256,
             vec![
-                ohttp::SymmetricSuite::new(
-                    hpke::Kdf::HkdfSha256,
-                    hpke::Aead::ChaCha20Poly1305,
-                ),
+                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::ChaCha20Poly1305),
                 ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes256Gcm),
                 ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes128Gcm),
             ],
@@ -165,11 +162,6 @@ impl std::fmt::Debug for KeyInfo {
 /// allowing for flexibility in how keys are generated or acquired.
 #[async_trait]
 pub trait KeyManager: Send + Sync {
-    /// Get an key info with their status by key ID
-    ///
-    /// Returns an key configuration for the given ID.
-    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError>;
-
     /// Get an key info with their status by key ID
     ///
     /// Returns an key configuration for the given ID.

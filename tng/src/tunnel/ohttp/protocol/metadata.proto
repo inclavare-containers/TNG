@@ -15,7 +15,7 @@ message Metadata {
     AttestedPublicKey attested_public_key = 2;
   }
 
-  // Optional hint: provides a cryptographic identifier to help the server
+  // Provides a cryptographic identifier to help the server
   // locate the correct key configuration for decryption.
   //
   // Although key_config contains an 'id' field (1-byte u8), it only allows 256
@@ -24,8 +24,7 @@ message Metadata {
   // to avoid collisions.
   //
   // Servers SHOULD use this hint to select the appropriate key_config, if a
-  // matching one exists. If not present, the server may fall back to other
-  // mechanisms (e.g., default key, ID-based lookup).
+  // matching one exists. If not present, the server will report an error.
   ServerKeyConfigHint key_config_hint = 3;
 }
 

@@ -160,12 +160,8 @@ impl RandomKeyManagerInner {
                     0
                 });
 
-            let key_info = KeyInfo::generate(
-                new_key_id,
-                KeyStatus::Active,
-                now,
-                self.rotation_interval,
-            )?;
+            let key_info =
+                KeyInfo::generate(new_key_id, KeyStatus::Active, now, self.rotation_interval)?;
             tracing::info!(?key_info, "New OHTTP key generated");
             self.callback_manager
                 .trigger(&KeyChangeEvent::Created {
@@ -181,16 +177,6 @@ impl RandomKeyManagerInner {
 
 #[async_trait]
 impl KeyManager for SelfGeneratedKeyManager {
-    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError> {
-        let keys = self.inner.keys.read().await;
-        keys.values()
-            .find(|key_info| key_info.key_config.key_id() == key_id)
-            .cloned()
-            .ok_or(TngError::ServerKeyConfigNotFound(either::Either::Left(
-                key_id,
-            )))
-    }
-
     async fn get_key_by_public_key_data(
         &self,
         public_key_data: &PublicKeyData,
@@ -198,9 +184,7 @@ impl KeyManager for SelfGeneratedKeyManager {
         let keys = self.inner.keys.read().await;
         keys.get(public_key_data)
             .cloned()
-            .ok_or(TngError::ServerKeyConfigNotFound(either::Either::Right(
-                public_key_data.clone(),
-            )))
+            .ok_or(TngError::ServerKeyConfigNotFound(public_key_data.clone()))
     }
 
     async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {

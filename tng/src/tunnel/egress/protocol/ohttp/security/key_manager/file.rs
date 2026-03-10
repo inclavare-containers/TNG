@@ -181,16 +181,6 @@ impl FileBasedKeyManager {
 
 #[async_trait]
 impl KeyManager for FileBasedKeyManager {
-    async fn get_fist_key_by_key_id(&self, key_id: u8) -> Result<KeyInfo, TngError> {
-        let key = self.inner.key.read().await;
-        match key.as_ref() {
-            Some((_, k)) if k.key_config.key_id() == key_id => Ok(k.clone()),
-            _ => Err(TngError::ServerKeyConfigNotFound(either::Either::Left(
-                key_id,
-            ))),
-        }
-    }
-
     async fn get_key_by_public_key_data(
         &self,
         public_key_data: &PublicKeyData,
@@ -198,9 +188,7 @@ impl KeyManager for FileBasedKeyManager {
         let key = self.inner.key.read().await;
         match key.as_ref() {
             Some((p, k)) if p == public_key_data => Ok(k.clone()),
-            _ => Err(TngError::ServerKeyConfigNotFound(either::Either::Right(
-                public_key_data.clone(),
-            ))),
+            _ => Err(TngError::ServerKeyConfigNotFound(public_key_data.clone())),
         }
     }
 

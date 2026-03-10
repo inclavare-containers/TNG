@@ -117,10 +117,7 @@ impl OhttpServerApi {
                 .get_key_by_public_key_data(&PublicKeyData::new(hint.public_key))
                 .await?
         } else {
-            // Check key id, this make it compatible with old tng clients versions
-            self.key_manager
-                .get_fist_key_by_key_id(header_decoded.key_id())
-                .await?
+            return Err(TngError::ServerKeyConfigHintNotSpecified);
         };
 
         // Decrypt the ohttp message
