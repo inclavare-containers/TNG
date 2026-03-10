@@ -19,6 +19,12 @@ impl std::fmt::Debug for PublicKeyData {
     }
 }
 
+impl AsRef<[u8]> for PublicKeyData {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 pub(crate) trait KeyConfigExtend {
     fn public_key_data(&self) -> Result<PublicKeyData, TngError>;
 }

@@ -6,38 +6,9 @@ use anyhow::{anyhow, Context};
 use prost_types::Timestamp;
 use std::time::SystemTime;
 
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyInfo;
-use vec1::Vec1;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::{self, KeyInfo};
 
 // ========== Rust to Protobuf ==========
-
-impl TryFrom<super::cluster_key_set::ClusterKeySet> for pb::ClusterKeySet {
-    type Error = anyhow::Error;
-
-    fn try_from(value: super::cluster_key_set::ClusterKeySet) -> Result<Self, Self::Error> {
-        Ok(Self {
-            pending: value
-                .pending
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()
-                .context("failed to convert pending keys")?,
-            active: value
-                .active
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()
-                .context("failed to convert active keys")?,
-            stale: value
-                .stale
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()
-                .context("failed to convert stale keys")?,
-            rotation_interval: value.rotation_interval,
-        })
-    }
-}
 
 impl TryFrom<KeyInfo> for pb::KeyInfo {
     type Error = anyhow::Error;
@@ -80,44 +51,6 @@ impl From<&ohttp::SymmetricSuite> for pb::SymmetricSuite {
 }
 
 // ========== Protobuf to Rust ==========
-
-impl TryFrom<pb::ClusterKeySet> for super::cluster_key_set::ClusterKeySet {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::ClusterKeySet) -> Result<Self, Self::Error> {
-        let pending: Vec<KeyInfo> = value
-            .pending
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to convert pending keys")?;
-
-        let active_keys: Vec<KeyInfo> = value
-            .active
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to convert active keys")?;
-
-        // ClusterKeySet requires at least one active key
-        let active = Vec1::try_from(active_keys)
-            .map_err(|_| anyhow::anyhow!("ClusterKeySet must have at least one active key"))?;
-
-        let stale: Vec<KeyInfo> = value
-            .stale
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to convert stale keys")?;
-
-        Ok(Self {
-            pending,
-            active,
-            stale,
-            rotation_interval: value.rotation_interval,
-        })
-    }
-}
 
 impl TryFrom<pb::KeyInfo> for KeyInfo {
     type Error = anyhow::Error;
@@ -189,6 +122,19 @@ impl TryFrom<pb::SymmetricSuite> for ohttp::SymmetricSuite {
             .with_context(|| anyhow!("unsupported AEAD algorithm ID: {}", aead_value))?;
 
         Ok(Self::new(kdf, aead))
+    }
+}
+
+impl TryFrom<i32> for key_manager::KeyStatus {
+    type Error = anyhow::Error;
+
+    fn try_from(v: i32) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(key_manager::KeyStatus::Pending),
+            1 => Ok(key_manager::KeyStatus::Active),
+            2 => Ok(key_manager::KeyStatus::Stale),
+            _ => Err(anyhow!("unknown KeyStatus value: {}", v)),
+        }
     }
 }
 

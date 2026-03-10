@@ -1,6 +1,5 @@
 mod cluster_key_set;
 mod key_manager;
-mod key_update;
 mod memberlist_rats_quic;
 mod runtime;
 mod serf;

@@ -11,23 +11,18 @@ impl KeyManager for super::PeerSharedKeyManager {
         &self,
         public_key_data: &PublicKeyData,
     ) -> Result<KeyInfo, TngError> {
-        match self
-            .inner
-            .inner_key_manager
-            .get_key_by_public_key_data(public_key_data)
-            .await
-        {
-            Ok(key) => Ok(key),
-            Err(_) => {
-                let keys_from_peers = self.inner.keys_from_peers.read().await;
-                keys_from_peers
-                    .get(public_key_data)
-                    .cloned()
-                    .ok_or(TngError::ServerKeyConfigNotFound(public_key_data.clone()))
-            }
+        let cks = self.inner.cluster_key_set.read().await;
+
+        if let Some(key) = cks.get_key_by_public_key(public_key_data) {
+            return Ok(key.clone());
         }
+
+        Err(TngError::ServerKeyConfigNotFound(public_key_data.clone()))
     }
+
     async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
-        self.inner.inner_key_manager.get_client_visible_key().await
+        let cks = self.inner.cluster_key_set.read().await;
+        // Return the client-visible key (active key with latest stale_at)
+        Ok(cks.get_client_visible_key().clone())
     }
 }

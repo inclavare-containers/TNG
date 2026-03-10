@@ -44,7 +44,7 @@ pub struct KeyInfo {
 impl KeyInfo {
     /// Generate a new KeyInfo with the specified parameters.
     ///
-    /// According to serf-v2 protocol, the timestamps are calculated as:
+    /// The timestamps are calculated as:
     /// - actived_at: the provided activation time (may be in the future for pending keys)
     /// - stale_at: actived_at + rotation_interval
     /// - expire_at: stale_at + rotation_interval
