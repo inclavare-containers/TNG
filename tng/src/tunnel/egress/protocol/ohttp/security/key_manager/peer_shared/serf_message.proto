@@ -35,11 +35,10 @@ message BroadcastClusterKeySetEvent {
 // ========== Shared Data Structures ==========
 
 // Complete cluster key set maintained by each node
+// All keys are stored in a single list with status indicating the state
 message ClusterKeySet {
-  repeated KeyInfo pending = 1;
-  repeated KeyInfo active = 2;
-  repeated KeyInfo stale = 3;
-  uint64 rotation_interval = 4;
+  repeated KeyInfo keys = 1;
+  uint64 rotation_interval = 2;
 }
 
 // Key information with status and timestamps

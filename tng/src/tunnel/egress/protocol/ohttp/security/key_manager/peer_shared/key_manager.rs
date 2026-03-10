@@ -23,6 +23,6 @@ impl KeyManager for super::PeerSharedKeyManager {
     async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
         let cks = self.inner.cluster_key_set.read().await;
         // Return the client-visible key (active key with latest stale_at)
-        Ok(cks.get_client_visible_key().clone())
+        Ok(cks.get_client_visible_key()?.clone())
     }
 }

@@ -5,7 +5,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::runtime::InstrumentedRuntime;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::serf_message::pb;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyStatus};
-use crate::tunnel::ohttp::key_config::PublicKeyData;
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::file_watcher::FileWatcher;
@@ -289,7 +289,7 @@ impl PeerSharedKeyManager {
                                 tracing::info!("Received cluster key set from peer");
 
                                 if let Some(ref mut local) = merged_key_set {
-                                    local.merge(&remote_key_set);
+                                    local.merge(remote_key_set);
                                 } else {
                                     merged_key_set = Some(remote_key_set);
                                 }
@@ -331,7 +331,13 @@ impl PeerSharedKeyManager {
         .map_err(|e| {
             TngError::KeyUpdateMessageDecodeError(anyhow!("Failed to generate initial key: {}", e))
         })?;
-        Ok(ClusterKeySet::new(initial_key, rotation_interval))
+
+        let public_key_data = initial_key.key_config.public_key_data()?;
+        Ok(ClusterKeySet::new(
+            public_key_data,
+            initial_key,
+            rotation_interval,
+        ))
     }
 
     /// Spawn key watcher task that handles key status transitions.
@@ -349,43 +355,37 @@ impl PeerSharedKeyManager {
 
             loop {
                 let now = SystemTime::now();
-                let mut should_check_rotation = false;
 
                 {
                     let mut cks = inner.cluster_key_set.write().await;
 
                     // 1. Handle pending -> active transition (first, as it triggers check_and_key_rotation)
-                    let activated_count = cks.transition_pending_to_active(now);
-                    if activated_count > 0 {
-                        should_check_rotation = true;
-                    }
+                    cks.transition_pending_to_active(now);
 
                     // 2. Handle active -> stale transition
-                    cks.transition_expired_active_to_stale(now);
+                    cks.transition_active_to_stale(now);
 
                     // 3. Remove expired stale keys
                     cks.remove_expired_keys(now);
                 } // Release write lock
 
                 // Trigger check_and_key_rotation only when pending -> active
-                if should_check_rotation {
-                    Self::check_and_key_rotation(&serf, &inner).await;
-                }
+                Self::check_and_key_rotation(&serf, &inner).await;
 
                 // Compute the next deadline for key status transition.
                 let next_deadline={
                     let cks = inner.cluster_key_set.read().await;
-                    cks.next_deadline(now)
+                    cks.next_deadline()
                 };
 
                 match next_deadline {
                     Some(deadline) => {
                         let sleep_duration = deadline.duration_since(now).unwrap_or_else(|e| {
                             tracing::warn!(
-                                "Key watcher deadline passed during state transitions (overdue by {:?}), will check immediately",
+                                "Key watcher deadline passed during state transitions (overdue by {:?}), will check soon",
                                 e.duration()
                             );
-                            Duration::from_secs(0)
+                            Duration::from_secs(1) // Force sleep 1 second to prevent busy-looping and CPU exhaustion when a bug causes repeated activations
                         });
                         tokio::select! {
                             _ = tokio::time::sleep(sleep_duration) => {
@@ -415,7 +415,7 @@ impl PeerSharedKeyManager {
         // Try to generate pending key (will fail if already has pending key)
         let generated = {
             let mut cks = inner.cluster_key_set.write().await;
-            match cks.try_generate_pending_key() {
+            match cks.generate_pending_key_if_none() {
                 Ok(generated) => generated,
                 Err(e) => {
                     tracing::error!("Failed to generate pending key: {}", e);
@@ -596,7 +596,7 @@ impl PeerSharedKeyManager {
 
                     {
                         let mut cks = inner.cluster_key_set.write().await;
-                        cks.merge(&remote_key_set);
+                        cks.merge(remote_key_set);
                     }
 
                     tracing::info!("Merged broadcasted cluster key set");
