@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_trait::async_trait;
+use itertools::Itertools;
 
 /// Implementation of KeyManager that generates random keys with automatic rotation
 pub struct SelfGeneratedKeyManager {
@@ -158,13 +159,17 @@ impl KeyManager for SelfGeneratedKeyManager {
             .ok_or(TngError::ServerKeyConfigNotFound(public_key_data.clone()))
     }
 
-    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
+    async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
-        Ok(keys
-            .values()
-            .filter(|key_info| matches!(key_info.status, KeyStatus::Active))
-            .cloned()
-            .collect())
+        keys.iter()
+            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
+            .sorted_by_cached_key(|&(public_key_data, key_info)| {
+                (key_info.expire_at, public_key_data)
+            })
+            .rev()
+            .next()
+            .map(|(_, key_info)| key_info.clone())
+            .ok_or(TngError::NoActiveKey)
     }
 }
 

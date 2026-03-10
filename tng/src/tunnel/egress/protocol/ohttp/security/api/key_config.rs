@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
-use itertools::Itertools;
+
 use ohttp::KeyConfig;
 #[cfg(unix)]
 use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericConverter as _, ReportData};
@@ -49,8 +49,8 @@ impl OhttpServerApi {
         payload: Option<Json<KeyConfigRequest>>,
         context: TngStreamContext,
     ) -> Result<Response, TngError> {
-        // Expected public keys
-        let all_visible_keys = self.key_manager.get_client_visible_keys().await?;
+        // Get the client visible key
+        let client_visible_key = self.key_manager.get_client_visible_key().await?;
 
         // Check if hit the cache
         #[cfg(unix)]
@@ -63,23 +63,18 @@ impl OhttpServerApi {
                 })),
             ) => {
                 // Check if cache exists and is up-to-date
-                let expected_public_keys = all_visible_keys
-                    .into_iter()
-                    .map(|k| k.key_config.public_key_data())
-                    .collect::<Result<Vec<_>, TngError>>()?;
+                let expected_public_key = client_visible_key.key_config.public_key_data()?;
 
                 async fn check_cache_valid(
-                    cache_ref: &Option<
-                        MaybeCached<(Vec<PublicKeyData>, KeyConfigResponse), TngError>,
-                    >,
-                    expected_public_keys: &Vec<PublicKeyData>,
-                ) -> Result<Option<Arc<(Vec<PublicKeyData>, KeyConfigResponse)>>, TngError>
+                    cache_ref: &Option<MaybeCached<(PublicKeyData, KeyConfigResponse), TngError>>,
+                    expected_public_key: &PublicKeyData,
+                ) -> Result<Option<Arc<(PublicKeyData, KeyConfigResponse)>>, TngError>
                 {
                     Ok(match cache_ref {
                         Some(cached) => {
                             let latest_cache = cached.get_latest().await?;
-                            let (public_keys, _response) = latest_cache.as_ref();
-                            if expected_public_keys != public_keys {
+                            let (public_key, _response) = latest_cache.as_ref();
+                            if expected_public_key != public_key {
                                 // The cache is outdated, regenerate the response
                                 None
                             } else {
@@ -92,7 +87,7 @@ impl OhttpServerApi {
 
                 let valid_cache = {
                     let cache_guard = self.passport_cache.read().await;
-                    check_cache_valid(&cache_guard, &expected_public_keys).await?
+                    check_cache_valid(&cache_guard, &expected_public_key).await?
                 };
 
                 let latest_cache = match valid_cache {
@@ -103,7 +98,7 @@ impl OhttpServerApi {
 
                         // Double-check after acquiring write lock
                         let double_check_valid_cache =
-                            check_cache_valid(&cache_guard, &expected_public_keys).await?;
+                            check_cache_valid(&cache_guard, &expected_public_key).await?;
                         match double_check_valid_cache {
                             Some(latest_cache) => latest_cache,
                             None => {
@@ -126,25 +121,23 @@ impl OhttpServerApi {
                                             let payload = payload.clone();
 
                                             async move {
-                                                // Get current keys and their fingerprints
-                                                let current_all_visible_keys =
-                                                    key_manager.get_client_visible_keys().await?;
-                                                let current_public_keys: Vec<PublicKeyData> =
-                                                    current_all_visible_keys
-                                                        .iter()
-                                                        .map(|k| k.key_config.public_key_data())
-                                                        .collect::<Result<Vec<_>, _>>()?;
+                                                // Get current key and its fingerprint
+                                                let current_client_visible_key =
+                                                    key_manager.get_client_visible_key().await?;
+                                                let current_public_key = current_client_visible_key
+                                                    .key_config
+                                                    .public_key_data()?;
 
                                                 let response =
                                                     Self::get_hpke_configuration_internal(
                                                         &ra_context,
-                                                        current_all_visible_keys,
+                                                        current_client_visible_key,
                                                         payload.as_ref().clone(),
                                                     )
                                                     .await?;
 
                                                 Ok((
-                                                    (current_public_keys, response),
+                                                    (current_public_key, response),
                                                     Expire::NoExpire,
                                                 ))
                                             }
@@ -167,14 +160,16 @@ impl OhttpServerApi {
                 )))
             }
             // Otherwise, we generate a new response
-            _ => Self::get_hpke_configuration_internal(&self.ra_context, all_visible_keys, payload)
-                .await
-                .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response))),
+            _ => {
+                Self::get_hpke_configuration_internal(&self.ra_context, client_visible_key, payload)
+                    .await
+                    .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response)))
+            }
         };
 
         #[cfg(not(unix))]
         let response =
-            Self::get_hpke_configuration_internal(&self.ra_context, all_visible_keys, payload)
+            Self::get_hpke_configuration_internal(&self.ra_context, client_visible_key, payload)
                 .await
                 .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response)));
 
@@ -184,21 +179,13 @@ impl OhttpServerApi {
     #[allow(unused_variables)]
     async fn get_hpke_configuration_internal(
         ra_context: &RaContext,
-        all_visible_keys: Vec<KeyInfo>,
+        client_visible_key: KeyInfo,
         payload: Option<Json<KeyConfigRequest>>,
     ) -> Result<KeyConfigResponse, TngError> {
-        // Create encoded_key_config_list based on all client visible keys
-        let keys_expire_time = all_visible_keys
-            .iter()
-            .map(|key_info| key_info.expire_at)
-            .min()
-            .ok_or_else(|| TngError::NoActiveKey)?;
+        // Create encoded_key_config based on the client visible key
+        let keys_expire_time = client_visible_key.expire_at;
 
-        let key_config_list = all_visible_keys
-            .into_iter()
-            .sorted_by_key(|key_info| key_info.key_config.key_id())
-            .map(|key_info| key_info.key_config)
-            .collect_vec();
+        let key_config_list = vec![client_visible_key.key_config];
 
         let encoded_key_config_list = BASE64_STANDARD
             .encode(KeyConfig::encode_list(&key_config_list).map_err(TngError::from)?);

@@ -27,7 +27,7 @@ impl KeyManager for super::PeerSharedKeyManager {
             }
         }
     }
-    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
-        self.inner.inner_key_manager.get_client_visible_keys().await
+    async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
+        self.inner.inner_key_manager.get_client_visible_key().await
     }
 }

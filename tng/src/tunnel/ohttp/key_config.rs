@@ -1,6 +1,6 @@
 use crate::error::TngError;
 
-#[derive(Eq, Hash, PartialEq, Clone)]
+#[derive(Eq, Hash, PartialEq, Clone, Ord, PartialOrd)]
 pub struct PublicKeyData(Vec<u8>);
 
 impl PublicKeyData {

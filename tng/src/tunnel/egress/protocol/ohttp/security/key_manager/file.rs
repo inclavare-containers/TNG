@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use crate::{
     error::TngError,
     tunnel::{
-        egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager, KeyStatus},
+        egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager},
         ohttp::key_config::{KeyConfigExtend, PublicKeyData},
         utils::{file_watcher::FileWatcher, runtime::supervised_task::SupervisedTaskResult},
     },
@@ -46,7 +46,7 @@ struct FileBasedKeyManagerInner {
     ///
     /// Protected by a write lock during updates; readers can concurrently access the current key.
     /// When the file is modified, a new `KeyInfo` replaces the old one atomically.
-    key: RwLock<Option<(PublicKeyData, KeyInfo)>>,
+    key: RwLock<(PublicKeyData, KeyInfo)>,
 }
 impl FileBasedKeyManager {
     /// Create a new FileBasedKeyManager and start watching the file.
@@ -85,7 +85,7 @@ impl FileBasedKeyManager {
         let key_info = Self::load_key_from_pem(&path).await?;
 
         let inner = Arc::new(FileBasedKeyManagerInner {
-            key: RwLock::new(Some((key_info.key_config.public_key_data()?, key_info))),
+            key: RwLock::new((key_info.key_config.public_key_data()?, key_info)),
         });
 
         let inner_clone = inner.clone();
@@ -115,7 +115,8 @@ impl FileBasedKeyManager {
                                             continue;
                                         }
                                     };
-                                write.replace((public_key_data, new_key_info.clone()));
+
+                                *write = (public_key_data, new_key_info.clone());
 
                                 tracing::info!(?path, "Successfully reloaded OHTTP key from file");
                             }
@@ -155,22 +156,15 @@ impl KeyManager for FileBasedKeyManager {
         public_key_data: &PublicKeyData,
     ) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
-        match key.as_ref() {
-            Some((p, k)) if p == public_key_data => Ok(k.clone()),
+        match &*key {
+            (p, k) if p == public_key_data => Ok(k.clone()),
             _ => Err(TngError::ServerKeyConfigNotFound(public_key_data.clone())),
         }
     }
 
-    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError> {
+    async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
-        if let Some((_, info)) = key
-            .as_ref()
-            .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
-        {
-            Ok(vec![info.clone()])
-        } else {
-            Ok(Default::default())
-        }
+        Ok(key.1.clone())
     }
 }
 

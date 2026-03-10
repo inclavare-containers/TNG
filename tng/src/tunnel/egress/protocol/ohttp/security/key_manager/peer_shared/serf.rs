@@ -434,18 +434,16 @@ impl PeerSharedKeyManager {
                                             .collect_vec(),
                                         "New serf node joined, start sharing keys"
                                     );
-                                    // Notify self generated keys as key update event to all peers, when a new node joins
+                                    // Notify self generated key as key update event to all peers, when a new node joins
                                     async {
-                                        for key_info in inner
+                                        let key_info = inner
                                             .inner_key_manager
-                                            .get_client_visible_keys()
-                                            .await?
-                                        {
-                                            broadcast_func(&KeyChangeEvent::Created {
-                                                key_info: Cow::Owned(key_info),
-                                            })
-                                            .await;
-                                        }
+                                            .get_client_visible_key()
+                                            .await?;
+                                        broadcast_func(&KeyChangeEvent::Created {
+                                            key_info: Cow::Owned(key_info),
+                                        })
+                                        .await;
                                         Ok::<(), TngError>(())
                                     }
                                     .await

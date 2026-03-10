@@ -44,8 +44,7 @@ pub struct OhttpServerApi {
     /// The cache automatically refreshes based on configured refresh strategy.
     /// When keys change, the cache is invalidated and regenerated.
     #[cfg(unix)]
-    passport_cache:
-        Arc<RwLock<Option<MaybeCached<(Vec<PublicKeyData>, KeyConfigResponse), TngError>>>>,
+    passport_cache: Arc<RwLock<Option<MaybeCached<(PublicKeyData, KeyConfigResponse), TngError>>>>,
 }
 
 impl OhttpServerApi {

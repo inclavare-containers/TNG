@@ -168,8 +168,8 @@ pub trait KeyManager: Send + Sync {
         public_key_data: &PublicKeyData,
     ) -> Result<KeyInfo, TngError>;
 
-    /// Get a list of keys that are visible and intended to be shared with clients
+    /// Get the client visible key that is intended to be shared with clients
     ///
-    /// Returns only keys that are active, valid, and safe to expose.
-    async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError>;
+    /// Returns the key that is active, valid, and safe to expose.
+    async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError>;
 }
