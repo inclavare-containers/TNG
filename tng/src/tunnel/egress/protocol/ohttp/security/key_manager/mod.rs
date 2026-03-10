@@ -3,7 +3,6 @@
 //! This module provides abstractions for managing OHTTP key configurations.
 //! It defines traits and implementations for different key management strategies:
 
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::KeyChangeCallback;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 use crate::{error::TngError, tunnel::ohttp::key_config::KeyConfigExtend};
 use std::time::SystemTime;
@@ -12,7 +11,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-pub mod callback_manager;
 pub mod file;
 pub mod peer_shared;
 pub mod self_generated;
@@ -174,9 +172,4 @@ pub trait KeyManager: Send + Sync {
     ///
     /// Returns only keys that are active, valid, and safe to expose.
     async fn get_client_visible_keys(&self) -> Result<Vec<KeyInfo>, TngError>;
-
-    /// Register a callback that will be called whenever a key is created or modified.
-    ///
-    /// The callback receives a reference to the updated `KeyInfo`.
-    async fn register_callback(&self, callback: KeyChangeCallback);
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 #[cfg(unix)]
-use tokio::sync::{OnceCell, RwLock};
+use tokio::sync::RwLock;
 
 use crate::config::egress::KeyArgs;
 use crate::error::TngError;
@@ -15,6 +15,8 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     self_generated::SelfGeneratedKeyManager, KeyManager,
 };
+#[cfg(unix)]
+use crate::tunnel::ohttp::key_config::PublicKeyData;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::KeyConfigResponse;
 use crate::tunnel::ra_context::RaContext;
@@ -34,14 +36,16 @@ pub struct OhttpServerApi {
     /// Pre-instantiated Remote Attestation context
     ra_context: Arc<RaContext>,
     /// Key manager for OHTTP key configurations
-    pub(crate) key_manager: Arc<dyn KeyManager>,
+    key_manager: Arc<dyn KeyManager>,
     /// Cache for storing passport mode key configuration responses
     ///
     /// In passport mode, the server generates an attestation (passport) that is cached
     /// and reused for subsequent client requests to avoid expensive re-attestation.
     /// The cache automatically refreshes based on configured refresh strategy.
+    /// When keys change, the cache is invalidated and regenerated.
     #[cfg(unix)]
-    passport_cache: Arc<RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>>,
+    passport_cache:
+        Arc<RwLock<Option<MaybeCached<(Vec<PublicKeyData>, KeyConfigResponse), TngError>>>>,
 }
 
 impl OhttpServerApi {
@@ -66,31 +70,11 @@ impl OhttpServerApi {
             }
         };
 
-        #[cfg(unix)]
-        let passport_cache: Arc<
-            RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>,
-        > = Default::default();
-
-        // Register a callback to reset the passport cache when key changes
-        #[cfg(unix)]
-        {
-            let passport_cache_cloned = passport_cache.clone();
-            key_manager
-                .register_callback(Arc::new(move |_event| {
-                    let passport_cache_cloned = passport_cache_cloned.clone();
-                    Box::pin(async move {
-                        // Reset the passport cache
-                        let _ = passport_cache_cloned.write().await.take();
-                    })
-                }))
-                .await;
-        }
-
         Ok(OhttpServerApi {
             ra_context,
             key_manager,
             #[cfg(unix)]
-            passport_cache,
+            passport_cache: Arc::new(RwLock::new(None)),
         })
     }
 }

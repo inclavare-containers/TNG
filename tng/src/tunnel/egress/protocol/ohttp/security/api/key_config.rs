@@ -17,7 +17,9 @@ use std::sync::Arc;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyInfo;
+#[cfg(unix)]
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 #[cfg(unix)]
@@ -47,6 +49,9 @@ impl OhttpServerApi {
         payload: Option<Json<KeyConfigRequest>>,
         context: TngStreamContext,
     ) -> Result<Response, TngError> {
+        // Expected public keys
+        let all_visible_keys = self.key_manager.get_client_visible_keys().await?;
+
         // Check if hit the cache
         #[cfg(unix)]
         let response = match (self.ra_context.attest_context(), &payload) {
@@ -56,63 +61,122 @@ impl OhttpServerApi {
                 Some(Json(KeyConfigRequest {
                     attestation_request: Some(AttestationRequest::Passport),
                 })),
-            ) => self
-                .passport_cache
-                .read()
-                .await
-                .get_or_try_init(|| async {
-                    let ra_context = self.ra_context.clone();
-                    let key_manager = Arc::clone(&self.key_manager);
-                    let payload = Arc::new(payload);
+            ) => {
+                // Check if cache exists and is up-to-date
+                let expected_public_keys = all_visible_keys
+                    .into_iter()
+                    .map(|k| k.key_config.public_key_data())
+                    .collect::<Result<Vec<_>, TngError>>()?;
 
-                    let refresh_strategy = attest_ctx.refresh_strategy();
+                async fn check_cache_valid(
+                    cache_ref: &Option<
+                        MaybeCached<(Vec<PublicKeyData>, KeyConfigResponse), TngError>,
+                    >,
+                    expected_public_keys: &Vec<PublicKeyData>,
+                ) -> Result<Option<Arc<(Vec<PublicKeyData>, KeyConfigResponse)>>, TngError>
+                {
+                    Ok(match cache_ref {
+                        Some(cached) => {
+                            let latest_cache = cached.get_latest().await?;
+                            let (public_keys, _response) = latest_cache.as_ref();
+                            if expected_public_keys != public_keys {
+                                // The cache is outdated, regenerate the response
+                                None
+                            } else {
+                                Some(latest_cache)
+                            }
+                        }
+                        None => None,
+                    })
+                }
 
-                    MaybeCached::new(context.runtime.clone(), refresh_strategy, move || {
-                        Box::pin({
-                            tracing::info!("Regenerating passport response");
+                let valid_cache = {
+                    let cache_guard = self.passport_cache.read().await;
+                    check_cache_valid(&cache_guard, &expected_public_keys).await?
+                };
 
-                            let ra_context = ra_context.clone();
-                            let key_manager = key_manager.clone();
-                            let payload = payload.clone();
+                let latest_cache = match valid_cache {
+                    Some(latest_cache) => latest_cache,
+                    None => {
+                        // Cache doesn't exist, create new cache entry
+                        let mut cache_guard = self.passport_cache.write().await;
 
-                            async move {
-                                let response = Self::get_hpke_configuration_internal(
-                                    &ra_context,
-                                    key_manager.as_ref(),
-                                    payload.as_ref().clone(),
+                        // Double-check after acquiring write lock
+                        let double_check_valid_cache =
+                            check_cache_valid(&cache_guard, &expected_public_keys).await?;
+                        match double_check_valid_cache {
+                            Some(latest_cache) => latest_cache,
+                            None => {
+                                tracing::info!("Creating new passport cache entry");
+
+                                let ra_context = self.ra_context.clone();
+                                let key_manager = Arc::clone(&self.key_manager);
+                                let payload = Arc::new(payload);
+                                let refresh_strategy = attest_ctx.refresh_strategy();
+
+                                let maybe_cached = MaybeCached::new(
+                                    context.runtime.clone(),
+                                    refresh_strategy,
+                                    move || {
+                                        Box::pin({
+                                            tracing::info!("Regenerating passport response");
+
+                                            let ra_context = ra_context.clone();
+                                            let key_manager = key_manager.clone();
+                                            let payload = payload.clone();
+
+                                            async move {
+                                                // Get current keys and their fingerprints
+                                                let current_all_visible_keys =
+                                                    key_manager.get_client_visible_keys().await?;
+                                                let current_public_keys: Vec<PublicKeyData> =
+                                                    current_all_visible_keys
+                                                        .iter()
+                                                        .map(|k| k.key_config.public_key_data())
+                                                        .collect::<Result<Vec<_>, _>>()?;
+
+                                                let response =
+                                                    Self::get_hpke_configuration_internal(
+                                                        &ra_context,
+                                                        current_all_visible_keys,
+                                                        payload.as_ref().clone(),
+                                                    )
+                                                    .await?;
+
+                                                Ok((
+                                                    (current_public_keys, response),
+                                                    Expire::NoExpire,
+                                                ))
+                                            }
+                                        }) as Pin<Box<_>>
+                                    },
                                 )
                                 .await?;
 
-                                Ok((response, Expire::NoExpire))
+                                let latest_cache = maybe_cached.get_latest().await?;
+                                *cache_guard = Some(maybe_cached);
+
+                                latest_cache
                             }
-                        }) as Pin<Box<_>>
-                    })
-                    .await
-                })
-                .await?
-                .get_latest()
-                .await
-                .map(|response: Arc<KeyConfigResponse>| {
-                    IntoResponse::into_response(Json(response))
-                }),
+                        }
+                    }
+                };
+
+                Ok(IntoResponse::into_response(Json(
+                    &latest_cache.as_ref().1 as &KeyConfigResponse,
+                )))
+            }
             // Otherwise, we generate a new response
-            _ => Self::get_hpke_configuration_internal(
-                &self.ra_context,
-                self.key_manager.as_ref(),
-                payload,
-            )
-            .await
-            .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response))),
+            _ => Self::get_hpke_configuration_internal(&self.ra_context, all_visible_keys, payload)
+                .await
+                .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response))),
         };
 
         #[cfg(not(unix))]
-        let response = Self::get_hpke_configuration_internal(
-            &self.ra_context,
-            self.key_manager.as_ref(),
-            payload,
-        )
-        .await
-        .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response)));
+        let response =
+            Self::get_hpke_configuration_internal(&self.ra_context, all_visible_keys, payload)
+                .await
+                .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response)));
 
         response
     }
@@ -120,18 +184,17 @@ impl OhttpServerApi {
     #[allow(unused_variables)]
     async fn get_hpke_configuration_internal(
         ra_context: &RaContext,
-        key_manager: &dyn KeyManager,
+        all_visible_keys: Vec<KeyInfo>,
         payload: Option<Json<KeyConfigRequest>>,
     ) -> Result<KeyConfigResponse, TngError> {
-        // Collect all client visible keys, and create encoded_key_config_list
-        let all_keys = key_manager.get_client_visible_keys().await?;
-        let keys_expire_time = all_keys
+        // Create encoded_key_config_list based on all client visible keys
+        let keys_expire_time = all_visible_keys
             .iter()
             .map(|key_info| key_info.expire_at)
             .min()
             .ok_or_else(|| TngError::NoActiveKey)?;
 
-        let key_config_list = all_keys
+        let key_config_list = all_visible_keys
             .into_iter()
             .sorted_by_key(|key_info| key_info.key_config.key_id())
             .map(|key_info| key_info.key_config)

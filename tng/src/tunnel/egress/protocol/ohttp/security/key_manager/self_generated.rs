@@ -1,7 +1,4 @@
 use crate::error::TngError;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
-    CallbackManager, KeyChangeCallback, KeyChangeEvent,
-};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
 };
@@ -9,7 +6,6 @@ use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -29,8 +25,6 @@ pub struct SelfGeneratedKeyManager {
 pub struct RandomKeyManagerInner {
     /// Map of key IDs to key information
     keys: tokio::sync::RwLock<HashMap<PublicKeyData, KeyInfo>>,
-    /// List of registered callbacks triggered when a key is updated or created
-    callback_manager: CallbackManager,
 
     rotation_interval: u64,
 }
@@ -46,7 +40,6 @@ impl SelfGeneratedKeyManager {
     ) -> Result<Self, TngError> {
         let inner = Arc::new(RandomKeyManagerInner {
             keys: tokio::sync::RwLock::new(HashMap::new()),
-            callback_manager: CallbackManager::new(),
             rotation_interval,
         });
 
@@ -116,28 +109,11 @@ impl RandomKeyManagerInner {
         let mut keys = self.keys.write().await;
 
         // Remove expired keys
-        for (_, key_info) in keys.iter_mut() {
-            // first, nofity the callbacks
-            if key_info.expire_at <= now {
-                self.callback_manager
-                    .trigger(&KeyChangeEvent::Removed {
-                        key_info: Cow::Borrowed(key_info),
-                    })
-                    .await;
-            }
-        }
         keys.retain(|_, key_info| key_info.expire_at > now);
 
         // Mark stale keys
         for (_, key_info) in keys.iter_mut() {
             if key_info.stale_at <= now && matches!(key_info.status, KeyStatus::Active) {
-                self.callback_manager
-                    .trigger(&KeyChangeEvent::StatusChanged {
-                        key_info: Cow::Borrowed(key_info),
-                        old_status: key_info.status,
-                        new_status: KeyStatus::Stale,
-                    })
-                    .await;
                 key_info.status = KeyStatus::Stale;
             }
         }
@@ -163,11 +139,6 @@ impl RandomKeyManagerInner {
             let key_info =
                 KeyInfo::generate(new_key_id, KeyStatus::Active, now, self.rotation_interval)?;
             tracing::info!(?key_info, "New OHTTP key generated");
-            self.callback_manager
-                .trigger(&KeyChangeEvent::Created {
-                    key_info: Cow::Borrowed(&key_info),
-                })
-                .await;
             keys.insert(key_info.key_config.public_key_data()?, key_info);
         }
 
@@ -194,13 +165,6 @@ impl KeyManager for SelfGeneratedKeyManager {
             .filter(|key_info| matches!(key_info.status, KeyStatus::Active))
             .cloned()
             .collect())
-    }
-
-    async fn register_callback(&self, callback: KeyChangeCallback) {
-        self.inner
-            .callback_manager
-            .register_callback(callback)
-            .await;
     }
 }
 

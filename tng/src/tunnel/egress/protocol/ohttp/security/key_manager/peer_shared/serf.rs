@@ -1,16 +1,16 @@
 use crate::config::egress::PeerSharedArgs;
 use crate::error::TngError;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
-    KeyChangeCallback, KeyChangeEvent,
-};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_quic::RatsQuic;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::runtime::InstrumentedRuntime;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager, KeyStatus};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use tokio::task::JoinHandle;
+
+use futures::Future;
+use std::pin::Pin;
 
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
@@ -42,6 +42,37 @@ use crate::tunnel::utils::file_watcher::FileWatcher;
 use std::path::Path;
 
 const SERF_USER_EVENT_KEY_UPDATE: &str = "key_update";
+
+/// Represents different types of key change events
+#[derive(Debug, Clone)]
+pub enum KeyChangeEvent<'a> {
+    /// A new key has been created and added to the manager
+    Created {
+        /// The newly created key information
+        key_info: Cow<'a, KeyInfo>,
+    },
+    /// An existing key has been removed (e.g., expired)
+    Removed {
+        /// The key that was removed
+        key_info: Cow<'a, KeyInfo>,
+    },
+    /// The status of an existing key has changed (e.g., Active → Stale)
+    StatusChanged {
+        /// The key whose status changed
+        key_info: Cow<'a, KeyInfo>,
+        /// Previous status
+        old_status: KeyStatus,
+        /// New status
+        new_status: KeyStatus,
+    },
+}
+
+/// Type alias for a callback that receives a key change event
+pub type KeyChangeCallback = Arc<
+    dyn for<'a, 'b> Fn(&'a KeyChangeEvent<'b>) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>
+        + Send
+        + Sync,
+>;
 
 pub struct PeerSharedKeyManager {
     pub(super) inner: Arc<PeerSharedKeyManagerInner>,
@@ -90,21 +121,22 @@ impl PeerSharedKeyManager {
         let broadcast_func = Self::make_broadcast_callback(&node_id_str, &serf);
 
         // Register callback to broadcast self generated key change event to all serf members
-        {
-            // We need to broadcast all key change events to the cluster
-            inner
-                .inner_key_manager
-                .register_callback(broadcast_func.clone())
-                .await;
-
-            // Make sure we have broadcast all existing keys to the cluster
-            for key_info in inner.inner_key_manager.get_client_visible_keys().await? {
-                broadcast_func(&KeyChangeEvent::Created {
-                    key_info: Cow::Owned(key_info),
-                })
-                .await;
-            }
-        }
+        // TODO: Refactor this to use a different approach since register_callback is removed
+        // {
+        //     // We need to broadcast all key change events to the cluster
+        //     inner
+        //         .inner_key_manager
+        //         .register_callback(broadcast_func.clone())
+        //         .await;
+        //
+        //     // Make sure we have broadcast all existing keys to the cluster
+        //     for key_info in inner.inner_key_manager.get_client_visible_keys().await? {
+        //         broadcast_func(&KeyChangeEvent::Created {
+        //             key_info: Cow::Owned(key_info),
+        //         })
+        //         .await;
+        //     }
+        // }
 
         // Step 5: Spawn peer key sharing task (handles incoming events)
         let _peer_keys_sharing_task = Self::spawn_key_sharing_task(

@@ -192,8 +192,6 @@ impl TryFrom<pb::SymmetricSuite> for ohttp::SymmetricSuite {
     }
 }
 
-
-
 // ========== Helper Functions ==========
 
 fn system_time_to_timestamp(t: SystemTime) -> Timestamp {

@@ -103,10 +103,13 @@ impl ClusterKeySet {
         }
 
         // Multiple active keys: return the one with latest stale_at
-        self.active.iter().min_by(|a, b| {
-            // Compare by stale_at (descending - later is better)
-            b.stale_at.cmp(&a.stale_at)
-        }).expect("Vec1 always has at least one element")
+        self.active
+            .iter()
+            .min_by(|a, b| {
+                // Compare by stale_at (descending - later is better)
+                b.stale_at.cmp(&a.stale_at)
+            })
+            .expect("Vec1 always has at least one element")
     }
 
     /// Remove all expired keys (where expire_at <= now).
@@ -118,7 +121,7 @@ impl ClusterKeySet {
         let stale_before = self.stale.len();
 
         self.pending.retain(|k| k.expire_at > now);
-        
+
         // Move expired active keys to stale instead of removing them
         let expired_active: Vec<KeyInfo> = self
             .active
@@ -126,21 +129,20 @@ impl ClusterKeySet {
             .filter(|k| k.expire_at <= now)
             .cloned()
             .collect();
-        
+
         for key in expired_active {
             let mut stale_key = key;
             stale_key.status = KeyStatus::Stale;
             self.stale.push(stale_key);
         }
-        
+
         // Remove expired from active (Vec1::retain may fail if all are removed,
         // but protocol ensures at least one active key exists at all times)
         let _ = self.active.retain(|k| k.expire_at > now);
-        
+
         self.stale.retain(|k| k.expire_at > now);
 
-        (pending_before - self.pending.len())
-            + (stale_before - self.stale.len())
+        (pending_before - self.pending.len()) + (stale_before - self.stale.len())
     }
 
     /// Find pending keys that should be activated (actived_at <= now).
@@ -205,7 +207,7 @@ impl ClusterKeySet {
             Ok(pk) => pk,
             Err(_) => return true, // If we can't get public key, insert anyway
         };
-        
+
         match self.get_key_by_public_key(&key_public_key) {
             None => true,
             Some(existing) => key.actived_at > existing.actived_at,
@@ -227,7 +229,7 @@ mod tests {
     fn test_insert_and_get_key() {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key_data().unwrap();
-        
+
         let mut cks = ClusterKeySet::new(key, 300);
 
         let key2 = create_test_key(2, KeyStatus::Active, 2000);
@@ -241,7 +243,7 @@ mod tests {
     fn test_get_client_visible_key_single() {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key_data().unwrap();
-        
+
         let cks = ClusterKeySet::new(key, 300);
 
         let visible = cks.get_client_visible_key();
@@ -268,7 +270,7 @@ mod tests {
             stale_at: now + std::time::Duration::from_secs(500),
             expire_at: now + std::time::Duration::from_secs(1000),
         };
-        
+
         let mut cks = ClusterKeySet::new(active_key, 300);
 
         // Create a pending key that is expired

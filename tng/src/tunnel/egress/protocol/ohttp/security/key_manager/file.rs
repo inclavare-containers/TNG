@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -10,10 +9,7 @@ use tokio::sync::RwLock;
 use crate::{
     error::TngError,
     tunnel::{
-        egress::protocol::ohttp::security::key_manager::{
-            callback_manager::{CallbackManager, KeyChangeCallback, KeyChangeEvent},
-            KeyInfo, KeyManager, KeyStatus,
-        },
+        egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager, KeyStatus},
         ohttp::key_config::{KeyConfigExtend, PublicKeyData},
         utils::{file_watcher::FileWatcher, runtime::supervised_task::SupervisedTaskResult},
     },
@@ -51,12 +47,6 @@ struct FileBasedKeyManagerInner {
     /// Protected by a write lock during updates; readers can concurrently access the current key.
     /// When the file is modified, a new `KeyInfo` replaces the old one atomically.
     key: RwLock<Option<(PublicKeyData, KeyInfo)>>,
-
-    /// Manages registration and invocation of callbacks on key lifecycle events (create/remove).
-    ///
-    /// Used to notify subscribers (like public key exporters or health monitors) when the key
-    /// changes due to file reloads.
-    callback_manager: CallbackManager,
 }
 impl FileBasedKeyManager {
     /// Create a new FileBasedKeyManager and start watching the file.
@@ -96,7 +86,6 @@ impl FileBasedKeyManager {
 
         let inner = Arc::new(FileBasedKeyManagerInner {
             key: RwLock::new(Some((key_info.key_config.public_key_data()?, key_info))),
-            callback_manager: CallbackManager::new(),
         });
 
         let inner_clone = inner.clone();
@@ -113,40 +102,20 @@ impl FileBasedKeyManager {
 
                         match Self::load_key_from_pem(&path).await {
                             Ok(new_key_info) => {
-                                let old_key_info = {
-                                    let mut write = inner_clone.key.write().await;
-                                    let public_key_data =
-                                        match new_key_info.key_config.public_key_data() {
-                                            Ok(public_key_data) => public_key_data,
-                                            Err(error) => {
-                                                tracing::error!(
-                                                    ?path,
-                                                    ?error,
-                                                    "Failed to get public key data"
-                                                );
-                                                continue;
-                                            }
-                                        };
-                                    write.replace((public_key_data, new_key_info.clone()))
-                                };
-
-                                // Trigger creation event for the new key
-                                inner_clone
-                                    .callback_manager
-                                    .trigger(&KeyChangeEvent::Created {
-                                        key_info: Cow::Borrowed(&new_key_info),
-                                    })
-                                    .await;
-
-                                // Trigger removal event for the old key, if exists
-                                if let Some((_, old)) = old_key_info {
-                                    inner_clone
-                                        .callback_manager
-                                        .trigger(&KeyChangeEvent::Removed {
-                                            key_info: Cow::Borrowed(&old),
-                                        })
-                                        .await;
-                                }
+                                let mut write = inner_clone.key.write().await;
+                                let public_key_data =
+                                    match new_key_info.key_config.public_key_data() {
+                                        Ok(public_key_data) => public_key_data,
+                                        Err(error) => {
+                                            tracing::error!(
+                                                ?path,
+                                                ?error,
+                                                "Failed to get public key data"
+                                            );
+                                            continue;
+                                        }
+                                    };
+                                write.replace((public_key_data, new_key_info.clone()));
 
                                 tracing::info!(?path, "Successfully reloaded OHTTP key from file");
                             }
@@ -202,13 +171,6 @@ impl KeyManager for FileBasedKeyManager {
         } else {
             Ok(Default::default())
         }
-    }
-
-    async fn register_callback(&self, callback: KeyChangeCallback) {
-        self.inner
-            .callback_manager
-            .register_callback(callback)
-            .await;
     }
 }
 
