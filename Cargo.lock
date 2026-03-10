@@ -7701,6 +7701,7 @@ dependencies = [
  "peekable 0.4.1",
  "pin-project",
  "pin-project-lite",
+ "pkcs8",
  "portpicker",
  "prost 0.14.3",
  "prost-build 0.14.3",

@@ -3,6 +3,7 @@ pub mod pb {
 }
 
 use anyhow::{anyhow, Context};
+use pkcs8::{DecodePrivateKey, LineEnding};
 use prost_types::Timestamp;
 use std::time::SystemTime;
 
@@ -28,15 +29,23 @@ impl TryFrom<ohttp::KeyConfig> for pb::KeyConfig {
     type Error = anyhow::Error;
 
     fn try_from(value: ohttp::KeyConfig) -> Result<Self, Self::Error> {
+        // Serialize private key to PEM, then decode to DER
+        let pem = value
+            .dangerous_sk()
+            .context("missing private key in the key config")?
+            .serialize_to_pkcs8_pem()
+            .context("failed to serialize private key to pkcs8 pem")?;
+
+        // Decode PEM to DER using pkcs8 crate
+        let (_, secret_key) = pkcs8::SecretDocument::from_pem(&pem)
+            .context("failed to decode private key from pem")?;
+        let der_bytes = secret_key.to_bytes();
+
         Ok(Self {
             key_id: value.key_id() as u32,
             kem: value.kem() as i32,
             symmetric: value.symmetric().iter().map(Into::into).collect(),
-            sk: value
-                .dangerous_sk()
-                .context("missing private key in the key config")?
-                .serialize_to_pkcs8_pem()
-                .context("failed to serialize private key to pkcs8 pem")?,
+            sk: der_bytes.to_vec(),
         })
     }
 }
@@ -100,7 +109,14 @@ impl TryFrom<pb::KeyConfig> for ohttp::KeyConfig {
             .collect::<Result<Vec<_>, _>>()
             .context("failed to parse symmetric suites")?;
 
-        let key_config = ohttp::KeyConfig::new_from_pkcs8_pem(key_id, kem, symmetric, &value.sk)
+        // Convert DER bytes to PEM string using pkcs8 crate
+        let secret_key = pkcs8::SecretDocument::from_pkcs8_der(&value.sk)
+            .context("failed to parse private key from der")?;
+        let pem = secret_key
+            .to_pem("PRIVATE KEY", LineEnding::default())
+            .context("failed to encode private key to pem")?;
+
+        let key_config = ohttp::KeyConfig::new_from_pkcs8_pem(key_id, kem, symmetric, &pem)
             .context("failed to construct KeyConfig from PKCS#8")?;
 
         Ok(key_config)

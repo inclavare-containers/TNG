@@ -121,7 +121,9 @@ impl PeerSharedKeyManager {
     > {
         let opts = Options::new()
             .with_memberlist_options(MemberlistOptions::lan())
-            .with_event_buffer_size(256);
+            .with_event_buffer_size(256)
+            .with_max_user_event_size(9 * 1024)
+            .with_query_response_size_limit(9 * 1024);
         let node_id_str = Uuid::new_v4().to_string();
         let node_id = NodeId::<255>::new(&node_id_str)
             .with_context(|| format!("invalid node id {node_id_str}"))
@@ -482,7 +484,6 @@ impl PeerSharedKeyManager {
             .await
             .map_err(|e| TngError::SerfCrateError(anyhow!("Failed to broadcast: {}", e)))?;
 
-        tracing::info!("Broadcasted cluster key set to all members");
         Ok(())
     }
 

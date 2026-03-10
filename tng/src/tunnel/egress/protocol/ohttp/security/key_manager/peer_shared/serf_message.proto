@@ -55,7 +55,7 @@ message KeyConfig {
   uint32 key_id = 1;
   Kem kem = 2;
   repeated SymmetricSuite symmetric = 3;
-  string sk = 4;
+  bytes sk = 4; // DER-encoded private key
 }
 
 // Key status enum
