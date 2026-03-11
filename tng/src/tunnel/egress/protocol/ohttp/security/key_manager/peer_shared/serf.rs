@@ -7,7 +7,6 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyStatus};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::TokioRuntime;
-use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::tunnel::utils::file_watcher::FileWatcher;
 
 use anyhow::{anyhow, Context, Result};
@@ -24,7 +23,6 @@ use serf::quic::{QuicTransport, QuicTransportOptions};
 use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use uuid::Uuid;
 
@@ -45,8 +43,6 @@ const SERF_USER_EVENT_BROADCAST_CLUSTER_KEY_SET: &str = "broadcast_cluster_key_s
 pub struct PeerSharedKeyManager {
     pub(super) inner: Arc<PeerSharedKeyManagerInner>,
     serf: Arc<SerfGracefulShutdown>,
-    #[allow(unused)]
-    peers_file_watch_task: Option<JoinHandle<SupervisedTaskResult<()>>>,
 }
 
 type InstrumentedTokioRuntime = InstrumentedRuntime<serf::agnostic::tokio::TokioRuntime>;
@@ -76,8 +72,7 @@ impl PeerSharedKeyManager {
         let (serf, subscriber) = Self::setup_serf(&runtime, &peer_shared).await?;
 
         // Step 2: Join cluster via static peers and optional file
-        let peers_file_watch_task =
-            Self::spawn_cluster_join_tasks(&runtime, &serf, &peer_shared).await?;
+        Self::spawn_cluster_join_tasks(&runtime, &serf, &peer_shared).await?;
 
         // Step 3: Preboot phase - synchronize cluster key set
         let cluster_key_set = Self::preboot(&serf, peer_shared.rotation_interval).await?;
@@ -94,22 +89,17 @@ impl PeerSharedKeyManager {
         });
 
         // Step 5: Spawn key watcher task (handles key status transitions)
-        let _key_watcher_task: JoinHandle<_> =
-            Self::spawn_key_watcher(runtime.clone(), inner.clone(), Arc::downgrade(&serf));
+        Self::spawn_key_watcher(runtime.clone(), inner.clone(), Arc::downgrade(&serf));
 
         // Step 6: Spawn serf event handler task (handles queries and events)
-        let _serf_watcher_task: JoinHandle<_> = Self::spawn_serf_watcher(
+        Self::spawn_serf_watcher(
             runtime.clone(),
             subscriber,
             inner.clone(),
             Arc::downgrade(&serf),
         );
 
-        Ok(Self {
-            inner,
-            serf,
-            peers_file_watch_task,
-        })
+        Ok(Self { inner, serf })
     }
 
     /// Sets up the Serf instance with proper options and networking.
@@ -172,11 +162,11 @@ impl PeerSharedKeyManager {
         runtime: &TokioRuntime,
         serf: &Arc<SerfGracefulShutdown>,
         peer_shared: &PeerSharedArgs,
-    ) -> Result<Option<JoinHandle<SupervisedTaskResult<()>>>, TngError> {
+    ) -> Result<(), TngError> {
         // First, join using static peers
         if !peer_shared.peers.is_empty() {
             if let Err(e) = join_serf_cluster(serf.as_ref(), &peer_shared.peers).await {
-                tracing::warn!(error = ?e, "Failed to join some static peers");
+                tracing::warn!(error = ?e, "Some peers from static peers list failed to join, continuing...");
             }
         }
 
@@ -200,7 +190,11 @@ impl PeerSharedKeyManager {
             let mut file_watcher = FileWatcher::new(peers_file_path_for_watcher.clone())
                 .map_err(|e| TngError::WatchFileFailed(peers_file_path_for_watcher.clone(), e))?;
 
-            let watch_task = runtime.spawn_supervised_task_current_span(async move {
+            runtime.spawn_supervised_task_current_span(async move {
+                    defer!{
+                        tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file watcher stopped");
+                    }
+
                     while let Some(result) = file_watcher.recv().await {
                         match result {
                             Ok(()) => {
@@ -241,12 +235,10 @@ impl PeerSharedKeyManager {
                         }
                     }
 
-                    tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file watcher stopped");
                 });
-            Ok(Some(watch_task))
-        } else {
-            Ok(None)
         }
+
+        Ok(())
     }
 
     /// Preboot phase: synchronize cluster key set with existing members.
@@ -351,7 +343,7 @@ impl PeerSharedKeyManager {
         runtime: TokioRuntime,
         inner: Arc<PeerSharedKeyManagerInner>,
         serf: Weak<SerfGracefulShutdown>,
-    ) -> JoinHandle<SupervisedTaskResult<()>> {
+    ) {
         runtime.spawn_supervised_task_current_span(async move {
             defer! {
                 tracing::info!("Key watcher stopped");
@@ -414,7 +406,7 @@ impl PeerSharedKeyManager {
                     }
                 }
             }
-        })
+        });
     }
 
     /// Check if this node is master (smallest node ID) and perform key rotation if needed.
@@ -503,7 +495,7 @@ impl PeerSharedKeyManager {
         subscriber: EventSubscriber<SerfTransport, SerfDelegate>,
         inner: Arc<PeerSharedKeyManagerInner>,
         serf: Weak<SerfGracefulShutdown>,
-    ) -> JoinHandle<()> {
+    ) {
         runtime.spawn_unsupervised_task_current_span(async move {
             defer! {
                 tracing::info!("Serf watcher stopped");
@@ -550,7 +542,7 @@ impl PeerSharedKeyManager {
                     }
                 }
             }
-        })
+        });
     }
 
     /// Handle incoming query requests.
@@ -752,14 +744,6 @@ impl Drop for SerfGracefulShutdown {
                         }
                     }
                 });
-        }
-    }
-}
-
-impl Drop for PeerSharedKeyManager {
-    fn drop(&mut self) {
-        if let Some(task) = self.peers_file_watch_task.take() {
-            task.abort();
         }
     }
 }
