@@ -20,7 +20,7 @@ use serf::net::hostaddr::{Host, HostAddr};
 use serf::net::resolver::socket_addr::SocketAddrResolver;
 use serf::net::NodeId;
 use serf::quic::{QuicTransport, QuicTransportOptions};
-use serf::types::MaybeResolvedAddress;
+use serf::types::{MaybeResolvedAddress, MemberStatus};
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -440,15 +440,16 @@ impl PeerSharedKeyManager {
 
     /// Check if this node is the master (smallest node ID in the cluster).
     async fn is_master(serf: &Serf) -> bool {
-        let members = serf.members().await;
-        let local_id = serf.local_id().to_string();
+        let local_id = serf.local_id();
 
-        if members.is_empty() {
-            return true; // We are the only node
-        }
+        let members = serf.members().await;
 
         // Find the smallest node ID
-        let min_node_id = members.iter().map(|m| m.node().id().to_string()).min();
+        let min_node_id = members
+            .iter()
+            .filter(|m| m.status == MemberStatus::Alive)
+            .map(|m| m.node().id())
+            .min();
 
         match min_node_id {
             Some(min) => min == local_id,
