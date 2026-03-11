@@ -32,7 +32,7 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
 use crate::tunnel::ra_context::RaContext;
@@ -94,12 +94,16 @@ impl PeerSharedKeyManager {
         });
 
         // Step 5: Spawn key watcher task (handles key status transitions)
-        let _key_watcher_task =
-            Self::spawn_key_watcher(runtime.clone(), inner.clone(), serf.clone());
+        let _key_watcher_task: JoinHandle<_> =
+            Self::spawn_key_watcher(runtime.clone(), inner.clone(), Arc::downgrade(&serf));
 
         // Step 6: Spawn serf event handler task (handles queries and events)
-        let _serf_watcher_task =
-            Self::spawn_serf_watcher(runtime.clone(), subscriber, inner.clone(), serf.clone());
+        let _serf_watcher_task: JoinHandle<_> = Self::spawn_serf_watcher(
+            runtime.clone(),
+            subscriber,
+            inner.clone(),
+            Arc::downgrade(&serf),
+        );
 
         Ok(Self {
             inner,
@@ -346,9 +350,9 @@ impl PeerSharedKeyManager {
     fn spawn_key_watcher(
         runtime: TokioRuntime,
         inner: Arc<PeerSharedKeyManagerInner>,
-        serf: Arc<SerfGracefulShutdown>,
-    ) -> JoinHandle<()> {
-        runtime.spawn_unsupervised_task_current_span(async move {
+        serf: Weak<SerfGracefulShutdown>,
+    ) -> JoinHandle<SupervisedTaskResult<()>> {
+        runtime.spawn_supervised_task_current_span(async move {
             defer! {
                 tracing::info!("Key watcher stopped");
             }
@@ -371,8 +375,14 @@ impl PeerSharedKeyManager {
                     cks.remove_expired_keys(now);
                 } // Release write lock
 
-                // Trigger check_and_key_rotation only when pending -> active
-                Self::check_and_key_rotation(&serf, &inner).await;
+                {
+                    let Some(serf) = serf.upgrade() else {
+                        tracing::debug!("stop key watcher since serf has been dropped");
+                        break;
+                    };
+                    // Trigger check_and_key_rotation only when pending -> active
+                    Self::check_and_key_rotation(&serf, &inner).await;
+                }
 
                 // Compute the next deadline for key status transition.
                 let next_deadline={
@@ -492,7 +502,7 @@ impl PeerSharedKeyManager {
         runtime: TokioRuntime,
         subscriber: EventSubscriber<SerfTransport, SerfDelegate>,
         inner: Arc<PeerSharedKeyManagerInner>,
-        serf: Arc<SerfGracefulShutdown>,
+        serf: Weak<SerfGracefulShutdown>,
     ) -> JoinHandle<()> {
         runtime.spawn_unsupervised_task_current_span(async move {
             defer! {
@@ -509,7 +519,7 @@ impl PeerSharedKeyManager {
 
                 match event {
                     Event::Query(query) => {
-                        if let Err(e) = Self::handle_query(&query, &inner, &serf).await {
+                        if let Err(e) = Self::handle_query(&query, &inner).await {
                             tracing::warn!("Error handling query: {}", e);
                         }
                     }
@@ -527,7 +537,15 @@ impl PeerSharedKeyManager {
                     Event::Member(member_event) => {
                         if matches!(member_event.ty(), MemberEventType::Leave) {
                             tracing::info!("Member left, triggering key rotation check");
-                            Self::check_and_key_rotation(&serf, &inner).await;
+                            {
+                                let Some(serf) = serf.upgrade() else {
+                                    tracing::debug!(
+                                        "stop serf watcher since serf has been dropped"
+                                    );
+                                    break;
+                                };
+                                Self::check_and_key_rotation(&serf, &inner).await;
+                            }
                         }
                     }
                 }
@@ -539,7 +557,6 @@ impl PeerSharedKeyManager {
     async fn handle_query(
         query: &QueryEvent<SerfTransport, SerfDelegate>,
         inner: &PeerSharedKeyManagerInner,
-        _serf: &Serf,
     ) -> Result<()> {
         match query.name().as_str() {
             SERF_QUERY_CLUSTER_KEY_SET => {
