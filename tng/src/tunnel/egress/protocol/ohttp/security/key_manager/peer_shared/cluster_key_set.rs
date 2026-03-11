@@ -293,17 +293,20 @@ impl ClusterKeySet {
         }
     }
 
-    /// Check if a key should be inserted (doesn't exist or is newer).
-    fn should_insert_key(&self, key: &KeyInfo) -> bool {
-        let key_public_key = match key.key_config.public_key_data() {
-            Ok(pk) => pk,
-            Err(_) => return true, // If we can't get public key, insert anyway
-        };
-
-        match self.get_key_by_public_key(&key_public_key) {
-            None => true,
-            Some(existing) => key.actived_at > existing.actived_at,
+    /// Insert a key received from peer query response.
+    ///
+    /// This is used when we query a specific key from the cluster and receive it.
+    /// The key is inserted only if it doesn't already exist locally.
+    /// Returns true if the key was inserted, false if it already existed.
+    pub fn insert_key_from_peer(&mut self, public_key_data: PublicKeyData, key_info: KeyInfo) -> bool {
+        // Only insert if not already present
+        if self.keys.contains_key(&public_key_data) {
+            return false;
         }
+
+        self.keys.insert(public_key_data, key_info);
+        self.trigger_notify();
+        true
     }
 }
 

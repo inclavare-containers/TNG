@@ -619,6 +619,73 @@ impl PeerSharedKeyManager {
         }
         Ok(())
     }
+
+    /// Query a specific key from the cluster via Serf.
+    ///
+    /// This is used as a fallback when the key is not found locally.
+    /// If found, the key is inserted into the local cluster key set.
+    pub(crate) async fn query_key_from_cluster(
+        &self,
+        public_key_data: &PublicKeyData,
+    ) -> Result<Option<KeyInfo>, TngError> {
+        let request = pb::QueryKeyRequest {
+            public_key: public_key_data.as_ref().to_vec(),
+        };
+
+        let mut request_buf = BytesMut::new();
+        request.encode(&mut request_buf).map_err(|e| {
+            TngError::KeyUpdateMessageDecodeError(anyhow!("Failed to encode query request: {}", e))
+        })?;
+
+        // Send query to the cluster
+        let query_response = self
+            .serf
+            .query(SERF_QUERY_KEY, request_buf, None)
+            .await
+            .map_err(|e| TngError::SerfCrateError(anyhow!("Failed to send query: {}", e)))?;
+
+        let resp_rx = query_response.response_rx();
+
+        // Wait for response
+        while let Ok(response) = resp_rx.recv().await {
+            if response.payload().is_empty() {
+                continue;
+            }
+
+            match pb::QueryKeyResponse::decode(response.payload().as_ref()) {
+                Ok(query_response) => {
+                    if let Some(pb_key_info) = query_response.key_info {
+                        match TryInto::<KeyInfo>::try_into(pb_key_info) {
+                            Ok(key_info) => {
+                                // Insert into local cluster key set
+                                let mut cks = self.inner.cluster_key_set.write().await;
+                                cks.insert_key_from_peer(public_key_data.clone(), key_info.clone());
+                                tracing::info!(
+                                    node_id = ?response.from(),
+                                    public_key = ?public_key_data,
+                                    "Received key from peer via query"
+                                );
+                                return Ok(Some(key_info));
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to convert key info from peer response: {}",
+                                    e
+                                );
+                            }
+                        }
+                    } else {
+                        tracing::warn!("Received query response with empty key_info");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to decode query response from peer: {}", e);
+                }
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngError> {

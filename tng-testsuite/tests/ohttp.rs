@@ -1396,7 +1396,7 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
                                         "peers": [
                                             "192.168.1.1.nip.io:8301"
                                         ],
-                                        "rotation_interval": 10,
+                                        "rotation_interval": 5,
                                         "attest": {
                                             "model": "background_check",
                                             "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -1431,22 +1431,6 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
     tasks.extend(server_tasks);
 
     tasks.extend(vec![
-        ShellTask {
-            name: "waiting for tng cluster keys sharing".to_owned(),
-            node_type: NodeType::Client,
-            script: {
-                format!(
-                    r#"
-                    set -euo pipefail
-                    
-                    sleep 3
-                    "#
-                )
-            },
-            stop_test_on_finish: false,
-            run_in_foreground: true,
-        }
-        .boxed(),
         AppType::LoadBalancer {
             listen_port: 30001,
             upstream_servers: ips.into_iter().map(|ip| (ip, 30001)).collect(),
