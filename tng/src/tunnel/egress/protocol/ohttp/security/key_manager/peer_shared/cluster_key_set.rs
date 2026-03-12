@@ -210,11 +210,11 @@ impl ClusterKeySet {
     ///
     /// Returns true if a new pending key was generated, false if already has pending key.
     /// The actived_at is set to max(stale_at of all active keys).
-    pub fn generate_pending_key_if_none(&mut self) -> anyhow::Result<bool> {
+    pub fn generate_pending_key_if_none(&mut self) -> anyhow::Result<Option<PublicKeyData>> {
         // Only generate if no pending key exists
         let has_pending = self.keys.values().any(|k| k.status == KeyStatus::Pending);
         if has_pending {
-            return Ok(false);
+            return Ok(None);
         }
 
         // Calculate actived_at as max(stale_at of all active keys)
@@ -236,11 +236,11 @@ impl ClusterKeySet {
         .map_err(|e| anyhow::anyhow!("Failed to generate pending key: {}", e))?;
 
         // Insert and trigger notification
-        self.keys
-            .insert(pending_key.key_config.public_key()?, pending_key);
+        let public_key = pending_key.key_config.public_key()?;
+        self.keys.insert(public_key.clone(), pending_key);
         self.trigger_notify();
 
-        Ok(true)
+        Ok(Some(public_key))
     }
 
     /// Compute the next deadline for key status transition.

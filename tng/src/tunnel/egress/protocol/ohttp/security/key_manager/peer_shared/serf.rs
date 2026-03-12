@@ -434,12 +434,15 @@ impl PeerSharedKeyManager {
             }
         };
 
-        if generated {
-            tracing::info!("Master node generated new pending key, broadcasting to cluster");
+        if let Some(public_key) = generated {
+            tracing::info!(
+                ?public_key,
+                "Master node generated new pending key, broadcasting to cluster"
+            );
 
             // Broadcast to all members
             if let Err(error) = Self::broadcast_cluster_key_set(serf, inner).await {
-                tracing::error!(?error, "Failed to broadcast cluster key set");
+                tracing::error!(?error, ?public_key, "Failed to broadcast cluster key set");
             }
         }
     }
