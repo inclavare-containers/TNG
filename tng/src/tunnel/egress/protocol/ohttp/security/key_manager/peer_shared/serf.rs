@@ -354,24 +354,27 @@ impl PeerSharedKeyManager {
             loop {
                 let now = SystemTime::now();
 
-                {
+                let should_check_rotation = {
                     let mut cks = inner.cluster_key_set.write().await;
 
                     // 1. Handle pending -> active transition (first, as it triggers check_and_key_rotation)
-                    cks.transition_pending_to_active(now);
+                    let activated = cks.transition_pending_to_active(now);
 
                     // 2. Handle active -> stale transition
                     cks.transition_active_to_stale(now);
 
                     // 3. Remove expired stale keys
                     cks.remove_expired_keys(now);
-                } // Release write lock
 
-                {
+                    activated > 0
+                };
+
+                if should_check_rotation {
                     let Some(serf) = serf.upgrade() else {
                         tracing::debug!("stop key watcher since serf has been dropped");
                         break;
                     };
+
                     // Trigger check_and_key_rotation only when pending -> active
                     Self::check_and_key_rotation(&serf, &inner).await;
                 }
