@@ -138,9 +138,9 @@ impl KeyInfo {
 impl std::fmt::Debug for KeyInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut st = f.debug_struct("KeyInfo");
-        match self.key_config.public_key_data() {
-            Ok(public_key_data) => {
-                st.field("public_key", &public_key_data);
+        match self.key_config.public_key() {
+            Ok(public_key) => {
+                st.field("public_key", &public_key);
             }
             Err(error) => {
                 st.field("public_key", &error);
@@ -163,10 +163,7 @@ pub trait KeyManager: Send + Sync {
     /// Get an key info with their status by key ID
     ///
     /// Returns an key configuration for the given ID.
-    async fn get_key_by_public_key_data(
-        &self,
-        public_key_data: &PublicKeyData,
-    ) -> Result<KeyInfo, TngError>;
+    async fn get_key_by_public_key(&self, public_key: &PublicKeyData) -> Result<KeyInfo, TngError>;
 
     /// Get the client visible key that is intended to be shared with clients
     ///

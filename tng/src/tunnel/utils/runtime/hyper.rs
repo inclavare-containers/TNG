@@ -12,7 +12,7 @@ where
 
         self.spawn_supervised_task_current_span(async move {
             let res = join_handle.await;
-            tracing::debug!(is_err = res.is_err(), err=?res.err(), "task spawned for hyper finished")
+            tracing::debug!(is_err = res.is_err(), error=?res.err(), "task spawned for hyper finished")
         });
     }
 }

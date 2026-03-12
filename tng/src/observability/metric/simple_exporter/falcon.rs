@@ -170,8 +170,8 @@ impl SimpleMetricExporter for FalconExporter {
             .collect::<Result<Vec<_>>>()?;
 
         tracing::trace!(
-            "Pushing metrics to falcon: {}",
-            serde_json::to_string(&falcon_metrics).unwrap_or_else(|e| format!("error: {e:#}"))
+            metrics_json = %serde_json::to_string(&falcon_metrics).unwrap_or_else(|error| format!("{error:#}")),
+            "Pushing metrics to falcon"
         );
         RetryPolicy::fixed(Duration::from_secs(1))
             .with_max_retries(MAX_PUSH_RETRY - 1)
@@ -364,7 +364,7 @@ mod tests {
                 let falcon_metrics: Vec<FalconMetric> = serde_json::from_value(payload).unwrap();
 
                 assert!(!falcon_metrics.is_empty());
-                tracing::info!("Fake falcon server got metrics: {falcon_metrics:?}");
+                tracing::info!(?falcon_metrics, "Fake falcon server got metrics");
 
                 let _ = tx.send(());
 

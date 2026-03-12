@@ -105,7 +105,7 @@ pub enum TngError {
     InvalidOhttpApiHeaderValue,
 
     #[error("The requested key does not exist, public_key: {0:?}")]
-    ServerKeyConfigNotFound(PublicKeyData /* public_key_data */),
+    ServerKeyConfigNotFound(PublicKeyData /* public_key */),
 
     #[error("Server key config hint not specified")]
     ServerKeyConfigHintNotSpecified,

@@ -50,8 +50,8 @@ impl SelfGeneratedKeyManager {
         let refresh_task = runtime.spawn_supervised_task_current_span(async move {
             loop {
                 // Perform the refresh
-                if let Err(e) = inner_clone.refresh_keys().await {
-                    tracing::error!("Failed to refresh OHTTP keys: {:?}", e);
+                if let Err(error) = inner_clone.refresh_keys().await {
+                    tracing::error!(?error, "Failed to refresh OHTTP keys");
                 }
 
                 // Calculate the next refresh time
@@ -140,7 +140,7 @@ impl RandomKeyManagerInner {
             let key_info =
                 KeyInfo::generate(new_key_id, KeyStatus::Active, now, self.rotation_interval)?;
             tracing::info!(?key_info, "New OHTTP key generated");
-            keys.insert(key_info.key_config.public_key_data()?, key_info);
+            keys.insert(key_info.key_config.public_key()?, key_info);
         }
 
         Ok(())
@@ -149,23 +149,18 @@ impl RandomKeyManagerInner {
 
 #[async_trait]
 impl KeyManager for SelfGeneratedKeyManager {
-    async fn get_key_by_public_key_data(
-        &self,
-        public_key_data: &PublicKeyData,
-    ) -> Result<KeyInfo, TngError> {
+    async fn get_key_by_public_key(&self, public_key: &PublicKeyData) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
-        keys.get(public_key_data)
+        keys.get(public_key)
             .cloned()
-            .ok_or(TngError::ServerKeyConfigNotFound(public_key_data.clone()))
+            .ok_or(TngError::ServerKeyConfigNotFound(public_key.clone()))
     }
 
     async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
         let keys = self.inner.keys.read().await;
         keys.iter()
             .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
-            .sorted_by_cached_key(|&(public_key_data, key_info)| {
-                (key_info.expire_at, public_key_data)
-            })
+            .sorted_by_cached_key(|&(public_key, key_info)| (key_info.expire_at, public_key))
             .rev()
             .next()
             .map(|(_, key_info)| key_info.clone())

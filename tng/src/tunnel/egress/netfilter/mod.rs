@@ -91,7 +91,7 @@ impl EgressTrait for NetfilterEgress {
         // Listen on 0.0.0.0 to capture traffic redirected by the nat OUTPUT chain.
         // REDIRECT sends packets to the listener's address; 0.0.0.0 captures all interfaces.
         let listen_addr = format!("0.0.0.0:{}", self.listen_port);
-        tracing::debug!("Add TCP listener on {}", listen_addr);
+        tracing::debug!(%listen_addr, "Add TCP listener");
 
         // Setup iptables
         let iptables_guard = IptablesExecutor::setup(self).await?;

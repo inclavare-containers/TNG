@@ -61,8 +61,8 @@ impl RegistedService for ControlInterface {
                 tokio::select! {
                     _ = self.runtime.shutdown_guard().cancelled() => {  /* exit here */ },
                     res = restful.serve() => {
-                        if let Err(err) = &res {
-                            tracing::error!("restful control interface failed: {}", err);
+                        if let Err(error) = &res {
+                            tracing::error!(?error, "restful control interface failed");
                         }
                         res?
                     },

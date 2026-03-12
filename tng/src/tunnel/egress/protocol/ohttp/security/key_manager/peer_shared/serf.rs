@@ -165,8 +165,11 @@ impl PeerSharedKeyManager {
     ) -> Result<(), TngError> {
         // First, join using static peers
         if !peer_shared.peers.is_empty() {
-            if let Err(e) = join_serf_cluster(serf.as_ref(), &peer_shared.peers).await {
-                tracing::warn!(error = ?e, "Some peers from static peers list failed to join, continuing...");
+            if let Err(error) = join_serf_cluster(serf.as_ref(), &peer_shared.peers).await {
+                tracing::warn!(
+                    ?error,
+                    "Some peers from static peers list failed to join, continuing..."
+                );
             }
         }
 
@@ -177,8 +180,8 @@ impl PeerSharedKeyManager {
             // Load initial peers from file and join if any
             if let Ok(file_peers) = load_peers_from_file(&peers_file_path).await {
                 // Join using peers from file
-                if let Err(e) = join_serf_cluster(serf, &file_peers).await {
-                    tracing::warn!(error = ?e, "Some peers from file failed to join, continuing...");
+                if let Err(error) = join_serf_cluster(serf, &file_peers).await {
+                    tracing::warn!(?error, "Some peers from file failed to join, continuing...");
                 }
             }
 
@@ -212,8 +215,8 @@ impl PeerSharedKeyManager {
                                             break;
                                         };
 
-                                        if let Err(e) = join_serf_cluster(&serf_clone, &new_peers).await {
-                                            tracing::warn!(error = ?e, "Some peers from file failed to join, continuing...");
+                                        if let Err(error) = join_serf_cluster(&serf_clone, &new_peers).await {
+                                            tracing::warn!(?error, "Some peers from file failed to join, continuing...");
                                         }
                                     }
                                     Err(error) => {
@@ -254,8 +257,8 @@ impl PeerSharedKeyManager {
             if members.len() > 1 {
                 // There are other nodes in the cluster, send query to synchronize
                 tracing::info!(
-                    "Found {} peers in cluster, querying for cluster key set",
-                    members.len() - 1
+                    peer_count = members.len() - 1,
+                    "Found peers in cluster, querying for cluster key set"
                 );
 
                 let request = pb::QueryClusterKeySetRequest {};
@@ -330,9 +333,9 @@ impl PeerSharedKeyManager {
             TngError::KeyUpdateMessageDecodeError(anyhow!("Failed to generate initial key: {}", e))
         })?;
 
-        let public_key_data = initial_key.key_config.public_key_data()?;
+        let public_key = initial_key.key_config.public_key()?;
         Ok(ClusterKeySet::new(
-            public_key_data,
+            public_key,
             initial_key,
             rotation_interval,
         ))
@@ -387,10 +390,10 @@ impl PeerSharedKeyManager {
 
                 match next_deadline {
                     Some(deadline) => {
-                        let sleep_duration = deadline.duration_since(now).unwrap_or_else(|e| {
+                        let sleep_duration = deadline.duration_since(now).unwrap_or_else(|error| {
                             tracing::warn!(
-                                "Key watcher deadline passed during state transitions (overdue by {:?}), will check soon",
-                                e.duration()
+                                overdue = ?error.duration(),
+                                "Key watcher deadline passed during state transitions, will check soon"
                             );
                             Duration::from_secs(1) // Force sleep 1 second to prevent busy-looping and CPU exhaustion when a bug causes repeated activations
                         });
@@ -424,8 +427,8 @@ impl PeerSharedKeyManager {
             let mut cks = inner.cluster_key_set.write().await;
             match cks.generate_pending_key_if_none() {
                 Ok(generated) => generated,
-                Err(e) => {
-                    tracing::error!("Failed to generate pending key: {}", e);
+                Err(error) => {
+                    tracing::error!(?error, "Failed to generate pending key");
                     return;
                 }
             }
@@ -435,8 +438,8 @@ impl PeerSharedKeyManager {
             tracing::info!("Master node generated new pending key, broadcasting to cluster");
 
             // Broadcast to all members
-            if let Err(e) = Self::broadcast_cluster_key_set(serf, inner).await {
-                tracing::error!("Failed to broadcast cluster key set: {}", e);
+            if let Err(error) = Self::broadcast_cluster_key_set(serf, inner).await {
+                tracing::error!(?error, "Failed to broadcast cluster key set");
             }
         }
     }
@@ -515,19 +518,19 @@ impl PeerSharedKeyManager {
 
                 match event {
                     Event::Query(query) => {
-                        if let Err(e) = Self::handle_query(&query, &inner).await {
-                            tracing::warn!("Error handling query: {}", e);
+                        if let Err(error) = Self::handle_query(&query, &inner).await {
+                            tracing::warn!(?error, "Error handling query");
                         }
                     }
                     Event::User(user_event) => {
-                        if let Err(e) = Self::handle_user_event(
+                        if let Err(error) = Self::handle_user_event(
                             user_event.name().as_str(),
                             user_event.payload(),
                             &inner,
                         )
                         .await
                         {
-                            tracing::warn!("Error handling user event: {}", e);
+                            tracing::warn!(?error, "Error handling user event");
                         }
                     }
                     Event::Member(member_event) => {
@@ -589,7 +592,7 @@ impl PeerSharedKeyManager {
                 // If not found, don't respond (empty response)
             }
             _ => {
-                tracing::warn!("Ignoring unknown query: {}", query.name());
+                tracing::warn!(query_name = %query.name(), "Ignoring unknown query");
             }
         }
         Ok(())
@@ -617,7 +620,7 @@ impl PeerSharedKeyManager {
                 }
             }
             _ => {
-                tracing::warn!("Ignoring unknown user event: {}", event_name);
+                tracing::warn!(%event_name, "Ignoring unknown user event");
             }
         }
         Ok(())
@@ -629,10 +632,10 @@ impl PeerSharedKeyManager {
     /// If found, the key is inserted into the local cluster key set.
     pub(crate) async fn query_key_from_cluster(
         &self,
-        public_key_data: &PublicKeyData,
+        public_key: &PublicKeyData,
     ) -> Result<Option<KeyInfo>, TngError> {
         let request = pb::QueryKeyRequest {
-            public_key: public_key_data.as_ref().to_vec(),
+            public_key: public_key.as_ref().to_vec(),
         };
 
         let mut request_buf = BytesMut::new();
@@ -662,18 +665,18 @@ impl PeerSharedKeyManager {
                             Ok(key_info) => {
                                 // Insert into local cluster key set
                                 let mut cks = self.inner.cluster_key_set.write().await;
-                                cks.insert_key_from_peer(public_key_data.clone(), key_info.clone());
+                                cks.insert_key_from_peer(public_key.clone(), key_info.clone());
                                 tracing::info!(
                                     node_id = ?response.from(),
-                                    public_key = ?public_key_data,
+                                    ?public_key,
                                     "Received key from peer via query"
                                 );
                                 return Ok(Some(key_info));
                             }
-                            Err(e) => {
+                            Err(error) => {
                                 tracing::warn!(
-                                    "Failed to convert key info from peer response: {}",
-                                    e
+                                    ?error,
+                                    "Failed to convert key info from peer response"
                                 );
                             }
                         }
@@ -681,8 +684,8 @@ impl PeerSharedKeyManager {
                         tracing::warn!("Received query response with empty key_info");
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to decode query response from peer: {}", e);
+                Err(error) => {
+                    tracing::warn!(?error, "Failed to decode query response from peer");
                 }
             }
         }

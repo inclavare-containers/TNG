@@ -74,7 +74,7 @@ async fn main() {
         build::BUILD_TIME
     );
 
-    tracing::info!("Current process PID: {}", std::process::id());
+    tracing::info!(pid = std::process::id(), "Current process PID");
 
     let fut = async {
         match cli.command {
@@ -90,7 +90,7 @@ async fn main() {
                         }
                         (None, Some(s)) => serde_json::from_str(&s)?,
                         (Some(path), None) => {
-                            tracing::info!("Loading config from: {path:?}");
+                            tracing::info!(?path, "Loading config from");
                             let file = File::open(path)?;
                             let reader = BufReader::new(file);
                             serde_json::from_reader(reader)?
@@ -100,7 +100,7 @@ async fn main() {
                 .await
                 .context("Failed to load config")?;
 
-                tracing::debug!("TNG config: {config:#?}");
+                tracing::debug!(?config, "TNG config");
 
                 tracing::info!("Starting tng instance now");
                 TngRuntime::from_config_with_reload_handle(config, &reload_handle)
@@ -116,7 +116,7 @@ async fn main() {
     };
 
     if let Err(error) = fut.await {
-        tracing::error!(error = format!("{error:#}"));
+        tracing::error!(?error);
         std::process::exit(1);
     }
 }

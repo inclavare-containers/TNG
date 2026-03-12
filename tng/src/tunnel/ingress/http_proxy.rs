@@ -164,8 +164,8 @@ impl RequestHelper {
                     Ok::<_, anyhow::Error>(())
                 };
 
-                if let Err(e) = fut.await {
-                    tracing::error!(error=?e, "Failed handling http connect request");
+                if let Err(error) = fut.await {
+                    tracing::error!(?error, "Failed handling http connect request");
                 }
             });
 
@@ -200,8 +200,8 @@ impl RequestHelper {
 
                     let http_conn_span = tracing::info_span!("http_conn");
                     runtime.spawn_supervised_task_with_span(http_conn_span, async move {
-                        if let Err(e) = conn.await {
-                            tracing::error!(?e, "The HTTP connection with upstream is broken");
+                        if let Err(error) = conn.await {
+                            tracing::error!(?error, "The HTTP connection with upstream is broken");
                         }
                     });
 
@@ -297,7 +297,7 @@ impl IngressTrait for HttpProxyIngress {
 
     async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!("Add TCP listener on {}", listen_addr);
+        tracing::debug!(%listen_addr, "Add TCP listener");
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;

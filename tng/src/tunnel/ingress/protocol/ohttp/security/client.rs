@@ -469,7 +469,7 @@ impl OHttpClientInner {
             .clone();
 
         tracing::debug!(
-            public_key = ?key_config.public_key_data(),
+            public_key = ?key_config.public_key(),
             "Encrypting request with HPKE key"
         );
 
@@ -527,7 +527,7 @@ impl OHttpClientInner {
                 let metadata = Metadata {
                     client_auth: Some(client_auth.clone()), // TODO: optimize this clone
                     key_config_hint: Some(ServerKeyConfigHint {
-                        public_key: key_config.public_key_data()?.into_vec(),
+                        public_key: key_config.public_key()?.into_vec(),
                     }),
                 };
 
@@ -542,7 +542,7 @@ impl OHttpClientInner {
                 metadata
                     .encode(&mut metadata_buf)
                     .map_err(TngError::MetadataEncodeError)?;
-                tracing::trace!("metadata length: {:?}", metadata_buf.len());
+                tracing::trace!(metadata_length = metadata_buf.len(), "metadata length");
                 metadata_buf
             };
 
@@ -550,7 +550,10 @@ impl OHttpClientInner {
             {
                 let mut body_bytes = metadata_buf;
                 body_bytes.extend_from_slice(&encrypted_request);
-                tracing::debug!("Encrypted request body length: {:?}", body_bytes.len());
+                tracing::debug!(
+                    body_length = body_bytes.len(),
+                    "Encrypted request body length"
+                );
                 reqwest::Body::from(body_bytes.freeze())
             }
             #[cfg(not(wasm))]

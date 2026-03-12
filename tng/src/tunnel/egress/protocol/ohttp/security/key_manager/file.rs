@@ -85,7 +85,7 @@ impl FileBasedKeyManager {
         let key_info = Self::load_key_from_pem(&path).await?;
 
         let inner = Arc::new(FileBasedKeyManagerInner {
-            key: RwLock::new((key_info.key_config.public_key_data()?, key_info)),
+            key: RwLock::new((key_info.key_config.public_key()?, key_info)),
         });
 
         let inner_clone = inner.clone();
@@ -103,20 +103,19 @@ impl FileBasedKeyManager {
                         match Self::load_key_from_pem(&path).await {
                             Ok(new_key_info) => {
                                 let mut write = inner_clone.key.write().await;
-                                let public_key_data =
-                                    match new_key_info.key_config.public_key_data() {
-                                        Ok(public_key_data) => public_key_data,
-                                        Err(error) => {
-                                            tracing::error!(
-                                                ?path,
-                                                ?error,
-                                                "Failed to get public key data"
-                                            );
-                                            continue;
-                                        }
-                                    };
+                                let public_key = match new_key_info.key_config.public_key() {
+                                    Ok(public_key) => public_key,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            ?path,
+                                            ?error,
+                                            "Failed to get public key data"
+                                        );
+                                        continue;
+                                    }
+                                };
 
-                                *write = (public_key_data, new_key_info.clone());
+                                *write = (public_key, new_key_info.clone());
 
                                 tracing::info!(?path, "Successfully reloaded OHTTP key from file");
                             }
@@ -151,14 +150,11 @@ impl FileBasedKeyManager {
 
 #[async_trait]
 impl KeyManager for FileBasedKeyManager {
-    async fn get_key_by_public_key_data(
-        &self,
-        public_key_data: &PublicKeyData,
-    ) -> Result<KeyInfo, TngError> {
+    async fn get_key_by_public_key(&self, public_key: &PublicKeyData) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
         match &*key {
-            (p, k) if p == public_key_data => Ok(k.clone()),
-            _ => Err(TngError::ServerKeyConfigNotFound(public_key_data.clone())),
+            (p, k) if p == public_key => Ok(k.clone()),
+            _ => Err(TngError::ServerKeyConfigNotFound(public_key.clone())),
         }
     }
 

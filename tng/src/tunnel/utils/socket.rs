@@ -139,7 +139,7 @@ where
 
     let mut last_result = None;
     for addr in addrs {
-        tracing::debug!("Trying to tcp connect to {addr:?}");
+        tracing::debug!(?addr, "Trying to tcp connect");
         let socket = {
             let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
                 .context("Failed to create socket")?;

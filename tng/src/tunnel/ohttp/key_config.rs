@@ -26,11 +26,11 @@ impl AsRef<[u8]> for PublicKeyData {
 }
 
 pub(crate) trait KeyConfigExtend {
-    fn public_key_data(&self) -> Result<PublicKeyData, TngError>;
+    fn public_key(&self) -> Result<PublicKeyData, TngError>;
 }
 
 impl KeyConfigExtend for ohttp::KeyConfig {
-    fn public_key_data(&self) -> Result<PublicKeyData, TngError> {
+    fn public_key(&self) -> Result<PublicKeyData, TngError> {
         Ok(PublicKeyData::new(self.pk_data()?))
     }
 }

@@ -184,7 +184,7 @@ impl HttpRequestInspector {
                         (Ok(h1), _) => h1,
                         (Err(_), Ok(h2)) => h2,
                         (Err(h1_err), Err(h2_err)) => {
-                            tracing::debug!("Failed to inspect tcp stream as both http1 and http2 request. HTTP1 error: {h1_err:#}, HTTP2 error: {h2_err:#}");
+                            tracing::debug!(h1_error = ?h1_err, h2_error = ?h2_err, "Failed to inspect tcp stream as both http1 and http2 request");
                             RequestInfo::UnknownProtocol
                         }
                     }

@@ -12,7 +12,7 @@ impl StdoutExporter {}
 #[async_trait]
 impl SimpleMetricExporter for StdoutExporter {
     async fn push(&self, metrics: &[SimpleMetric]) -> Result<()> {
-        tracing::info!("current metrics: {metrics:?}",);
+        tracing::info!(?metrics, "current metrics");
         Ok(())
     }
 }

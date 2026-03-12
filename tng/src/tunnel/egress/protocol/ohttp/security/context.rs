@@ -37,8 +37,8 @@ impl TngStreamContext {
             .map_err(TngError::HttpPlainTextForwardError)?;
 
         self.runtime.spawn_supervised_task_current_span(async move {
-            if let Err(e) = conn.await {
-                tracing::error!(?e, "The HTTP connection with upstream is broken");
+            if let Err(error) = conn.await {
+                tracing::error!(?error, "The HTTP connection with upstream is broken");
             }
         });
 

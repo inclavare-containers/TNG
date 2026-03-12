@@ -114,7 +114,7 @@ impl OhttpServerApi {
         let key_info = if let Some(hint) = metadata.key_config_hint {
             // Get key by hint
             self.key_manager
-                .get_key_by_public_key_data(&PublicKeyData::new(hint.public_key))
+                .get_key_by_public_key(&PublicKeyData::new(hint.public_key))
                 .await?
         } else {
             return Err(TngError::ServerKeyConfigHintNotSpecified);

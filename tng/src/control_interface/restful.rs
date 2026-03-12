@@ -55,9 +55,9 @@ impl RestfulControlInterface {
             self.args.address.port,
         );
         tracing::info!(
-            "Restful Control interface listening on http://{}:{}",
-            addr.0,
-            addr.1
+            host = %addr.0,
+            port = addr.1,
+            "Restful Control interface listening"
         );
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;

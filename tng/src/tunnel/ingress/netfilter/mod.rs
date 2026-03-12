@@ -85,7 +85,7 @@ impl IngressTrait for NetfilterIngress {
 
     async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("127.0.0.1:{}", self.listen_port);
-        tracing::debug!("Add TCP listener on {}", listen_addr);
+        tracing::debug!(%listen_addr, "Add TCP listener");
 
         // Setup iptables
         let iptables_guard = IptablesExecutor::setup(self).await?;

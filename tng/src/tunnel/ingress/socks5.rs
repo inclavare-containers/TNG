@@ -127,7 +127,7 @@ impl IngressTrait for Socks5Ingress {
 
     async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!("Add TCP listener on {}", listen_addr);
+        tracing::debug!(%listen_addr, "Add TCP listener");
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;

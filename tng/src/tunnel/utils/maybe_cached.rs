@@ -193,8 +193,8 @@ impl<
                                 })
                             };
 
-                            if let Err(e) = fut.await {
-                                tracing::error!(error=?e,"Failed to update the cached value");
+                            if let Err(error) = fut.await {
+                                tracing::error!(?error, "Failed to update the cached value");
                             }
                         }
                     });

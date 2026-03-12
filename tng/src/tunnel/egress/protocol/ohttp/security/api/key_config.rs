@@ -63,7 +63,7 @@ impl OhttpServerApi {
                 })),
             ) => {
                 // Check if cache exists and is up-to-date
-                let expected_public_key = client_visible_key.key_config.public_key_data()?;
+                let expected_public_key = client_visible_key.key_config.public_key()?;
 
                 async fn check_cache_valid(
                     cache_ref: &Option<MaybeCached<(PublicKeyData, KeyConfigResponse), TngError>>,
@@ -126,7 +126,7 @@ impl OhttpServerApi {
                                                     key_manager.get_client_visible_key().await?;
                                                 let current_public_key = current_client_visible_key
                                                     .key_config
-                                                    .public_key_data()?;
+                                                    .public_key()?;
 
                                                 let response =
                                                     Self::get_hpke_configuration_internal(

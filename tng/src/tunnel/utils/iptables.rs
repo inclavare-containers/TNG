@@ -105,10 +105,10 @@ impl Drop for IptablesGuard {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(
                 async {
-                    if let Err(e) =
+                    if let Err(error) =
                         IptablesExecutor::execute_script(&self.iptables_revoke_script).await
                     {
-                        tracing::error!("Failed to clean up iptables rules: {e:#}");
+                        tracing::error!(?error, "Failed to clean up iptables rules");
                     }
                 }
                 .instrument(self.span.clone()),

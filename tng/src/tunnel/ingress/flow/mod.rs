@@ -209,8 +209,8 @@ impl IngressFlow {
                     Ok::<(), anyhow::Error>(())
                 };
 
-                if let Err(e) = fut.await {
-                    tracing::error!(error=?e, "Failed to forward stream");
+                if let Err(error) = fut.await {
+                    tracing::error!(?error, "Failed to forward stream");
                 }
             },
         );

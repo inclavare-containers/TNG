@@ -269,9 +269,9 @@ impl TngRuntime {
                 let error_sender = error_sender.clone();
                 self.runtime
                     .spawn_supervised_task_with_span(span, async move {
-                        if let Err(e) = service.serve(ready_sender).await {
-                            tracing::error!(error=?e, "service failed");
-                            let _ = error_sender.send(e).await;
+                        if let Err(error) = service.serve(ready_sender).await {
+                            tracing::error!(?error, "service failed");
+                            let _ = error_sender.send(error).await;
                         }
                     });
             }
@@ -293,7 +293,7 @@ impl TngRuntime {
 
         let maybe_err = tokio::select! {
             _ = check_services_ready => {
-                tracing::info!("All of the {service_count} services are ready");
+                tracing::info!(service_count, "All services are ready");
                 live.record(1, &[]);
 
                 let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
@@ -370,7 +370,7 @@ impl TngRuntime {
                 });
                 match reload_result {
                     Ok(_) => {} // Great!
-                    Err(err) => tracing::warn!("Unable to add new layer: {}", err),
+                    Err(error) => tracing::warn!(?error, "Unable to add new layer"),
                 }
             }
         }

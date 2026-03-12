@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Cluster key set containing all keys indexed by public_key_data.
+/// Cluster key set containing all keys indexed by public_key.
 ///
 /// This structure uses a unified HashMap as the single source of truth,
 /// with KeyStatus indicating the state of each key.
 #[derive(Debug, Clone)]
 pub struct ClusterKeySet {
-    /// All keys indexed by public_key_data (single source of truth)
+    /// All keys indexed by public_key (single source of truth)
     keys: HashMap<PublicKeyData, KeyInfo>,
     /// Rotation interval in seconds
     rotation_interval: u64,
@@ -26,13 +26,9 @@ impl ClusterKeySet {
     ///
     /// Note that there must be at least one active key.
     /// This constructor is used during Bootstrap when the first active key is created.
-    pub fn new(
-        public_key_data: PublicKeyData,
-        active_key: KeyInfo,
-        rotation_interval: u64,
-    ) -> Self {
+    pub fn new(public_key: PublicKeyData, active_key: KeyInfo, rotation_interval: u64) -> Self {
         let mut keys = HashMap::new();
-        keys.insert(public_key_data, active_key);
+        keys.insert(public_key, active_key);
         Self {
             keys,
             rotation_interval,
@@ -52,9 +48,9 @@ impl ClusterKeySet {
         }
     }
 
-    /// Find a key by its public_key_data.
-    pub fn get_key_by_public_key(&self, public_key_data: &PublicKeyData) -> Option<&KeyInfo> {
-        self.keys.get(public_key_data)
+    /// Find a key by its public_key.
+    pub fn get_key_by_public_key(&self, public_key: &PublicKeyData) -> Option<&KeyInfo> {
+        self.keys.get(public_key)
     }
 
     /// Get the key that should be returned to clients.
@@ -67,9 +63,7 @@ impl ClusterKeySet {
         self.keys
             .iter()
             .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
-            .sorted_by_cached_key(|&(public_key_data, key_info)| {
-                (key_info.expire_at, public_key_data)
-            })
+            .sorted_by_cached_key(|&(public_key, key_info)| (key_info.expire_at, public_key))
             .rev()
             .next()
             .map(|(_, key_info)| key_info)
@@ -198,8 +192,8 @@ impl ClusterKeySet {
             .collect();
 
         let mut activated = 0;
-        for public_key_data in keys_to_activate {
-            if let Some(key) = self.keys.get_mut(&public_key_data) {
+        for public_key in keys_to_activate {
+            if let Some(key) = self.keys.get_mut(&public_key) {
                 key.status = KeyStatus::Active;
                 activated += 1;
             }
@@ -243,7 +237,7 @@ impl ClusterKeySet {
 
         // Insert and trigger notification
         self.keys
-            .insert(pending_key.key_config.public_key_data()?, pending_key);
+            .insert(pending_key.key_config.public_key()?, pending_key);
         self.trigger_notify();
 
         Ok(true)
@@ -276,14 +270,14 @@ impl ClusterKeySet {
     /// Merge another ClusterKeySet into this one.
     ///
     /// For each key in the other set, if it's newer or doesn't exist here, insert it.
-    /// Keys are compared by public_key_data and actived_at.
+    /// Keys are compared by public_key and actived_at.
     pub fn merge(&mut self, other: ClusterKeySet) {
         let mut merged = false;
 
-        for (public_key_data, key_info) in other.keys {
+        for (public_key, key_info) in other.keys {
             // If not exist, we insert it
-            if !self.keys.contains_key(&public_key_data) {
-                self.keys.insert(public_key_data, key_info);
+            if !self.keys.contains_key(&public_key) {
+                self.keys.insert(public_key, key_info);
                 merged = true;
             }
         }
@@ -298,13 +292,13 @@ impl ClusterKeySet {
     /// This is used when we query a specific key from the cluster and receive it.
     /// The key is inserted only if it doesn't already exist locally.
     /// Returns true if the key was inserted, false if it already existed.
-    pub fn insert_key_from_peer(&mut self, public_key_data: PublicKeyData, key_info: KeyInfo) -> bool {
+    pub fn insert_key_from_peer(&mut self, public_key: PublicKeyData, key_info: KeyInfo) -> bool {
         // Only insert if not already present
-        if self.keys.contains_key(&public_key_data) {
+        if self.keys.contains_key(&public_key) {
             return false;
         }
 
-        self.keys.insert(public_key_data, key_info);
+        self.keys.insert(public_key, key_info);
         self.trigger_notify();
         true
     }
@@ -335,11 +329,11 @@ impl TryFrom<super::serf_message::pb::ClusterKeySet> for super::cluster_key_set:
         for key_info in value.keys {
             let key: KeyInfo = key_info.try_into().context("failed to convert key")?;
             // Decode base64 public key back to PublicKeyData
-            let public_key_data = key
+            let public_key = key
                 .key_config
-                .public_key_data()
+                .public_key()
                 .context("failed to create PublicKeyData")?;
-            keys.insert(public_key_data, key);
+            keys.insert(public_key, key);
         }
 
         Ok(Self {
@@ -363,12 +357,12 @@ mod tests {
     #[test]
     fn test_insert_and_get_key() {
         let key = create_test_key(1, KeyStatus::Active, 1000);
-        let public_key = key.key_config.public_key_data().unwrap();
+        let public_key = key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(public_key, key, 300);
+        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
 
         let key2 = create_test_key(2, KeyStatus::Active, 2000);
-        cks.keys.insert(key2.key_config.public_key_data()?, key2);
+        cks.keys.insert(key2.key_config.public_key().unwrap(), key2);
 
         assert!(cks.get_key_by_public_key(&public_key).is_some());
         assert_eq!(cks.keys.len(), 2);
@@ -377,12 +371,12 @@ mod tests {
     #[test]
     fn test_get_client_visible_key_single() {
         let key = create_test_key(1, KeyStatus::Active, 1000);
-        let public_key = key.key_config.public_key_data().unwrap();
+        let public_key = key.key_config.public_key().unwrap();
 
-        let cks = ClusterKeySet::new(public_key, key, 300);
+        let cks = ClusterKeySet::new(public_key.clone(), key, 300);
 
-        let visible = cks.get_client_visible_key()?;
-        assert_eq!(visible.key_config.public_key_data().unwrap(), public_key);
+        let visible = cks.get_client_visible_key().unwrap();
+        assert_eq!(visible.key_config.public_key().unwrap(), public_key);
     }
 
     #[test]
@@ -406,7 +400,8 @@ mod tests {
             expire_at: now + std::time::Duration::from_secs(1000),
         };
 
-        let mut cks = ClusterKeySet::new(active_key.key_config.public_key_data()?, active_key, 300);
+        let mut cks =
+            ClusterKeySet::new(active_key.key_config.public_key().unwrap(), active_key, 300);
 
         // Create a pending key that is expired
         let expired_pending = KeyInfo {
@@ -425,7 +420,7 @@ mod tests {
             expire_at: now - std::time::Duration::from_secs(1),
         };
         cks.keys.insert(
-            expired_pending.key_config.public_key_data()?,
+            expired_pending.key_config.public_key().unwrap(),
             expired_pending,
         );
         assert_eq!(cks.keys.len(), 2);
@@ -434,6 +429,6 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(cks.keys.len(), 1);
         // Active key still exists (not removed to maintain invariant)
-        assert!(cks.get_client_visible_key()?.status == KeyStatus::Active);
+        assert!(cks.get_client_visible_key().unwrap().status == KeyStatus::Active);
     }
 }
