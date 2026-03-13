@@ -17,6 +17,8 @@ impl KeyManager for super::PeerSharedKeyManager {
         }
 
         // Try to get key by querying peers
+        // Note: Concurrent queries may happen here without locking. We intentionally avoid locking
+        // to prevent a single failure from blocking all queries, allowing as many queries as possible to succeed.
         match self.query_key_from_cluster(public_key).await {
             Ok(Some(key)) => return Ok(key),
             Ok(None) => {
