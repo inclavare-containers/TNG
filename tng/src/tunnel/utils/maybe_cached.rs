@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use futures::FutureExt as _;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::{pin::Pin, sync::Arc, time::Duration};
@@ -27,6 +28,7 @@ use std::time::SystemTime;
 ))]
 use web_time::SystemTime;
 
+use crate::error::TngError;
 use crate::tunnel::utils::runtime::{
     future::TokioRuntimeSupportedFuture, supervised_task::SupervisedTaskResult, TokioRuntime,
 };
@@ -61,20 +63,25 @@ impl Ord for Expire {
 }
 
 impl Expire {
-    pub fn from_timestamp(timestamp_seconds: u64) -> Result<Self> {
+    pub fn from_timestamp(timestamp_seconds: u64) -> Result<Self, TngError> {
         let input_system_time = SystemTime::UNIX_EPOCH
             .checked_add(std::time::Duration::from_secs(timestamp_seconds))
             .with_context(|| {
                 format!(
-                    "the timestamp is too far in the future to be represented: {timestamp_seconds}"
+                    "the expire timestamp is too far in the future to be represented: {timestamp_seconds}"
                 )
-            })?;
+            }).map_err(TngError::BadExpireTimeStamp)?;
 
         // Sanity check
         let now = SystemTime::now();
-        let _duration = input_system_time.duration_since(now).with_context(|| {
-            format!("the timestamp is earlier than current time: {input_system_time:?} < {now:?}")
-        })?;
+        if input_system_time < now.checked_sub(Duration::from_secs(120)).unwrap_or(now) {
+            // Just log there instead of throw an error
+            tracing::warn!(
+                expire = DateTime::<Utc>::from(input_system_time).to_string(),
+                now = DateTime::<Utc>::from(now).to_string(),
+                "the expire timestamp is too earlier than current time"
+            )
+        }
 
         Ok(Expire::ExpireAt(input_system_time))
     }
@@ -159,7 +166,7 @@ impl<
                                     Expire::ExpireAt(expire_time) => {
                                         let now = SystemTime::now();
                                         let duration =
-                                            expire_time.duration_since(now).unwrap_or_default();
+                                            expire_time.duration_since(now).unwrap_or_default(); // If already expired, set the duration to 0
 
                                         let fut = tokio_time::sleep(duration);
                                         #[cfg(not(wasm))]
@@ -312,9 +319,10 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        // Should fail because timestamp is not later than current time
+        // Should succeed: slightly outdated timestamps are now allowed
+        // (see commit "feat(maybe_cached): relax expire timestamp validation")
         let result = Expire::from_timestamp(current_timestamp);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -326,9 +334,9 @@ mod tests {
             .as_secs();
         let past_timestamp = now - 100;
 
-        // Should fail because timestamp is earlier than current time
+        // Slightly outdated timestamps are allowed (warned but not rejected)
         let result = Expire::from_timestamp(past_timestamp);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

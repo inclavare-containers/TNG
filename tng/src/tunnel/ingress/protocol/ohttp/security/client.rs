@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bhttp::http_compat::{
     decode::{BhttpDecoder, HttpMessage},
@@ -143,12 +143,7 @@ impl OHttpClient {
             let inner = inner.clone();
             move || {
                 let inner = inner.clone();
-                Box::pin(async move {
-                    inner
-                        .create_key_store_value()
-                        .await
-                        .map_err(TngError::GenServerHpkeConfigurationResponseFailed)
-                }) as Pin<Box<_>>
+                Box::pin(async move { inner.create_key_store_value().await }) as Pin<Box<_>>
             }
         })
         .await?;
@@ -192,9 +187,12 @@ impl OHttpClient {
 }
 
 impl OHttpClientInner {
-    async fn create_key_store_value(&self) -> Result<(KeyStoreValue, Expire)> {
+    async fn create_key_store_value(&self) -> Result<(KeyStoreValue, Expire), TngError> {
         // Handle metatdata for self
-        let (client_key, client_auth, mut expire) = self.create_attested_client_key().await?;
+        let (client_key, client_auth, mut expire) = self
+            .create_attested_client_key()
+            .await
+            .map_err(TngError::ClientGenerateClientKeyFailed)?;
 
         let (server_key_config, token) = {
             let verify_context = self.ra_context.verify_context();
@@ -216,24 +214,27 @@ impl OHttpClientInner {
                             let token = TngToken::from_wire(
                                 ProviderType::from_optional_wire(*as_provider),
                                 attestation_result.clone(),
-                            )?;
+                            )
+                            .map_err(TngError::TngTokenDecodeError)?;
 
                             let userdata = ServerUserData {
                                 // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
                                 challenge_token: None,
                                 hpke_key_config: response.hpke_key_config.clone(),
                             }
-                            .to_claims()?;
+                            .to_claims()
+                            .map_err(TngError::ClaimsEncodeError)?;
 
                             verifier
                                 .verify_evidence(&token, &ReportData::Claims(userdata))
-                                .await?;
+                                .await
+                                .map_err(TngError::EvidenceVerifyError)?;
                             token
                         }
                         Some(ServerAttestationInfo::BackgroundCheck { .. }) => {
-                            bail!("Passport model is expected but got background check attestation from server")
+                            Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Passport model is expected but got background check attestation from server")))?
                         }
-                        None => bail!("Missing attestation info from server"),
+                        None => Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Missing attestation info from server")))?,
                     };
 
                     (response.hpke_key_config, Some(token))
@@ -243,7 +244,10 @@ impl OHttpClientInner {
                     verifier,
                 }) => {
                     // fetch a challenge token from attestation service
-                    let challenge_token = converter.get_nonce().await?;
+                    let challenge_token = converter
+                        .get_nonce()
+                        .await
+                        .map_err(|e| TngError::ClientRequestKeyConfigFailed(e.into()))?;
 
                     // Request hpke configuration for server
                     let response = self
@@ -262,24 +266,28 @@ impl OHttpClientInner {
                             let evidence = TngEvidence::deserialize_from_json(
                                 ProviderType::from_optional_wire(aa_provider),
                                 evidence,
-                            )?;
-                            let token = converter.convert(&evidence).await?;
+                            )
+                            .map_err(TngError::TngEvidenceDecodeError)?;
+                            let token = converter.convert(&evidence).await
+                                .map_err(TngError::EvidenceVerifyError)?;
 
                             let userdata = ServerUserData {
                                 challenge_token: Some(challenge_token),
                                 hpke_key_config: response.hpke_key_config.clone(),
                             }
-                            .to_claims()?;
+                            .to_claims()
+                            .map_err(TngError::ClaimsEncodeError)?;
 
                             verifier
                                 .verify_evidence(&token, &ReportData::Claims(userdata))
-                                .await?;
+                                .await
+                                .map_err(TngError::EvidenceVerifyError)?;
                             token
                         }
                         Some(ServerAttestationInfo::Passport { .. }) => {
-                            bail!("Background check model is expected but got passport attestation from server")
-                        }
-                        None => bail!("Missing attestation info from server"),
+                            Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Background check model is expected but got passport attestation from server")))?
+                        },
+                        None => Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Missing attestation info from server")))?,
                     };
 
                     (response.hpke_key_config, Some(token))
@@ -304,7 +312,14 @@ impl OHttpClientInner {
 
         let server_attestation_result = match token {
             Some(token) => {
-                expire = std::cmp::min(expire, Expire::from_timestamp(token.exp()?)?);
+                expire = std::cmp::min(
+                    expire,
+                    Expire::from_timestamp(
+                        token
+                            .exp()
+                            .map_err(|e| TngError::ClientRequestKeyConfigFailed(e.into()))?,
+                    )?,
+                );
                 Some(AttestationResult::from_token(token))
             }
             None => None,
@@ -435,15 +450,15 @@ impl OHttpClientInner {
             .json(&key_config_request)
             .send()
             .await
-            .map_err(|error| TngError::RequestKeyConfigFailed(error.into()))?
+            .map_err(|error| TngError::ClientRequestKeyConfigFailed(error.into()))?
             .check_error_response()
             .await
-            .map_err(TngError::RequestKeyConfigFailed)?;
+            .map_err(TngError::ClientRequestKeyConfigFailed)?;
 
         let response: KeyConfigResponse = response
             .json()
             .await
-            .map_err(|error| TngError::RequestKeyConfigFailed(error.into()))?;
+            .map_err(|error| TngError::ClientRequestKeyConfigFailed(error.into()))?;
 
         tracing::debug!(?response, "Received HPKE key configuration");
 

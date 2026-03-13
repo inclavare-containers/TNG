@@ -62,14 +62,23 @@ pub enum TngError {
     #[error("Failed to get client background check result from server")]
     ClientGetBackgroundCheckResultFaild(#[source] anyhow::Error),
 
+    #[error("Failed to verify server evidence")]
+    ClientVerifyServerEvidenceFailed(#[source] anyhow::Error),
+
+    #[error("Failed to verify server attestation result")]
+    ClientVerifyServerAttestationResultFailed(#[source] anyhow::Error),
+
     #[error("Failed to get challenge token for client")]
     ServerVerifyClientGetChallengeTokenFailed(#[source] anyhow::Error),
 
     #[error("Failed to verify client evidence")]
     ServerVerifyClientEvidenceFailed(#[source] anyhow::Error),
 
-    #[error("Failed to request key config from ohttp server")]
-    RequestKeyConfigFailed(#[source] anyhow::Error),
+    #[error("Failed to request ohttp key config from server")]
+    ClientRequestKeyConfigFailed(#[source] anyhow::Error),
+
+    #[error("Failed to generate ohttp client key")]
+    ClientGenerateClientKeyFailed(#[source] anyhow::Error),
 
     #[error("Failed to connect to upstream")]
     ConnectUpstreamFailed,
@@ -134,6 +143,21 @@ pub enum TngError {
 
     #[error("Failed to watch file {0}")]
     WatchFileFailed(PathBuf, #[source] anyhow::Error),
+
+    #[error("bad expire timestamp: {0}")]
+    BadExpireTimeStamp(#[source] anyhow::Error),
+
+    #[error("Failed to decode TngToken from wire format")]
+    TngTokenDecodeError(#[source] anyhow::Error),
+
+    #[error("Failed to encode claims")]
+    ClaimsEncodeError(#[source] anyhow::Error),
+
+    #[error("Failed to deserialize TngEvidence from JSON")]
+    TngEvidenceDecodeError(#[source] anyhow::Error),
+
+    #[error("Failed to verify attestation evidence")]
+    EvidenceVerifyError(#[source] rats_cert::errors::Error),
 }
 
 /// Error response structure
@@ -203,7 +227,7 @@ impl IntoResponse for TngError {
             | TngError::ClientGetBackgroundCheckResultFaild(..)
             | TngError::ServerVerifyClientGetChallengeTokenFailed(..)
             | TngError::ServerVerifyClientEvidenceFailed(..)
-            | TngError::RequestKeyConfigFailed(..)
+            | TngError::ClientRequestKeyConfigFailed(..)
             | TngError::ClientSelectHpkeConfigurationFailed(..)
             | TngError::GenServerHpkeConfigurationResponseFailed(..)
             | TngError::CreateOHttpClientFailed(..)
@@ -215,6 +239,14 @@ impl IntoResponse for TngError {
             TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::KeyUpdateMessageEncodeError(..)
             | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::ClientVerifyServerEvidenceFailed(..)
+            | TngError::ClientVerifyServerAttestationResultFailed(..)
+            | TngError::ClientGenerateClientKeyFailed(..)
+            | TngError::BadExpireTimeStamp(..)
+            | TngError::TngTokenDecodeError(..)
+            | TngError::ClaimsEncodeError(..)
+            | TngError::TngEvidenceDecodeError(..)
+            | TngError::EvidenceVerifyError(..) => StatusCode::INTERNAL_SERVER_ERROR,
 
             // See the RFC 9458 section 6.4. Key Management
             // The client should request new KeyConfig from server when got UNPROCESSABLE_ENTITY from server.
