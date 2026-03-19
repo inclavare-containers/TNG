@@ -58,7 +58,7 @@ jobs:
           GITHUB_RELEASE="${{ github.ref_name || 'no_tag' }}"
           VERSION=$(grep -m1 '^Version:' trusted-network-gateway.spec | awk '{print $2}')
           RELEASE="1"
-          
+
           echo "Using GITHUB_RELEASE: $GITHUB_RELEASE"
           echo "Using VERSION: $VERSION"
           echo "Using RELEASE: $RELEASE"
@@ -194,3 +194,73 @@ jobs:
       upload_provenance_to_rekor: true
       release_tag_name: "${{ github.ref_name }}"
       prerelease: "${{ needs.build.outputs.PRE_RELEASE == 'true' }}"
+
+  update-release-notes:
+    name: Update GitHub Release Notes
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: generate-notes
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          echo "Current tag: $CURRENT_TAG"
+
+          # Extract version number from current tag (e.g., v2.5.0-alpha -> v2.5.0)
+          CURRENT_VERSION=$(echo "$CURRENT_TAG" | grep -oE '^v[0-9]+\.[0-9]+\.[0-9]+')
+          echo "Current version: $CURRENT_VERSION"
+
+          # Get all stable tags sorted by version
+          STABLE_TAGS=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+          echo "Stable tags:"
+          echo "$STABLE_TAGS" | head -5
+
+          # Check if the stable version of current tag exists
+          if echo "$STABLE_TAGS" | grep -q "^${CURRENT_VERSION}$"; then
+            echo "Found stable version $CURRENT_VERSION, finding previous tag"
+            # Use the stable version as reference, find the one before it
+            PREV_TAG=$(echo "$STABLE_TAGS" | grep -A1 "^${CURRENT_VERSION}$" | tail -n1)
+          else
+            echo "Stable version not found, using most recent stable tag"
+            # Current tag is pre-release, find the most recent stable tag
+            PREV_TAG=$(echo "$STABLE_TAGS" | head -1)
+          fi
+
+          # Fallback: if still no prev tag, use the most recent stable tag
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$CURRENT_VERSION" ]; then
+            echo "Fallback: using most recent stable tag"
+            PREV_TAG=$(echo "$STABLE_TAGS" | head -1)
+          fi
+          echo "Previous tag: $PREV_TAG"
+
+          # Generate changelog with commit hashes
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log "${PREV_TAG}..${CURRENT_TAG}" --pretty=format:"- (%h) %s" --no-merges)
+          else
+            CHANGELOG=$(git log --pretty=format:"- (%h) %s" --no-merges -20)
+          fi
+
+          # Write to file
+          echo "## What's Changed" > release_notes.md
+          echo "" >> release_notes.md
+          echo "$CHANGELOG" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}" >> release_notes.md
+
+          cat release_notes.md
+
+      - name: Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          append_body: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
