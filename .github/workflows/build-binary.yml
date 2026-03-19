@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-all
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Check pre-release
@@ -46,7 +46,7 @@ jobs:
           echo "prerelease=$prerelease"
           echo "PRE_RELEASE=$prerelease" >> $GITHUB_ENV
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: false

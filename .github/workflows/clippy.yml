@@ -34,7 +34,7 @@ jobs:
           yum install -y git cargo protobuf-devel yum-utils
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.89.0

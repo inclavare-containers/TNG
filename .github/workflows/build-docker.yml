@@ -19,7 +19,7 @@ jobs:
       tags: ${{ steps.meta.outputs.tags }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Docker Setup Buildx
         id: buildx
         uses: docker/setup-buildx-action@v3
@@ -87,7 +87,7 @@ jobs:
           yum install -y podman
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: ${{ runner.temp }}
@@ -98,7 +98,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: 'true'
 
@@ -122,7 +122,7 @@ jobs:
       - build
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: ${{ runner.temp }}

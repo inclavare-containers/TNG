@@ -21,7 +21,7 @@ jobs:
       build-tool: ${{ contains( inputs.target, 'windows-msvc' ) && 'build' || 'zigbuild' }}
       executable: ./target/${{inputs.target}}/release/*.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Setup protoc

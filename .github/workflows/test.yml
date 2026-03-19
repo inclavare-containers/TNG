@@ -54,7 +54,7 @@ jobs:
         with:
           components: llvm-tools  # for providing llvm-profdata and llvm-cov
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: 'true'
 
