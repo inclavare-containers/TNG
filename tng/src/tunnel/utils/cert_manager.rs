@@ -3,18 +3,18 @@ use anyhow::{Context as _, Result};
 use rats_cert::{
     cert::create::CertBuilder,
     crypto::{AsymmetricAlgo, HashAlgo},
-    tee::{
-        coco::{attester::CocoAttester, converter::CocoConverter},
-        AttesterPipeline,
-    },
+    tee::AttesterPipeline,
 };
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use crate::{
     config::ra::AttestArgs,
-    tunnel::utils::{
-        maybe_cached::{Expire, MaybeCached},
-        runtime::TokioRuntime,
+    tunnel::{
+        provider::{create_attester, create_converter},
+        utils::{
+            maybe_cached::{Expire, MaybeCached},
+            runtime::TokioRuntime,
+        },
     },
 };
 
@@ -60,20 +60,13 @@ impl CertManager {
         let timeout_sec = CREATE_CERT_TIMEOUT_SECOND as i64;
         tracing::debug!(?attest_args, timeout_sec, "Generate new cert with rats-rs");
 
-        let (der_cert, privkey, expired) = match attest_args {
-            AttestArgs::Passport { aa_args, as_args, .. } => {
-                let coco_attester = CocoAttester::new_with_timeout_nano(
-                    &aa_args.aa_addr,
-                    timeout_sec * 1000 * 1000 * 1000,
-                )?;
+        let timeout_nano = Some(timeout_sec * 1_000_000_000);
+        let attester = create_attester(attest_args, timeout_nano)?;
 
-                let coco_converter = CocoConverter::new(
-                    &as_args.as_addr_config.as_addr,
-                    &as_args.policy_ids,
-                    as_args.as_addr_config.as_is_grpc,
-                    &as_args.as_addr_config.as_headers,
-                )?;
-                let attester_pipeline = AttesterPipeline::new(coco_attester, coco_converter);
+        let (der_cert, privkey, expired) = match attest_args {
+            AttestArgs::Passport { .. } => {
+                let converter = create_converter(attest_args)?;
+                let attester_pipeline = AttesterPipeline::new(attester, converter);
                 let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
                     .with_subject("CN=TNG,O=Inclavare Containers")
                     .build(AsymmetricAlgo::P256)
@@ -101,13 +94,8 @@ impl CertManager {
                     std::cmp::min(evidence_expire, cert_expire),
                 )
             }
-            AttestArgs::BackgroundCheck { aa_args, .. } => {
-                let coco_attester = CocoAttester::new_with_timeout_nano(
-                    &aa_args.aa_addr,
-                    timeout_sec * 1000 * 1000 * 1000,
-                )?;
-
-                let cert_bundle = CertBuilder::new(coco_attester, HashAlgo::Sha256)
+            AttestArgs::BackgroundCheck { .. } => {
+                let cert_bundle = CertBuilder::new(attester, HashAlgo::Sha256)
                     .with_subject("CN=TNG,O=Inclavare Containers")
                     .build(AsymmetricAlgo::P256)
                     .await?;

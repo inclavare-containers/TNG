@@ -1,20 +1,21 @@
 use anyhow::{Context, Result};
-use rats_cert::cert::verify::{
-    AttestationServiceConfig, CertVerifier, CocoVerifyMode, CocoVerifyPolicy,
-};
+use rats_cert::cert::verify::CertVerifier;
 
 use crate::{
-    config::ra::{AttestationServiceAddrArgs, AttestationServiceArgs, VerifyArgs},
-    tunnel::attestation_result::AttestationResult,
+    config::ra::VerifyArgs,
+    tunnel::{
+        attestation_result::AttestationResult,
+        provider::create_verify_policy,
+    },
 };
 
 #[derive(Debug)]
-pub struct CoCoCommonCertVerifier {
+pub struct CommonCertVerifier {
     verify_args: VerifyArgs,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
-impl CoCoCommonCertVerifier {
+impl CommonCertVerifier {
     pub fn new(verify_args: VerifyArgs) -> Self {
         Self {
             verify_args,
@@ -31,47 +32,7 @@ impl CoCoCommonCertVerifier {
             .take()
             .context("No rats-tls cert received")?;
 
-        let verify_policy = match &self.verify_args {
-            VerifyArgs::Passport { token_verify, .. } => CocoVerifyPolicy {
-                verify_mode: CocoVerifyMode::Token,
-                policy_ids: token_verify.policy_ids.clone(),
-                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr_config: token_verify.as_addr_config.as_ref().map(|addr_config| {
-                    AttestationServiceConfig {
-                        as_addr: addr_config.as_addr.clone(),
-                        as_is_grpc: addr_config.as_is_grpc,
-                        as_headers: addr_config.as_headers.clone(),
-                    }
-                }),
-            },
-            VerifyArgs::BackgroundCheck {
-                as_args:
-                    AttestationServiceArgs {
-                        as_addr_config:
-                            AttestationServiceAddrArgs {
-                                as_addr,
-                                as_is_grpc,
-                                as_headers,
-                            },
-                        policy_ids,
-                    },
-                token_verify,
-                ..
-            } => CocoVerifyPolicy {
-                verify_mode: CocoVerifyMode::Evidence(AttestationServiceConfig {
-                    as_addr: as_addr.clone(),
-                    as_is_grpc: *as_is_grpc,
-                    as_headers: as_headers.clone(),
-                }),
-                policy_ids: policy_ids.clone(),
-                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr_config: Some(AttestationServiceConfig {
-                    as_addr: as_addr.clone(),
-                    as_is_grpc: *as_is_grpc,
-                    as_headers: as_headers.clone(),
-                }),
-            },
-        };
+        let verify_policy = create_verify_policy(&self.verify_args);
 
         let res = CertVerifier::new(verify_policy)
             .verify_der(&pending_cert)
@@ -79,7 +40,7 @@ impl CoCoCommonCertVerifier {
 
         tracing::debug!(passed = res.is_ok(), "rats-rs cert verify finished");
 
-        res.map(AttestationResult::from_coco_as_token)
+        res.map(AttestationResult::from_token)
             .map_err(|e| anyhow::anyhow!("Verify failed: {:?}", e))
     }
 

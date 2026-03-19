@@ -50,6 +50,11 @@ message AttestedPublicKey {
   // The client(sender)'s public key, encoded in binary format
   // Used by the server to establish secure channel only.
   bytes pk_s = 2;
+
+  // The attestation provider that produced the attestation_result token
+  // (e.g., "coco", "ita"). Used by the receiver to correctly parse and
+  // verify the token.
+  string provider = 3;
 }
 
 // Hint for the server to identify the key configuration needed to decrypt the

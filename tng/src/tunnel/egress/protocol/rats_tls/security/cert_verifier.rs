@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use rustls::{
     server::{
-        danger::{ClientCertVerified, ClientCertVerifier},
+        danger::{ClientCertVerified, ClientCertVerifier as RustlsClientCertVerifier},
         WebPkiClientVerifier,
     },
     Error,
@@ -13,18 +13,18 @@ use tokio_rustls::rustls::RootCertStore;
 use crate::{
     config::ra::VerifyArgs,
     tunnel::{
-        attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
+        attestation_result::AttestationResult, cert_verifier::CommonCertVerifier,
         utils::certs::TNG_DUMMY_CERT,
     },
 };
 
 #[derive(Debug)]
-pub struct CoCoClientCertVerifier {
-    inner: Arc<dyn ClientCertVerifier>,
-    common: CoCoCommonCertVerifier,
+pub struct ClientCertVerifier {
+    inner: Arc<dyn RustlsClientCertVerifier>,
+    common: CommonCertVerifier,
 }
 
-impl CoCoClientCertVerifier {
+impl ClientCertVerifier {
     pub fn new(verify: VerifyArgs) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
@@ -35,7 +35,7 @@ impl CoCoClientCertVerifier {
 
         Ok(Self {
             inner: verifier,
-            common: CoCoCommonCertVerifier::new(verify),
+            common: CommonCertVerifier::new(verify),
         })
     }
 
@@ -44,7 +44,7 @@ impl CoCoClientCertVerifier {
     }
 }
 
-impl rustls::server::danger::ClientCertVerifier for CoCoClientCertVerifier {
+impl RustlsClientCertVerifier for ClientCertVerifier {
     fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
         &[]
     }

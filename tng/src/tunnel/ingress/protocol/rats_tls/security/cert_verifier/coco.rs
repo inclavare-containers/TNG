@@ -1,24 +1,25 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use rustls::client::danger::ServerCertVerifier as RustlsServerCertVerifier;
 use rustls::client::{danger::ServerCertVerified, WebPkiServerVerifier};
 use tokio_rustls::rustls::RootCertStore;
 
 use crate::{
     config::ra::VerifyArgs,
     tunnel::{
-        attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
+        attestation_result::AttestationResult, cert_verifier::CommonCertVerifier,
         utils::certs::TNG_DUMMY_CERT,
     },
 };
 
 #[derive(Debug)]
-pub struct CoCoServerCertVerifier {
+pub struct ServerCertVerifier {
     inner: Arc<WebPkiServerVerifier>,
-    common: CoCoCommonCertVerifier,
+    common: CommonCertVerifier,
 }
 
-impl CoCoServerCertVerifier {
+impl ServerCertVerifier {
     pub fn new(verify: VerifyArgs) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
@@ -29,7 +30,7 @@ impl CoCoServerCertVerifier {
 
         Ok(Self {
             inner: verifier,
-            common: CoCoCommonCertVerifier::new(verify),
+            common: CommonCertVerifier::new(verify),
         })
     }
 
@@ -38,7 +39,7 @@ impl CoCoServerCertVerifier {
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for CoCoServerCertVerifier {
+impl RustlsServerCertVerifier for ServerCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,

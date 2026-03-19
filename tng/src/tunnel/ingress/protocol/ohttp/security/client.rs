@@ -17,20 +17,11 @@ use rand::SeedableRng as _;
 #[cfg(unix)]
 use rand_chacha::ChaCha12Rng;
 #[cfg(unix)]
-use rats_cert::tee::coco::attester::CocoAttester;
-#[cfg(unix)]
 use rats_cert::tee::AttesterPipeline;
 #[cfg(unix)]
 use rats_cert::tee::GenericAttester as _;
-use rats_cert::tee::{coco::converter::CoCoNonce, ReportData};
-use rats_cert::tee::{
-    coco::{
-        converter::CocoConverter,
-        evidence::{CocoAsToken, CocoEvidence},
-        verifier::CocoVerifier,
-    },
-    GenericConverter, GenericVerifier as _,
-};
+use rats_cert::tee::ReportData;
+use rats_cert::tee::{GenericConverter as _, GenericVerifier as _};
 #[cfg(unix)]
 use tokio::io::AsyncReadExt;
 use tokio_util::{
@@ -51,7 +42,7 @@ use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 use crate::{
-    config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
+    config::ra::VerifyArgs,
     error::CheckErrorResponse as _,
     tunnel::{
         ohttp::protocol::{
@@ -61,11 +52,16 @@ use crate::{
             AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
             KeyConfigResponse, ServerAttestationInfo,
         },
+        provider::{
+            create_converter_from_as_args, create_verifier, ProviderType, TngEvidence, TngToken,
+        },
         utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
     },
 };
+#[cfg(unix)]
+use crate::tunnel::provider::{create_attester, create_converter};
 use crate::{
-    config::ra::{AttestationServiceTokenVerifyAdditionalArgs, RaArgs},
+    config::ra::RaArgs,
     error::TngError,
     tunnel::ohttp::{
         key_config::KeyConfigExtend,
@@ -78,7 +74,6 @@ use crate::{
     },
     AttestationResult, TokioRuntime,
 };
-use rats_cert::cert::verify::AttestationServiceConfig;
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -197,22 +192,12 @@ impl OHttpClientInner {
     async fn verify_token(
         server_key_config: &HpkeKeyConfig,
         attestation_result: &AttestationResultJwt,
-        token_verify: &AttestationServiceTokenVerifyArgs,
-    ) -> Result<CocoAsToken> {
-        let token = CocoAsToken::new(attestation_result.0.to_owned())?;
-        let verifier = CocoVerifier::new(
-            token_verify
-                .as_addr_config
-                .as_ref()
-                .map(|addr_config| AttestationServiceConfig {
-                    as_addr: addr_config.as_addr.clone(),
-                    as_is_grpc: addr_config.as_is_grpc,
-                    as_headers: addr_config.as_headers.clone(),
-                }),
-            &token_verify.trusted_certs_paths,
-            &token_verify.policy_ids,
-        )
-        .await?;
+        wire_provider: &str,
+        verify_args: &VerifyArgs,
+    ) -> Result<TngToken> {
+        let provider: ProviderType = wire_provider.parse()?;
+        let token = TngToken::from_wire(provider, attestation_result.0.clone())?;
+        let verifier = create_verifier(verify_args).await?;
 
         let userdata = ServerUserData {
             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
@@ -231,28 +216,16 @@ impl OHttpClientInner {
         server_key_config: &HpkeKeyConfig,
         challenge_token: String,
         evidence: serde_json::Value,
-        as_args: &AttestationServiceArgs,
-        token_verify: &AttestationServiceTokenVerifyAdditionalArgs,
-    ) -> Result<CocoAsToken> {
-        let coco_evidence = CocoEvidence::deserialize_from_json(evidence)?;
-        let coco_converter = CocoConverter::new(
-            &as_args.as_addr_config.as_addr,
-            &as_args.policy_ids,
-            as_args.as_addr_config.as_is_grpc,
-            &as_args.as_addr_config.as_headers,
-        )?;
-        let token = coco_converter.convert(&coco_evidence).await?;
+        verify_args: &VerifyArgs,
+    ) -> Result<TngToken> {
+        let VerifyArgs::BackgroundCheck { as_args, .. } = verify_args else {
+            bail!("verify_evidence requires background_check verify args");
+        };
+        let converter = create_converter_from_as_args(as_args)?;
+        let tng_evidence = TngEvidence::deserialize_from_json(evidence)?;
+        let token = converter.convert(&tng_evidence).await?;
 
-        let verifier = CocoVerifier::new(
-            Some(AttestationServiceConfig {
-                as_addr: as_args.as_addr_config.as_addr.clone(),
-                as_is_grpc: as_args.as_addr_config.as_is_grpc,
-                as_headers: as_args.as_addr_config.as_headers.clone(),
-            }),
-            &token_verify.trusted_certs_paths,
-            &as_args.policy_ids,
-        )
-        .await?;
+        let verifier = create_verifier(verify_args).await?;
 
         let userdata = ServerUserData {
             challenge_token: Some(challenge_token),
@@ -281,7 +254,7 @@ impl OHttpClientInner {
             };
 
             match verify {
-                Some(VerifyArgs::Passport { token_verify, .. }) => {
+                Some(verify_args @ VerifyArgs::Passport { .. }) => {
                     // Request hpke configuration for server
                     let response = self
                         .get_hpke_configuration(KeyConfigRequest {
@@ -290,11 +263,15 @@ impl OHttpClientInner {
                         .await?;
 
                     let token = match &response.attestation_info {
-                        Some(ServerAttestationInfo::Passport { attestation_result }) => {
+                        Some(ServerAttestationInfo::Passport {
+                            attestation_result,
+                            provider,
+                        }) => {
                             Self::verify_token(
                                 &response.hpke_key_config,
                                 attestation_result,
-                                token_verify,
+                                provider,
+                                verify_args,
                             )
                             .await?
                         }
@@ -306,20 +283,11 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                Some(VerifyArgs::BackgroundCheck {
-                    as_args,
-                    token_verify,
-                    ..
-                }) => {
-                    let coco_converter = CocoConverter::new(
-                        &as_args.as_addr_config.as_addr,
-                        &as_args.policy_ids,
-                        as_args.as_addr_config.as_is_grpc,
-                        &as_args.as_addr_config.as_headers,
-                    )?;
+                Some(verify_args @ VerifyArgs::BackgroundCheck { as_args, .. }) => {
+                    let converter = create_converter_from_as_args(as_args)?;
 
                     // fetch a challenge token from attestation service
-                    let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                    let challenge_token = converter.get_nonce().await?;
 
                     // Request hpke configuration for server
                     let response = self
@@ -336,8 +304,7 @@ impl OHttpClientInner {
                                 &response.hpke_key_config,
                                 challenge_token,
                                 evidence,
-                                as_args,
-                                token_verify,
+                                verify_args,
                             )
                             .await?
                         }
@@ -370,7 +337,7 @@ impl OHttpClientInner {
         let server_attestation_result = match token {
             Some(token) => {
                 expire = std::cmp::min(expire, Expire::from_timestamp(token.exp()?)?);
-                Some(AttestationResult::from_coco_as_token(token))
+                Some(AttestationResult::from_token(token))
             }
             None => None,
         };
@@ -409,20 +376,14 @@ impl OHttpClientInner {
                 let pk_s = client_key.1.to_bytes().to_vec();
 
                 let token = match attest {
-                    AttestArgs::Passport { aa_args, as_args, .. } => {
-                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
+                    AttestArgs::Passport { .. } => {
+                        let attester = create_attester(attest, None)?;
+                        let converter = create_converter(attest)?;
 
                         // fetch a challenge token from attestation service
-                        let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                        let challenge_token = converter.get_nonce().await?;
 
-                        let attester_pipeline =
-                            AttesterPipeline::new(coco_attester, coco_converter);
+                        let attester_pipeline = AttesterPipeline::new(attester, converter);
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
@@ -434,11 +395,11 @@ impl OHttpClientInner {
                             .get_evidence(&ReportData::Claims(userdata))
                             .await?
                     }
-                    AttestArgs::BackgroundCheck { aa_args, .. } => {
+                    AttestArgs::BackgroundCheck { .. } => {
                         let AttestationChallengeResponse { challenge_token } =
                             self.background_check_attestation_challenge().await?;
 
-                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+                        let attester = create_attester(attest, None)?;
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
@@ -446,24 +407,27 @@ impl OHttpClientInner {
                         }
                         .to_claims()?;
 
-                        let evidence = coco_attester
+                        let evidence = attester
                             .get_evidence(&ReportData::Claims(userdata))
                             .await?;
 
                         let AttestationVerifyResponse {
-                            attestation_result: token,
+                            attestation_result: token_str,
+                            provider: provider_str,
                         } = self.background_check_verify_attestation(evidence).await?;
-                        CocoAsToken::new(token)?
+                        TngToken::from_wire(provider_str.parse()?, token_str)?
                     }
                 };
 
                 let token_expire = Expire::from_timestamp(token.exp()?)?;
+                let provider = token.provider_type().to_string();
 
                 (
                     Some(client_key),
                     ClientAuth::AttestedPublicKey(AttestedPublicKey {
                         attestation_result: token.into_str(),
                         pk_s,
+                        provider,
                     }),
                     token_expire,
                 )
@@ -746,7 +710,7 @@ impl OHttpClientInner {
     /// It is used specifically in the "Server verification Client + background check model" scenario.
     pub async fn background_check_verify_attestation(
         &self,
-        evidence: CocoEvidence,
+        evidence: TngEvidence,
     ) -> Result<AttestationVerifyResponse, TngError> {
         let url = self.base_url.clone();
 

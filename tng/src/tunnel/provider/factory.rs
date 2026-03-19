@@ -47,7 +47,7 @@ pub fn create_converter(attest_args: &AttestArgs) -> Result<TngConverter> {
     )?))
 }
 
-// TODO: Consolidate into a single create_converter taking ConverterConfig once Phase 2 config restructuring is done.
+// TODO: Consolidate into a single create_converter taking ConverterArgs once config is restructured with provider-specific converter args.
 /// Create a converter from explicit AS args (used on the verify side in background check mode).
 pub fn create_converter_from_as_args(as_args: &AttestationServiceArgs) -> Result<TngConverter> {
     Ok(TngConverter::Coco(CocoConverter::new(

@@ -8,9 +8,9 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use itertools::Itertools;
 use ohttp::KeyConfig;
-use rats_cert::tee::coco::attester::CocoAttester;
-use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
 use rats_cert::tee::{AttesterPipeline, GenericAttester as _, ReportData};
+
+use crate::tunnel::provider::{create_attester, create_converter};
 
 use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
@@ -141,20 +141,15 @@ impl OhttpServerApi {
                     match (attestation_request, attest) {
                         (
                             Some(AttestationRequest::Passport),
-                            AttestArgs::Passport { aa_args, as_args, .. },
+                            attest_args @ AttestArgs::Passport { .. },
                         ) => {
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-                            let coco_converter = CocoConverter::new(
-                                &as_args.as_addr_config.as_addr,
-                                &as_args.policy_ids,
-                                as_args.as_addr_config.as_is_grpc,
-                                &as_args.as_addr_config.as_headers,
-                            )?;
+                            let attester = create_attester(attest_args, None)?;
+                            let converter = create_converter(attest_args)?;
                             // fetch a challenge token from attestation service
-                            let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                            let challenge_token = converter.get_nonce().await?;
 
                             let attester_pipeline =
-                                AttesterPipeline::new(coco_attester, coco_converter);
+                                AttesterPipeline::new(attester, converter);
 
                             let userdata = ServerUserData {
                                 challenge_token: Some(challenge_token),
@@ -164,25 +159,27 @@ impl OhttpServerApi {
                             let token = attester_pipeline
                                 .get_evidence(&ReportData::Claims(userdata))
                                 .await?;
+                            let provider = token.provider_type().to_string();
                             KeyConfigResponse {
                                 hpke_key_config,
                                 attestation_info: Some(ServerAttestationInfo::Passport {
                                     attestation_result: AttestationResultJwt(token.into_str()),
+                                    provider,
                                 }),
                             }
                         }
                         (
                             Some(AttestationRequest::BackgroundCheck { challenge_token }),
-                            AttestArgs::BackgroundCheck { aa_args, .. },
+                            attest_args @ AttestArgs::BackgroundCheck { .. },
                         ) => {
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+                            let attester = create_attester(attest_args, None)?;
 
                             let userdata = ServerUserData {
                                 challenge_token: Some(challenge_token),
                                 hpke_key_config: hpke_key_config.clone(),
                             }.to_claims()?;
 
-                            let evidence = coco_attester
+                            let evidence = attester
                                 .get_evidence(&ReportData::Claims(userdata))
                                 .await?.serialize_to_json()?;
 

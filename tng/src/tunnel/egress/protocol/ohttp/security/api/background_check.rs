@@ -1,8 +1,6 @@
 use anyhow::{bail, Result};
 use axum::Json;
-use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
-use rats_cert::tee::coco::evidence::CocoEvidence;
-use rats_cert::tee::GenericConverter;
+use rats_cert::tee::GenericConverter as _;
 
 use crate::config::ra::{RaArgs, VerifyArgs};
 use crate::error::TngError;
@@ -10,6 +8,7 @@ use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationVerifyRequest, AttestationVerifyResponse,
 };
+use crate::tunnel::provider::{create_converter_from_as_args, TngEvidence};
 
 impl OhttpServerApi {
     /// Interface 3: Attestation Forward - Get Challenge
@@ -31,14 +30,9 @@ impl OhttpServerApi {
                         ..
                     } => {
                         // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
+                        let converter = create_converter_from_as_args(as_args)?;
 
-                        let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                        let challenge_token = converter.get_nonce().await?;
 
                         Ok(Json(AttestationChallengeResponse {
                             challenge_token,
@@ -74,19 +68,16 @@ impl OhttpServerApi {
                         as_args,
                         ..
                     } => {
-                        let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
+                        let tng_evidence = TngEvidence::deserialize_from_json(payload.evidence)?;
 
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
+                        let converter = create_converter_from_as_args(as_args)?;
 
-                        let token  = coco_converter.convert(&coco_evidence).await?;
+                        let token = converter.convert(&tng_evidence).await?;
 
+                        let provider = token.provider_type().to_string();
                         let response = AttestationVerifyResponse {
                             attestation_result: token.into_str(),
+                            provider,
                         };
                         Ok(Json(response))
 

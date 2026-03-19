@@ -6,8 +6,6 @@ use bhttp::http_compat::encode::BhttpEncoder;
 use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
-use rats_cert::tee::coco::evidence::CocoAsToken;
-use rats_cert::tee::coco::verifier::CocoVerifier;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
@@ -15,11 +13,7 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
-use crate::config::ra::{
-    AttestationServiceAddrArgs, AttestationServiceArgs,
-    AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceTokenVerifyArgs, RaArgs,
-    VerifyArgs,
-};
+use crate::config::ra::{RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -32,7 +26,7 @@ use crate::tunnel::ohttp::protocol::metadata::{
     AttestedPublicKey, Metadata, NoAuth, METADATA_MAX_LEN,
 };
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
-use rats_cert::cert::verify::AttestationServiceConfig;
+use crate::tunnel::provider::{create_verifier, ProviderType, TngToken};
 
 impl OhttpServerApi {
     /// Interface 2: Process Encrypted Request
@@ -203,60 +197,13 @@ impl OhttpServerApi {
                 Some(ClientAuth::AttestedPublicKey(AttestedPublicKey {
                     attestation_result,
                     pk_s,
+                    provider,
                 })),
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify),
             ) => {
-                let verifier = match verify {
-                    VerifyArgs::Passport {
-                        token_verify:
-                            AttestationServiceTokenVerifyArgs {
-                                policy_ids,
-                                trusted_certs_paths,
-                                as_addr_config,
-                                ..
-                            },
-                        ..
-                    } => {
-                        CocoVerifier::new(
-                            as_addr_config
-                                .as_ref()
-                                .map(|addr_config| AttestationServiceConfig {
-                                    as_addr: addr_config.as_addr.clone(),
-                                    as_is_grpc: addr_config.as_is_grpc,
-                                    as_headers: addr_config.as_headers.clone(),
-                                }),
-                            trusted_certs_paths,
-                            policy_ids,
-                        )
-                        .await?
-                    }
-                    VerifyArgs::BackgroundCheck {
-                        as_args:
-                            AttestationServiceArgs {
-                                as_addr_config: AttestationServiceAddrArgs { as_addr, .. },
-                                policy_ids,
-                                ..
-                            },
-                        token_verify:
-                            AttestationServiceTokenVerifyAdditionalArgs {
-                                trusted_certs_paths,
-                            },
-                        ..
-                    } => {
-                        CocoVerifier::new(
-                            Some(AttestationServiceConfig {
-                                as_addr: as_addr.clone(),
-                                as_is_grpc: false,              // default value
-                                as_headers: Default::default(), // default value
-                            }),
-                            trusted_certs_paths,
-                            policy_ids,
-                        )
-                        .await?
-                    }
-                };
-
-                let token = CocoAsToken::new(attestation_result)?;
+                let provider: ProviderType = provider.parse()?;
+                let token = TngToken::from_wire(provider, attestation_result)?;
+                let verifier = create_verifier(verify).await?;
 
                 let userdata = ClientUserData {
                     // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
