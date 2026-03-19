@@ -15,7 +15,7 @@ authors = ["Kun Lai <laikun@linux.alibaba.com>"]
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/inclavare-containers/tng"
-version = "2.4.0"
+version = "2.5.0"
 
 [workspace.dependencies]
 again = "0.1.2"

@@ -4757,7 +4757,7 @@ dependencies = [
 
 [[package]]
 name = "rats-cert"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "as-any",
@@ -5999,7 +5999,7 @@ dependencies = [
 
 [[package]]
 name = "tng"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "again",
  "anyhow",
@@ -6099,7 +6099,7 @@ dependencies = [
 
 [[package]]
 name = "tng-testsuite"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "again",
  "anyhow",
@@ -6137,7 +6137,7 @@ dependencies = [
 
 [[package]]
 name = "tng-wasm"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "anyhow",
  "axum",

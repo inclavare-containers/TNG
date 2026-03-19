@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.4.0
+Version: 2.5.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -77,6 +77,22 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Thu Mar 19 2026 Kun Lai <laikun@linux.alibaba.com> - 2.5.0-1
+- ci: add GitHub Release notes generation with robust tag detection
+- ci: upgrade GitHub Actions to v6/v8 for Node.js 24 compatibility
+- build(makefile): add automated version bump targets
+- chore: unify dependency versions and migrate to workspace-level management
+- feat: migrate rats-cert into workspace with SGX/TDX features removed
+- docs(configuration): fix typo in field name from r#in to in
+- fix(verifier): fix missing headers when fetching JWT verification certs in Passport mode
+- refactor(verifier): handle AS certificate fetch errors gracefully and validate HTTP status
+- ohttp(peer_shared): add support for peers_file in peer_shared key mode
+- feat(ohttp, utils): add robust file watcher with close-write detection for key reload
+- feat(attestation): enable multi-submod EAR verification and additional evidence support
+- ci: add reproducible build and SLSA provenance support for RPM build workflow
+- docs: add missing attest, verify, and no_ra fields to peer_shared mode configuration
+- fix(rpm): specify AnolisOS 23.3 release version in Dockerfile
+
 * Mon Jan 26 2026 Kun Lai <laikun@linux.alibaba.com> - 2.4.0-1
 - ohttp: add configurable key management with self-generated default keys and file-based HPKE key loading with auto-reload
 - ohttp: support key lookup by SHA-256 hash and hostname-based peer_shared cluster connections
