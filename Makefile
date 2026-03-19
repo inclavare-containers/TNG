@@ -30,6 +30,108 @@ run-test-on-podman: install-test-deps
 
 VERSION 	:= $(shell grep '^version' ./Cargo.toml | awk -F' = ' '{print $$2}' | tr -d '"')
 
+# Version components for bumping
+MAJOR := $(shell echo $(VERSION) | awk -F. '{print $$1}')
+MINOR := $(shell echo $(VERSION) | awk -F. '{print $$2}')
+PATCH := $(shell echo $(VERSION) | awk -F. '{print $$3}')
+
+# Calculate new versions
+NEW_VERSION_MAJOR := $(shell echo $$(( $(MAJOR) + 1 ))).0.0
+NEW_VERSION_MINOR := $(MAJOR).$(shell echo $$(( $(MINOR) + 1 ))).0
+NEW_VERSION_PATCH := $(MAJOR).$(MINOR).$(shell echo $$(( $(PATCH) + 1 )))
+
+# Function to update Cargo.toml version
+define update-cargo-toml
+	@sed -i 's/^version = "$(VERSION)"/version = "$(1)"/' Cargo.toml
+endef
+
+# Function to update buildspec.yml version
+define update-buildspec-yml
+	@sed -i -E 's/(tags: \[\[)[0-9]+\.[0-9]+\.[0-9]+(, latest\]\])/\1$(1)\2/' APPLICATION/tng/buildspec.yml
+endef
+
+# Function to update Cargo.lock
+define update-cargo-lock
+	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
+endef
+
+# Function to get git info
+define get-git-info
+	$(eval AUTHOR := $(shell git log -1 --pretty=format:"%an <%ae>"))
+endef
+
+# Function to determine last tag
+# $(1) = expected previous version tag (e.g., v2.4.0)
+define determine-last-tag
+	$(eval EXPECTED_TAG := $(1))
+	$(eval TAG_EXISTS := $(shell git tag -l "$(EXPECTED_TAG)"))
+	$(eval LAST_TAG := $(if $(TAG_EXISTS),$(EXPECTED_TAG),$(shell git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1)))
+endef
+
+# Function to write commits to file for RPM (uses -)
+define write-commits-to-file
+	@git log $(LAST_TAG)..HEAD --pretty=format:"- %s" --no-merges > $(1) 2>/dev/null || echo "- Version bump to $(2)" > $(1)
+endef
+
+# Function to update RPM spec version and changelog
+define update-rpm-spec
+	@# Update Version field in spec file (matches any version number)
+	@sed -i 's/^Version: .*/Version: $(1)/' trusted-network-gateway.spec
+	$(eval RPM_DATE := $(shell date +"%a %b %d %Y"))
+	@echo "* $(RPM_DATE) $(AUTHOR) - $(1)-1" > /tmp/rpm_changelog_entry.txt
+	$(call write-commits-to-file,/tmp/rpm_commits.txt,$(1))
+	@cat /tmp/rpm_commits.txt >> /tmp/rpm_changelog_entry.txt
+	@echo "" >> /tmp/rpm_changelog_entry.txt
+	@echo "" >> /tmp/rpm_changelog_entry.txt
+	@awk '/^%changelog/{print; while((getline line < "/tmp/rpm_changelog_entry.txt") > 0) print line; close("/tmp/rpm_changelog_entry.txt"); next} {print}' trusted-network-gateway.spec > trusted-network-gateway.spec.new && mv trusted-network-gateway.spec.new trusted-network-gateway.spec
+	@rm -f /tmp/rpm_changelog_entry.txt /tmp/rpm_commits.txt
+endef
+
+# Main bump version function
+# $(1) = version type (major/minor/patch)
+# $(2) = new version number
+# $(3) = expected previous version tag (e.g., v2.4.0)
+define bump-version-internal
+	@echo "Bumping $(1) version: $(VERSION) -> $(2)"
+	$(call update-cargo-toml,$(2))
+	@echo "New version: $(2)"
+	$(call update-cargo-lock)
+	$(call update-buildspec-yml,$(2))
+	@echo "Updated APPLICATION/tng/buildspec.yml"
+	$(call get-git-info)
+	$(call determine-last-tag,$(3))
+	@echo "Using last tag: $(LAST_TAG)"
+	@echo "Updating RPM spec version and changelog..."
+	$(call update-rpm-spec,$(2))
+	@echo "Version bump complete. New version: $(2)"
+	@echo "Changes made:"
+	@echo "  - Updated Cargo.toml"
+	@echo "  - Updated Cargo.lock"
+	@echo "  - Updated APPLICATION/tng/buildspec.yml"
+	@echo "  - Updated RPM spec version and changelog"
+	@echo ""
+	@echo "If it is ok to commit, run the following commands:"
+	@echo "  git add ."
+	@echo "  git commit -m \"Bump $(1) version to $(2)\""
+	@echo "  git tag -a v$(2) -m \"Bump $(1) version to $(2)\""
+	@echo "  git push origin v$(2)"
+endef
+
+# Bump major version (2.4.0 -> 3.0.0)
+.PHONY: bump-version-major
+bump-version-major:
+	$(call bump-version-internal,major,$(NEW_VERSION_MAJOR),v$(VERSION))
+
+# Bump minor version (2.4.0 -> 2.5.0)
+.PHONY: bump-version-minor
+bump-version-minor:
+	$(call bump-version-internal,minor,$(NEW_VERSION_MINOR),v$(VERSION))
+
+# Bump patch version (2.4.0 -> 2.4.1)
+.PHONY: bump-version-patch
+bump-version-patch:
+	$(call bump-version-internal,patch,$(NEW_VERSION_PATCH),v$(VERSION))
+
 .PHONE: create-tarball
 create-tarball:
 	rm -rf /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/ && mkdir -p /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/
