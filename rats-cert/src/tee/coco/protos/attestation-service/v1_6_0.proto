@@ -1,0 +1,83 @@
+// Taken from https://github.com/openanolis/trustee/blob/0a87ec9b904c9f20dc26bc41c535bf57756af935/protos/attestation.proto
+
+syntax = "proto3";
+
+package attestation;
+
+message AttestationRequest {
+    // The evidence from one or more atttesters that should be verified
+    // along with metadata about the evidence.
+    repeated IndividualAttestationRequest verification_requests = 1;
+    // List of IDs of the policy used to check evidence. If not provided,
+    // a "default" one will be used.
+    // EAR tokens will be based only on the first policy specified in
+    // this list.
+    repeated string policy_ids = 2;
+
+}
+
+message IndividualAttestationRequest {
+    // TEE enum. Specify the evidence type
+    string tee = 1;
+
+    // Base64 encoded evidence. The alphabet is URL_SAFE_NO_PAD.
+    // defined in https://datatracker.ietf.org/doc/html/rfc4648#section-5
+    string evidence = 3;
+
+    // Runtime Data used to check the binding relationship with report data in
+    // Evidence
+    oneof runtime_data {
+        // Base64 encoded runtime data slice. The whole string will be base64
+        // decoded. The result one will then be accumulated into a digest which
+        // is used as the expected runtime data to check against the one inside
+        // evidence.
+        //
+        // The alphabet is URL_SAFE_NO_PAD.
+        // defined in https://datatracker.ietf.org/doc/html/rfc4648#section-5
+        string raw_runtime_data = 4;
+
+        // Runtime data in a JSON map. CoCoAS will rearrange each layer of the
+        // data JSON object in dictionary order by key, then serialize and output
+        // it into a compact string, and perform hash calculation on the whole
+        // to check against the one inside evidence.
+        //
+        // After the verification, the structured runtime data field will be included
+        // inside the token claims.
+        string structured_runtime_data = 5;
+    }
+
+    // Init Data used to check the binding relationship with init data in
+    // Evidence
+    oneof init_data {
+        // Base64 encoded init data digest slice. The whole string will be base64
+        // decoded. The result one will then be accumulated into a digest which
+        // is used as the expected init data to check against the one inside
+        // evidence.
+        //
+        // The alphabet is URL_SAFE_NO_PAD.
+        // defined in https://datatracker.ietf.org/doc/html/rfc4648#section-5
+        string init_data_digest = 6;
+
+        // Init data TOML. CoCoAS will perform hash calculation on the whole
+        // to check against the one inside evidence. The hash algorithm to use
+        // is inside the Initdata Toml's metadata.
+        // 
+        // See https://github.com/confidential-containers/trustee/blob/main/kbs/docs/initdata.md#toml-version
+        // 
+        // After the verification, the `.data` field of init data field will
+        // be included inside the token claims.
+        string init_data_toml = 7;
+    }
+
+    // Hash algorithm used to calculate runtime data. Currently can be "sha256",
+    // "sha384" or "sha512". If not specified, "sha384" will be selected.
+    string runtime_data_hash_algorithm = 8;
+}
+
+message AttestationResponse {
+    string attestation_token = 1;
+}
+
+service AttestationService {
+    rpc AttestationEvaluate(AttestationRequest) returns (AttestationResponse) {};
+}

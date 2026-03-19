@@ -6,6 +6,7 @@ members = [
   "tng-testsuite",
   "tng-wasm",
   "deps/hyper-util-shim",
+  "rats-cert",
 ]
 resolver = "2"
 
@@ -32,9 +33,51 @@ scopeguard = "1.2.0"
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0.140"
 tokio = {version = "1.47.1", features = ["sync"]}
+tracing = "0.1"
 tokio-graceful = "0.2.2"
 tokio_with_wasm = {version = "=0.8.6", features = ["rt", "macros", "time"]}
 tokio_with_wasm_proc = "=0.8.6"
+
+# rats-cert dependencies
+as-any = "0.3.2"
+async-trait = "0.1.86"
+base64 = "0.22.1"
+bitflags = "2.8.0"
+ciborium = "0.2.2"
+jsonwebtoken = {version = "9", default-features = false}
+rand = "0.8.5"
+ring = "0.17.8"
+rsa = {version = "0.9.7", features = ["sha2"]}
+rustls-pki-types = "1.10.1"
+rustls-webpki = {package = "rustls-webpki", version = "0.103.3", default-features = false, features = ["alloc", "ring"]}
+serde_bytes = "0.11.15"
+sha2 = {version = "0.10.8", features = ["oid"]}
+signature = "2.2.0"
+spin = "0.9.8"
+strum = {version = "0.26.3", features = ["derive"]}
+strum_macros = "0.26.4"
+thiserror = "2.0.17"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+zeroize = "1.8.1"
+
+# rats-cert optional dependencies
+canon-json = {git = "https://github.com/inclavare-containers/canon-json-rs", rev = "d6fa90c68f60d3d7a51daf942d882b589541be51"}
+const-oid = "0.9.6"
+flatten-json-object = "0.6.1"
+p256 = "0.13.2"
+pkcs8 = {version = "0.10.2", features = ["pem"]}
+prost = "0.13.4"
+protobuf = "~3.7.1"
+tonic = {version = "0.13.1", default-features = false, features = ["prost", "codegen", "channel"]}
+tonic-build = {version = "0.13.1", default-features = false, features = ["prost"]}
+ttrpc = "0.8.4"
+ttrpc-codegen = "0.5.0"
+x509-cert = {version = "0.2.5", features = ["builder", "pem"]}
+
+# rats-cert target-specific dependencies
+time = {version = "0.3.37", features = ["std"]}
+tonic-web-wasm-client = "0.7.1"
+web-time = "1.1.0"
 
 [patch.crates-io.rustls]
 branch = "v/0.23.27-patched"
