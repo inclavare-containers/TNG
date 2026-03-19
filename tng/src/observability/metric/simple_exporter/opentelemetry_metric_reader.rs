@@ -19,7 +19,7 @@ impl<T: MetricReader> MetricReader for ShutdownInStandaloneTokioThreadMetricRead
     fn collect(
         &self,
         rm: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
-    ) -> opentelemetry_sdk::metrics::MetricResult<()> {
+    ) -> opentelemetry_sdk::error::OTelSdkResult {
         self.inner.collect(rm)
     }
 
@@ -44,5 +44,16 @@ impl<T: MetricReader> MetricReader for ShutdownInStandaloneTokioThreadMetricRead
         kind: opentelemetry_sdk::metrics::InstrumentKind,
     ) -> opentelemetry_sdk::metrics::Temporality {
         self.inner.temporality(kind)
+    }
+
+    fn shutdown_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> opentelemetry_sdk::error::OTelSdkResult {
+        // Informs the executor to hand off any other tasks it has to a new worker thread
+        tokio::task::block_in_place(|| {
+            // And then we can call the inner shutdown method
+            self.inner.shutdown_with_timeout(timeout)
+        })
     }
 }

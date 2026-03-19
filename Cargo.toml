@@ -18,66 +18,134 @@ repository = "https://github.com/inclavare-containers/tng"
 version = "2.4.0"
 
 [workspace.dependencies]
+again = "0.1.2"
 anyhow = "1.0.98"
-bytes = "1.10.1"
-futures = "0.3.31"
-hex = "0.4.3"
-http = "1.3.1"
-http-body-util = "0.1.3"
-hyper = {version = "1", default-features = false, features = ["http1", "http2"]}
-hyper-util = {version = "=0.1.7", features = ["service", "client-legacy", "http1", "http2"]}
-itertools = "0.14.0"
-regex = "1.11.1"
-reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
-scopeguard = "1.2.0"
-serde = {version = "1.0", features = ["derive"]}
-serde_json = "1.0.140"
-tokio = {version = "1.47.1", features = ["sync"]}
-tracing = "0.1"
-tokio-graceful = "0.2.2"
-tokio_with_wasm = {version = "=0.8.6", features = ["rt", "macros", "time"]}
-tokio_with_wasm_proc = "=0.8.6"
-
-# rats-cert dependencies
 as-any = "0.3.2"
-async-trait = "0.1.86"
+async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
+async-stream = "0.3.6"
+async-trait = "0.1.88"
+atty = "0.2.14"
+auto_enums = {version = "0.8", features = ["std", "tokio1"]}
+axum = {version = "0.8.4", default-features = false}
+axum-extra = "0.10.1"
 base64 = "0.22.1"
 bitflags = "2.8.0"
+bytes = "1.10.1"
+canon-json = {git = "https://github.com/inclavare-containers/canon-json-rs", rev = "d6fa90c68f60d3d7a51daf942d882b589541be51"}
+cfg_aliases = "0.2.1"
+chromedriver-manager = "0.4.0"
+chrono = "0.4.42"
 ciborium = "0.2.2"
+cidr = {version = "0.2.3", features = ["serde"]}
+clap = {version = "4.5.39", features = ["derive"]}
+console-subscriber = "0.5.0"
+console_error_panic_hook = "0.1.7"
+const-oid = "0.9.6"
+const_format = "0.2.34"
+ctor = "=0.4.1"
+derivative = "2.2.0"
+either = "1.15.0"
+fast-socks5 = {git = "https://github.com/dizda/fast-socks5.git", rev = "4c8985c"}
+flatten-json-object = "0.6.1"
+futures = "0.3.31"
+getrandom = "0.3"
+gloo = {version = "0.11.0"}
+h2 = {version = "0.4.10", features = ["stream"]}
+hex = "0.4.3"
+hpke = "0.13.0"
+http = "1.3.1"
+http-body = "1.0.1"
+http-body-util = "0.1.3"
+httparse = "1.10.1"
+hyper = {version = "1", default-features = false, features = ["http1", "http2"]}
+hyper-util = {version = "=0.1.7", features = ["service", "client-legacy", "http1", "http2"]}# version locked for used with hyper-util-shim
+indexmap = {version = "2.9.0", features = ["serde"]}
+itertools = "0.14.0"
+js-sys = "0.3.77"
 jsonwebtoken = {version = "9", default-features = false}
-rand = "0.8.5"
+netns-rs = "0.1.0"
+nix = "0.30.1"
+notify = "7.0.0"
+once_cell = "1.21.3"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = {version = "0.31.0", default-features = false}
+opentelemetry-stdout = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+p256 = "0.13.2"
+peekable = "0.4"
+pin-project = "1"
+pin-project-lite = "0.2.16"
+pkcs8 = {version = "0.10.2", features = ["pem"]}
+portpicker = "0.1.1"
+prost = "^0.14"
+prost-build = "0.14.1"
+prost-types = "0.14"
+protobuf = "~3.7.1"
+rand = "0.9.1"
+rand_chacha = "0.9.0"
+rayon = "1.10.0"
+regex = "1.11.1"
+reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
 ring = "0.17.8"
 rsa = {version = "0.9.7", features = ["sha2"]}
+rstest = "0.25.0"
+rtnetlink = "0.17.0"
+rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring"]}
+rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.10.1"
 rustls-webpki = {package = "rustls-webpki", version = "0.103.3", default-features = false, features = ["alloc", "ring"]}
+scopeguard = "1.2.0"
+serde = {version = "1.0", features = ["derive"]}
+serde-wasm-bindgen = "0.6.5"
 serde_bytes = "0.11.15"
-sha2 = {version = "0.10.8", features = ["oid"]}
+serde_json = "1.0.140"
+serde_variant = "0.1.3"
+serde_with = {version = "3.12.0", features = ["json"]}
+serf = {version = "0.4.1", features = ["default", "tokio", "tcp", "serde"]}
+serial_test = "3.2.0"
+sha2 = "0.10.8"
+shadow-rs = {version = "=1.0.0", default-features = false}
 signature = "2.2.0"
-spin = "0.9.8"
-strum = {version = "0.26.3", features = ["derive"]}
-strum_macros = "0.26.4"
+socket2 = "0.5.10"
+spin = {version = "0.10.0", default-features = false, features = ["mutex", "spin_mutex"]}
+strum = "0.27.1"
+strum_macros = "0.27.1"
+tempfile = "3.20.0"
+thirtyfour = "0.35.0"
 thiserror = "2.0.17"
+time = "0.3.41"
+tokio = {version = "1.47.1", default-features = false, features = ["sync"]}
+tokio-graceful = {version = "0.2.2", default-features = false}
+tokio-rustls = {version = "0.26.2", default-features = false, features = ["logging", "tls12", "ring"]}
+tokio-util = "0.7.15"
+tokio_with_wasm = {version = "=0.8.6", features = ["rt", "macros", "time"]}
+tokio_with_wasm_proc = "=0.8.6"
+tonic = {version = "=0.14.2", default-features = false}# locked to 0.14.2 due to limit of hyper-util=0.1.7
+tonic-prost = {version = "=0.14.2", default-features = false}# locked to 0.14.2 due to limit of hyper-util=0.1.7
+tonic-prost-build = {version = "=0.14.2", default-features = false}# locked to 0.14.2 due to limit of hyper-util=0.1.7
+tonic-web-wasm-client = "0.8.0"
+tower = {version = "0.5"}
+tower-http = "0.6.6"
+tracing = "0.1"
+tracing-futures = {version = "0.2.5"}
+tracing-log = "0.2.0"
+tracing-opentelemetry = "0.32.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-zeroize = "1.8.1"
-
-# rats-cert optional dependencies
-canon-json = {git = "https://github.com/inclavare-containers/canon-json-rs", rev = "d6fa90c68f60d3d7a51daf942d882b589541be51"}
-const-oid = "0.9.6"
-flatten-json-object = "0.6.1"
-p256 = "0.13.2"
-pkcs8 = {version = "0.10.2", features = ["pem"]}
-prost = "0.13.4"
-protobuf = "~3.7.1"
-tonic = {version = "0.13.1", default-features = false, features = ["prost", "codegen", "channel"]}
-tonic-build = {version = "0.13.1", default-features = false, features = ["prost"]}
+tracing-wasm = "0.2.1"
 ttrpc = "0.8.4"
 ttrpc-codegen = "0.5.0"
-x509-cert = {version = "0.2.5", features = ["builder", "pem"]}
-
-# rats-cert target-specific dependencies
-time = {version = "0.3.37", features = ["std"]}
-tonic-web-wasm-client = "0.7.1"
+url = "2.5"
+uuid = {version = "1.18.1"}
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4.50"
+wasm-streams = "0.4.2"
+web-sys = {version = "0.3.77"}
 web-time = "1.1.0"
+which = "7.0.3"
+ws_stream_tungstenite = "0.13.0"
+ws_stream_wasm = "=0.7.5"
+x509-cert = {version = "0.2.5", features = ["builder", "pem"]}
+zeroize = "1.8.1"
 
 [patch.crates-io.rustls]
 branch = "v/0.23.27-patched"

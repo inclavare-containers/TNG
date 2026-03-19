@@ -47,7 +47,7 @@ fn main() {
 
         let v1_5_2 = out_dir.join("attestation-service").join("v1_5_2");
         let _ = std::fs::create_dir_all(&v1_5_2); // This will panic below if the directory failed to create
-        tonic_build::configure()
+        tonic_prost_build::configure()
             .out_dir(v1_5_2)
             .build_server(false)
             .build_client(true)
@@ -59,7 +59,7 @@ fn main() {
 
         let v1_6_0 = out_dir.join("attestation-service").join("v1_6_0");
         let _ = std::fs::create_dir_all(&v1_6_0); // This will panic below if the directory failed to create
-        tonic_build::configure()
+        tonic_prost_build::configure()
             .out_dir(v1_6_0)
             .build_server(false)
             .build_client(true)

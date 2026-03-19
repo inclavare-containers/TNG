@@ -6,6 +6,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use indexmap::IndexMap;
+use itertools::Itertools;
 
 pub mod falcon;
 pub mod noop;
@@ -73,125 +74,102 @@ impl<T: SimpleMetricExporter> OpenTelemetryMetricExporterAdapter<T> {
 
     fn convert_to_simple_metrics(
         &self,
-        metrics: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
+        metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
     ) -> Result<Vec<SimpleMetric>> {
         let mut out_metrics = vec![];
 
-        for scope_metrics in &metrics.scope_metrics {
-            for metric in &scope_metrics.metrics {
-                let value_and_time = {
-                    let data = metric.data.as_any();
-                    if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<u64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_u128(data_point.value as u128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                sum.time,
-                                ValueType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<i64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_i128(data_point.value as i128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                sum.time,
-                                ValueType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(sum) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Sum<f64>>()
-                    {
-                        match sum.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_f64(data_point.value).with_context(
-                                    || {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    },
-                                )?,
-                                sum.time,
-                                ValueType::Counter,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<u64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_u128(data_point.value as u128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                gauge.time,
-                                ValueType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<i64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_i128(data_point.value as i128)
-                                    .with_context(|| {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    })?,
-                                gauge.time,
-                                ValueType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(gauge) =
-                        data.downcast_ref::<opentelemetry_sdk::metrics::data::Gauge<f64>>()
-                    {
-                        match gauge.data_points.last() {
-                            Some(data_point) => Some((
-                                serde_json::Number::from_f64(data_point.value).with_context(
-                                    || {
-                                        format!(
-                                            "Failed to convert num {} to json",
-                                            data_point.value
-                                        )
-                                    },
-                                )?,
-                                gauge.time,
-                                ValueType::Gauge,
-                                &data_point.attributes,
-                            )),
-                            None => None,
-                        }
-                    } else {
+        for scope_metrics in metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                let value_and_time = match metric.data() {
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::U64(
+                        opentelemetry_sdk::metrics::data::MetricData::Sum(sum),
+                    ) => match sum.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_u128(data_point.value() as u128)
+                                .with_context(|| {
+                                    format!("Failed to convert num {} to json", data_point.value())
+                                })?,
+                            sum.time(),
+                            ValueType::Counter,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(
+                        opentelemetry_sdk::metrics::data::MetricData::Sum(sum),
+                    ) => match sum.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_i128(data_point.value() as i128)
+                                .with_context(|| {
+                                    format!("Failed to convert num {} to json", data_point.value())
+                                })?,
+                            sum.time(),
+                            ValueType::Counter,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
+                        opentelemetry_sdk::metrics::data::MetricData::Sum(sum),
+                    ) => match sum.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_f64(data_point.value()).with_context(
+                                || format!("Failed to convert num {} to json", data_point.value()),
+                            )?,
+                            sum.time(),
+                            ValueType::Counter,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::U64(
+                        opentelemetry_sdk::metrics::data::MetricData::Gauge(gauge),
+                    ) => match gauge.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_u128(data_point.value() as u128)
+                                .with_context(|| {
+                                    format!("Failed to convert num {} to json", data_point.value())
+                                })?,
+                            gauge.time(),
+                            ValueType::Gauge,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(
+                        opentelemetry_sdk::metrics::data::MetricData::Gauge(gauge),
+                    ) => match gauge.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_i128(data_point.value() as i128)
+                                .with_context(|| {
+                                    format!("Failed to convert num {} to json", data_point.value())
+                                })?,
+                            gauge.time(),
+                            ValueType::Gauge,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(
+                        opentelemetry_sdk::metrics::data::MetricData::Gauge(gauge),
+                    ) => match gauge.data_points().last() {
+                        Some(data_point) => Some((
+                            serde_json::Number::from_f64(data_point.value()).with_context(
+                                || format!("Failed to convert num {} to json", data_point.value()),
+                            )?,
+                            gauge.time(),
+                            ValueType::Gauge,
+                            data_point.attributes().collect_vec(),
+                        )),
+                        None => None,
+                    },
+
+                    _ => {
                         bail!("Unsupported data type");
                     }
                 };
@@ -206,7 +184,7 @@ impl<T: SimpleMetricExporter> OpenTelemetryMetricExporterAdapter<T> {
                         });
 
                     out_metrics.push(SimpleMetric {
-                        name: metric.name.to_string(),
+                        name: metric.name().to_string(),
                         value,
                         value_type,
                         attributes: attrs,
@@ -226,7 +204,7 @@ impl<T: SimpleMetricExporter + std::marker::Sync + std::marker::Send + 'static>
 {
     async fn export(
         &self,
-        metrics: &mut opentelemetry_sdk::metrics::data::ResourceMetrics,
+        metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
     ) -> opentelemetry_sdk::error::OTelSdkResult {
         if self.is_shutdown.load(atomic::Ordering::SeqCst) {
             Err(opentelemetry_sdk::error::OTelSdkError::AlreadyShutdown)
@@ -245,13 +223,16 @@ impl<T: SimpleMetricExporter + std::marker::Sync + std::marker::Send + 'static>
         Ok(())
     }
 
-    fn shutdown(&self) -> opentelemetry_sdk::error::OTelSdkResult {
-        self.is_shutdown.store(true, atomic::Ordering::SeqCst);
-        Ok(())
-    }
-
     fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
         opentelemetry_sdk::metrics::Temporality::Cumulative
+    }
+
+    fn shutdown_with_timeout(
+        &self,
+        _timeout: std::time::Duration,
+    ) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.is_shutdown.store(true, atomic::Ordering::SeqCst);
+        Ok(())
     }
 }
 

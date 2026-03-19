@@ -35,4 +35,15 @@ impl<T: SpanProcessor> SpanProcessor for ShutdownInStandaloneTokioThreadSpanProc
     fn on_end(&self, span: opentelemetry_sdk::trace::SpanData) {
         self.inner.on_end(span);
     }
+
+    fn shutdown_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> opentelemetry_sdk::error::OTelSdkResult {
+        // Informs the executor to hand off any other tasks it has to a new worker thread
+        tokio::task::block_in_place(|| {
+            // And then we can call the inner shutdown method
+            self.inner.shutdown_with_timeout(timeout)
+        })
+    }
 }
