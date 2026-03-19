@@ -141,7 +141,7 @@ impl OhttpServerApi {
                     match (attestation_request, attest) {
                         (
                             Some(AttestationRequest::Passport),
-                            AttestArgs::Passport { aa_args, as_args },
+                            AttestArgs::Passport { aa_args, as_args, .. },
                         ) => {
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                             let coco_converter = CocoConverter::new(
@@ -173,7 +173,7 @@ impl OhttpServerApi {
                         }
                         (
                             Some(AttestationRequest::BackgroundCheck { challenge_token }),
-                            AttestArgs::BackgroundCheck { aa_args },
+                            AttestArgs::BackgroundCheck { aa_args, .. },
                         ) => {
                             let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 

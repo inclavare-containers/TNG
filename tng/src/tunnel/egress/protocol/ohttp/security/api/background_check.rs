@@ -23,7 +23,7 @@ impl OhttpServerApi {
         async {
             match self.ra_args.as_ref() {
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                    VerifyArgs::Passport { token_verify: _ } => {
+                    VerifyArgs::Passport { .. } => {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyArgs::BackgroundCheck {
@@ -67,7 +67,7 @@ impl OhttpServerApi {
         async {
             match self.ra_args.as_ref() {
                 RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                    VerifyArgs::Passport { token_verify: _ } => {
+                    VerifyArgs::Passport { .. } => {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyArgs::BackgroundCheck {

@@ -200,7 +200,7 @@ fn bind_attestation_result(
 
     match ra_args {
         RaArgs::VerifyOnly(verify_args) => match verify_args {
-            VerifyArgs::Passport { token_verify } => {
+            VerifyArgs::Passport { token_verify, .. } => {
                 attest_info.as_addr = token_verify
                     .as_addr_config
                     .as_ref()

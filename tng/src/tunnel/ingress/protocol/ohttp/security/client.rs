@@ -123,7 +123,7 @@ impl OHttpClient {
         let refresh_strategy = match &ra_args {
             #[cfg(unix)]
             RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
-                AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
+                AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args, .. } => {
                     aa_args.refresh_strategy()
                 }
             },
@@ -281,7 +281,7 @@ impl OHttpClientInner {
             };
 
             match verify {
-                Some(VerifyArgs::Passport { token_verify }) => {
+                Some(VerifyArgs::Passport { token_verify, .. }) => {
                     // Request hpke configuration for server
                     let response = self
                         .get_hpke_configuration(KeyConfigRequest {
@@ -309,6 +309,7 @@ impl OHttpClientInner {
                 Some(VerifyArgs::BackgroundCheck {
                     as_args,
                     token_verify,
+                    ..
                 }) => {
                     let coco_converter = CocoConverter::new(
                         &as_args.as_addr_config.as_addr,
@@ -408,7 +409,7 @@ impl OHttpClientInner {
                 let pk_s = client_key.1.to_bytes().to_vec();
 
                 let token = match attest {
-                    AttestArgs::Passport { aa_args, as_args } => {
+                    AttestArgs::Passport { aa_args, as_args, .. } => {
                         let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
                         let coco_converter = CocoConverter::new(
                             &as_args.as_addr_config.as_addr,
@@ -433,7 +434,7 @@ impl OHttpClientInner {
                             .get_evidence(&ReportData::Claims(userdata))
                             .await?
                     }
-                    AttestArgs::BackgroundCheck { aa_args } => {
+                    AttestArgs::BackgroundCheck { aa_args, .. } => {
                         let AttestationChallengeResponse { challenge_token } =
                             self.background_check_attestation_challenge().await?;
 

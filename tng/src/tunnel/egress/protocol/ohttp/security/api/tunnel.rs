@@ -215,6 +215,7 @@ impl OhttpServerApi {
                                 as_addr_config,
                                 ..
                             },
+                        ..
                     } => {
                         CocoVerifier::new(
                             as_addr_config
@@ -240,6 +241,7 @@ impl OhttpServerApi {
                             AttestationServiceTokenVerifyAdditionalArgs {
                                 trusted_certs_paths,
                             },
+                        ..
                     } => {
                         CocoVerifier::new(
                             Some(AttestationServiceConfig {

@@ -32,7 +32,7 @@ impl CoCoCommonCertVerifier {
             .context("No rats-tls cert received")?;
 
         let verify_policy = match &self.verify_args {
-            VerifyArgs::Passport { token_verify } => CocoVerifyPolicy {
+            VerifyArgs::Passport { token_verify, .. } => CocoVerifyPolicy {
                 verify_mode: CocoVerifyMode::Token,
                 policy_ids: token_verify.policy_ids.clone(),
                 trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
@@ -56,6 +56,7 @@ impl CoCoCommonCertVerifier {
                         policy_ids,
                     },
                 token_verify,
+                ..
             } => CocoVerifyPolicy {
                 verify_mode: CocoVerifyMode::Evidence(AttestationServiceConfig {
                     as_addr: as_addr.clone(),

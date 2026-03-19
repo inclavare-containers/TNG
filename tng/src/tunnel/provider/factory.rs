@@ -21,7 +21,7 @@ pub fn create_attester(
 ) -> Result<TngAttester> {
     let aa_args = match attest_args {
         AttestArgs::Passport { aa_args, .. } => aa_args,
-        AttestArgs::BackgroundCheck { aa_args } => aa_args,
+        AttestArgs::BackgroundCheck { aa_args, .. } => aa_args,
     };
     let attester = match timeout_nano {
         Some(t) => CocoAttester::new_with_timeout_nano(&aa_args.aa_addr, t)?,
@@ -62,7 +62,7 @@ pub fn create_converter_from_as_args(as_args: &AttestationServiceArgs) -> Result
 /// When provider dispatching is added (Phase 2), this will match on provider type.
 pub async fn create_verifier(verify_args: &VerifyArgs) -> Result<TngVerifier> {
     match verify_args {
-        VerifyArgs::Passport { token_verify } => {
+        VerifyArgs::Passport { token_verify, .. } => {
             let as_addr_config = token_verify.as_addr_config.as_ref().map(|a| {
                 AttestationServiceConfig {
                     as_addr: a.as_addr.clone(),
@@ -82,6 +82,7 @@ pub async fn create_verifier(verify_args: &VerifyArgs) -> Result<TngVerifier> {
         VerifyArgs::BackgroundCheck {
             as_args,
             token_verify,
+            ..
         } => {
             let as_addr_config = AttestationServiceConfig {
                 as_addr: as_args.as_addr_config.as_addr.clone(),
@@ -104,7 +105,7 @@ pub async fn create_verifier(verify_args: &VerifyArgs) -> Result<TngVerifier> {
 /// When provider dispatching is added (Phase 2), this will match on provider type.
 pub fn create_verify_policy(verify_args: &VerifyArgs) -> TngVerifyPolicy {
     match verify_args {
-        VerifyArgs::Passport { token_verify } => {
+        VerifyArgs::Passport { token_verify, .. } => {
             TngVerifyPolicy::Coco(CocoVerifyPolicy {
                 verify_mode: CocoVerifyMode::Token,
                 policy_ids: token_verify.policy_ids.clone(),
@@ -121,6 +122,7 @@ pub fn create_verify_policy(verify_args: &VerifyArgs) -> TngVerifyPolicy {
         VerifyArgs::BackgroundCheck {
             as_args,
             token_verify,
+            ..
         } => {
             let as_config = AttestationServiceConfig {
                 as_addr: as_args.as_addr_config.as_addr.clone(),

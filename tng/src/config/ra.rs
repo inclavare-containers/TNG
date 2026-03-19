@@ -4,7 +4,10 @@ use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::{error::TngError, tunnel::utils::maybe_cached::RefreshStrategy};
+use crate::{
+    error::TngError,
+    tunnel::{provider::ProviderType, utils::maybe_cached::RefreshStrategy},
+};
 
 /// Remote Attestation configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,6 +83,7 @@ impl RaArgsUnchecked {
                 }
                 | AttestArgs::BackgroundCheck {
                     aa_args: AttestationAgentArgs { aa_addr, .. },
+                    ..
                 } => {
                     let aa_sock_file = aa_addr
                         .strip_prefix("unix:///")
@@ -112,6 +116,7 @@ impl RaArgsUnchecked {
                             trusted_certs_paths,
                             ..
                         },
+                    ..
                 }
                 | VerifyArgs::BackgroundCheck {
                     token_verify:
@@ -124,6 +129,7 @@ impl RaArgsUnchecked {
                     // Additional checks for Passport mode
                     let has_as_addr = if let VerifyArgs::Passport {
                         token_verify: AttestationServiceTokenVerifyArgs { as_addr_config, .. },
+                        ..
                     } = verify_args
                     {
                         as_addr_config.is_some()
@@ -158,6 +164,28 @@ impl RaArgsUnchecked {
                     .map_err(TngError::InvalidParameter)?;
             }
         }
+
+        // Cross-provider compatibility checks
+        #[cfg(unix)]
+        if let RaArgs::AttestAndVerify(attest_args, verify_args) = &ra_args {
+            if attest_args.provider() != verify_args.provider() {
+                tracing::warn!(
+                    attest_provider = %attest_args.provider(),
+                    verify_provider = %verify_args.provider(),
+                    "attest and verify use different providers; cross-provider compatibility depends on TranslateTo support"
+                );
+            }
+            if let Some(converter_provider) = attest_args.converter_provider() {
+                if converter_provider != verify_args.provider() {
+                    tracing::warn!(
+                        converter_provider = %converter_provider,
+                        verify_provider = %verify_args.provider(),
+                        "converter override uses a different provider than verify; the token format may be incompatible"
+                    );
+                }
+            }
+        }
+
         Ok(ra_args)
     }
 }
@@ -165,22 +193,46 @@ impl RaArgsUnchecked {
 /// Attestation parameters configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "model")]
-#[serde(try_from = "maybe_tagged_attest_args::MaybeTaggedAttestArgs")]
+#[serde(try_from = "maybe_tagged_attest_args::MaybeProviderTaggedAttestArgs")]
 pub enum AttestArgs {
     /// Passport mode attestation parameters
     Passport {
+        provider: ProviderType,
+
         #[serde(flatten)]
         aa_args: AttestationAgentArgs,
 
         #[serde(flatten)]
         as_args: AttestationServiceArgs,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        converter: Option<ConverterOverride>,
     },
 
     /// Background check mode attestation parameters
     BackgroundCheck {
+        provider: ProviderType,
+
         #[serde(flatten)]
         aa_args: AttestationAgentArgs,
     },
+}
+
+impl AttestArgs {
+    pub fn provider(&self) -> ProviderType {
+        match self {
+            Self::Passport { provider, .. } | Self::BackgroundCheck { provider, .. } => *provider,
+        }
+    }
+
+    pub fn converter_provider(&self) -> Option<ProviderType> {
+        match self {
+            Self::Passport {
+                converter: Some(c), ..
+            } => Some(c.provider()),
+            _ => None,
+        }
+    }
 }
 
 /// This is a workaround for a missing feature in serde where it doesn't support deserializing
@@ -191,8 +243,29 @@ mod maybe_tagged_attest_args {
     use anyhow::bail;
     use serde::{Deserialize, Serialize};
 
-    use super::{AttestArgs, AttestationAgentArgs, AttestationServiceArgs};
+    use super::{
+        AttestArgs, AttestationAgentArgs, AttestationServiceArgs, ConverterOverride, ProviderType,
+    };
 
+    /// Outer layer: backward compat for optional "provider" field.
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum MaybeProviderTaggedAttestArgs {
+        WithProvider(ProviderTaggedAttestArgs),
+        Legacy(MaybeTaggedAttestArgs),
+    }
+
+    /// Provider dispatch layer: routes on "provider" field.
+    #[derive(Serialize, Deserialize)]
+    #[serde(tag = "provider")]
+    pub enum ProviderTaggedAttestArgs {
+        #[serde(rename = "coco")]
+        Coco(MaybeTaggedAttestArgs),
+        #[serde(other)]
+        Unknown,
+    }
+
+    /// Model dispatch layer: routes on "model" field with untagged fallback.
     #[derive(Serialize, Deserialize)]
     #[serde(untagged)]
     pub enum MaybeTaggedAttestArgs {
@@ -215,6 +288,9 @@ mod maybe_tagged_attest_args {
 
             #[serde(flatten)]
             as_args: AttestationServiceArgs,
+
+            #[serde(default)]
+            converter: Option<ConverterOverride>,
         },
 
         BackgroundCheck {
@@ -226,28 +302,51 @@ mod maybe_tagged_attest_args {
         Unknown,
     }
 
-    impl TryFrom<MaybeTaggedAttestArgs> for AttestArgs {
+    fn attest_args_from_model(
+        args: MaybeTaggedAttestArgs,
+        provider: ProviderType,
+    ) -> Result<AttestArgs, anyhow::Error> {
+        match args {
+            MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Passport {
+                aa_args,
+                as_args,
+                converter,
+            }) => Ok(AttestArgs::Passport {
+                provider,
+                aa_args,
+                as_args,
+                converter,
+            }),
+            MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::BackgroundCheck { aa_args }) => {
+                Ok(AttestArgs::BackgroundCheck { provider, aa_args })
+            }
+            MaybeTaggedAttestArgs::Untagged { aa_args, other } => {
+                if let Some(v) = other.get("model") {
+                    bail!(r#"missing field for "model": {v}"#);
+                }
+                Ok(AttestArgs::BackgroundCheck { provider, aa_args })
+            }
+            MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Unknown) => {
+                bail!(
+                    r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
+                )
+            }
+        }
+    }
+
+    impl TryFrom<MaybeProviderTaggedAttestArgs> for AttestArgs {
         type Error = anyhow::Error;
-        fn try_from(args: MaybeTaggedAttestArgs) -> Result<AttestArgs, Self::Error> {
-            Ok(match args {
-                MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::BackgroundCheck { aa_args }) => {
-                    AttestArgs::BackgroundCheck { aa_args }
-                }
-                MaybeTaggedAttestArgs::Untagged { aa_args, other } => {
-                    if let Some(v) = other.get("model") {
-                        bail!(r#"missing field for "model": {v}"#);
+        fn try_from(args: MaybeProviderTaggedAttestArgs) -> Result<AttestArgs, Self::Error> {
+            let (provider, model_args) = match args {
+                MaybeProviderTaggedAttestArgs::WithProvider(tagged) => match tagged {
+                    ProviderTaggedAttestArgs::Coco(m) => (ProviderType::Coco, m),
+                    ProviderTaggedAttestArgs::Unknown => {
+                        bail!(r#"unsupported value for "provider" field"#)
                     }
-                    AttestArgs::BackgroundCheck { aa_args }
-                }
-                MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Passport { aa_args, as_args }) => {
-                    AttestArgs::Passport { aa_args, as_args }
-                }
-                MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Unknown) => {
-                    bail!(
-                        r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
-                    )
-                }
-            })
+                },
+                MaybeProviderTaggedAttestArgs::Legacy(m) => (ProviderType::Coco, m),
+            };
+            attest_args_from_model(model_args, provider)
         }
     }
 }
@@ -283,22 +382,34 @@ impl AttestationAgentArgs {
 /// Verification parameters configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "model")]
-#[serde(try_from = "maybe_tagged_verify_args::MaybeTaggedVerifyArgs")]
+#[serde(try_from = "maybe_tagged_verify_args::MaybeProviderTaggedVerifyArgs")]
 pub enum VerifyArgs {
     /// Passport mode verification parameters
     Passport {
+        provider: ProviderType,
+
         #[serde(flatten)]
         token_verify: AttestationServiceTokenVerifyArgs,
     },
 
     /// Background check mode verification parameters
     BackgroundCheck {
+        provider: ProviderType,
+
         #[serde(flatten)]
         as_args: AttestationServiceArgs,
 
         #[serde(flatten)]
         token_verify: AttestationServiceTokenVerifyAdditionalArgs,
     },
+}
+
+impl VerifyArgs {
+    pub fn provider(&self) -> ProviderType {
+        match self {
+            Self::Passport { provider, .. } | Self::BackgroundCheck { provider, .. } => *provider,
+        }
+    }
 }
 
 /// This is a workaround for a missing feature in serde where it doesn't support deserializing
@@ -311,8 +422,29 @@ mod maybe_tagged_verify_args {
 
     use crate::config::ra::AttestationServiceTokenVerifyAdditionalArgs;
 
-    use super::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs};
+    use super::{
+        AttestationServiceArgs, AttestationServiceTokenVerifyArgs, ProviderType, VerifyArgs,
+    };
 
+    /// Outer layer: backward compat for optional "provider" field.
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum MaybeProviderTaggedVerifyArgs {
+        WithProvider(ProviderTaggedVerifyArgs),
+        Legacy(MaybeTaggedVerifyArgs),
+    }
+
+    /// Provider dispatch layer: routes on "provider" field.
+    #[derive(Serialize, Deserialize)]
+    #[serde(tag = "provider")]
+    pub enum ProviderTaggedVerifyArgs {
+        #[serde(rename = "coco")]
+        Coco(MaybeTaggedVerifyArgs),
+        #[serde(other)]
+        Unknown,
+    }
+
+    /// Model dispatch layer: routes on "model" field with untagged fallback.
     #[derive(Serialize, Deserialize)]
     #[serde(untagged)]
     pub enum MaybeTaggedVerifyArgs {
@@ -349,39 +481,60 @@ mod maybe_tagged_verify_args {
         Unknown,
     }
 
-    impl TryFrom<MaybeTaggedVerifyArgs> for VerifyArgs {
+    fn verify_args_from_model(
+        args: MaybeTaggedVerifyArgs,
+        provider: ProviderType,
+    ) -> Result<VerifyArgs, anyhow::Error> {
+        match args {
+            MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::BackgroundCheck {
+                as_args,
+                token_verify,
+            }) => Ok(VerifyArgs::BackgroundCheck {
+                provider,
+                as_args,
+                token_verify,
+            }),
+            MaybeTaggedVerifyArgs::Untagged {
+                as_args,
+                token_verify,
+                other,
+            } => {
+                if let Some(v) = other.get("model") {
+                    bail!(r#"missing field for "model": {v}"#);
+                }
+                Ok(VerifyArgs::BackgroundCheck {
+                    provider,
+                    as_args,
+                    token_verify,
+                })
+            }
+            MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Passport { token_verify }) => {
+                Ok(VerifyArgs::Passport {
+                    provider,
+                    token_verify,
+                })
+            }
+            MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Unknown) => {
+                bail!(
+                    r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
+                )
+            }
+        }
+    }
+
+    impl TryFrom<MaybeProviderTaggedVerifyArgs> for VerifyArgs {
         type Error = anyhow::Error;
-        fn try_from(args: MaybeTaggedVerifyArgs) -> Result<VerifyArgs, Self::Error> {
-            Ok(match args {
-                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::BackgroundCheck {
-                    as_args,
-                    token_verify,
-                }) => VerifyArgs::BackgroundCheck {
-                    as_args,
-                    token_verify,
+        fn try_from(args: MaybeProviderTaggedVerifyArgs) -> Result<VerifyArgs, Self::Error> {
+            let (provider, model_args) = match args {
+                MaybeProviderTaggedVerifyArgs::WithProvider(tagged) => match tagged {
+                    ProviderTaggedVerifyArgs::Coco(m) => (ProviderType::Coco, m),
+                    ProviderTaggedVerifyArgs::Unknown => {
+                        bail!(r#"unsupported value for "provider" field"#)
+                    }
                 },
-                MaybeTaggedVerifyArgs::Untagged {
-                    as_args,
-                    token_verify,
-                    other,
-                } => {
-                    if let Some(v) = other.get("model") {
-                        bail!(r#"missing field for "model": {v}"#);
-                    }
-                    VerifyArgs::BackgroundCheck {
-                        as_args,
-                        token_verify,
-                    }
-                }
-                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Passport { token_verify }) => {
-                    VerifyArgs::Passport { token_verify }
-                }
-                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Unknown) => {
-                    bail!(
-                        r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
-                    )
-                }
-            })
+                MaybeProviderTaggedVerifyArgs::Legacy(m) => (ProviderType::Coco, m),
+            };
+            verify_args_from_model(model_args, provider)
         }
     }
 }
@@ -434,6 +587,27 @@ pub struct AttestationServiceTokenVerifyAdditionalArgs {
     pub trusted_certs_paths: Option<Vec<String>>,
 }
 
+/// Optional converter provider override for passport mode.
+/// When present, the converter uses this provider instead of the top-level attest provider.
+/// This allows e.g. CoCo attester with ITA converter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "provider")]
+pub enum ConverterOverride {
+    #[serde(rename = "coco")]
+    Coco {
+        #[serde(flatten)]
+        as_args: AttestationServiceArgs,
+    },
+}
+
+impl ConverterOverride {
+    pub fn provider(&self) -> ProviderType {
+        match self {
+            Self::Coco { .. } => ProviderType::Coco,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -454,7 +628,7 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
-            Some(AttestArgs::BackgroundCheck { aa_args }) => {
+            Some(AttestArgs::BackgroundCheck { aa_args, .. }) => {
                 assert_eq!(
                     aa_args.aa_addr,
                     "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -463,11 +637,13 @@ mod tests {
             }
             _ => panic!("Expected BackgroundCheck variant"),
         }
+        assert_eq!(ra_args.attest.as_ref().unwrap().provider(), ProviderType::Coco);
 
         // Test serialization
         let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
         assert!(serialized.contains(r#""aa_addr":"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock""#));
         assert!(serialized.contains(r#""refresh_interval":3600"#));
+        assert!(serialized.contains(r#""provider":"coco""#));
     }
 
     #[test]
@@ -485,7 +661,7 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
-            Some(AttestArgs::BackgroundCheck { aa_args }) => {
+            Some(AttestArgs::BackgroundCheck { aa_args, .. }) => {
                 assert_eq!(
                     aa_args.aa_addr,
                     "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -515,7 +691,7 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.attest {
-            Some(AttestArgs::Passport { aa_args, as_args }) => {
+            Some(AttestArgs::Passport { aa_args, as_args, .. }) => {
                 assert_eq!(
                     aa_args.aa_addr,
                     "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -531,6 +707,7 @@ mod tests {
         // Test serialization
         let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
         assert!(serialized.contains(r#""model":"passport""#));
+        assert!(serialized.contains(r#""provider":"coco""#));
         assert!(serialized.contains(r#""aa_addr":"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock""#));
         assert!(serialized.contains(r#""as_addr":"localhost:8081""#));
         assert!(serialized.contains(r#""policy_ids":["policy1","policy2"]"#));
@@ -664,7 +841,7 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
 
         match &ra_args.verify {
-            Some(VerifyArgs::Passport { token_verify }) => {
+            Some(VerifyArgs::Passport { token_verify, .. }) => {
                 assert_eq!(token_verify.policy_ids, vec!["policy1", "policy2"]);
             }
             _ => panic!("Expected Passport variant"),
@@ -673,6 +850,7 @@ mod tests {
         // Test serialization
         let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
         assert!(serialized.contains(r#""model":"passport""#));
+        assert!(serialized.contains(r#""provider":"coco""#));
         assert!(serialized.contains(r#""policy_ids":["policy1","policy2"]"#));
     }
 
@@ -760,5 +938,227 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Invalid attestation service address"));
+    }
+
+    // --- Provider-tagged config tests ---
+
+    #[test]
+    fn test_background_check_attest_with_provider() {
+        let json = json!(
+            {
+                "attest": {
+                    "provider": "coco",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "refresh_interval": 3600
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.attest {
+            Some(AttestArgs::BackgroundCheck { provider, aa_args, .. }) => {
+                assert_eq!(*provider, ProviderType::Coco);
+                assert_eq!(
+                    aa_args.aa_addr,
+                    "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                );
+            }
+            _ => panic!("Expected BackgroundCheck variant"),
+        }
+    }
+
+    #[test]
+    fn test_passport_attest_with_provider() {
+        let json = json!(
+            {
+                "attest": {
+                    "provider": "coco",
+                    "model": "passport",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "refresh_interval": 3600,
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1", "policy2"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.attest {
+            Some(AttestArgs::Passport { provider, aa_args, as_args, .. }) => {
+                assert_eq!(*provider, ProviderType::Coco);
+                assert_eq!(
+                    aa_args.aa_addr,
+                    "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                );
+                assert_eq!(as_args.as_addr_config.as_addr, "localhost:8081");
+            }
+            _ => panic!("Expected Passport variant"),
+        }
+    }
+
+    #[test]
+    fn test_background_check_verify_with_provider() {
+        let json = json!(
+            {
+                "verify": {
+                    "provider": "coco",
+                    "model": "background_check",
+                    "as_addr": "http://localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.verify {
+            Some(VerifyArgs::BackgroundCheck { provider, as_args, .. }) => {
+                assert_eq!(*provider, ProviderType::Coco);
+                assert_eq!(as_args.as_addr_config.as_addr, "http://localhost:8081");
+            }
+            _ => panic!("Expected BackgroundCheck variant"),
+        }
+    }
+
+    #[test]
+    fn test_passport_verify_with_provider() {
+        let json = json!(
+            {
+                "verify": {
+                    "provider": "coco",
+                    "model": "passport",
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.verify {
+            Some(VerifyArgs::Passport { provider, token_verify, .. }) => {
+                assert_eq!(*provider, ProviderType::Coco);
+                assert_eq!(token_verify.policy_ids, vec!["policy1"]);
+            }
+            _ => panic!("Expected Passport variant"),
+        }
+    }
+
+    #[test]
+    fn test_attest_bad_provider() {
+        let json = json!(
+            {
+                "attest": {
+                    "provider": "unknown_provider",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
+            }
+        );
+
+        let result = serde_json::from_value::<RaArgsUnchecked>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_bad_provider() {
+        let json = json!(
+            {
+                "verify": {
+                    "provider": "unknown_provider",
+                    "model": "background_check",
+                    "as_addr": "http://localhost:8081",
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let result = serde_json::from_value::<RaArgsUnchecked>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_passport_attest_with_converter_override() {
+        let json = json!(
+            {
+                "attest": {
+                    "provider": "coco",
+                    "model": "passport",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1"],
+                    "converter": {
+                        "provider": "coco",
+                        "as_addr": "localhost:9090",
+                        "as_is_grpc": true,
+                        "policy_ids": ["converter_policy"]
+                    }
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.attest {
+            Some(AttestArgs::Passport { provider, converter, .. }) => {
+                assert_eq!(*provider, ProviderType::Coco);
+                let converter = converter.as_ref().expect("Expected converter override");
+                assert_eq!(converter.provider(), ProviderType::Coco);
+                match converter {
+                    ConverterOverride::Coco { as_args } => {
+                        assert_eq!(as_args.as_addr_config.as_addr, "localhost:9090");
+                        assert!(as_args.as_addr_config.as_is_grpc);
+                        assert_eq!(as_args.policy_ids, vec!["converter_policy"]);
+                    }
+                }
+            }
+            _ => panic!("Expected Passport variant"),
+        }
+    }
+
+    #[test]
+    fn test_passport_attest_without_converter_override() {
+        let json = json!(
+            {
+                "attest": {
+                    "provider": "coco",
+                    "model": "passport",
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                    "as_addr": "localhost:8081",
+                    "as_is_grpc": false,
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.attest {
+            Some(AttestArgs::Passport { converter, .. }) => {
+                assert!(converter.is_none());
+            }
+            _ => panic!("Expected Passport variant"),
+        }
+    }
+
+    #[test]
+    fn test_legacy_config_defaults_to_coco_provider() {
+        let attest_json = json!(
+            {
+                "attest": {
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
+            }
+        );
+        let ra_args: RaArgsUnchecked = serde_json::from_value(attest_json).expect("Failed to deserialize");
+        assert_eq!(ra_args.attest.as_ref().unwrap().provider(), ProviderType::Coco);
+
+        let verify_json = json!(
+            {
+                "verify": {
+                    "as_addr": "http://localhost:8081",
+                    "policy_ids": ["policy1"]
+                }
+            }
+        );
+        let ra_args: RaArgsUnchecked = serde_json::from_value(verify_json).expect("Failed to deserialize");
+        assert_eq!(ra_args.verify.as_ref().unwrap().provider(), ProviderType::Coco);
     }
 }

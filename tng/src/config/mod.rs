@@ -52,12 +52,15 @@ mod tests {
     use ingress::{IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
-    use crate::config::{
-        egress::EgressMappingArgs,
-        ra::{
-            AttestationAgentArgs, AttestationServiceAddrArgs, AttestationServiceArgs,
-            AttestationServiceTokenVerifyAdditionalArgs,
+    use crate::{
+        config::{
+            egress::EgressMappingArgs,
+            ra::{
+                AttestationAgentArgs, AttestationServiceAddrArgs, AttestationServiceArgs,
+                AttestationServiceTokenVerifyAdditionalArgs,
+            },
         },
+        tunnel::provider::ProviderType,
     };
 
     use super::*;
@@ -92,6 +95,7 @@ mod tests {
                         no_ra: false,
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
+                            provider: ProviderType::Coco,
                             as_args: AttestationServiceArgs{
                                 as_addr_config: AttestationServiceAddrArgs {
                                     as_addr: "http://127.0.0.1:8080/".to_owned(),
@@ -127,7 +131,7 @@ mod tests {
                     }),
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
-                        attest: Some(AttestArgs::BackgroundCheck { aa_args: AttestationAgentArgs {
+                        attest: Some(AttestArgs::BackgroundCheck { provider: ProviderType::Coco, aa_args: AttestationAgentArgs {
                             aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
                             refresh_interval: None,
                         }}),

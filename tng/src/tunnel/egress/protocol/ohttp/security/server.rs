@@ -49,8 +49,8 @@ impl OhttpServer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args })
-        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args }, ..) = &ra_args
+        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args, .. })
+        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args, .. }, ..) = &ra_args
         {
             if aa_args.refresh_interval.is_some() {
                 tracing::warn!(
