@@ -12,10 +12,7 @@ use futures::TryStreamExt;
 use gloo::utils::format::JsValueSerdeExt;
 use http_body_util::BodyDataStream;
 use serde::Serialize;
-use tng::config::{
-    ingress::{self},
-    ra::VerifyArgs,
-};
+use tng::config::ingress::{self};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -199,27 +196,19 @@ fn bind_attestation_result(
     };
 
     match ra_args {
-        RaArgs::VerifyOnly(verify_args) => match verify_args {
-            VerifyArgs::Passport { token_verify, .. } => {
-                attest_info.as_addr = token_verify
-                    .as_addr_config
-                    .as_ref()
-                    .map(|addr| addr.as_addr.clone());
-                attest_info.policy_ids = Some(token_verify.policy_ids.clone());
+        RaArgs::VerifyOnly(verify_args) => {
+            match verify_args.verifier() {
+                tng::config::ra::VerifierConfig::Coco {
+                    policy_ids,
+                    as_addr_config,
+                    ..
+                } => {
+                    attest_info.as_addr =
+                        as_addr_config.as_ref().map(|a| a.as_addr.clone());
+                    attest_info.policy_ids = Some(policy_ids.clone());
+                }
             }
-            VerifyArgs::BackgroundCheck {
-                as_args:
-                    tng::config::ra::AttestationServiceArgs {
-                        as_addr_config,
-                        policy_ids,
-                        ..
-                    },
-                ..
-            } => {
-                attest_info.as_addr = Some(as_addr_config.as_addr.clone());
-                attest_info.policy_ids = Some(policy_ids.clone());
-            }
-        },
+        }
         RaArgs::NoRa => { /* nothing */ }
     }
 

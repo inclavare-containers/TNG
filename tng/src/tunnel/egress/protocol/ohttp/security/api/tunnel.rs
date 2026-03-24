@@ -13,7 +13,7 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
-use crate::config::ra::{RaArgs, VerifyArgs};
+use crate::config::ra::RaArgs;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -203,7 +203,7 @@ impl OhttpServerApi {
             ) => {
                 let provider: ProviderType = provider.parse()?;
                 let token = TngToken::from_wire(provider, attestation_result)?;
-                let verifier = create_verifier(verify).await?;
+                let verifier = create_verifier(verify.verifier()).await?;
 
                 let userdata = ClientUserData {
                     // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.

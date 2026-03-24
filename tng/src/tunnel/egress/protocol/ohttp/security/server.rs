@@ -49,14 +49,12 @@ impl OhttpServer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args, .. })
-        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args, .. }, ..) = &ra_args
+        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { refresh_interval: Some(_), .. })
+        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { refresh_interval: Some(_), .. }, ..) = &ra_args
         {
-            if aa_args.refresh_interval.is_some() {
-                tracing::warn!(
-                    "`refresh_interval` in your configuration is set but will be ignored for background check"
-                );
-            }
+            tracing::warn!(
+                "`refresh_interval` in your configuration is set but will be ignored for background check"
+            );
         }
 
         Ok(Self {

@@ -45,8 +45,8 @@ impl OhttpServerApi {
         match (self.ra_args.as_ref(), &payload) {
             // If the server is set to be a attester with passport mode, and the client is requesting a passport response, we cache it and return the cached response
             (
-                RaArgs::AttestOnly(AttestArgs::Passport { aa_args, .. })
-                | RaArgs::AttestAndVerify(AttestArgs::Passport { aa_args, .. }, ..),
+                RaArgs::AttestOnly(attest @ AttestArgs::Passport { .. })
+                | RaArgs::AttestAndVerify(attest @ AttestArgs::Passport { .. }, ..),
                 Some(Json(KeyConfigRequest {
                     attestation_request: Some(AttestationRequest::Passport),
                 })),
@@ -59,7 +59,7 @@ impl OhttpServerApi {
                     let key_manager = Arc::clone(&self.key_manager);
                     let payload = Arc::new(payload);
 
-                    let refresh_strategy = aa_args.refresh_strategy();
+                    let refresh_strategy = attest.refresh_strategy();
 
                     MaybeCached::new(context.runtime.clone(), refresh_strategy, move || {
                         Box::pin({
@@ -143,9 +143,8 @@ impl OhttpServerApi {
                             Some(AttestationRequest::Passport),
                             attest_args @ AttestArgs::Passport { .. },
                         ) => {
-                            let attester = create_attester(attest_args, None)?;
-                            let converter = create_converter(attest_args)?;
-                            // fetch a challenge token from attestation service
+                            let attester = create_attester(attest_args.attester(), None)?;
+                            let converter = create_converter(attest_args.converter().unwrap())?;
                             let challenge_token = converter.get_nonce().await?;
 
                             let attester_pipeline =
@@ -172,7 +171,7 @@ impl OhttpServerApi {
                             Some(AttestationRequest::BackgroundCheck { challenge_token }),
                             attest_args @ AttestArgs::BackgroundCheck { .. },
                         ) => {
-                            let attester = create_attester(attest_args, None)?;
+                            let attester = create_attester(attest_args.attester(), None)?;
 
                             let userdata = ServerUserData {
                                 challenge_token: Some(challenge_token),
@@ -199,7 +198,6 @@ impl OhttpServerApi {
                             AttestArgs::Passport { .. },
                         ) => bail!("Passport model is expected but background check attestation is requested"),
                         (None, _) => {
-                            // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
                             KeyConfigResponse {
                                 hpke_key_config,
                                 attestation_info: None,
@@ -208,7 +206,6 @@ impl OhttpServerApi {
                     }
                 }
                 RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
-                    // No remote attestaion
                     KeyConfigResponse {
                         hpke_key_config,
                         attestation_info: None,

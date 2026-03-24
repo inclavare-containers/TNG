@@ -50,18 +50,12 @@ mod tests {
     use anyhow::Result;
     use egress::EgressMode;
     use ingress::{IngressMode, PathRewrite};
-    use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
-
-    use crate::{
-        config::{
-            egress::EgressMappingArgs,
-            ra::{
-                AttestationAgentArgs, AttestationServiceAddrArgs, AttestationServiceArgs,
-                AttestationServiceTokenVerifyAdditionalArgs,
-            },
-        },
-        tunnel::provider::ProviderType,
+    use ra::{
+        AsAddrConfig, AttestArgs, AttesterConfig, ConverterConfig, RaArgsUnchecked, VerifierConfig,
+        VerifyArgs,
     };
+
+    use crate::config::egress::EgressMappingArgs;
 
     use super::*;
 
@@ -95,17 +89,20 @@ mod tests {
                         no_ra: false,
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
-                            provider: ProviderType::Coco,
-                            as_args: AttestationServiceArgs{
-                                as_addr_config: AttestationServiceAddrArgs {
+                            converter: ConverterConfig::Coco {
+                                as_addr: "http://127.0.0.1:8080/".to_owned(),
+                                as_is_grpc: false,
+                                as_headers: Default::default(),
+                                policy_ids: vec!["default".to_owned()],
+                            },
+                            verifier: VerifierConfig::Coco {
+                                policy_ids: vec!["default".to_owned()],
+                                trusted_certs_paths: Some(vec!["/tmp/as.pem".to_owned()]),
+                                as_addr_config: Some(AsAddrConfig {
                                     as_addr: "http://127.0.0.1:8080/".to_owned(),
                                     as_is_grpc: false,
                                     as_headers: Default::default(),
-                                },
-                                policy_ids: vec!["default".to_owned()],
-                            },
-                            token_verify: AttestationServiceTokenVerifyAdditionalArgs {
-                                trusted_certs_paths: Some(vec!["/tmp/as.pem".to_owned()]),
+                                }),
                             },
                         })
                     },
@@ -131,10 +128,12 @@ mod tests {
                     }),
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
-                        attest: Some(AttestArgs::BackgroundCheck { provider: ProviderType::Coco, aa_args: AttestationAgentArgs {
-                            aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                        attest: Some(AttestArgs::BackgroundCheck {
+                            attester: AttesterConfig::Coco {
+                                aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                            },
                             refresh_interval: None,
-                        }}),
+                        }),
                         verify: None,
                     },
                 }

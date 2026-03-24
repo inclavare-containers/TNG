@@ -8,7 +8,7 @@ use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationVerifyRequest, AttestationVerifyResponse,
 };
-use crate::tunnel::provider::{create_converter_from_as_args, TngEvidence};
+use crate::tunnel::provider::{create_converter, TngEvidence};
 
 impl OhttpServerApi {
     /// Interface 3: Attestation Forward - Get Challenge
@@ -26,11 +26,10 @@ impl OhttpServerApi {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyArgs::BackgroundCheck {
-                        as_args,
+                        converter: converter_config,
                         ..
                     } => {
-                        // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
-                        let converter = create_converter_from_as_args(as_args)?;
+                        let converter = create_converter(converter_config)?;
 
                         let challenge_token = converter.get_nonce().await?;
 
@@ -65,12 +64,12 @@ impl OhttpServerApi {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyArgs::BackgroundCheck {
-                        as_args,
+                        converter: converter_config,
                         ..
                     } => {
                         let tng_evidence = TngEvidence::deserialize_from_json(payload.evidence)?;
 
-                        let converter = create_converter_from_as_args(as_args)?;
+                        let converter = create_converter(converter_config)?;
 
                         let token = converter.convert(&tng_evidence).await?;
 

@@ -26,11 +26,7 @@ pub struct CertManager {
 
 impl CertManager {
     pub async fn new(attest_args: AttestArgs, runtime: TokioRuntime) -> Result<Self> {
-        let refresh_strategy = match &attest_args {
-            AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args, .. } => {
-                aa_args.refresh_strategy()
-            }
-        };
+        let refresh_strategy = attest_args.refresh_strategy();
 
         let cert = MaybeCached::new(runtime, refresh_strategy, move || {
             let attest_args = attest_args.clone();
@@ -61,11 +57,11 @@ impl CertManager {
         tracing::debug!(?attest_args, timeout_sec, "Generate new cert with rats-rs");
 
         let timeout_nano = Some(timeout_sec * 1_000_000_000);
-        let attester = create_attester(attest_args, timeout_nano)?;
+        let attester = create_attester(attest_args.attester(), timeout_nano)?;
 
         let (der_cert, privkey, expired) = match attest_args {
-            AttestArgs::Passport { .. } => {
-                let converter = create_converter(attest_args)?;
+            AttestArgs::Passport { converter, .. } => {
+                let converter = create_converter(converter)?;
                 let attester_pipeline = AttesterPipeline::new(attester, converter);
                 let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
                     .with_subject("CN=TNG,O=Inclavare Containers")
@@ -145,8 +141,7 @@ mod tests {
     use anyhow::bail;
 
     use crate::{
-        config::ra::AttestationAgentArgs, tests::run_test_with_tokio_runtime,
-        tunnel::provider::ProviderType,
+        config::ra::AttesterConfig, tests::run_test_with_tokio_runtime,
     };
 
     use super::*;
@@ -155,13 +150,12 @@ mod tests {
     async fn test_cert_gen_with_nonzero_interval() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
             let mut cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
-                provider: ProviderType::Coco,
-                aa_args: AttestationAgentArgs {
+                attester: AttesterConfig::Coco {
                     aa_addr:
                         "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                             .to_owned(),
-                    refresh_interval: Some(3),
                 },
+                refresh_interval: Some(3),
             }, runtime)
             .await?;
 
@@ -209,13 +203,12 @@ mod tests {
     async fn test_cert_gen_with_zero_interval() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
             let cert_manager = CertManager::new(AttestArgs::BackgroundCheck {
-                provider: ProviderType::Coco,
-                aa_args: AttestationAgentArgs {
+                attester: AttesterConfig::Coco {
                     aa_addr:
                         "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                             .to_owned(),
-                    refresh_interval: Some(0),
                 },
+                refresh_interval: Some(0),
             },runtime)
             .await?;
 

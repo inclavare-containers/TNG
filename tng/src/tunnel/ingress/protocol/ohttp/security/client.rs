@@ -53,13 +53,13 @@ use crate::{
             KeyConfigResponse, ServerAttestationInfo,
         },
         provider::{
-            create_converter_from_as_args, create_verifier, ProviderType, TngEvidence, TngToken,
+            create_converter, create_verifier, ProviderType, TngEvidence, TngToken,
         },
         utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
     },
 };
 #[cfg(unix)]
-use crate::tunnel::provider::{create_attester, create_converter};
+use crate::tunnel::provider::create_attester;
 use crate::{
     config::ra::RaArgs,
     error::TngError,
@@ -117,11 +117,9 @@ impl OHttpClient {
     ) -> Result<Self> {
         let refresh_strategy = match &ra_args {
             #[cfg(unix)]
-            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
-                AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args, .. } => {
-                    aa_args.refresh_strategy()
-                }
-            },
+            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
+                attest.refresh_strategy()
+            }
             RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Periodically {
                 interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
             },
@@ -197,7 +195,7 @@ impl OHttpClientInner {
     ) -> Result<TngToken> {
         let provider: ProviderType = wire_provider.parse()?;
         let token = TngToken::from_wire(provider, attestation_result.0.clone())?;
-        let verifier = create_verifier(verify_args).await?;
+        let verifier = create_verifier(verify_args.verifier()).await?;
 
         let userdata = ServerUserData {
             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
@@ -218,14 +216,13 @@ impl OHttpClientInner {
         evidence: serde_json::Value,
         verify_args: &VerifyArgs,
     ) -> Result<TngToken> {
-        let VerifyArgs::BackgroundCheck { as_args, .. } = verify_args else {
-            bail!("verify_evidence requires background_check verify args");
-        };
-        let converter = create_converter_from_as_args(as_args)?;
+        let converter_config = verify_args.converter()
+            .context("verify_evidence requires background_check verify args")?;
+        let converter = create_converter(converter_config)?;
         let tng_evidence = TngEvidence::deserialize_from_json(evidence)?;
         let token = converter.convert(&tng_evidence).await?;
 
-        let verifier = create_verifier(verify_args).await?;
+        let verifier = create_verifier(verify_args.verifier()).await?;
 
         let userdata = ServerUserData {
             challenge_token: Some(challenge_token),
@@ -283,8 +280,8 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                Some(verify_args @ VerifyArgs::BackgroundCheck { as_args, .. }) => {
-                    let converter = create_converter_from_as_args(as_args)?;
+                Some(verify_args @ VerifyArgs::BackgroundCheck { converter: converter_config, .. }) => {
+                    let converter = create_converter(converter_config)?;
 
                     // fetch a challenge token from attestation service
                     let challenge_token = converter.get_nonce().await?;
@@ -376,9 +373,9 @@ impl OHttpClientInner {
                 let pk_s = client_key.1.to_bytes().to_vec();
 
                 let token = match attest {
-                    AttestArgs::Passport { .. } => {
-                        let attester = create_attester(attest, None)?;
-                        let converter = create_converter(attest)?;
+                    AttestArgs::Passport { converter: converter_config, .. } => {
+                        let attester = create_attester(attest.attester(), None)?;
+                        let converter = create_converter(converter_config)?;
 
                         // fetch a challenge token from attestation service
                         let challenge_token = converter.get_nonce().await?;
@@ -399,7 +396,7 @@ impl OHttpClientInner {
                         let AttestationChallengeResponse { challenge_token } =
                             self.background_check_attestation_challenge().await?;
 
-                        let attester = create_attester(attest, None)?;
+                        let attester = create_attester(attest.attester(), None)?;
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
