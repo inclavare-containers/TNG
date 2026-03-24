@@ -90,9 +90,11 @@ mod tests {
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
                             converter: ConverterConfig::Coco {
-                                as_addr: "http://127.0.0.1:8080/".to_owned(),
-                                as_is_grpc: false,
-                                as_headers: Default::default(),
+                                as_addr_config: AsAddrConfig {
+                                    as_addr: "http://127.0.0.1:8080/".to_owned(),
+                                    as_is_grpc: false,
+                                    as_headers: Default::default(),
+                                },
                                 policy_ids: vec!["default".to_owned()],
                             },
                             verifier: VerifierConfig::Coco {

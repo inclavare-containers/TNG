@@ -31,15 +31,13 @@ pub fn create_attester(
 pub fn create_converter(config: &ConverterConfig) -> Result<TngConverter> {
     match config {
         ConverterConfig::Coco {
-            as_addr,
+            as_addr_config,
             policy_ids,
-            as_is_grpc,
-            as_headers,
         } => Ok(TngConverter::Coco(CocoConverter::new(
-            as_addr,
+            &as_addr_config.as_addr,
             policy_ids,
-            *as_is_grpc,
-            as_headers,
+            as_addr_config.as_is_grpc,
+            &as_addr_config.as_headers,
         )?)),
     }
 }
@@ -81,10 +79,7 @@ pub fn create_verify_policy(verify_args: &VerifyArgs) -> TngVerifyPolicy {
         } => match (converter, verifier) {
             (
                 ConverterConfig::Coco {
-                    as_addr,
-                    as_is_grpc,
-                    as_headers,
-                    ..
+                    as_addr_config, ..
                 },
                 VerifierConfig::Coco {
                     policy_ids,
@@ -92,11 +87,7 @@ pub fn create_verify_policy(verify_args: &VerifyArgs) -> TngVerifyPolicy {
                     ..
                 },
             ) => {
-                let as_config = AttestationServiceConfig {
-                    as_addr: as_addr.clone(),
-                    as_is_grpc: *as_is_grpc,
-                    as_headers: as_headers.clone(),
-                };
+                let as_config = as_addr_to_service_config(as_addr_config);
                 TngVerifyPolicy::Coco(CocoVerifyPolicy {
                     verify_mode: CocoVerifyMode::Evidence(as_config.clone()),
                     policy_ids: policy_ids.clone(),
