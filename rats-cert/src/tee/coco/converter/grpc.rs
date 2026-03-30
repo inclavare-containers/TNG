@@ -45,8 +45,10 @@ impl CocoGrpcConverter {
         let mut request_metadata = tonic::metadata::MetadataMap::new();
         for (key, value) in as_headers {
             request_metadata.insert(
-                    <tonic::metadata::MetadataKey::<tonic::metadata::Ascii> as std::str::FromStr>::from_str(key.as_str())?,
-                    <tonic::metadata::MetadataValue::<tonic::metadata::Ascii> as std::str::FromStr>::from_str(value.as_str())?,
+                    <tonic::metadata::MetadataKey::<tonic::metadata::Ascii> as std::str::FromStr>::from_str(key.as_str())
+                        .map_err(Error::InvalidGrpcMetadataKey)?,
+                    <tonic::metadata::MetadataValue::<tonic::metadata::Ascii> as std::str::FromStr>::from_str(value.as_str())
+                        .map_err(Error::InvalidGrpcMetadataValue)?,
                 );
         }
 
@@ -128,37 +130,46 @@ impl CocoGrpcConverter {
             policy_ids: self.policy_ids.clone(),
         });
 
-        let mut client = async {
-            Ok::<_, anyhow::Error>(
+        let mut client =
+            {
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                )))]
+                {
+                    let endpoint = tonic::transport::Endpoint::new(self.as_addr.to_string())
+                        .map_err(|e| Error::GrpcEndpointCreateFailed {
+                            as_addr: self.as_addr.clone(),
+                            source: e,
+                        })?;
+                    as_api::v1_6_0::attestation_service_client::AttestationServiceClient::new(
+                        endpoint
+                            .connect()
+                            .await
+                            .map_err(|e| Error::GrpcConnectFailed {
+                                as_addr: self.as_addr.clone(),
+                                source: e,
+                            })?,
+                    )
+                }
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                ))]
                 as_api::v1_6_0::attestation_service_client::AttestationServiceClient::new(
-                    #[cfg(not(all(
-                        target_arch = "wasm32",
-                        target_vendor = "unknown",
-                        target_os = "unknown"
-                    )))]
-                    tonic::transport::Endpoint::new(self.as_addr.to_string())?
-                        .connect()
-                        .await?,
-                    #[cfg(all(
-                        target_arch = "wasm32",
-                        target_vendor = "unknown",
-                        target_os = "unknown"
-                    ))]
                     tonic_web_wasm_client::Client::new(self.as_addr.to_string()),
-                ),
-            )
-        }
-        .await
-        .with_context(|| format!("Failed to connect grpc-as address `{}`", self.as_addr))?;
+                )
+            };
 
         let fut = async move {
             let response: as_api::v1_6_0::AttestationResponse = client
                 .attestation_evaluate(request)
                 .await
-                .map_err(IntoRatsError::into_rats_error)
-                .context("Call attestation_evaluate() on grpc-as failed")?
+                .map_err(Error::GrpcAttestationEvaluateFailed)?
                 .into_inner();
-            Ok::<_, anyhow::Error>(response)
+            Ok::<_, Error>(response)
         };
 
         #[cfg(all(
@@ -169,8 +180,8 @@ impl CocoGrpcConverter {
         // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let response = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)?;
+            .map_err(|e| Error::TaskSpawnFailed(e))?
+            .map_err(|e: Error| e)?;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",
@@ -214,37 +225,46 @@ impl CocoGrpcConverter {
             },
         );
 
-        let mut client = async {
-            Ok::<_, anyhow::Error>(
+        let mut client =
+            {
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                )))]
+                {
+                    let endpoint = tonic::transport::Endpoint::new(self.as_addr.to_string())
+                        .map_err(|e| Error::GrpcEndpointCreateFailed {
+                            as_addr: self.as_addr.clone(),
+                            source: e,
+                        })?;
+                    as_api::v1_5_2::attestation_service_client::AttestationServiceClient::new(
+                        endpoint
+                            .connect()
+                            .await
+                            .map_err(|e| Error::GrpcConnectFailed {
+                                as_addr: self.as_addr.clone(),
+                                source: e,
+                            })?,
+                    )
+                }
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                ))]
                 as_api::v1_5_2::attestation_service_client::AttestationServiceClient::new(
-                    #[cfg(not(all(
-                        target_arch = "wasm32",
-                        target_vendor = "unknown",
-                        target_os = "unknown"
-                    )))]
-                    tonic::transport::Endpoint::new(self.as_addr.to_string())?
-                        .connect()
-                        .await?,
-                    #[cfg(all(
-                        target_arch = "wasm32",
-                        target_vendor = "unknown",
-                        target_os = "unknown"
-                    ))]
                     tonic_web_wasm_client::Client::new(self.as_addr.to_string()),
-                ),
-            )
-        }
-        .await
-        .with_context(|| format!("Failed to connect grpc-as address `{}`", self.as_addr))?;
+                )
+            };
 
         let fut = async move {
             let response: as_api::v1_5_2::AttestationResponse = client
                 .attestation_evaluate(request)
                 .await
-                .map_err(IntoRatsError::into_rats_error)
-                .context("Call attestation_evaluate() on grpc-as failed")?
+                .map_err(Error::GrpcAttestationEvaluateFailed)?
                 .into_inner();
-            Ok::<_, anyhow::Error>(response)
+            Ok::<_, Error>(response)
         };
 
         #[cfg(all(
@@ -255,8 +275,7 @@ impl CocoGrpcConverter {
         // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let response = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)?;
+            .map_err(Error::TaskSpawnFailed)??;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",

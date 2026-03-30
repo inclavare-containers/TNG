@@ -36,8 +36,12 @@ impl AsymmetricPrivateKey {
         Ok(match self {
             AsymmetricPrivateKey::Rsa2048(key)
             | AsymmetricPrivateKey::Rsa3072(key)
-            | AsymmetricPrivateKey::Rsa4096(key) => key.to_pkcs8_pem(LineEnding::LF)?,
-            AsymmetricPrivateKey::P256(key) => key.to_pkcs8_pem(LineEnding::LF)?,
+            | AsymmetricPrivateKey::Rsa4096(key) => key
+                .to_pkcs8_pem(LineEnding::LF)
+                .map_err(Error::FromPkcs8PemFailed)?,
+            AsymmetricPrivateKey::P256(key) => key
+                .to_pkcs8_pem(LineEnding::LF)
+                .map_err(Error::FromPkcs8PemFailed)?,
         })
     }
 
@@ -48,19 +52,12 @@ impl AsymmetricPrivateKey {
                 2048 => Ok(AsymmetricPrivateKey::Rsa2048(key)),
                 3072 => Ok(AsymmetricPrivateKey::Rsa3072(key)),
                 4096 => Ok(AsymmetricPrivateKey::Rsa4096(key)),
-                _ => Err(Error::kind_with_msg(
-                    ErrorKind::ParsePrivateKey,
-                    format!("unsupported rsa modulus bit length: {}", bit_len),
-                )),
+                _ => Err(Error::UnsupportedRsaBitLen(bit_len)),
             }
         } else {
-            match p256::SecretKey::from_pkcs8_pem(private_key_pkcs8) {
-                Ok(key) => Ok(AsymmetricPrivateKey::P256(key)),
-                Err(e) => Err(e).kind(ErrorKind::ParsePrivateKey).context(format!(
-                    "failed to parse private key from pkcs8 pem format. content: '{}'",
-                    private_key_pkcs8,
-                )),
-            }
+            p256::SecretKey::from_pkcs8_pem(private_key_pkcs8)
+                .map(AsymmetricPrivateKey::P256)
+                .map_err(Error::FromPkcs8PemFailed)
         }
     }
 }
@@ -71,15 +68,15 @@ impl DefaultCrypto {
     pub fn gen_private_key(algo: AsymmetricAlgo) -> Result<AsymmetricPrivateKey> {
         let mut rng = rand::thread_rng();
         match algo {
-            AsymmetricAlgo::Rsa2048 => Ok(AsymmetricPrivateKey::Rsa2048(rsa::RsaPrivateKey::new(
-                &mut rng, 2048,
-            )?)),
-            AsymmetricAlgo::Rsa3072 => Ok(AsymmetricPrivateKey::Rsa3072(rsa::RsaPrivateKey::new(
-                &mut rng, 3072,
-            )?)),
-            AsymmetricAlgo::Rsa4096 => Ok(AsymmetricPrivateKey::Rsa4096(rsa::RsaPrivateKey::new(
-                &mut rng, 4096,
-            )?)),
+            AsymmetricAlgo::Rsa2048 => Ok(AsymmetricPrivateKey::Rsa2048(
+                rsa::RsaPrivateKey::new(&mut rng, 2048).map_err(Error::RsaKeyGenerationFailed)?,
+            )),
+            AsymmetricAlgo::Rsa3072 => Ok(AsymmetricPrivateKey::Rsa3072(
+                rsa::RsaPrivateKey::new(&mut rng, 3072).map_err(Error::RsaKeyGenerationFailed)?,
+            )),
+            AsymmetricAlgo::Rsa4096 => Ok(AsymmetricPrivateKey::Rsa4096(
+                rsa::RsaPrivateKey::new(&mut rng, 4096).map_err(Error::RsaKeyGenerationFailed)?,
+            )),
             AsymmetricAlgo::P256 => Ok(AsymmetricPrivateKey::P256(p256::SecretKey::random(
                 &mut rng,
             ))),
@@ -96,7 +93,8 @@ impl DefaultCrypto {
             | AsymmetricPrivateKey::Rsa3072(key)
             | AsymmetricPrivateKey::Rsa4096(key) => key.to_public_key().to_public_key_der(),
             AsymmetricPrivateKey::P256(key) => key.public_key().to_public_key_der(),
-        }?;
+        }
+        .map_err(|e: pkcs8::spki::Error| Error::CertSpkiCreationFailed(e))?;
         let bytes = spki_doc.as_bytes();
 
         Ok(Self::hash(hash_algo, bytes))

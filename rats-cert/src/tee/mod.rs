@@ -20,10 +20,9 @@ pub enum DiceParseEvidenceOutput<T> {
 impl<T> From<DiceParseEvidenceOutput<T>> for Result<T> {
     fn from(value: DiceParseEvidenceOutput<T>) -> Self {
         match value {
-            crate::tee::DiceParseEvidenceOutput::NotMatch => Err(Error::kind_with_msg(
-                ErrorKind::UnrecognizedEvidenceType,
-                "Unrecognized evidence type",
-            )),
+            crate::tee::DiceParseEvidenceOutput::NotMatch => Err(Error::UnrecognizedEvidenceType {
+                detail: "CBOR tag does not match".to_string(),
+            }),
             crate::tee::DiceParseEvidenceOutput::MatchButInvalid(e) => Err(e),
             crate::tee::DiceParseEvidenceOutput::Ok(v) => Ok(v),
         }
@@ -61,7 +60,7 @@ pub trait GenericAttester {
 
 /// Blanket implementation for references to attesters.
 #[async_trait::async_trait]
-impl<'a, A: GenericAttester + Sync> GenericAttester for &'a A {
+impl<A: GenericAttester + Sync> GenericAttester for &A {
     type Evidence = A::Evidence;
 
     async fn get_evidence(&self, report_data: &ReportData) -> Result<Self::Evidence> {
@@ -92,7 +91,7 @@ pub trait GenericConverter {
 
 /// Blanket implementation for references to attesters.
 #[async_trait::async_trait]
-impl<'a, A: GenericConverter + Sync> GenericConverter for &'a A
+impl<A: GenericConverter + Sync> GenericConverter for &A
 where
     <A as GenericConverter>::InEvidence: Sync,
 {
@@ -119,7 +118,7 @@ impl<A: GenericAttester, C: GenericConverter<InEvidence = A::Evidence>> Attester
 }
 
 #[async_trait::async_trait]
-impl<'a, A, C> GenericAttester for AttesterPipeline<A, C>
+impl<A, C> GenericAttester for AttesterPipeline<A, C>
 where
     A: GenericAttester + Sync,
     C: GenericConverter<InEvidence = A::Evidence> + Sync,

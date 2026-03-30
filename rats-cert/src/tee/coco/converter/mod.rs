@@ -118,8 +118,7 @@ pub(crate) fn convert_additional_evidence(
 ) -> Result<Vec<(AaTeeType, serde_json::Value)>> {
     if let Some(json_bytes) = in_evidence.aa_additional_evidence_ref() {
         let additional_evidence_map: HashMap<String, serde_json::Value> =
-            serde_json::from_slice(json_bytes)
-                .context("Failed to parse JSON from additional evidence")?;
+            serde_json::from_slice(json_bytes).map_err(Error::ParseAdditionalEvidenceJsonFailed)?;
 
         let additional_evidence_map = additional_evidence_map
             .into_iter()

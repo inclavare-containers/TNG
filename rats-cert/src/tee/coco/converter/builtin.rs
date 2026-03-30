@@ -18,7 +18,6 @@ use reference_value_provider_service::extractors::extractor_modules::sample::Pro
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use reference_value_provider_service::storage::{local_json, ReferenceValueStorageConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -58,7 +57,7 @@ pub struct AttestationServiceWorkDir {
 impl AttestationServiceWorkDir {
     /// Create a new working directory with generated certificates
     fn new() -> Result<Self> {
-        let temp_dir = tempfile::tempdir().context("Failed to create builtin AS temp directory")?;
+        let temp_dir = tempfile::tempdir().map_err(Error::CreateTempDirFailed)?;
 
         let (cert_chain_path, key_path) = Self::generate_certificates(temp_dir.path())?;
 
@@ -89,8 +88,8 @@ impl AttestationServiceWorkDir {
     /// Generate CA and AS certificates using rcgen
     fn generate_certificates(work_dir: &Path) -> Result<(PathBuf, PathBuf)> {
         // Generate CA key pair
-        let ca_key_pair =
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate CA key")?;
+        let ca_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+            .map_err(Error::CaCertGenerationFailed)?;
 
         // Create CA certificate parameters
         let mut ca_params = CertificateParams::default();
@@ -109,11 +108,11 @@ impl AttestationServiceWorkDir {
         // Generate CA certificate
         let ca_cert = ca_params
             .self_signed(&ca_key_pair)
-            .context("Failed to generate CA certificate")?;
+            .map_err(Error::CaCertGenerationFailed)?;
 
         // Generate AS key pair
-        let as_key_pair =
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate AS key")?;
+        let as_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+            .map_err(Error::AsCertGenerationFailed)?;
 
         // Create AS certificate parameters
         let mut as_params = CertificateParams::default();
@@ -132,18 +131,24 @@ impl AttestationServiceWorkDir {
         // Sign AS certificate with CA
         let as_cert = as_params
             .signed_by(&as_key_pair, &ca_cert, &ca_key_pair)
-            .context("Failed to sign AS certificate")?;
+            .map_err(Error::AsCertGenerationFailed)?;
 
         // Write AS private key
         let key_path = work_dir.join("as.key");
-        std::fs::write(&key_path, as_key_pair.serialize_pem())
-            .context("Failed to write AS private key")?;
+        std::fs::write(&key_path, as_key_pair.serialize_pem()).map_err(|e| {
+            Error::WriteAsPrivateKeyFailed {
+                path: key_path.to_string_lossy().to_string(),
+                source: e,
+            }
+        })?;
 
         // Write certificate chain (AS cert + CA cert)
         let cert_chain_path = work_dir.join("as-chain.pem");
         let cert_chain = format!("{}{}", as_cert.pem(), ca_cert.pem());
-        std::fs::write(&cert_chain_path, cert_chain)
-            .context("Failed to write certificate chain")?;
+        std::fs::write(&cert_chain_path, cert_chain).map_err(|e| Error::WriteCertChainFailed {
+            path: cert_chain_path.to_string_lossy().to_string(),
+            source: e,
+        })?;
 
         Ok((cert_chain_path, key_path))
     }
@@ -203,7 +208,10 @@ pub enum ReferenceValueConfig {
 /// Converts CocoEvidence to CocoAsToken using an embedded attestation-service instance.
 /// This provides local evidence verification without requiring a remote AS.
 pub struct BuiltinCocoConverter {
-    attestation_service: AttestationService,
+    /// Embedded attestation service instance
+    ///
+    /// Note the attestation service is boxed to save the stack space and avoid large memory copy.
+    attestation_service: Box<AttestationService>,
 
     /// Working directory for attestation service (cleaned up on drop)
     #[allow(dead_code)]
@@ -247,16 +255,18 @@ impl BuiltinCocoConverter {
         };
 
         // Create AttestationService instance
-        let mut attestation_service = AttestationService::new(config)
-            .await
-            .context("Failed to create AttestationService")?;
+        let mut attestation_service = Box::new(
+            AttestationService::new(config)
+                .await
+                .map_err(Error::AttestationServiceCreateFailed)?,
+        );
 
         // Load policy (skip to use AS built-in default policy for Default)
-        if let Some(policy_content) = Self::load_policy_as_base64_url_safe_no_pad(policy)? {
+        if let Some(policy_content) = Self::load_policy_as_base64_url_safe_no_pad(policy).await? {
             attestation_service
                 .set_policy(DEFAULT_POLICY_ID.to_string(), policy_content)
                 .await
-                .context("Failed to set policy")?;
+                .map_err(Error::AttestationServiceSetPolicyFailed)?;
         }
 
         // Load reference values
@@ -270,22 +280,27 @@ impl BuiltinCocoConverter {
 
     /// Load policy from configuration
     /// Returns None for Default policy (use AS built-in default)
-    fn load_policy_as_base64_url_safe_no_pad(policy: &PolicyConfig) -> Result<Option<String>> {
+    async fn load_policy_as_base64_url_safe_no_pad(
+        policy: &PolicyConfig,
+    ) -> Result<Option<String>> {
         match policy {
             PolicyConfig::Default => Ok(None),
             PolicyConfig::Inline { content } => {
                 // Decode base64 encoded policy
                 let decoded = BASE64_STANDARD
                     .decode(content)
-                    .context("Failed to decode base64 policy content")?;
+                    .map_err(Error::DecodePolicyContentFailed)?;
                 Ok(Some(URL_SAFE_NO_PAD.encode(decoded)))
             }
-            PolicyConfig::Path { path } => Ok(Some(
-                URL_SAFE_NO_PAD.encode(
-                    std::fs::read_to_string(path)
-                        .with_context(|| format!("Failed to read policy file: {}", path))?,
-                ),
-            )),
+            PolicyConfig::Path { path } => {
+                let content_str = tokio::fs::read_to_string(path).await.map_err(|e| {
+                    Error::ReadPolicyFileFailed {
+                        path: path.clone(),
+                        source: e,
+                    }
+                })?;
+                Ok(Some(URL_SAFE_NO_PAD.encode(content_str)))
+            }
         }
     }
 
@@ -300,16 +315,25 @@ impl BuiltinCocoConverter {
                     let provenance = match payload {
                         SampleProvenancePayloadConfig::Inline { content } => Ok(content.clone()),
                         SampleProvenancePayloadConfig::Path { path } => {
-                            let content_str = std::fs::read_to_string(path).with_context(|| {
-                                format!("Failed to read payload file: {}", path)
-                            })?;
-                            serde_json::from_str(&content_str).with_context(|| {
-                                format!("Failed to parse payload JSON from file: {}", path)
+                            let content_str =
+                                tokio::fs::read_to_string(path).await.map_err(|e| {
+                                    Error::ReadReferenceValueFileFailed {
+                                        path: path.clone(),
+                                        source: e,
+                                    }
+                                })?;
+                            serde_json::from_str(&content_str).map_err(|e| {
+                                Error::ParseReferenceValuePayloadFailed {
+                                    path: path.clone(),
+                                    source: e,
+                                }
                             })
                         }
                     }?;
-                    let provenance_base64 = base64::engine::general_purpose::STANDARD
-                        .encode(serde_json::to_vec(&provenance)?);
+                    let provenance_base64 = base64::engine::general_purpose::STANDARD.encode(
+                        serde_json::to_vec(&provenance)
+                            .map_err(Error::SerializeProvenanceFailed)?,
+                    );
 
                     #[derive(Serialize)]
                     struct RvpsMessage<'a> {
@@ -326,32 +350,37 @@ impl BuiltinCocoConverter {
                         payload: provenance_base64,
                     };
                     let rvps_message = serde_json::to_string(&message)
-                        .context("Failed to serialize register_reference_value() message")?;
+                        .map_err(Error::SerializeReferenceValueMessageFailed)?;
                     attestation_service
                         .register_reference_value(&rvps_message)
                         .await
-                        .map_err(|e| {
-                            Error::msg(format!("Failed to set sample reference values: {:?}", e))
-                        })?;
+                        .map_err(Error::RegisterSampleReferenceValueFailed)?;
                 }
                 ReferenceValueConfig::Slsa { payload } => {
                     let payload_value = match payload {
                         SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
                         SlsaReferenceValuePayloadConfig::Path { path } => {
-                            let content_str = std::fs::read_to_string(path).with_context(|| {
-                                format!("Failed to read SLSA payload file: {}", path)
-                            })?;
+                            let content_str =
+                                tokio::fs::read_to_string(path).await.map_err(|e| {
+                                    Error::ReadReferenceValueFileFailed {
+                                        path: path.clone(),
+                                        source: e,
+                                    }
+                                })?;
                             serde_json::from_str::<ReferenceValueListPayload>(&content_str)
-                                .with_context(|| {
-                                    format!("Failed to parse SLSA payload JSON from file: {}", path)
+                                .map_err(|e| Error::ParseReferenceValuePayloadFailed {
+                                    path: path.clone(),
+                                    source: e,
                                 })?
                         }
                     };
 
+                    let payload_str = serde_json::to_string(&payload_value)
+                        .map_err(Error::SerializeSlsaReferenceValueListFailed)?;
                     attestation_service
-                        .set_reference_value_list(&serde_json::to_string(&payload_value)?)
+                        .set_reference_value_list(&payload_str)
                         .await
-                        .context("Failed to set SLSA reference values")?;
+                        .map_err(Error::SetSlsaReferenceValueListFailed)?;
                 }
             }
         }
@@ -363,7 +392,7 @@ impl BuiltinCocoConverter {
         self.attestation_service
             .generate_challenge(None, None)
             .await
-            .context("Failed to generate challenge")
+            .map_err(Error::AttestationServiceGenerateChallengeFailed)
     }
 
     /// Convert TEE type string to attestation-service Tee enum
@@ -377,7 +406,9 @@ impl BuiltinCocoConverter {
             "cca" => Ok(Tee::Cca),
             "aztdx" | "az-tdx-vtpm" => Ok(Tee::AzTdxVtpm),
             "azsnp" | "az-snp-vtpm" => Ok(Tee::AzSnpVtpm),
-            _ => Err(Error::msg(format!("Unknown TEE type: {}", tee_str))),
+            _ => Err(Error::UnknownTeeType {
+                tee_type: tee_str.to_string(),
+            }),
         }
     }
 
@@ -415,11 +446,12 @@ impl GenericConverter for BuiltinCocoConverter {
         // Parse runtime data as JSON
         let runtime_data: serde_json::Value =
             serde_json::from_str(in_evidence.aa_runtime_data_ref())
-                .context("Failed to parse runtime data as JSON")?;
+                .map_err(Error::ParseRuntimeDataJsonFailed)?;
 
         // Build verification requests
         let mut verification_requests = vec![attestation_service::VerificationRequest {
-            evidence: serde_json::from_slice(in_evidence.aa_evidence_ref())?,
+            evidence: serde_json::from_slice(in_evidence.aa_evidence_ref())
+                .map_err(Error::ParseEvidenceFromBytesFailed)?,
             tee,
             runtime_data: Some(attestation_service::RuntimeData::Structured(runtime_data)),
             runtime_data_hash_algorithm: hash_algorithm,
@@ -431,7 +463,7 @@ impl GenericConverter for BuiltinCocoConverter {
         for (tee_type, evidence) in convert_additional_evidence(in_evidence)? {
             let additional_tee = Self::tee_str_to_enum(tee_type.as_attestation_service_str_id())?;
             verification_requests.push(attestation_service::VerificationRequest {
-                evidence: evidence,
+                evidence,
                 tee: additional_tee,
                 runtime_data: None,
                 runtime_data_hash_algorithm: HashAlgorithm::Sha256,
@@ -445,7 +477,7 @@ impl GenericConverter for BuiltinCocoConverter {
             .attestation_service
             .evaluate(verification_requests, vec![DEFAULT_POLICY_ID.to_owned()])
             .await
-            .context("Evidence verification failed")?;
+            .map_err(Error::AttestationServiceVerifyFailed)?;
 
         CocoAsToken::new(token)
     }
@@ -474,7 +506,8 @@ default file_system := 2"#;
             content: policy_b64,
         };
 
-        let result = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config);
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
         assert!(result.is_ok());
         let encoded_content = result
             .unwrap()
@@ -491,7 +524,8 @@ default file_system := 2"#;
     #[tokio::test]
     async fn test_load_default_policy() {
         let policy_config = PolicyConfig::Default;
-        let result = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config);
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
         assert!(result.is_ok());
         assert!(
             result.unwrap().is_none(),
@@ -981,7 +1015,7 @@ default file_system := 2"#,
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
-        #[should_panic = "EAR status should be \\\"affirming\\\" but got \\\"warning\\\""]
+        #[should_panic(expected = "EarStatusNotAffirming")]
         async fn test_builtin_convert_and_verify_roundtrip() {
             let converter = BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
                 .await

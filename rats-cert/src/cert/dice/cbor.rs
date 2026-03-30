@@ -38,10 +38,7 @@ impl TryFrom<HashAlgoIanaId> for HashAlgo {
             1 => Self::Sha256,
             7 => Self::Sha384,
             8 => Self::Sha512,
-            _ => Err(Error::kind_with_msg(
-                ErrorKind::UnsupportedHashAlgo,
-                format!("unsupported hash-alg-id: {}", value),
-            ))?,
+            _ => Err(Error::DiceUnsupportedHashAlgo(value))?,
         })
     }
 }
@@ -140,7 +137,7 @@ pub fn generate_evidence_buffer_with_tag(
         claims_buffer,
     };
     let mut res = vec![];
-    ciborium::into_writer(&helper, &mut res)?;
+    ciborium::into_writer(&helper, &mut res).map_err(Error::CborSerializationFailed)?;
     Ok(res)
 }
 
@@ -151,14 +148,16 @@ pub fn parse_evidence_buffer_with_tag(
     /* raw_evidence */ Vec<u8>,
     /* claims_buffer */ Vec<u8>,
 )> {
-    let helper: TaggedEvidenceBufferHelperOwned = ciborium::from_reader(evidence_buffer)?;
+    let helper: TaggedEvidenceBufferHelperOwned =
+        ciborium::from_reader(evidence_buffer).map_err(Error::CborDeserializationFailed)?;
     Ok((helper.tag, helper.evidence, helper.claims_buffer))
 }
 
 // TODO: endorsement buffer
 
 pub fn parse_claims_buffer(claims_buffer: &[u8]) -> Result<Claims> {
-    let claims: Claims = ciborium::from_reader(claims_buffer)?;
+    let claims: Claims =
+        ciborium::from_reader(claims_buffer).map_err(Error::CborDeserializationFailed)?;
     Ok(claims)
 }
 
@@ -170,7 +169,8 @@ pub fn generate_pubkey_hash_value_buffer(hash_algo: HashAlgo, hash: &[u8]) -> Re
             serde_bytes::Bytes::new(hash),
         ),
         &mut res,
-    )?;
+    )
+    .map_err(Error::CborSerializationFailed)?;
     Ok(res)
 }
 
@@ -179,7 +179,8 @@ pub fn parse_pubkey_hash_value_buffer(
     pubkey_hash_value_buffer: &[u8],
 ) -> Result<(/* hash_algo */ HashAlgo, /* hash */ Vec<u8>)> {
     let (hash_algo_id, hash): (HashAlgoIanaId, Vec<u8>) =
-        ciborium::from_reader(pubkey_hash_value_buffer)?;
+        ciborium::from_reader(pubkey_hash_value_buffer)
+            .map_err(Error::CborDeserializationFailed)?;
     Ok((hash_algo_id.try_into()?, hash))
 }
 
@@ -226,7 +227,10 @@ pub mod tests {
             "claims pubkey_hash_value_buffer in cbor: {}",
             hex::encode(&pubkey_hash_value_buffer)
         );
-        assert_eq!(pubkey_hash_value_buffer, hex::decode("82014400010203")?);
+        assert_eq!(
+            pubkey_hash_value_buffer,
+            hex::decode("82014400010203").expect("valid hex")
+        );
 
         let deserialized = parse_pubkey_hash_value_buffer(&pubkey_hash_value_buffer)?;
         assert_eq!(expected_hash_algo, deserialized.0);

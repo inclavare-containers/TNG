@@ -97,9 +97,7 @@ impl CertVerifier {
     ///
     /// Returns a pending result that the caller should verify with an appropriate verifier.
     pub async fn verify_pem(&self, cert: &[u8]) -> Result<CertVerifyPendingResult> {
-        let cert = Certificate::from_pem(cert)
-            .kind(ErrorKind::ParseCertError)
-            .context("failed to parse certificate from pem")?;
+        let cert = Certificate::from_pem(cert).map_err(Error::ParsePemCertError)?;
         self.verify_cert(&cert).await
     }
 
@@ -107,15 +105,13 @@ impl CertVerifier {
     ///
     /// Returns a pending result that the caller should verify with an appropriate verifier.
     pub async fn verify_der(&self, cert: &[u8]) -> Result<CertVerifyPendingResult> {
-        let cert = Certificate::from_der(cert)
-            .kind(ErrorKind::ParseCertError)
-            .context("failed to parse certificate from der")?;
+        let cert = Certificate::from_der(cert).map_err(Error::ParseDerCertError)?;
         self.verify_cert(&cert).await
     }
 
     async fn verify_cert(&self, cert: &Certificate) -> Result<CertVerifyPendingResult> {
         /* check self-signed cert */
-        verify_cert_signature(cert, cert).kind(ErrorKind::CertVerifySignatureFailed)?;
+        verify_cert_signature(cert, cert)?;
 
         /* Extract the evidence_buffer and endorsements_buffer(optional) from the X.509 certificate extension. */
         let evidence_buffer = extract_ext_with_oid(cert, &OID_TCG_DICE_TAGGED_EVIDENCE);
@@ -124,10 +120,7 @@ impl CertVerifier {
         /* evidence extension is not optional */
         let evidence_buffer = match evidence_buffer {
             Some(v) => v,
-            None => Err(Error::kind_with_msg(
-                ErrorKind::CertExtractExtensionFailed,
-                "failed to extract the evidence extensions from the certificate",
-            ))?,
+            None => Err(Error::CertExtractExtensionFailed)?,
         };
         /* endorsements extension is optional */
         // TODO: endorsements extension
@@ -136,7 +129,11 @@ impl CertVerifier {
         // Note: the implementation here is not compatible with the Interoperable RA-TLS now
 
         /* Prepare expected pubkey-hash claim */
-        let spki_bytes = cert.tbs_certificate.subject_public_key_info.to_der()?;
+        let spki_bytes = cert
+            .tbs_certificate
+            .subject_public_key_info
+            .to_der()
+            .map_err(Error::DerError)?;
         // TODO: Hash algorithm is currently hardcoded to SHA256.
         // Future support should include extracting the hash algorithm from the evidence.
         let pubkey_hash = DefaultCrypto::hash(HashAlgo::Sha256, &spki_bytes);
@@ -157,11 +154,13 @@ impl CertVerifier {
                 cbor_tag,
                 &raw_evidence,
             ))
-            .with_context(|| {
-                format!(
-                    "Failed to parse CoCo AS token: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes)",
-                    cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
-                )
+            .map_err(|e| {
+                Error::UnrecognizedEvidenceType {
+                    detail: format!(
+                        "Failed to parse CoCo AS token: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
+                        cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
+                    ),
+                }
             })?;
             CertEvidence::Token(token)
         } else {
@@ -170,11 +169,13 @@ impl CertVerifier {
                 cbor_tag,
                 &raw_evidence,
             ))
-            .with_context(|| {
-                format!(
-                    "Failed to parse CoCo evidence: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes)",
-                    cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
-                )
+            .map_err(|e| {
+                Error::UnrecognizedEvidenceType {
+                    detail: format!(
+                        "Failed to parse CoCo evidence: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
+                        cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
+                    ),
+                }
             })?;
             CertEvidence::Evidence(evidence)
         };
@@ -188,14 +189,17 @@ impl CertVerifier {
 
 fn verify_cert_signature(issuer: &Certificate, signed: &Certificate) -> Result<()> {
     if issuer.tbs_certificate.subject != signed.tbs_certificate.issuer {
-        return Err("certificate issuer does not match".into());
+        return Err(Error::CertIssuerMismatch);
     }
 
-    let signed_data = signed.tbs_certificate.to_der()?;
+    let signed_data = signed
+        .tbs_certificate
+        .to_der()
+        .map_err(Error::CertEncodeFailed)?;
     let signature = signed
         .signature
         .as_bytes()
-        .ok_or("could not get cert signature")?;
+        .ok_or(Error::CertSignatureNotFound)?;
 
     verify_signed_data(issuer, &signed_data, signature, &signed.signature_algorithm)
 }
@@ -213,29 +217,54 @@ fn verify_signed_data(
 
     match algo.oid {
         const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION => {
-            rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(rsa::RsaPublicKey::try_from(spki)?)
-                .verify(signed_data, &signature.try_into()?)?;
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(
+                rsa::RsaPublicKey::try_from(spki).map_err(Error::RsaPublicKeyConversionFailed)?,
+            )
+            .verify(
+                signed_data,
+                &signature
+                    .try_into()
+                    .map_err(Error::CertVerifySignatureFailed)?,
+            )
+            .map_err(Error::CertVerifySignatureFailed)?;
         }
         const_oid::db::rfc5912::SHA_384_WITH_RSA_ENCRYPTION => {
-            rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(rsa::RsaPublicKey::try_from(spki)?)
-                .verify(signed_data, &signature.try_into()?)?;
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(
+                rsa::RsaPublicKey::try_from(spki).map_err(Error::RsaPublicKeyConversionFailed)?,
+            )
+            .verify(
+                signed_data,
+                &signature
+                    .try_into()
+                    .map_err(Error::CertVerifySignatureFailed)?,
+            )
+            .map_err(Error::CertVerifySignatureFailed)?;
         }
         const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION => {
-            rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(rsa::RsaPublicKey::try_from(spki)?)
-                .verify(signed_data, &signature.try_into()?)?;
+            rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(
+                rsa::RsaPublicKey::try_from(spki).map_err(Error::RsaPublicKeyConversionFailed)?,
+            )
+            .verify(
+                signed_data,
+                &signature
+                    .try_into()
+                    .map_err(Error::CertVerifySignatureFailed)?,
+            )
+            .map_err(Error::CertVerifySignatureFailed)?;
         }
-
         const_oid::db::rfc5912::ECDSA_WITH_SHA_256 => {
-            let signature = p256::ecdsa::DerSignature::try_from(signature)?;
-            p256::ecdsa::VerifyingKey::try_from(spki)?.verify(signed_data, &signature)?;
+            let signature = p256::ecdsa::DerSignature::try_from(signature)
+                .map_err(Error::CertVerifySignatureFailed)?;
+            p256::ecdsa::VerifyingKey::try_from(spki)
+                .map_err(Error::P256PublicKeyConversionFailed)?
+                .verify(signed_data, &signature)
+                .map_err(Error::CertVerifySignatureFailed)?;
         }
 
         _ => {
-            return Err(format!(
-                "unknown signature algo {}",
-                issuer.tbs_certificate.signature.oid
-            )
-            .into())
+            return Err(Error::UnknownSignatureAlgo(
+                issuer.tbs_certificate.signature.oid,
+            ))
         }
     }
 

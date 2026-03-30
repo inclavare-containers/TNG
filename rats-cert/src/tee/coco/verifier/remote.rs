@@ -17,10 +17,7 @@ impl CocoVerifier {
     ) -> Result<Self> {
         if let Some(as_addr_config) = as_addr_config {
             if as_addr_config.as_is_grpc {
-                return Err(Error::kind_with_msg(
-                    ErrorKind::CocoVerifyTokenFailed,
-                    "Grpc is not supported for CoCo AS token verification",
-                ));
+                return Err(Error::RemoteAsGrpcNotSupported);
             }
         }
 
@@ -30,10 +27,7 @@ impl CocoVerifier {
         let has_trust_source = !trusted_certs_paths.is_empty() || as_addr_config.is_some();
 
         if !has_trust_source {
-            Err(Error::kind_with_msg(
-                ErrorKind::CocoVerifyTokenFailed,
-                "No trust source provided (neither trusted_certs_paths nor as_addr)".to_string(),
-            ))?
+            Err(Error::NoTrustSource)?
         }
 
         let config = AttestationTokenVerifierConfig {
@@ -46,7 +40,9 @@ impl CocoVerifier {
             insecure_key: false,
         };
 
-        let token_verifier = TokenVerifier::from_config(config).await?;
+        let token_verifier = TokenVerifier::from_config(config)
+            .await
+            .map_err(Error::CocoVerifyTokenFailed)?;
 
         Ok(Self {
             inner: CommonCocoVerifier {
@@ -69,14 +65,6 @@ impl GenericVerifier for CocoVerifier {
         self.inner
             .verify_evidence_internal(evidence, report_data)
             .await
-            .context("Failed to verify CoCo AS token")
-            .map_err(|e| {
-                if e.get_kind() == ErrorKind::Unknown {
-                    e.with_kind(ErrorKind::CocoVerifyTokenFailed)
-                } else {
-                    e
-                }
-            })
     }
 }
 

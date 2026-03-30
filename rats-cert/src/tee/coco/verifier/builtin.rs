@@ -24,7 +24,9 @@ impl BuiltinCocoVerifier {
             insecure_key: true,
         };
 
-        let token_verifier = TokenVerifier::from_config(config).await?;
+        let token_verifier = TokenVerifier::from_config(config)
+            .await
+            .map_err(Error::CocoVerifyTokenFailed)?;
 
         Ok(Self {
             inner: CommonCocoVerifier {
@@ -48,13 +50,5 @@ impl GenericVerifier for BuiltinCocoVerifier {
         self.inner
             .verify_evidence_internal(evidence, report_data)
             .await
-            .context("Failed to verify CoCo AS token")
-            .map_err(|e| {
-                if e.get_kind() == ErrorKind::Unknown {
-                    e.with_kind(ErrorKind::CocoVerifyTokenFailed)
-                } else {
-                    e
-                }
-            })
     }
 }

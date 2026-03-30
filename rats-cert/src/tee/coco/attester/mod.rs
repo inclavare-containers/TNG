@@ -30,12 +30,8 @@ impl CocoAttester {
 
     pub fn new_with_timeout_nano(aa_addr: &str, timeout_nano: i64) -> Result<Self> {
         // TODO: turn ttrpc client to async client
-        let inner = ttrpc::Client::connect(aa_addr)
-            .kind(ErrorKind::CocoConnectTtrpcFailed)
-            .context(format!(
-                "Failed to connect to attestation-agent ttrpc address {}",
-                aa_addr
-            ))?;
+        let inner =
+            ttrpc::Client::connect(aa_addr).map_err(Error::ConnectAttestationAgentTtrpcFailed)?;
         let client = AttestationAgentServiceClient::new(inner);
         Ok(Self {
             client,
@@ -47,7 +43,9 @@ impl CocoAttester {
 fn serialize_canon_json<T: Serialize>(value: T) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut ser = serde_json::Serializer::with_formatter(&mut buf, CanonicalFormatter::new());
-    value.serialize(&mut ser)?;
+    value
+        .serialize(&mut ser)
+        .map_err(Error::SerializeCanonicalJsonFailed)?;
     Ok(buf)
 }
 
@@ -75,7 +73,7 @@ impl GenericAttester for CocoAttester {
                 ttrpc::context::with_timeout(self.timeout_nano),
                 &get_evidence_req,
             )
-            .kind(ErrorKind::CocoRequestAAFailed)?;
+            .map_err(Error::GetEvidenceFromAAFailed)?;
 
         // Query tee type from AA
         let get_tee_type_req = GetTeeTypeRequest {
@@ -87,7 +85,7 @@ impl GenericAttester for CocoAttester {
                 ttrpc::context::with_timeout(self.timeout_nano),
                 &get_tee_type_req,
             )
-            .kind(ErrorKind::CocoRequestAAFailed)?;
+            .map_err(Error::GetTeeTypeFromAAFailed)?;
         let tee_type = AaTeeType::from_attestation_agent_str_id(&get_tee_type_res.tee);
 
         // Attempt to get additional evidence from AA, but don't fail if not supported
@@ -125,7 +123,7 @@ impl GenericAttester for CocoAttester {
             tee_type,
             get_evidence_res.Evidence,
             additional_evidence,
-            String::from_utf8(aa_runtime_data_bytes)?,
+            String::from_utf8(aa_runtime_data_bytes).map_err(Error::InvalidUtf8)?,
             aa_runtime_data_hash_algo,
         )?)
     }

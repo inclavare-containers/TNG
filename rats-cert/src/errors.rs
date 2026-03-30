@@ -1,192 +1,311 @@
-use std::fmt::Display;
+use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[repr(C)]
-pub enum ErrorKind {
-    Unknown,
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Unrecognized evidence type: {detail}")]
+    UnrecognizedEvidenceType { detail: String },
 
-    UnsupportedTeeType,
+    // Token verification related
+    #[error("Unsupported EAT profile: {profile}")]
+    UnsupportedEatProfile { profile: String },
 
-    UnrecognizedEvidenceType,
+    #[error("Missing field in token: {detail}")]
+    MissingTokenField { detail: String },
 
-    CocoConnectTtrpcFailed,
+    #[error("Runtime data mismatch")]
+    RuntimeDataMismatch,
 
-    CocoRequestAAFailed,
+    #[error("EAR status is not affirming: got {status} for {tee_type}, trustworthiness: {trustworthiness}")]
+    EarStatusNotAffirming {
+        status: String,
+        tee_type: String,
+        trustworthiness: String,
+    },
 
-    CocoRequestASFailed,
+    #[error("Multiple policy IDs found in EAR token")]
+    MultiplePolicyIds,
 
-    CocoVerifyTokenFailed,
+    #[error("No valid policy ID found in EAR token")]
+    NoValidPolicyId,
 
-    CocoParseTokenFailed,
+    #[error("Policy evaluation failed for policy_id `{policy_id}`")]
+    PolicyEvaluationFailed { policy_id: String },
 
-    InvalidParameter,
+    // Remote AS related
+    #[error("Remote AS gRPC is not supported")]
+    RemoteAsGrpcNotSupported,
 
-    UnsupportedHashAlgo,
+    #[error("No trust source provided (neither trusted_certs_paths nor as_addr)")]
+    NoTrustSource,
 
+    // gRPC AS related errors
+    #[error("Failed to create gRPC endpoint for AS address `{as_addr}`")]
+    GrpcEndpointCreateFailed {
+        as_addr: String,
+        #[source]
+        source: tonic::transport::Error,
+    },
+
+    #[error("Failed to connect to gRPC AS address `{as_addr}`")]
+    GrpcConnectFailed {
+        as_addr: String,
+        #[source]
+        source: tonic::transport::Error,
+    },
+
+    #[error("gRPC attestation evaluate failed")]
+    GrpcAttestationEvaluateFailed(#[source] tonic::Status),
+
+    // RESTful AS related errors
+    #[error(
+        "Attestation service returned HTTP error: status={status_code}, response={response_body}"
+    )]
+    AttestationServiceHttpError {
+        status_code: u16,
+        response_body: String,
+    },
+
+    // AA ttrpc related errors
+    #[error("Failed to get evidence from Attestation Agent")]
+    GetEvidenceFromAAFailed(#[source] ttrpc::Error),
+
+    #[error("Failed to get TEE type from Attestation Agent")]
+    GetTeeTypeFromAAFailed(#[source] ttrpc::Error),
+
+    #[error("Failed to connect to Attestation Agent ttrpc endpoint")]
+    ConnectAttestationAgentTtrpcFailed(#[source] ttrpc::Error),
+
+    #[error("Verify token failed")]
+    CocoVerifyTokenFailed(#[source] crate::tee::coco::verifier::token::Error),
+
+    // Built-in AS related
+    // Certificate generation related errors
+    #[error("Failed to generate certificate validity period")]
+    CertValidityGenerationFailed(#[source] pkcs8::der::Error),
+
+    #[error("Failed to parse certificate subject {0}: {1}")]
+    CertSubjectParseFailed(String, #[source] pkcs8::der::Error),
+
+    #[error("Failed to create SubjectPublicKeyInfo")]
+    CertSpkiCreationFailed(#[source] pkcs8::spki::Error),
+
+    #[error("Failed to build certificate")]
+    CertBuildFailed(#[source] x509_cert::builder::Error),
+
+    #[error("Failed to sign certificate")]
+    CertSignFailed(#[source] x509_cert::builder::Error),
+
+    #[error("Failed to encode certificate")]
+    CertEncodeFailed(#[source] pkcs8::der::Error),
+
+    #[error("Failed to generate CA certificate")]
+    CaCertGenerationFailed(#[source] rcgen::Error),
+
+    #[error("Failed to generate AS certificate")]
+    AsCertGenerationFailed(#[source] rcgen::Error),
+
+    // File operation errors (specific scenarios)
+    #[error("Failed to create temporary directory")]
+    CreateTempDirFailed(#[source] std::io::Error),
+
+    #[error("Failed to write AS private key to {path}")]
+    WriteAsPrivateKeyFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to write certificate chain to {path}")]
+    WriteCertChainFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to read policy file from {path}")]
+    ReadPolicyFileFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to read reference value file from {path}")]
+    ReadReferenceValueFileFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Base64 decode failed")]
+    Base64DecodeFailed(#[source] base64::DecodeError),
+
+    // Reference value errors (specific scenarios)
+    #[error("Failed to parse reference value payload from {path}")]
+    ParseReferenceValuePayloadFailed {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("Failed to serialize reference value message")]
+    SerializeReferenceValueMessageFailed(#[source] serde_json::Error),
+
+    #[error("Failed to register sample reference value")]
+    RegisterSampleReferenceValueFailed(#[source] anyhow::Error),
+
+    #[error("Failed to set SLSA reference value list")]
+    SetSlsaReferenceValueListFailed(#[source] anyhow::Error),
+
+    // RSA key generation
+    #[error("RSA key generation failed")]
+    RsaKeyGenerationFailed(#[source] rsa::Error),
+
+    // CBOR serialization/deserialization
+    #[error("CBOR serialization failed")]
+    CborSerializationFailed(#[source] ciborium::ser::Error<std::io::Error>),
+
+    #[error("CBOR deserialization failed")]
+    CborDeserializationFailed(#[source] ciborium::de::Error<std::io::Error>),
+
+    // UTF-8 conversion
+    #[error("Invalid UTF-8 sequence in string")]
+    InvalidUtf8(#[source] std::string::FromUtf8Error),
+
+    #[error("Invalid UTF-8 sequence in byte slice")]
+    InvalidUtf8Slice(#[source] std::str::Utf8Error),
+
+    // TEE type
+    #[error("Unknown TEE type: {tee_type}")]
+    UnknownTeeType { tee_type: String },
+
+    // gRPC metadata
+    #[error("Invalid gRPC metadata key")]
+    InvalidGrpcMetadataKey(#[source] tonic::metadata::errors::InvalidMetadataKey),
+
+    #[error("Invalid gRPC metadata value")]
+    InvalidGrpcMetadataValue(#[source] tonic::metadata::errors::InvalidMetadataValue),
+
+    // Attestation service operations
+    #[error("Failed to create attestation service")]
+    AttestationServiceCreateFailed(#[source] attestation_service::ServiceError),
+
+    #[error("Failed to set attestation policy")]
+    AttestationServiceSetPolicyFailed(#[source] anyhow::Error),
+
+    #[error("Failed to generate attestation challenge")]
+    AttestationServiceGenerateChallengeFailed(#[source] anyhow::Error),
+
+    #[error("Attestation evidence verification failed")]
+    AttestationServiceVerifyFailed(#[source] anyhow::Error),
+
+    // HTTP client building
+    #[error("Failed to build HTTP client")]
+    HttpClientBuildFailed(#[source] reqwest::Error),
+
+    // HTTP request sending
+    #[error("Failed to send HTTP request to AS")]
+    HttpRequestSendFailed(#[source] reqwest::Error),
+
+    // HTTP response reading
+    #[error("Failed to read HTTP response from AS")]
+    HttpResponseReadFailed(#[source] reqwest::Error),
+
+    // Task spawning
+    #[error("Failed to spawn async task")]
+    TaskSpawnFailed(#[source] tokio::task::JoinError),
+
+    // JWT claims flattening
+    #[error("Failed to flatten JWT claims: {message}")]
+    JwtClaimsFlattenFailed { message: String },
+
+    // Policy content decode
+    #[error("Failed to decode base64 policy content")]
+    DecodePolicyContentFailed(#[source] base64::DecodeError),
+
+    #[error("Invalid attestation service header name")]
+    InvalidAttestationServiceHeaderName(#[source] reqwest::header::InvalidHeaderName),
+
+    #[error("Invalid attestation service header value")]
+    InvalidAttestationServiceHeaderValue(#[source] reqwest::header::InvalidHeaderValue),
+
+    #[error("Unsupported hash-alg-id: {0}")]
+    DiceUnsupportedHashAlgo(crate::cert::dice::cbor::HashAlgoIanaId),
+
+    #[error("Calculate hash failed")]
     CalculateHashFailed,
 
-    GenCertError,
+    #[error("Failed to parse PEM certificate")]
+    ParsePemCertError(#[source] pkcs8::der::Error),
 
-    ParseCertError,
+    #[error("Failed to parse DER certificate")]
+    ParseDerCertError(#[source] pkcs8::der::Error),
 
-    CertVerifySignatureFailed,
+    #[error("Certificate verify signature failed: {0}")]
+    CertVerifySignatureFailed(#[source] signature::Error),
 
+    #[error("Failed to convert RSA public key from SPKI")]
+    RsaPublicKeyConversionFailed(#[source] pkcs8::spki::Error),
+
+    #[error("Failed to convert P256 public key from SPKI")]
+    P256PublicKeyConversionFailed(#[source] pkcs8::spki::Error),
+
+    #[error("Certificate issuer does not match")]
+    CertIssuerMismatch,
+
+    #[error("Could not get cert signature")]
+    CertSignatureNotFound,
+
+    #[error("Certificate extract extension failed")]
     CertExtractExtensionFailed,
 
+    #[error("Certificate verify public key hash failed")]
     CertVerifyPublicKeyHashFailed,
 
-    ParsePrivateKey,
+    #[error("Unsupported rsa modulus bit length {0}")]
+    UnsupportedRsaBitLen(usize),
 
-    UnsupportedFeatures,
-}
+    #[error("Failed to parse private key from pkcs8 pem format: {0}")]
+    FromPkcs8PemFailed(pkcs8::Error),
 
-#[derive(Debug, PartialEq)]
-pub struct Error {
-    kind: ErrorKind,
-    msg: Option<String>,
-}
+    #[error("DER encoding/decoding error")]
+    DerError(#[source] pkcs8::der::Error),
 
-#[allow(dead_code)]
-impl Error {
-    /// Create an Error with a unknown kind
-    pub fn unknown() -> Self {
-        Error::kind(ErrorKind::Unknown)
-    }
+    #[error("SPKI error")]
+    SpkiError(#[source] pkcs8::spki::Error),
 
-    /// Create an Error with the specific kind
-    pub fn kind(kind: ErrorKind) -> Self {
-        Error { kind, msg: None }
-    }
+    #[error("Unknown signature algo: {0}")]
+    UnknownSignatureAlgo(pkcs8::ObjectIdentifier),
 
-    /// Create an Error with the specific message
-    pub fn msg<M>(msg: M) -> Self
-    where
-        M: Display,
-    {
-        Error::kind_with_msg(ErrorKind::Unknown, msg)
-    }
+    // JSON serialization/deserialization errors (specific scenarios)
+    #[error("Failed to serialize claims to JSON")]
+    SerializeClaimsToJsonFailed(#[source] serde_json::Error),
 
-    /// Create an Error with the specific kind and message
-    pub fn kind_with_msg<M>(kind: ErrorKind, msg: M) -> Self
-    where
-        M: Display,
-    {
-        Error {
-            kind,
-            msg: Some(msg.to_string()),
-        }
-    }
+    #[error("Failed to deserialize evidence from JSON")]
+    DeserializeEvidenceFromJsonFailed(#[source] serde_json::Error),
 
-    /// Set kind of self to a specific kind, and return this Error.
-    pub fn with_kind(mut self, kind: ErrorKind) -> Self {
-        self.kind = kind;
-        self
-    }
+    #[error("Failed to parse JWT claims")]
+    ParseJwtClaimsFailed(#[source] serde_json::Error),
 
-    /// Set message of self to a specific message, and return this Error.
-    pub fn with_msg<M>(mut self, msg: M) -> Self
-    where
-        M: Display,
-    {
-        self.msg = Some(msg.to_string());
-        self
-    }
+    #[error("Failed to serialize provenance")]
+    SerializeProvenanceFailed(#[source] serde_json::Error),
 
-    /// Get kind of this Error. If kind is not set, the default value is
-    /// `Unknown`.
-    pub fn get_kind(&self) -> ErrorKind {
-        self.kind
-    }
+    #[error("Failed to serialize SLSA reference value list")]
+    SerializeSlsaReferenceValueListFailed(#[source] serde_json::Error),
 
-    /// Get a const ref msg of this Error. If msg is not set, None is returned.
-    pub fn get_msg_ref(&self) -> &Option<String> {
-        &self.msg
-    }
-}
+    #[error("Failed to parse runtime data JSON")]
+    ParseRuntimeDataJsonFailed(#[source] serde_json::Error),
 
-// TODO: replace this with `impl<E: std::error::Error> From<E> for Error`，so that we can record source of our Error
-impl<E: Display> From<E> for Error {
-    fn from(error: E) -> Error {
-        Error::kind_with_msg(ErrorKind::Unknown, error)
-    }
-}
+    #[error("Failed to parse evidence from bytes")]
+    ParseEvidenceFromBytesFailed(#[source] serde_json::Error),
 
-pub trait IntoRatsError {
-    fn into_rats_error(self) -> Error;
-}
+    #[error("Failed to parse challenge response")]
+    ParseChallengeResponseFailed(#[source] serde_json::Error),
 
-#[cfg(feature = "verifier-coco")]
-impl IntoRatsError for tonic::Status {
-    fn into_rats_error(self) -> Error {
-        Error::kind_with_msg(
-            ErrorKind::Unknown,
-            format!("tonic status: {:?} msg: {}", self.code(), self.message()),
-        )
-    }
-}
+    #[error("Failed to parse additional evidence JSON")]
+    ParseAdditionalEvidenceJsonFailed(#[source] serde_json::Error),
 
-pub(crate) trait WithContext<T> {
-    fn kind(self, kind: ErrorKind) -> Result<T>;
-
-    fn context<C>(self, context: C) -> Result<T>
-    where
-        C: Display;
-
-    fn with_context<C, F>(self, f: F) -> Result<T>
-    where
-        C: Display,
-        F: FnOnce() -> C;
-}
-
-#[allow(dead_code)]
-impl<T, E> WithContext<T> for std::result::Result<T, E>
-where
-    Error: From<E>,
-{
-    fn kind(self, kind: ErrorKind) -> Result<T> {
-        self.map_err(|error| Into::<Error>::into(error).with_kind(kind))
-    }
-
-    fn context<C>(self, context: C) -> Result<T>
-    where
-        C: Display,
-    {
-        self.map_err(|error| Into::<Error>::into(error))
-            .map_err(|error| {
-                if let Some(ref msg) = error.msg {
-                    let new_msg = format!("{}: {}", context, msg);
-                    error.with_msg(new_msg)
-                } else {
-                    error.with_msg(context)
-                }
-            })
-    }
-
-    fn with_context<C, F>(self, f: F) -> Result<T>
-    where
-        C: Display,
-        F: FnOnce() -> C,
-    {
-        match self {
-            Ok(t) => Ok(t),
-            Err(e) => Err(e).context(f()),
-        }
-    }
-}
-
-// TODO: impl std::error::Error trait for our Error, so that we can provide `source` info.
-/// This is a temporary workaround that makes it possible to convert our Error to an anyhow::Error. A better way is to impl std::error::Error trait for our Error.
-impl From<Error> for anyhow::Error {
-    fn from(value: Error) -> Self {
-        anyhow::anyhow!(
-            "rats-rs error kind {:?}: {}",
-            value.kind,
-            match &value.msg {
-                Some(s) => s,
-                None => "unknown reason",
-            }
-        )
-    }
+    #[error("Failed to serialize canonical JSON")]
+    SerializeCanonicalJsonFailed(#[source] serde_json::Error),
 }

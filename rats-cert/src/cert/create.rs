@@ -23,15 +23,11 @@ impl<Evidence: GenericEvidence> CertBundle<Evidence> {
     pub fn cert_to_pem(&self) -> Result<String> {
         self.cert
             .to_pem(LineEnding::LF)
-            .kind(ErrorKind::GenCertError)
-            .context("failed to encode certificate as pem")
+            .map_err(Error::CertEncodeFailed)
     }
 
     pub fn cert_to_der(&self) -> Result<Vec<u8>> {
-        self.cert
-            .to_der()
-            .kind(ErrorKind::GenCertError)
-            .context("failed to encode certificate as der")
+        self.cert.to_der().map_err(Error::CertEncodeFailed)
     }
 
     pub fn private_key(&self) -> &AsymmetricPrivateKey {

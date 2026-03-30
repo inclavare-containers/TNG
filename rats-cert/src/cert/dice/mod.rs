@@ -25,11 +25,9 @@ pub(crate) fn generate_and_sign_dice_cert(
     let serial_number = SerialNumber::from(42u32);
     // TODO: use per-connection freshness instead of longer duration, currently is 6 hours
     let validity = Validity::from_now(Duration::new(6 * 60 * 60, 0))
-        .kind(ErrorKind::GenCertError)
-        .context("bad validity value")?;
+        .map_err(Error::CertValidityGenerationFailed)?;
     let subject = Name::from_str(subject)
-        .kind(ErrorKind::GenCertError)
-        .with_context(|| format!("bad subject value `{}`", subject))?;
+        .map_err(|e| Error::CertSubjectParseFailed(subject.to_string(), e))?;
     let profile = Profile::Leaf {
         issuer: subject.clone(),
         enable_key_agreement: true,
@@ -44,8 +42,7 @@ pub(crate) fn generate_and_sign_dice_cert(
         }
         AsymmetricPrivateKey::P256(key) => SubjectPublicKeyInfoOwned::from_key(key.public_key()),
     }
-    .kind(ErrorKind::GenCertError)
-    .context("failed to create SubjectPublicKeyInfo")?;
+    .map_err(Error::CertSpkiCreationFailed)?;
 
     macro_rules! build_with_signer {
         ($signer:expr) => {
@@ -62,25 +59,21 @@ pub(crate) fn generate_and_sign_dice_cert(
                 pub_key_info,
                 &signer,
             )
-            .kind(ErrorKind::GenCertError)
-            .context("failed to create certificate builder")?;
+            .map_err(Error::CertBuildFailed)?;
 
             builder
                 .add_extension(&DiceEvidenceExtension(evidence_buffer))
-                .kind(ErrorKind::GenCertError)
-                .context("failed to add evidence extension")?;
+                .map_err(Error::CertBuildFailed)?;
 
             if let Some(endorsements_buffer) = endorsements_buffer {
                 builder
                     .add_extension(&DiceEndorsementExtension(endorsements_buffer))
-                    .kind(ErrorKind::GenCertError)
-                    .context("failed to add endorsement extension")?;
+                    .map_err(Error::CertBuildFailed)?;
             }
 
             let certificate: x509_cert::Certificate = builder
                 .build::<$signature_type>()
-                .kind(ErrorKind::GenCertError)
-                .context("failed to create certificate")?;
+                .map_err(Error::CertSignFailed)?;
 
             certificate
         }};
@@ -130,8 +123,7 @@ pub mod tests {
             Some(b"\x05\x06\x07\x08"),
         )?
         .to_pem(LineEnding::LF)
-        .kind(ErrorKind::GenCertError)
-        .context("failed to encode certificate as pem")?;
+        .map_err(Error::CertEncodeFailed)?;
 
         println!("generated pem:\n{}", pem);
         // you can also view the cert manually with https://certificatedecoder.dev/

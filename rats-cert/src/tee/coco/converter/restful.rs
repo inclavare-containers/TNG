@@ -39,7 +39,12 @@ impl CocoRestfulConverter {
     ) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         for (k, v) in as_headers {
-            headers.insert(reqwest::header::HeaderName::from_str(k)?, v.parse()?);
+            headers.insert(
+                reqwest::header::HeaderName::from_str(k)
+                    .map_err(Error::InvalidAttestationServiceHeaderName)?,
+                v.parse()
+                    .map_err(Error::InvalidAttestationServiceHeaderValue)?,
+            );
         }
 
         let client = {
@@ -49,7 +54,7 @@ impl CocoRestfulConverter {
             #[cfg(unix)]
             let builder =
                 builder.connect_timeout(Duration::from_secs(RESTFUL_AS_CONNECT_TIMEOUT_DEFAULT));
-            builder.build()?
+            builder.build().map_err(Error::HttpClientBuildFailed)?
         };
 
         Ok(Self {
@@ -72,15 +77,15 @@ impl CocoRestfulConverter {
                 .json(&json!({}))
                 .send()
                 .await
-                .context("Send /challenge request to restful-as failed")?;
+                .map_err(Error::HttpRequestSendFailed)?;
 
             let status = response.status();
             let text = response
                 .text()
                 .await
-                .context("Failed to read challenge from restful-as response")?;
+                .map_err(Error::HttpResponseReadFailed)?;
 
-            Ok::<_, anyhow::Error>((status, text))
+            Ok::<_, Error>((status, text))
         };
 
         #[cfg(all(
@@ -91,8 +96,7 @@ impl CocoRestfulConverter {
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)?;
+            .map_err(|e| Error::TaskSpawnFailed(e))??;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",
@@ -111,15 +115,15 @@ impl CocoRestfulConverter {
                     return Ok(CoCoNonce::Jwt("dummy nonce".to_string()));
                 }
 
-                return Err(Error::msg(format!(
-                    "Error returned from restful-as. status: {} response: {}",
-                    status, text,
-                )));
+                return Err(Error::AttestationServiceHttpError {
+                    status_code: status.as_u16(),
+                    response_body: text,
+                });
             }
         };
 
         let challenge_response = serde_json::from_str::<GetChallengeResponse>(&body_text)
-            .context("Failed to parse challenge")?;
+            .map_err(Error::ParseChallengeResponseFailed)?;
 
         Ok(CoCoNonce::Jwt(challenge_response.extra_params.jwt))
     }
@@ -216,7 +220,8 @@ impl CocoRestfulConverter {
                 evidence: URL_SAFE_NO_PAD.encode(in_evidence.aa_evidence_ref()),
                 init_data: None, // TODO: add support for init_data when support on AA is ready
                 runtime_data: Some(as_api::v1_6_0::RuntimeData::Structured(
-                    serde_json::from_str(in_evidence.aa_runtime_data_ref())?,
+                    serde_json::from_str(in_evidence.aa_runtime_data_ref())
+                        .map_err(Error::ParseRuntimeDataJsonFailed)?,
                 )),
                 runtime_data_hash_algorithm: Some(runtime_data_hash_algorithm.into()),
             })
@@ -244,14 +249,14 @@ impl CocoRestfulConverter {
                 .json(&body)
                 .send()
                 .await
-                .context("Send /attestation request to restful-as failed")?;
+                .map_err(Error::HttpRequestSendFailed)?;
 
             let status = response.status();
             let text = response
                 .text()
                 .await
-                .context("Failed to read attestation_token from restful-as response")?;
-            Ok::<_, anyhow::Error>((status, text))
+                .map_err(Error::HttpResponseReadFailed)?;
+            Ok::<_, Error>((status, text))
         };
 
         #[cfg(all(
@@ -262,8 +267,7 @@ impl CocoRestfulConverter {
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)?;
+            .map_err(|e| Error::TaskSpawnFailed(e))??;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",
@@ -282,10 +286,10 @@ impl CocoRestfulConverter {
                     return self.convert_v1_5_2(in_evidence).await;
                 }
 
-                return Err(Error::msg(format!(
-                    "Error returned from restful-as >= 1.6.0. status: {} response: {}",
-                    status, text,
-                )));
+                return Err(Error::AttestationServiceHttpError {
+                    status_code: status.as_u16(),
+                    response_body: text,
+                });
             }
         };
 
@@ -312,9 +316,10 @@ impl CocoRestfulConverter {
             init_data: None, // TODO: add support for init_data when support on AA is ready
             init_data_hash_algorithm: None,
             policy_ids: self.policy_ids.clone(),
-            runtime_data: Some(as_api::v1_5_2::Data::Structured(serde_json::from_str(
-                in_evidence.aa_runtime_data_ref(),
-            )?)),
+            runtime_data: Some(as_api::v1_5_2::Data::Structured(
+                serde_json::from_str(in_evidence.aa_runtime_data_ref())
+                    .map_err(Error::ParseRuntimeDataJsonFailed)?,
+            )),
             runtime_data_hash_algorithm: Some(runtime_data_hash_algorithm.into()),
         };
         let client = self.client.clone();
@@ -325,14 +330,14 @@ impl CocoRestfulConverter {
                 .json(&body)
                 .send()
                 .await
-                .context("Send /attestation request to restful-as failed")?;
+                .map_err(Error::HttpRequestSendFailed)?;
 
             let status = response.status();
             let text = response
                 .text()
                 .await
-                .context("Failed to read attestation_token from restful-as response")?;
-            Ok::<_, anyhow::Error>((status, text))
+                .map_err(Error::HttpResponseReadFailed)?;
+            Ok::<_, Error>((status, text))
         };
 
         #[cfg(all(
@@ -343,8 +348,7 @@ impl CocoRestfulConverter {
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(anyhow::Error::from)
-            .and_then(|e| e)?;
+            .map_err(|e| Error::TaskSpawnFailed(e))??;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",
@@ -355,10 +359,10 @@ impl CocoRestfulConverter {
         let attestation_token = match status {
             reqwest::StatusCode::OK => text,
             _ => {
-                return Err(Error::msg(format!(
-                    "Error returned from restful-as <= 1.5.2. status: {} response: {}",
-                    status, text,
-                )));
+                return Err(Error::AttestationServiceHttpError {
+                    status_code: status.as_u16(),
+                    response_body: text,
+                });
             }
         };
 

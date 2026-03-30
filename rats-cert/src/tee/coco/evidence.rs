@@ -93,9 +93,10 @@ impl CocoEvidence {
             ReportData::Raw(report_data) => {
                 Ok(json!({"rats-rs.raw_runtime_data": URL_SAFE_NO_PAD.encode(report_data)}))
             }
-            ReportData::Claims(claims) => serde_json::to_value(claims),
+            ReportData::Claims(claims) => {
+                serde_json::to_value(claims).map_err(Error::SerializeClaimsToJsonFailed)
+            }
         }
-        .context("Failed to construct structed runtime data")
     }
 
     pub fn serialize_to_json(&self) -> serde_json::Result<serde_json::Value> {
@@ -103,7 +104,10 @@ impl CocoEvidence {
     }
 
     pub fn deserialize_from_json(value: serde_json::Value) -> Result<Self> {
-        Self::from_json_helper(serde_json::from_value::<CocoEvidenceJsonHelper>(value)?)
+        Self::from_json_helper(
+            serde_json::from_value::<CocoEvidenceJsonHelper>(value)
+                .map_err(Error::DeserializeEvidenceFromJsonFailed)?,
+        )
     }
 }
 
@@ -114,7 +118,8 @@ impl GenericEvidence for CocoEvidence {
 
     fn get_dice_raw_evidence(&self) -> Result<Vec<u8>> {
         let mut res = vec![];
-        ciborium::into_writer(&self.into_cbor_helper(), &mut res)?;
+        ciborium::into_writer(&self.into_cbor_helper(), &mut res)
+            .map_err(Error::CborSerializationFailed)?;
         Ok(res)
     }
 
@@ -129,7 +134,7 @@ impl GenericEvidence for CocoEvidence {
     ) -> DiceParseEvidenceOutput<Self> {
         if cbor_tag == OCBR_TAG_EVIDENCE_COCO_EVIDENCE {
             match ciborium::from_reader::<CocoEvidenceCborHelper, _>(raw_evidence)
-                .context("Failed to deserialize coco evidence")
+                .map_err(Error::CborDeserializationFailed)
                 .and_then(CocoEvidence::from_cbor_helper)
             {
                 Ok(v) => DiceParseEvidenceOutput::Ok(v),
@@ -163,15 +168,22 @@ impl CocoAsToken {
 
     pub fn exp(&self) -> Result<u64> {
         let split_token: Vec<&str> = self.data.split('.').collect();
-        if !split_token.len() == 3 {
-            return Err(Error::msg("Illegal JWT format"));
+        if split_token.len() != 3 {
+            return Err(Error::MissingTokenField {
+                detail: "Illegal JWT format".to_string(),
+            });
         }
 
-        let claims = URL_SAFE_NO_PAD.decode(split_token[1])?;
-        let claims_value = serde_json::from_slice::<Value>(&claims)?;
+        let claims = URL_SAFE_NO_PAD
+            .decode(split_token[1])
+            .map_err(Error::Base64DecodeFailed)?;
+        let claims_value =
+            serde_json::from_slice::<Value>(&claims).map_err(Error::ParseJwtClaimsFailed)?;
 
         let Some(exp) = claims_value["exp"].as_u64() else {
-            return Err(Error::msg("token expiration unset"));
+            return Err(Error::MissingTokenField {
+                detail: "token expiration unset".to_string(),
+            });
         };
 
         Ok(exp)
@@ -189,16 +201,18 @@ impl GenericEvidence for CocoAsToken {
 
     fn get_claims(&self) -> Result<Claims> {
         let split_token: Vec<&str> = self.data.split('.').collect();
-        if !split_token.len() == 3 {
-            return Err(Error::kind_with_msg(
-                ErrorKind::CocoVerifyTokenFailed,
-                "Illegal JWT format",
-            ));
+        if split_token.len() != 3 {
+            return Err(Error::MissingTokenField {
+                detail: "Illegal JWT format".to_string(),
+            });
         }
-        let claims = URL_SAFE_NO_PAD.decode(split_token[1])?;
+        let claims = URL_SAFE_NO_PAD
+            .decode(split_token[1])
+            .map_err(Error::Base64DecodeFailed)?;
         let claims_value = {
             let mut claims_value =
-                serde_json::from_slice::<serde_json::Map<String, Value>>(&claims)?;
+                serde_json::from_slice::<serde_json::Map<String, Value>>(&claims)
+                    .map_err(Error::ParseJwtClaimsFailed)?;
 
             if let Some(Value::String(json_str)) = claims_value.get("tcb-status") {
                 let tcb_status_claims = serde_json::from_str::<Value>(json_str);
@@ -214,17 +228,19 @@ impl GenericEvidence for CocoAsToken {
             Value::Object(claims_value)
         };
 
-        let flattened_claims_value = Flattener::new()
-            .flatten(&claims_value)
-            .context("Failed to flatten JWT claims JSON object")?;
+        let flattened_claims_value =
+            Flattener::new()
+                .flatten(&claims_value)
+                .map_err(|e| Error::JwtClaimsFlattenFailed {
+                    message: e.to_string(),
+                })?;
 
         Ok(match flattened_claims_value {
             Value::Object(m) => m,
             _ => {
-                return Err(Error::kind_with_msg(
-                    ErrorKind::CocoParseTokenFailed,
-                    format!("Invalid claims value: {}", claims_value),
-                ))
+                return Err(Error::MissingTokenField {
+                    detail: format!("Invalid claims value: {claims_value}"),
+                })
             }
         })
     }
@@ -235,7 +251,7 @@ impl GenericEvidence for CocoAsToken {
     ) -> DiceParseEvidenceOutput<Self> {
         if cbor_tag == OCBR_TAG_EVIDENCE_COCO_TOKEN {
             return match std::str::from_utf8(raw_evidence)
-                .context("Failed to parse evidence as utf-8 string")
+                .map_err(Error::InvalidUtf8Slice)
                 .map(|token| Self::new(token.to_owned()))
             {
                 Ok(Ok(v)) => DiceParseEvidenceOutput::Ok(v),
@@ -312,9 +328,15 @@ impl CocoEvidence {
     fn from_json_helper(helper: CocoEvidenceJsonHelper) -> Result<Self> {
         Ok(Self {
             aa_tee_type: AaTeeType::from_attestation_agent_str_id(&helper.aa_tee_type),
-            aa_evidence: BASE64_STANDARD.decode(helper.aa_evidence)?,
+            aa_evidence: BASE64_STANDARD
+                .decode(helper.aa_evidence)
+                .map_err(Error::Base64DecodeFailed)?,
             aa_additional_evidence: match helper.aa_additional_evidence {
-                Some(e) => Some(BASE64_STANDARD.decode(e)?),
+                Some(e) => Some(
+                    BASE64_STANDARD
+                        .decode(e)
+                        .map_err(Error::Base64DecodeFailed)?,
+                ),
                 None => None,
             },
             aa_runtime_data: helper.aa_runtime_data,
