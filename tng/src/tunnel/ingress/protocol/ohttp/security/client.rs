@@ -27,7 +27,7 @@ use rats_cert::tee::{
     coco::{
         converter::CocoConverter,
         evidence::{CocoAsToken, CocoEvidence},
-        verifier::CocoVerifier,
+        verifier::remote::CocoVerifier,
     },
     GenericConverter, GenericVerifier as _,
 };
@@ -78,7 +78,7 @@ use crate::{
     },
     AttestationResult, TokioRuntime,
 };
-use rats_cert::cert::verify::AttestationServiceConfig;
+use rats_cert::cert::verify::AttestationServiceAddrArgs;
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -126,6 +126,10 @@ impl OHttpClient {
                 AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
                     aa_args.refresh_strategy()
                 }
+                AttestArgs::PassportBuiltin {
+                    builtin_aa_args, ..
+                }
+                | AttestArgs::Builtin { builtin_aa_args } => builtin_aa_args.refresh_strategy(),
             },
             RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Periodically {
                 interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
@@ -194,21 +198,14 @@ impl OHttpClient {
 }
 
 impl OHttpClientInner {
-    async fn verify_token(
+    async fn verify_token_with_remote_as(
         server_key_config: &HpkeKeyConfig,
         attestation_result: &AttestationResultJwt,
         token_verify: &AttestationServiceTokenVerifyArgs,
     ) -> Result<CocoAsToken> {
         let token = CocoAsToken::new(attestation_result.0.to_owned())?;
         let verifier = CocoVerifier::new(
-            token_verify
-                .as_addr_config
-                .as_ref()
-                .map(|addr_config| AttestationServiceConfig {
-                    as_addr: addr_config.as_addr.clone(),
-                    as_is_grpc: addr_config.as_is_grpc,
-                    as_headers: addr_config.as_headers.clone(),
-                }),
+            &token_verify.as_addr_config,
             &token_verify.trusted_certs_paths,
             &token_verify.policy_ids,
         )
@@ -227,7 +224,7 @@ impl OHttpClientInner {
         Ok(token)
     }
 
-    async fn verify_evidence(
+    async fn verify_evidence_with_remote_as(
         server_key_config: &HpkeKeyConfig,
         challenge_token: String,
         evidence: serde_json::Value,
@@ -244,7 +241,7 @@ impl OHttpClientInner {
         let token = coco_converter.convert(&coco_evidence).await?;
 
         let verifier = CocoVerifier::new(
-            Some(AttestationServiceConfig {
+            &Some(AttestationServiceAddrArgs {
                 as_addr: as_args.as_addr_config.as_addr.clone(),
                 as_is_grpc: as_args.as_addr_config.as_is_grpc,
                 as_headers: as_args.as_addr_config.as_headers.clone(),
@@ -291,7 +288,7 @@ impl OHttpClientInner {
 
                     let token = match &response.attestation_info {
                         Some(ServerAttestationInfo::Passport { attestation_result }) => {
-                            Self::verify_token(
+                            Self::verify_token_with_remote_as(
                                 &response.hpke_key_config,
                                 attestation_result,
                                 token_verify,
@@ -331,7 +328,7 @@ impl OHttpClientInner {
 
                     let token = match response.attestation_info {
                         Some(ServerAttestationInfo::BackgroundCheck { evidence }) => {
-                            Self::verify_evidence(
+                            Self::verify_evidence_with_remote_as(
                                 &response.hpke_key_config,
                                 challenge_token,
                                 evidence,
@@ -339,6 +336,68 @@ impl OHttpClientInner {
                                 token_verify,
                             )
                             .await?
+                        }
+                        Some(ServerAttestationInfo::Passport { .. }) => {
+                            bail!("Background check model is expected but got passport attestation from server")
+                        }
+                        None => bail!("Missing attestation info from server"),
+                    };
+
+                    (response.hpke_key_config, Some(token))
+                }
+                #[cfg(feature = "builtin-as")]
+                Some(VerifyArgs::Builtin {
+                    policy,
+                    reference_values,
+                }) => {
+                    use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
+                    use rats_cert::tee::coco::evidence::CocoEvidence;
+                    use rats_cert::tee::GenericConverter;
+
+                    // Initialize builtin AS converter
+                    let builtin_converter = BuiltinCocoConverter::new(policy, reference_values)
+                        .await
+                        .map_err(|e| anyhow!("Failed to create BuiltinCocoConverter: {:?}", e))?;
+
+                    // Generate a local challenge
+                    let challenge_token = builtin_converter
+                        .generate_challenge()
+                        .await
+                        .map_err(|e| anyhow!("Failed to generate challenge: {:?}", e))?;
+
+                    // Request hpke configuration from server with background check request
+                    let response = self
+                        .get_hpke_configuration(KeyConfigRequest {
+                            attestation_request: Some(AttestationRequest::BackgroundCheck {
+                                challenge_token: challenge_token.clone(),
+                            }),
+                        })
+                        .await?;
+
+                    let token = match response.attestation_info {
+                        Some(ServerAttestationInfo::BackgroundCheck { evidence }) => {
+                            // Parse evidence JSON to CocoEvidence
+                            let coco_evidence = CocoEvidence::deserialize_from_json(evidence)
+                                .map_err(|e| anyhow!("Failed to parse evidence: {:?}", e))?;
+
+                            // Convert evidence to token using builtin AS
+                            let token = builtin_converter
+                                .convert(&coco_evidence)
+                                .await
+                                .map_err(|e| anyhow!("Builtin AS verification failed: {:?}", e))?;
+
+                            let verifier = builtin_converter.new_verifier().await?;
+
+                            let userdata = ServerUserData {
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: response.hpke_key_config.clone(),
+                            }
+                            .to_claims()?;
+
+                            verifier
+                                .verify_evidence(&token, &ReportData::Claims(userdata))
+                                .await?;
+                            token
                         }
                         Some(ServerAttestationInfo::Passport { .. }) => {
                             bail!("Background check model is expected but got passport attestation from server")
@@ -421,7 +480,7 @@ impl OHttpClientInner {
                         let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
 
                         let attester_pipeline =
-                            AttesterPipeline::new(coco_attester, coco_converter);
+                            AttesterPipeline::new(&coco_attester, &coco_converter);
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
@@ -453,6 +512,12 @@ impl OHttpClientInner {
                             attestation_result: token,
                         } = self.background_check_verify_attestation(evidence).await?;
                         CocoAsToken::new(token)?
+                    }
+                    AttestArgs::PassportBuiltin { .. } => {
+                        todo!("Builtin AA with remote AS not implemented yet")
+                    }
+                    AttestArgs::Builtin { .. } => {
+                        todo!("Builtin AA not implemented yet")
                     }
                 };
 

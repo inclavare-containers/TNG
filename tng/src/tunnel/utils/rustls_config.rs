@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::config::ra::{RaArgs, VerifyArgs};
+use crate::config::ra::RaArgs;
+use crate::tunnel::ra_context::{RaContext, VerifyContext};
 use crate::tunnel::utils::{cert_manager::CertManager, runtime::TokioRuntime};
 use anyhow::{Context as _, Result};
 
@@ -30,23 +31,25 @@ impl RustlsDummyCert {
 
 pub enum TlsConfigGenerator {
     NoRa,
-    Verify(VerifyArgs),
+    Verify(Arc<VerifyContext>),
     Attest(Arc<super::cert_manager::CertManager>),
-    AttestAndVerify(Arc<super::cert_manager::CertManager>, VerifyArgs),
+    AttestAndVerify(Arc<super::cert_manager::CertManager>, Arc<VerifyContext>),
 }
 
 impl TlsConfigGenerator {
     pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
-        Ok(match &ra_args {
-            RaArgs::AttestOnly(attest) => {
-                Self::Attest(Arc::new(CertManager::new(attest.clone(), runtime).await?))
+        let ra_context = RaContext::from_ra_args(&ra_args).await?;
+
+        Ok(match ra_context {
+            RaContext::AttestOnly(attest_ctx) => {
+                Self::Attest(Arc::new(CertManager::new(attest_ctx, runtime).await?))
             }
-            RaArgs::VerifyOnly(verify) => Self::Verify(verify.clone()),
-            RaArgs::AttestAndVerify(attest, verify) => Self::AttestAndVerify(
-                Arc::new(CertManager::new(attest.clone(), runtime).await?),
-                verify.clone(),
+            RaContext::VerifyOnly(verify_ctx) => Self::Verify(Arc::new(verify_ctx)),
+            RaContext::AttestAndVerify { attest, verify } => Self::AttestAndVerify(
+                Arc::new(CertManager::new(attest, runtime).await?),
+                Arc::new(verify),
             ),
-            RaArgs::NoRa => Self::NoRa,
+            RaContext::NoRa => Self::NoRa,
         })
     }
 }

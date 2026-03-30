@@ -6,17 +6,21 @@ use serde::{Deserialize, Serialize};
 
 use super::evidence::{CocoAsToken, CocoEvidence};
 use crate::errors::*;
+#[cfg(feature = "builtin-as")]
+use crate::tee::coco::converter::builtin::BuiltinCocoConverter;
 use crate::tee::coco::evidence::AaTeeType;
 use crate::{
     crypto::HashAlgo,
     tee::{GenericConverter, TeeType},
 };
 
+#[cfg(feature = "builtin-as")]
+pub mod builtin;
 pub mod grpc;
 pub mod restful;
 
 #[derive(Serialize, Deserialize)]
-pub(crate) enum AttestationServiceHashAlgo {
+pub enum AttestationServiceHashAlgo {
     #[serde(rename = "sha256")]
     Sha256,
     #[serde(rename = "sha384")]
@@ -58,6 +62,8 @@ impl From<AttestationServiceHashAlgo> for HashAlgo {
 pub enum CocoConverter {
     Grpc(CocoGrpcConverter),
     Restful(CocoRestfulConverter),
+    #[cfg(feature = "builtin-as")]
+    Builtin(BuiltinCocoConverter),
 }
 
 impl CocoConverter {
@@ -78,6 +84,11 @@ impl CocoConverter {
         match self {
             CocoConverter::Grpc(converter) => converter.get_nonce().await,
             CocoConverter::Restful(converter) => converter.get_nonce().await,
+            #[cfg(feature = "builtin-as")]
+            CocoConverter::Builtin(converter) => {
+                let challenge = converter.generate_challenge().await?;
+                Ok(CoCoNonce::Jwt(challenge))
+            }
         }
     }
 }
@@ -96,11 +107,13 @@ impl GenericConverter for CocoConverter {
         match self {
             CocoConverter::Grpc(converter) => converter.convert(in_evidence).await,
             CocoConverter::Restful(converter) => converter.convert(in_evidence).await,
+            #[cfg(feature = "builtin-as")]
+            CocoConverter::Builtin(converter) => converter.convert(in_evidence).await,
         }
     }
 }
 
-fn convert_additional_evidence(
+pub(crate) fn convert_additional_evidence(
     in_evidence: &CocoEvidence,
 ) -> Result<Vec<(AaTeeType, serde_json::Value)>> {
     if let Some(json_bytes) = in_evidence.aa_additional_evidence_ref() {

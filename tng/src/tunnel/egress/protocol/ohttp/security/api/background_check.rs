@@ -1,15 +1,17 @@
 use anyhow::{bail, Result};
 use axum::Json;
-use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
 use rats_cert::tee::coco::evidence::CocoEvidence;
 use rats_cert::tee::GenericConverter;
 
-use crate::config::ra::{RaArgs, VerifyArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationVerifyRequest, AttestationVerifyResponse,
 };
+use crate::tunnel::ra_context::VerifyContext;
+
+#[cfg(feature = "builtin-as")]
+use rats_cert::tee::coco::converter::CoCoNonce;
 
 impl OhttpServerApi {
     /// Interface 3: Attestation Forward - Get Challenge
@@ -21,34 +23,27 @@ impl OhttpServerApi {
         &self,
     ) -> Result<Json<AttestationChallengeResponse>, TngError> {
         async {
-            match self.ra_args.as_ref() {
-                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                    VerifyArgs::Passport { token_verify: _ } => {
+            match self.ra_context.verify_context() {
+                Some(verify_ctx) => match verify_ctx {
+                    VerifyContext::Passport { .. } => {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
-                    VerifyArgs::BackgroundCheck {
-                        as_args,
-                        ..
-                    } => {
-                        // Forward the request to the actual AS challenge endpoint. Return the challenge token received from the AS
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
-
-                        let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
-
-                        Ok(Json(AttestationChallengeResponse {
-                            challenge_token,
-                        }))
-
+                    VerifyContext::BackgroundCheck { converter, .. } => {
+                        // Forward the request to the actual AS challenge endpoint
+                        let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
+                        Ok(Json(AttestationChallengeResponse { challenge_token }))
+                    }
+                    #[cfg(feature = "builtin-as")]
+                    VerifyContext::Builtin { converter, .. } => {
+                        // For builtin mode, generate a local challenge
+                        let challenge_token = converter
+                            .generate_challenge()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Failed to generate challenge: {:?}", e))?;
+                        Ok(Json(AttestationChallengeResponse { challenge_token }))
                     }
                 },
-                RaArgs::AttestOnly(..) | RaArgs::NoRa => {
-                    bail!("client attestation is not required")
-                }
+                None => bail!("client attestation is not required"),
             }
         }
         .await
@@ -65,36 +60,32 @@ impl OhttpServerApi {
         Json(payload): Json<AttestationVerifyRequest>,
     ) -> Result<Json<AttestationVerifyResponse>, TngError> {
         async {
-            match self.ra_args.as_ref() {
-                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify) => match verify {
-                    VerifyArgs::Passport { token_verify: _ } => {
+            match self.ra_context.verify_context() {
+                Some(verify_ctx) => match verify_ctx {
+                    VerifyContext::Passport { .. } => {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
-                    VerifyArgs::BackgroundCheck {
-                        as_args,
-                        ..
-                    } => {
+                    VerifyContext::BackgroundCheck { converter, .. } => {
                         let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
-
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
-
-                        let token  = coco_converter.convert(&coco_evidence).await?;
-
-                        let response = AttestationVerifyResponse {
+                        let token = converter.convert(&coco_evidence).await?;
+                        Ok(Json(AttestationVerifyResponse {
                             attestation_result: token.into_str(),
-                        };
-                        Ok(Json(response))
-
+                        }))
+                    }
+                    #[cfg(feature = "builtin-as")]
+                    VerifyContext::Builtin { converter, .. } => {
+                        let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)
+                            .map_err(|e| anyhow::anyhow!("Failed to parse evidence: {:?}", e))?;
+                        let token = converter
+                            .convert(&coco_evidence)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Builtin AS verification failed: {:?}", e))?;
+                        Ok(Json(AttestationVerifyResponse {
+                            attestation_result: token.into_str(),
+                        }))
                     }
                 },
-                RaArgs::AttestOnly(..) | RaArgs::NoRa => {
-                    bail!("client attestation is not required")
-                }
+                None => bail!("client attestation is not required"),
             }
         }
         .await

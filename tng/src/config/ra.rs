@@ -1,6 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use anyhow::{anyhow, Context as _, Result};
+pub use rats_cert::cert::verify::AttestationServiceAddrArgs;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -92,6 +93,10 @@ impl RaArgsUnchecked {
                         )));
                     }
                 }
+                // Builtin AA modes don't need socket file check
+                AttestArgs::PassportBuiltin { .. } | AttestArgs::Builtin { .. } => {
+                    // TODO: Builtin AA not implemented yet
+                }
             };
         }
 
@@ -144,6 +149,39 @@ impl RaArgsUnchecked {
                         }
                     }
                 }
+                #[cfg(feature = "builtin-as")]
+                VerifyArgs::Builtin {
+                    policy,
+                    reference_values,
+                } => {
+                    use rats_cert::cert::verify::{
+                        PayloadConfig, PolicyConfig, ReferenceValueConfig,
+                    };
+                    // Check policy path exists if using Path variant
+                    if let PolicyConfig::Path { path } = policy {
+                        if !Path::new(path).exists() {
+                            return Err(TngError::InvalidParameter(anyhow!(
+                                "Policy file path does not exist: {}",
+                                path
+                            )));
+                        }
+                    }
+
+                    // Check reference value payload paths
+                    for rv in reference_values {
+                        if let ReferenceValueConfig::Sample {
+                            payload: PayloadConfig::Path { path },
+                        } = rv
+                        {
+                            if !Path::new(path).exists() {
+                                return Err(TngError::InvalidParameter(anyhow!(
+                                    "Reference value payload file path does not exist: {}",
+                                    path
+                                )));
+                            }
+                        }
+                    }
+                }
             };
 
             // Check if as_addr is a valid URL
@@ -181,6 +219,21 @@ pub enum AttestArgs {
         #[serde(flatten)]
         aa_args: AttestationAgentArgs,
     },
+
+    /// Passport with builtin AA - builtin AA + remote AS
+    PassportBuiltin {
+        #[serde(flatten)]
+        builtin_aa_args: BuiltinAttestationAgentArgs,
+
+        #[serde(flatten)]
+        as_args: AttestationServiceArgs,
+    },
+
+    /// Builtin mode - builtin AA
+    Builtin {
+        #[serde(flatten)]
+        builtin_aa_args: BuiltinAttestationAgentArgs,
+    },
 }
 
 /// This is a workaround for a missing feature in serde where it doesn't support deserializing
@@ -191,7 +244,9 @@ mod maybe_tagged_attest_args {
     use anyhow::bail;
     use serde::{Deserialize, Serialize};
 
-    use super::{AttestArgs, AttestationAgentArgs, AttestationServiceArgs};
+    use super::{
+        AttestArgs, AttestationAgentArgs, AttestationServiceArgs, BuiltinAttestationAgentArgs,
+    };
 
     #[derive(Serialize, Deserialize)]
     #[serde(untagged)]
@@ -222,6 +277,19 @@ mod maybe_tagged_attest_args {
             aa_args: AttestationAgentArgs,
         },
 
+        PassportBuiltin {
+            #[serde(flatten)]
+            builtin_aa_args: BuiltinAttestationAgentArgs,
+
+            #[serde(flatten)]
+            as_args: AttestationServiceArgs,
+        },
+
+        Builtin {
+            #[serde(flatten)]
+            builtin_aa_args: BuiltinAttestationAgentArgs,
+        },
+
         #[serde(other)]
         Unknown,
     }
@@ -242,9 +310,19 @@ mod maybe_tagged_attest_args {
                 MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Passport { aa_args, as_args }) => {
                     AttestArgs::Passport { aa_args, as_args }
                 }
+                MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::PassportBuiltin {
+                    builtin_aa_args,
+                    as_args,
+                }) => AttestArgs::PassportBuiltin {
+                    builtin_aa_args,
+                    as_args,
+                },
+                MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Builtin { builtin_aa_args }) => {
+                    AttestArgs::Builtin { builtin_aa_args }
+                }
                 MaybeTaggedAttestArgs::Tagged(TaggedAttestArgs::Unknown) => {
                     bail!(
-                        r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
+                        r#"unsupported value for "model" field, should be one of ["background_check", "passport", "passport_builtin", "builtin"]"#
                     )
                 }
             })
@@ -299,6 +377,17 @@ pub enum VerifyArgs {
         #[serde(flatten)]
         token_verify: AttestationServiceTokenVerifyAdditionalArgs,
     },
+
+    /// Builtin mode - local AS verification
+    #[cfg(feature = "builtin-as")]
+    Builtin {
+        /// OPA policy configuration (default: use AS built-in default policy)
+        #[serde(default)]
+        policy: rats_cert::cert::verify::PolicyConfig,
+        /// Reference value configurations
+        #[serde(default)]
+        reference_values: Vec<rats_cert::cert::verify::ReferenceValueConfig>,
+    },
 }
 
 /// This is a workaround for a missing feature in serde where it doesn't support deserializing
@@ -345,6 +434,13 @@ mod maybe_tagged_verify_args {
             token_verify: AttestationServiceTokenVerifyAdditionalArgs,
         },
 
+        #[cfg(feature = "builtin-as")]
+        Builtin {
+            policy: rats_cert::cert::verify::PolicyConfig,
+            #[serde(default)]
+            reference_values: Vec<rats_cert::cert::verify::ReferenceValueConfig>,
+        },
+
         #[serde(other)]
         Unknown,
     }
@@ -376,7 +472,20 @@ mod maybe_tagged_verify_args {
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Passport { token_verify }) => {
                     VerifyArgs::Passport { token_verify }
                 }
+                #[cfg(feature = "builtin-as")]
+                MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Builtin {
+                    policy,
+                    reference_values,
+                }) => VerifyArgs::Builtin {
+                    policy,
+                    reference_values,
+                },
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Unknown) => {
+                    #[cfg(feature = "builtin-as")]
+                    bail!(
+                        r#"unsupported value for "model" field, should be one of ["background_check", "passport", "builtin"]"#
+                    );
+                    #[cfg(not(feature = "builtin-as"))]
                     bail!(
                         r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
                     )
@@ -384,21 +493,6 @@ mod maybe_tagged_verify_args {
             })
         }
     }
-}
-
-/// Attestation service address configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AttestationServiceAddrArgs {
-    /// Attestation service address
-    pub as_addr: String,
-
-    /// Whether attestation service uses gRPC protocol, default is false (using REST API)
-    #[serde(default = "bool::default")]
-    pub as_is_grpc: bool,
-
-    /// Custom headers to be sent with attestation service requests
-    #[serde(default = "Default::default")]
-    pub as_headers: HashMap<String, String>,
 }
 
 /// Attestation service parameters configuration
@@ -432,6 +526,40 @@ pub struct AttestationServiceTokenVerifyAdditionalArgs {
     /// Trusted certificate paths list, optional
     #[serde(default = "Default::default")]
     pub trusted_certs_paths: Option<Vec<String>>,
+}
+
+// ============================================================================
+// Builtin AS/AA Configuration Types
+// ============================================================================
+
+// Re-export config types from rats-cert to ensure consistency
+#[cfg(feature = "builtin-as")]
+pub use rats_cert::cert::verify::{
+    PayloadConfig, PolicyConfig, ProvenanceSource, ReferenceValueConfig,
+};
+
+/// Builtin attestation agent configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BuiltinAttestationAgentArgs {
+    /// Evidence refresh interval (seconds), optional
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_interval: Option<u64>,
+}
+
+impl BuiltinAttestationAgentArgs {
+    pub fn refresh_strategy(&self) -> RefreshStrategy {
+        let refresh_interval = self
+            .refresh_interval
+            .unwrap_or(EVIDENCE_REFRESH_INTERVAL_SECOND);
+
+        if refresh_interval == 0 {
+            RefreshStrategy::Always
+        } else {
+            RefreshStrategy::Periodically {
+                interval: refresh_interval,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -760,5 +888,243 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Invalid attestation service address"));
+    }
+
+    // =====================================================================
+    // Builtin mode tests
+    // =====================================================================
+
+    #[cfg(feature = "builtin-as")]
+    #[test]
+    fn test_builtin_verify_with_inline_policy() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "builtin",
+                    "policy": {
+                        "type": "inline",
+                        "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
+                    },
+                    "reference_values": []
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::Builtin {
+                policy,
+                reference_values,
+            }) => {
+                match policy {
+                    PolicyConfig::Inline { content } => {
+                        assert_eq!(content, "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU=");
+                    }
+                    _ => panic!("Expected Inline policy"),
+                }
+                assert!(reference_values.is_empty());
+            }
+            _ => panic!("Expected Builtin variant"),
+        }
+
+        // Test serialization
+        let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
+        assert!(serialized.contains(r#""model":"builtin""#));
+        assert!(serialized.contains(r#""type":"inline""#));
+    }
+
+    #[cfg(feature = "builtin-as")]
+    #[test]
+    fn test_builtin_verify_with_path_policy() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "builtin",
+                    "policy": {
+                        "type": "path",
+                        "path": "/path/to/policy.rego"
+                    },
+                    "reference_values": []
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::Builtin { policy, .. }) => match policy {
+                PolicyConfig::Path { path } => {
+                    assert_eq!(path, "/path/to/policy.rego");
+                }
+                _ => panic!("Expected Path policy"),
+            },
+            _ => panic!("Expected Builtin variant"),
+        }
+    }
+
+    #[cfg(feature = "builtin-as")]
+    #[test]
+    fn test_builtin_verify_with_sample_reference() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "builtin",
+                    "policy": {
+                        "type": "inline",
+                        "content": "cGFja2FnZQ=="
+                    },
+                    "reference_values": [
+                        {
+                            "type": "sample",
+                            "payload": {
+                                "type": "path",
+                                "path": "/path/to/payload.json"
+                            }
+                        }
+                    ]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::Builtin {
+                reference_values, ..
+            }) => {
+                assert_eq!(reference_values.len(), 1);
+                match &reference_values[0] {
+                    ReferenceValueConfig::Sample { payload } => match payload {
+                        PayloadConfig::Path { path } => {
+                            assert_eq!(path, "/path/to/payload.json");
+                        }
+                        _ => panic!("Expected Path payload"),
+                    },
+                    _ => panic!("Expected Sample reference value"),
+                }
+            }
+            _ => panic!("Expected Builtin variant"),
+        }
+    }
+
+    #[cfg(feature = "builtin-as")]
+    #[test]
+    fn test_builtin_verify_with_slsa_reference() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "builtin",
+                    "policy": {
+                        "type": "inline",
+                        "content": "cGFja2FnZQ=="
+                    },
+                    "reference_values": [
+                        {
+                            "type": "slsa",
+                            "id": "my-artifact",
+                            "version": "1.0.0",
+                            "artifact_type": "container-image",
+                            "rekor_url": "https://rekor.sigstore.dev",
+                            "provenance_source": {
+                                "protocol": "oci",
+                                "uri": "oci://registry/repo:tag",
+                                "artifact": "bundle"
+                            }
+                        }
+                    ]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::Builtin {
+                reference_values, ..
+            }) => {
+                assert_eq!(reference_values.len(), 1);
+                match &reference_values[0] {
+                    ReferenceValueConfig::Slsa {
+                        id,
+                        version,
+                        artifact_type,
+                        rekor_url,
+                        rekor_api_version,
+                        provenance_source,
+                    } => {
+                        assert_eq!(id, "my-artifact");
+                        assert_eq!(version, "1.0.0");
+                        assert_eq!(artifact_type, "container-image");
+                        assert_eq!(rekor_url, "https://rekor.sigstore.dev");
+                        assert_eq!(*rekor_api_version, 2); // default value
+                        assert!(provenance_source.is_some());
+                        let ps = provenance_source.as_ref().unwrap();
+                        assert_eq!(ps.protocol, "oci");
+                        assert_eq!(ps.uri, "oci://registry/repo:tag");
+                        assert_eq!(ps.artifact, Some("bundle".to_string()));
+                    }
+                    _ => panic!("Expected Slsa reference value"),
+                }
+            }
+            _ => panic!("Expected Builtin variant"),
+        }
+    }
+
+    #[test]
+    fn test_attest_passport_builtin() {
+        let json = json!(
+            {
+                "attest": {
+                    "model": "passport_builtin",
+                    "refresh_interval": 600,
+                    "as_addr": "http://as-server:8080",
+                    "policy_ids": ["default"]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.attest {
+            Some(AttestArgs::PassportBuiltin {
+                builtin_aa_args,
+                as_args,
+            }) => {
+                assert_eq!(builtin_aa_args.refresh_interval, Some(600));
+                assert_eq!(as_args.as_addr_config.as_addr, "http://as-server:8080");
+                assert_eq!(as_args.policy_ids, vec!["default"]);
+            }
+            _ => panic!("Expected PassportBuiltin variant"),
+        }
+
+        // Test serialization
+        let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
+        assert!(serialized.contains(r#""model":"passport_builtin""#));
+    }
+
+    #[test]
+    fn test_attest_builtin() {
+        let json = json!(
+            {
+                "attest": {
+                    "model": "builtin",
+                    "refresh_interval": 300
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.attest {
+            Some(AttestArgs::Builtin { builtin_aa_args }) => {
+                assert_eq!(builtin_aa_args.refresh_interval, Some(300));
+            }
+            _ => panic!("Expected Builtin variant"),
+        }
+
+        // Test serialization
+        let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
+        assert!(serialized.contains(r#""model":"builtin""#));
     }
 }

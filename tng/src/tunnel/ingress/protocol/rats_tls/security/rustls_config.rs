@@ -24,7 +24,7 @@ impl TlsConfigGenerator {
 
                     OnetimeTlsClientConfig(tls_client_config, None)
                 }
-                TlsConfigGenerator::Verify(verify_args) => {
+                TlsConfigGenerator::Verify(verify_ctx) => {
                     let mut tls_client_config =
                         rustls::ClientConfig::builder_with_protocol_versions(&[
                             &rustls::version::TLS13,
@@ -33,7 +33,7 @@ impl TlsConfigGenerator {
                         .with_no_client_auth();
 
                     let verifier: Arc<CoCoServerCertVerifier> =
-                        Arc::new(CoCoServerCertVerifier::new(verify_args.clone())?);
+                        Arc::new(CoCoServerCertVerifier::new(verify_ctx.clone())?);
                     tls_client_config
                         .dangerous()
                         .set_certificate_verifier(verifier.clone());
@@ -57,7 +57,7 @@ impl TlsConfigGenerator {
                     OnetimeTlsClientConfig(tls_client_config, None)
                 }
                 #[cfg(unix)]
-                TlsConfigGenerator::AttestAndVerify(cert_manager, verify_args) => {
+                TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
                     let mut tls_client_config =
                         rustls::ClientConfig::builder_with_protocol_versions(&[
                             &rustls::version::TLS13,
@@ -68,7 +68,7 @@ impl TlsConfigGenerator {
                         )));
 
                     let verifier: Arc<CoCoServerCertVerifier> =
-                        Arc::new(CoCoServerCertVerifier::new(verify_args.clone())?);
+                        Arc::new(CoCoServerCertVerifier::new(verify_ctx.clone())?);
                     tls_client_config
                         .dangerous()
                         .set_certificate_verifier(verifier.clone());

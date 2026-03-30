@@ -135,6 +135,7 @@ ctor = {workspace = true}
 hyper = {workspace = true, features = ["http1", "http2", "client", "server"]}
 once_cell = {workspace = true}
 portpicker = {workspace = true}
+serial_test = {workspace = true}
 
 [features]
 default = [
@@ -147,6 +148,7 @@ default = [
   "ingress-socks5",
   "egress-mapping",
   "egress-netfilter",
+  "builtin-as-tdx",
 ]
 egress = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid"]
 egress-mapping = ["egress"]
@@ -166,3 +168,11 @@ trace = [
   "dep:opentelemetry_sdk",
   "dep:tracing-opentelemetry",
 ]
+
+# Builtin Attestation Service features
+# builtin-as is auto-enabled when any TEE-specific builtin feature is enabled
+builtin-as = ["rats-cert/builtin-as"]
+builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
+builtin-as-sgx = ["builtin-as", "rats-cert/builtin-as-sgx"]
+builtin-as-snp = ["builtin-as", "rats-cert/builtin-as-snp"]
+builtin-as-tdx = ["builtin-as", "rats-cert/builtin-as-tdx"]

@@ -93,6 +93,9 @@ pub enum TngError {
     #[error("Failed to create OHTTP client: {0}")]
     CreateOHttpClientFailed(#[source] anyhow::Error),
 
+    #[error("Failed to create RA context: {0}")]
+    RaContextCreationFailed(#[source] anyhow::Error),
+
     #[error("Access to this service requires a TNG-secured connection. Ensure your client connects via TNG. To bypass, update the direct_forward rules in the TNG server side configuration.")]
     RejectNonTngRequest,
 
@@ -207,6 +210,7 @@ impl IntoResponse for TngError {
             | TngError::ClientSelectHpkeConfigurationFailed(..)
             | TngError::GenServerHpkeConfigurationResponseFailed(..)
             | TngError::CreateOHttpClientFailed(..)
+            | TngError::RaContextCreationFailed(..)
             | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,

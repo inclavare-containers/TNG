@@ -6,7 +6,6 @@ use strum_macros::EnumIter;
 use self::claims::Claims;
 use crate::errors::*;
 
-pub mod auto;
 pub mod claims;
 
 #[cfg(any(feature = "attester-coco", feature = "verifier-coco"))]
@@ -60,6 +59,16 @@ pub trait GenericAttester {
     async fn get_evidence(&self, report_data: &ReportData) -> Result<Self::Evidence>;
 }
 
+/// Blanket implementation for references to attesters.
+#[async_trait::async_trait]
+impl<'a, A: GenericAttester + Sync> GenericAttester for &'a A {
+    type Evidence = A::Evidence;
+
+    async fn get_evidence(&self, report_data: &ReportData) -> Result<Self::Evidence> {
+        (*self).get_evidence(report_data).await
+    }
+}
+
 /// Trait representing a generic verifier.
 #[async_trait::async_trait]
 pub trait GenericVerifier {
@@ -81,6 +90,20 @@ pub trait GenericConverter {
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence>;
 }
 
+/// Blanket implementation for references to attesters.
+#[async_trait::async_trait]
+impl<'a, A: GenericConverter + Sync> GenericConverter for &'a A
+where
+    <A as GenericConverter>::InEvidence: Sync,
+{
+    type InEvidence = A::InEvidence;
+    type OutEvidence = A::OutEvidence;
+
+    async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
+        (*self).convert(in_evidence).await
+    }
+}
+
 pub struct AttesterPipeline<A: GenericAttester, C: GenericConverter<InEvidence = A::Evidence>> {
     attester: A,
     converter: C,
@@ -96,7 +119,7 @@ impl<A: GenericAttester, C: GenericConverter<InEvidence = A::Evidence>> Attester
 }
 
 #[async_trait::async_trait]
-impl<A, C> GenericAttester for AttesterPipeline<A, C>
+impl<'a, A, C> GenericAttester for AttesterPipeline<A, C>
 where
     A: GenericAttester + Sync,
     C: GenericConverter<InEvidence = A::Evidence> + Sync,

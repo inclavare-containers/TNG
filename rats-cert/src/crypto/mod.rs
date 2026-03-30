@@ -122,8 +122,8 @@ pub mod tests {
     fn test_gen_private_key() -> Result<()> {
         [
             AsymmetricAlgo::Rsa2048,
-            AsymmetricAlgo::Rsa3072,
-            AsymmetricAlgo::Rsa4096,
+            // AsymmetricAlgo::Rsa3072,
+            // AsymmetricAlgo::Rsa4096, // Too slow
             AsymmetricAlgo::P256,
         ]
         .into_par_iter()

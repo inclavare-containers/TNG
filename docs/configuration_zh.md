@@ -670,6 +670,161 @@ Passport模式适用于网络隔离或性能要求较高的场景，因为它减
 }
 ```
 
+### Builtin模式
+
+Builtin模式是TNG提供的一种本地Attestation Service验证模式。与Background Check和Passport模式不同，Builtin模式不需要连接外部的Attestation Service，而是在本地直接验证Evidence。这种模式适用于以下场景：
+
+- 网络隔离环境，无法连接外部Attestation Service
+- 对验证延迟敏感，需要快速验证
+- 希望简化部署架构，减少外部依赖
+
+> [!NOTE]
+> Builtin模式需要TNG在编译时启用对应的TEE类型特性（`builtin-as-tdx`、`builtin-as-sgx`或`builtin-as-snp`）。
+
+> [!WARNING]
+> 当前Builtin模式仅支持Verify（验证方）角色，不支持Attest（证明方）角色。
+
+#### Verify（Builtin模式）
+
+在Builtin模式下，[Verify](#verify)配置需要包含以下字段：
+
+- **`model`** (string): 设置为`"builtin"`以启用Builtin模式
+- **`policy`** (PolicyConfig, 可选，默认为`default`): 指定OPA验证策略配置
+- **`reference_values`** (array [ReferenceValueConfig], 可选，默认为空数组): 指定参考值配置列表，用于验证Evidence的度量值
+
+##### PolicyConfig
+
+策略配置指定了验证Evidence时使用的OPA策略，支持以下三种方式：
+
+**默认策略（default）**：
+
+- **`type`** (string): 设置为`"default"`
+- 使用attestation-service内置的默认策略，该策略对TEE硬件和软件进行详尽的度量验证
+- 默认策略源码：[ear_default_policy_cpu.rego](https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego)
+
+**内联策略（inline）**：
+
+- **`type`** (string): 设置为`"inline"`
+- **`content`** (string): 标准Base64编码的OPA策略内容
+
+**文件路径策略（path）**：
+
+- **`type`** (string): 设置为`"path"`
+- **`path`** (string): OPA策略文件的路径
+
+##### ReferenceValueConfig
+
+参考值配置指定了用于验证Evidence的参考值来源，支持以下两种模式：
+
+**Sample模式**：直接提供参考值payload
+
+- **`type`** (string): 设置为`"sample"`
+- **`payload`** (PayloadConfig): 参考值payload配置
+
+**SLSA模式**：从Rekor透明日志获取参考值
+
+- **`type`** (string): 设置为`"slsa"`
+- **`id`** (string): 制品ID
+- **`version`** (string): 制品版本
+- **`artifact_type`** (string): 制品类型
+- **`rekor_url`** (string): Rekor服务器URL
+- **`rekor_api_version`** (integer, 可选，默认为2): Rekor API版本
+- **`provenance_source`** (ProvenanceSource, 可选): 来源配置
+
+##### PayloadConfig
+
+Payload配置指定参考值的具体内容：
+
+**内联payload（inline）**：
+
+- **`type`** (string): 设置为`"inline"`
+- **`content`** (string): Base64编码的参考值JSON内容
+
+**文件路径payload（path）**：
+
+- **`type`** (string): 设置为`"path"`
+- **`path`** (string): 参考值JSON文件的路径
+
+##### ProvenanceSource
+
+来源配置（用于SLSA模式）：
+
+- **`protocol`** (string): 协议类型，如`"oci"`
+- **`uri`** (string): 来源URI
+- **`artifact`** (string, 可选): 制品名称
+
+#### 示例
+
+##### 示例1：使用Sample模式提供参考值
+
+以下示例展示了使用内联策略和文件路径方式提供TDX参考值：
+
+```json
+{
+    "verify": {
+        "model": "builtin",
+        "policy": {
+            "type": "inline",
+            "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "path",
+                    "path": "/etc/tng/tdx-reference-values.json"
+                }
+            }
+        ]
+    }
+}
+```
+
+其中`/etc/tng/tdx-reference-values.json`文件内容示例：
+
+```json
+{
+    "tdx": {
+        "quote": {
+            "body": {
+                "mr_td": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }
+    }
+}
+```
+
+##### 示例2：使用SLSA/Rekor模式获取参考值
+
+以下示例展示了从Rekor透明日志获取TDX参考值：
+
+```json
+{
+    "verify": {
+        "model": "builtin",
+        "policy": {
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
+        },
+        "reference_values": [
+            {
+                "type": "slsa",
+                "id": "my-tdx-artifact",
+                "version": "1.0.0",
+                "artifact_type": "container-image",
+                "rekor_url": "https://rekor.sigstore.dev",
+                "rekor_api_version": 2,
+                "provenance_source": {
+                    "protocol": "oci",
+                    "uri": "oci://registry.example.com/my-image:latest",
+                    "artifact": "attestation-bundle"
+                }
+            }
+        ]
+    }
+}
+```
+
 ## OHTTP
 
 OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，通过在HTTP请求层面进行加密，提供端到端的隐私保护和匿名性增强。TNG可利用OHTTP提供安全通信，同时保持与现有HTTP基础设施的兼容性。

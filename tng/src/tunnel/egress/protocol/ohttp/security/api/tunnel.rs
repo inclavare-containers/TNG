@@ -7,7 +7,6 @@ use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::coco::evidence::CocoAsToken;
-use rats_cert::tee::coco::verifier::CocoVerifier;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
@@ -15,11 +14,6 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::io::ReaderStream;
 
-use crate::config::ra::{
-    AttestationServiceAddrArgs, AttestationServiceArgs,
-    AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceTokenVerifyArgs, RaArgs,
-    VerifyArgs,
-};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -32,7 +26,7 @@ use crate::tunnel::ohttp::protocol::metadata::{
     AttestedPublicKey, Metadata, NoAuth, METADATA_MAX_LEN,
 };
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
-use rats_cert::cert::verify::AttestationServiceConfig;
+use crate::tunnel::ra_context::VerifyContext;
 
 impl OhttpServerApi {
     /// Interface 2: Process Encrypted Request
@@ -198,87 +192,55 @@ impl OhttpServerApi {
         &self,
         client_auth: Option<ClientAuth>,
     ) -> Result<()> {
-        match (client_auth, self.ra_args.as_ref()) {
+        match (client_auth, self.ra_context.verify_context()) {
             (
                 Some(ClientAuth::AttestedPublicKey(AttestedPublicKey {
                     attestation_result,
                     pk_s,
                 })),
-                RaArgs::VerifyOnly(verify) | RaArgs::AttestAndVerify(.., verify),
+                Some(verify_ctx),
             ) => {
-                let verifier = match verify {
-                    VerifyArgs::Passport {
-                        token_verify:
-                            AttestationServiceTokenVerifyArgs {
-                                policy_ids,
-                                trusted_certs_paths,
-                                as_addr_config,
-                                ..
-                            },
-                    } => {
-                        CocoVerifier::new(
-                            as_addr_config
-                                .as_ref()
-                                .map(|addr_config| AttestationServiceConfig {
-                                    as_addr: addr_config.as_addr.clone(),
-                                    as_is_grpc: addr_config.as_is_grpc,
-                                    as_headers: addr_config.as_headers.clone(),
-                                }),
-                            trusted_certs_paths,
-                            policy_ids,
-                        )
-                        .await?
-                    }
-                    VerifyArgs::BackgroundCheck {
-                        as_args:
-                            AttestationServiceArgs {
-                                as_addr_config: AttestationServiceAddrArgs { as_addr, .. },
-                                policy_ids,
-                                ..
-                            },
-                        token_verify:
-                            AttestationServiceTokenVerifyAdditionalArgs {
-                                trusted_certs_paths,
-                            },
-                    } => {
-                        CocoVerifier::new(
-                            Some(AttestationServiceConfig {
-                                as_addr: as_addr.clone(),
-                                as_is_grpc: false,              // default value
-                                as_headers: Default::default(), // default value
-                            }),
-                            trusted_certs_paths,
-                            policy_ids,
-                        )
-                        .await?
-                    }
-                };
+                match verify_ctx {
+                    VerifyContext::Passport { verifier }
+                    | VerifyContext::BackgroundCheck { verifier, .. } => {
+                        let token = CocoAsToken::new(attestation_result)?;
 
-                let token = CocoAsToken::new(attestation_result)?;
+                        let userdata = ClientUserData {
+                            // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
+                            challenge_token: None,
+                            pk_s: BASE64_STANDARD.encode(&pk_s),
+                        }
+                        .to_claims()?;
 
-                let userdata = ClientUserData {
-                    // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
-                    challenge_token: None,
-                    pk_s: BASE64_STANDARD.encode(&pk_s),
+                        verifier
+                            .verify_evidence(&token, &ReportData::Claims(userdata))
+                            .await?;
+                    }
+                    #[cfg(feature = "builtin-as")]
+                    VerifyContext::Builtin { verifier, .. } => {
+                        let token = CocoAsToken::new(attestation_result)?;
+
+                        let userdata = ClientUserData {
+                            challenge_token: None,
+                            pk_s: BASE64_STANDARD.encode(&pk_s),
+                        }
+                        .to_claims()?;
+
+                        verifier
+                            .verify_evidence(&token, &ReportData::Claims(userdata))
+                            .await?;
+                    }
                 }
-                .to_claims()?;
-
-                verifier
-                    .verify_evidence(&token, &ReportData::Claims(userdata))
-                    .await?;
             }
-            (Some(ClientAuth::NoAuth(NoAuth {})), RaArgs::AttestOnly(..) | RaArgs::NoRa) => {
-                // Peace and love
+            (Some(ClientAuth::NoAuth(NoAuth {})), None) => {
+                // Peace and love - no attestation required and client didn't provide any
             }
-            (
-                Some(ClientAuth::NoAuth(NoAuth {})),
-                RaArgs::VerifyOnly(..) | RaArgs::AttestAndVerify(..),
-            ) => {
+            (Some(ClientAuth::NoAuth(NoAuth {})), Some(_)) => {
                 bail!(
                     "client attestation is required but no attestation info was provided by client"
                 )
             }
-            (Some(ClientAuth::AttestedPublicKey(..)), RaArgs::AttestOnly(..) | RaArgs::NoRa) => {
+            (Some(ClientAuth::AttestedPublicKey(..)), None) => {
                 bail!("client attestation is not required but some attestation info ware provided by client")
             }
             (None, _) => {

@@ -1,23 +1,22 @@
-use anyhow::{Context, Result};
-use rats_cert::cert::verify::{
-    AttestationServiceConfig, CertVerifier, CocoVerifyMode, CocoVerifyPolicy,
-};
+use std::sync::Arc;
 
-use crate::{
-    config::ra::{AttestationServiceAddrArgs, AttestationServiceArgs, VerifyArgs},
-    tunnel::attestation_result::AttestationResult,
-};
+use anyhow::{anyhow, Context, Result};
+use rats_cert::cert::verify::{CertEvidence, CertVerifier};
+use rats_cert::tee::GenericConverter;
+use rats_cert::tee::GenericVerifier;
+
+use crate::{tunnel::attestation_result::AttestationResult, tunnel::ra_context::VerifyContext};
 
 #[derive(Debug)]
 pub struct CoCoCommonCertVerifier {
-    verify_args: VerifyArgs,
+    verify_ctx: Arc<VerifyContext>,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
 impl CoCoCommonCertVerifier {
-    pub fn new(verify_args: VerifyArgs) -> Self {
+    pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
         Self {
-            verify_args,
+            verify_ctx,
             pending_cert: spin::mutex::spin::SpinMutex::new(None),
         }
     }
@@ -31,55 +30,87 @@ impl CoCoCommonCertVerifier {
             .take()
             .context("No rats-tls cert received")?;
 
-        let verify_policy = match &self.verify_args {
-            VerifyArgs::Passport { token_verify } => CocoVerifyPolicy {
-                verify_mode: CocoVerifyMode::Token,
-                policy_ids: token_verify.policy_ids.clone(),
-                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr_config: token_verify.as_addr_config.as_ref().map(|addr_config| {
-                    AttestationServiceConfig {
-                        as_addr: addr_config.as_addr.clone(),
-                        as_is_grpc: addr_config.as_is_grpc,
-                        as_headers: addr_config.as_headers.clone(),
+        // Step 1: Extract evidence from certificate
+        let pending_result = CertVerifier::new()
+            .verify_der(&pending_cert)
+            .await
+            .map_err(|e| anyhow!("Failed to extract evidence from certificate: {:?}", e))?;
+
+        // Step 2: Based on verify mode, convert evidence to token and verify
+        let token = match &*self.verify_ctx {
+            VerifyContext::Passport { verifier } => {
+                // Passport mode: certificate should contain a token
+                let token = match pending_result.evidence {
+                    CertEvidence::Token(t) => t,
+                    CertEvidence::Evidence(_) => return Err(anyhow!("Expected CoCo AS token in certificate for passport mode, but got raw evidence")),
+                };
+
+                // Verify the token using pre-instantiated verifier
+                verifier
+                    .verify_evidence(&token, &pending_result.report_data)
+                    .await
+                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
+
+                token
+            }
+            VerifyContext::BackgroundCheck {
+                converter,
+                verifier,
+            } => {
+                // BackgroundCheck mode: certificate should contain raw evidence
+                let evidence = match &pending_result.evidence {
+                    CertEvidence::Evidence(e) => e,
+                    CertEvidence::Token(_) => return Err(anyhow!("Expected CoCo evidence in certificate for background check mode, but got token")),
+                };
+
+                // Convert evidence to token via remote AS
+                let token = converter
+                    .convert(evidence)
+                    .await
+                    .map_err(|e| anyhow!("Failed to convert evidence to token: {:?}", e))?;
+
+                // Verify the token
+                verifier
+                    .verify_evidence(&token, &pending_result.report_data)
+                    .await
+                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
+
+                token
+            }
+            #[cfg(feature = "builtin-as")]
+            VerifyContext::Builtin {
+                converter,
+                verifier,
+            } => {
+                // Builtin mode: certificate should contain raw evidence
+                let evidence = match &pending_result.evidence {
+                    CertEvidence::Evidence(e) => e,
+                    CertEvidence::Token(_) => {
+                        return Err(anyhow!(
+                            "Expected CoCo evidence in certificate for builtin mode, but got token"
+                        ))
                     }
-                }),
-            },
-            VerifyArgs::BackgroundCheck {
-                as_args:
-                    AttestationServiceArgs {
-                        as_addr_config:
-                            AttestationServiceAddrArgs {
-                                as_addr,
-                                as_is_grpc,
-                                as_headers,
-                            },
-                        policy_ids,
-                    },
-                token_verify,
-            } => CocoVerifyPolicy {
-                verify_mode: CocoVerifyMode::Evidence(AttestationServiceConfig {
-                    as_addr: as_addr.clone(),
-                    as_is_grpc: *as_is_grpc,
-                    as_headers: as_headers.clone(),
-                }),
-                policy_ids: policy_ids.clone(),
-                trusted_certs_paths: token_verify.trusted_certs_paths.clone(),
-                as_addr_config: Some(AttestationServiceConfig {
-                    as_addr: as_addr.clone(),
-                    as_is_grpc: *as_is_grpc,
-                    as_headers: as_headers.clone(),
-                }),
-            },
+                };
+
+                // Convert evidence to token via local builtin AS
+                let token = converter
+                    .convert(evidence)
+                    .await
+                    .map_err(|e| anyhow!("Builtin AS verification failed: {:?}", e))?;
+
+                // Verify the token via local builtin AS
+                verifier
+                    .verify_evidence(&token, &pending_result.report_data)
+                    .await
+                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
+
+                token
+            }
         };
 
-        let res = CertVerifier::new(verify_policy)
-            .verify_der(&pending_cert)
-            .await;
+        tracing::debug!("rats-rs cert verify finished successfully");
 
-        tracing::debug!(passed = res.is_ok(), "rats-rs cert verify finished");
-
-        res.map(AttestationResult::from_coco_as_token)
-            .map_err(|e| anyhow::anyhow!("Verify failed: {:?}", e))
+        Ok(AttestationResult::from_coco_as_token(token))
     }
 
     pub fn verify_cert(

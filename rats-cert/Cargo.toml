@@ -45,6 +45,10 @@ x509-cert = {workspace = true, optional = true}
 zeroize = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
+attestation-service = {workspace = true, default-features = false, optional = true}
+rcgen = {workspace = true, optional = true}
+reference-value-provider-service = {workspace = true, default-features = false, optional = true}
+tempfile = {workspace = true, optional = true}
 time = {workspace = true, features = ["std"]}
 tokio = {workspace = true, default-features = true, features = ["fs"]}
 tonic = {workspace = true, default-features = false, features = ["codegen", "channel"], optional = true}
@@ -92,6 +96,15 @@ crypto-rustcrypto = [
   "dep:rustls-webpki",
   "dep:rustls-pki-types",
 ]
+
+# Builtin Attestation Service features (local evidence verification)
+# builtin-as is auto-enabled when any TEE-specific builtin feature is enabled
+builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen"]
+builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
+builtin-as-sgx = ["builtin-as", "attestation-service/sgx-verifier"]
+builtin-as-snp = ["builtin-as", "attestation-service/snp-verifier"]
+builtin-as-tdx = ["builtin-as", "attestation-service/tdx-verifier"]
+
 default = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]
 
 [dev-dependencies]
@@ -99,6 +112,7 @@ ctor = {workspace = true}
 hex = {workspace = true}
 rayon = {workspace = true}
 rstest = {workspace = true}
+serial_test = {workspace = true}
 tempfile = {workspace = true}
 tracing-subscriber = {workspace = true}
 

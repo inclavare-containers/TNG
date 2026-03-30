@@ -16,6 +16,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     self_generated::SelfGeneratedKeyManager, KeyManager,
 };
 use crate::tunnel::ohttp::protocol::KeyConfigResponse;
+use crate::tunnel::ra_context::RaContext;
 use crate::tunnel::utils::maybe_cached::MaybeCached;
 use crate::TokioRuntime;
 
@@ -28,8 +29,8 @@ use crate::TokioRuntime;
 /// The handler manages cryptographic keys, remote attestation data, and provides
 /// caching mechanisms to optimize performance for repeated operations.
 pub struct OhttpServerApi {
-    /// Remote Attestation arguments
-    ra_args: Arc<RaArgs>,
+    /// Pre-instantiated Remote Attestation context
+    ra_context: Arc<RaContext>,
     /// Key manager for OHTTP key configurations
     pub(crate) key_manager: Arc<dyn KeyManager>,
     /// Cache for storing passport mode key configuration responses
@@ -49,9 +50,14 @@ impl OhttpServerApi {
         key: KeyArgs,
         runtime: TokioRuntime,
     ) -> Result<Self, TngError> {
-        // Create a default random key manager
+        // Pre-instantiate RA components
+        let ra_context = Arc::new(
+            RaContext::from_ra_args(&ra_args)
+                .await
+                .map_err(TngError::RaContextCreationFailed)?,
+        );
 
-        // let KeyArgs::SelfGenerated { rotation_interval } = key;
+        // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
             KeyArgs::SelfGenerated { rotation_interval } => Arc::new(
                 SelfGeneratedKeyManager::new_with_auto_refresh(runtime, rotation_interval)?,
@@ -82,7 +88,7 @@ impl OhttpServerApi {
         }
 
         Ok(OhttpServerApi {
-            ra_args: Arc::new(ra_args),
+            ra_context,
             key_manager,
             passport_cache,
         })

@@ -4,12 +4,9 @@ use anyhow::Result;
 use rustls::client::{danger::ServerCertVerified, WebPkiServerVerifier};
 use tokio_rustls::rustls::RootCertStore;
 
-use crate::{
-    config::ra::VerifyArgs,
-    tunnel::{
-        attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
-        utils::certs::TNG_DUMMY_CERT,
-    },
+use crate::tunnel::{
+    attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
+    ra_context::VerifyContext, utils::certs::TNG_DUMMY_CERT,
 };
 
 #[derive(Debug)]
@@ -19,7 +16,7 @@ pub struct CoCoServerCertVerifier {
 }
 
 impl CoCoServerCertVerifier {
-    pub fn new(verify: VerifyArgs) -> Result<Self> {
+    pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
         let mut roots = RootCertStore::empty();
@@ -29,7 +26,7 @@ impl CoCoServerCertVerifier {
 
         Ok(Self {
             inner: verifier,
-            common: CoCoCommonCertVerifier::new(verify),
+            common: CoCoCommonCertVerifier::new(verify_ctx),
         })
     }
 

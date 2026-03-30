@@ -8,11 +8,9 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use itertools::Itertools;
 use ohttp::KeyConfig;
-use rats_cert::tee::coco::attester::CocoAttester;
-use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
+use rats_cert::tee::coco::converter::CoCoNonce;
 use rats_cert::tee::{AttesterPipeline, GenericAttester as _, ReportData};
 
-use crate::config::ra::{AttestArgs, RaArgs};
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -22,6 +20,7 @@ use crate::tunnel::ohttp::protocol::{
     AttestationRequest, AttestationResultJwt, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse,
     ServerAttestationInfo,
 };
+use crate::tunnel::ra_context::{AttestContext, RaContext};
 use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached};
 
 impl OhttpServerApi {
@@ -42,11 +41,10 @@ impl OhttpServerApi {
         context: TngStreamContext,
     ) -> Result<Response, TngError> {
         // Check if hit the cache
-        match (self.ra_args.as_ref(), &payload) {
+        match (self.ra_context.attest_context(), &payload) {
             // If the server is set to be a attester with passport mode, and the client is requesting a passport response, we cache it and return the cached response
             (
-                RaArgs::AttestOnly(AttestArgs::Passport { aa_args, .. })
-                | RaArgs::AttestAndVerify(AttestArgs::Passport { aa_args, .. }, ..),
+                Some(attest_ctx @ AttestContext::Passport { .. }),
                 Some(Json(KeyConfigRequest {
                     attestation_request: Some(AttestationRequest::Passport),
                 })),
@@ -55,23 +53,23 @@ impl OhttpServerApi {
                 .read()
                 .await
                 .get_or_try_init(|| async {
-                    let ra_args = self.ra_args.clone();
+                    let ra_context = self.ra_context.clone();
                     let key_manager = Arc::clone(&self.key_manager);
                     let payload = Arc::new(payload);
 
-                    let refresh_strategy = aa_args.refresh_strategy();
+                    let refresh_strategy = attest_ctx.refresh_strategy();
 
                     MaybeCached::new(context.runtime.clone(), refresh_strategy, move || {
                         Box::pin({
                             tracing::info!("Regenerating passport response");
 
-                            let ra_args = ra_args.clone();
+                            let ra_context = ra_context.clone();
                             let key_manager = key_manager.clone();
                             let payload = payload.clone();
 
                             async move {
                                 let response = Self::get_hpke_configuration_internal(
-                                    &ra_args,
+                                    &ra_context,
                                     key_manager.as_ref(),
                                     payload.as_ref().clone(),
                                 )
@@ -91,7 +89,7 @@ impl OhttpServerApi {
                 }),
             // Otherwise, we generate a new response
             _ => Self::get_hpke_configuration_internal(
-                &self.ra_args,
+                &self.ra_context,
                 self.key_manager.as_ref(),
                 payload,
             )
@@ -101,7 +99,7 @@ impl OhttpServerApi {
     }
 
     async fn get_hpke_configuration_internal(
-        ra_args: &RaArgs,
+        ra_context: &RaContext,
         key_manager: &dyn KeyManager,
         payload: Option<Json<KeyConfigRequest>>,
     ) -> Result<KeyConfigResponse, TngError> {
@@ -136,82 +134,69 @@ impl OhttpServerApi {
         let attestation_request = payload.and_then(|Json(payload)| payload.attestation_request);
 
         let response = async {
-            Ok(match &ra_args {
-                RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
-                    match (attestation_request, attest) {
-                        (
-                            Some(AttestationRequest::Passport),
-                            AttestArgs::Passport { aa_args, as_args },
-                        ) => {
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-                            let coco_converter = CocoConverter::new(
-                                &as_args.as_addr_config.as_addr,
-                                &as_args.policy_ids,
-                                as_args.as_addr_config.as_is_grpc,
-                                &as_args.as_addr_config.as_headers,
-                            )?;
-                            // fetch a challenge token from attestation service
-                            let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+            Ok(match ra_context.attest_context() {
+                Some(attest_ctx) => match (attestation_request, attest_ctx) {
+                    (Some(AttestationRequest::Passport), AttestContext::Passport { attester, converter, .. }) => {
+                        // fetch a challenge token from attestation service
+                        let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
 
-                            let attester_pipeline =
-                                AttesterPipeline::new(coco_attester, coco_converter);
+                        let attester_pipeline = AttesterPipeline::new(attester, converter);
 
-                            let userdata = ServerUserData {
-                                challenge_token: Some(challenge_token),
-                                hpke_key_config: hpke_key_config.clone(),
-                            }.to_claims()?;
-
-                            let token = attester_pipeline
-                                .get_evidence(&ReportData::Claims(userdata))
-                                .await?;
-                            KeyConfigResponse {
-                                hpke_key_config,
-                                attestation_info: Some(ServerAttestationInfo::Passport {
-                                    attestation_result: AttestationResultJwt(token.into_str()),
-                                }),
-                            }
+                        let userdata = ServerUserData {
+                            challenge_token: Some(challenge_token),
+                            hpke_key_config: hpke_key_config.clone(),
                         }
-                        (
-                            Some(AttestationRequest::BackgroundCheck { challenge_token }),
-                            AttestArgs::BackgroundCheck { aa_args },
-                        ) => {
-                            let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
+                        .to_claims()?;
 
-                            let userdata = ServerUserData {
-                                challenge_token: Some(challenge_token),
-                                hpke_key_config: hpke_key_config.clone(),
-                            }.to_claims()?;
-
-                            let evidence = coco_attester
-                                .get_evidence(&ReportData::Claims(userdata))
-                                .await?.serialize_to_json()?;
-
-                            KeyConfigResponse {
-                                hpke_key_config,
-                                attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
-                                    evidence,
-                                }),
-                            }
+                        let token = attester_pipeline
+                            .get_evidence(&ReportData::Claims(userdata))
+                            .await?;
+                        KeyConfigResponse {
+                            hpke_key_config,
+                            attestation_info: Some(ServerAttestationInfo::Passport {
+                                attestation_result: AttestationResultJwt(token.into_str()),
+                            }),
                         }
-                        (
-                            Some(AttestationRequest::Passport),
-                            AttestArgs::BackgroundCheck { .. },
-                        ) => bail!("Background check model is expected but passport attestation is requested"),
-                        (
-                            Some(AttestationRequest::BackgroundCheck { .. }),
-                            AttestArgs::Passport { .. },
-                        ) => bail!("Passport model is expected but background check attestation is requested"),
-                        (None, _) => {
-                            // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
-                            KeyConfigResponse {
-                                hpke_key_config,
-                                attestation_info: None,
-                            }
-                        },
                     }
-                }
-                RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
-                    // No remote attestaion
+                    (
+                        Some(AttestationRequest::BackgroundCheck { challenge_token }),
+                        AttestContext::BackgroundCheck { attester, .. },
+                    ) => {
+                        let userdata = ServerUserData {
+                            challenge_token: Some(challenge_token),
+                            hpke_key_config: hpke_key_config.clone(),
+                        }
+                        .to_claims()?;
+
+                        let evidence = attester
+                            .get_evidence(&ReportData::Claims(userdata))
+                            .await?
+                            .serialize_to_json()?;
+
+                        KeyConfigResponse {
+                            hpke_key_config,
+                            attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
+                                evidence,
+                            }),
+                        }
+                    }
+                    (Some(AttestationRequest::Passport), AttestContext::BackgroundCheck { .. }) => {
+                        bail!("Background check model is expected but passport attestation is requested")
+                    }
+                    (Some(AttestationRequest::BackgroundCheck { .. }), AttestContext::Passport { .. }) => {
+                        bail!("Passport model is expected but background check attestation is requested")
+                    }
+                    (None, _) => {
+
+                            // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
+                        KeyConfigResponse {
+                            hpke_key_config,
+                            attestation_info: None,
+                        }
+                    }
+                },
+                None => {
+                    // No attestation required (VerifyOnly or NoRa)
                     KeyConfigResponse {
                         hpke_key_config,
                         attestation_info: None,
