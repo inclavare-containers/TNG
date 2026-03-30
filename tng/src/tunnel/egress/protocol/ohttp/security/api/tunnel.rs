@@ -216,7 +216,7 @@ impl OhttpServerApi {
                             .verify_evidence(&token, &ReportData::Claims(userdata))
                             .await?;
                     }
-                    #[cfg(feature = "builtin-as")]
+                    #[cfg(feature = "__builtin-as")]
                     VerifyContext::Builtin { verifier, .. } => {
                         let token = CocoAsToken::new(attestation_result)?;
 

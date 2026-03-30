@@ -8,7 +8,7 @@ use url::Url;
 use crate::{error::TngError, tunnel::utils::maybe_cached::RefreshStrategy};
 
 /// Remote Attestation configuration parameters
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaArgsUnchecked {
     /// Whether to disable Remote Attestation functionality
@@ -24,7 +24,7 @@ pub struct RaArgsUnchecked {
     pub verify: Option<VerifyArgs>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum RaArgs {
     #[cfg(unix)]
     AttestOnly(AttestArgs),
@@ -149,13 +149,13 @@ impl RaArgsUnchecked {
                         }
                     }
                 }
-                #[cfg(feature = "builtin-as")]
+                #[cfg(feature = "__builtin-as")]
                 VerifyArgs::Builtin {
                     policy,
                     reference_values,
                 } => {
                     use rats_cert::cert::verify::{
-                        PayloadConfig, PolicyConfig, ReferenceValueConfig,
+                        PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
                     };
                     // Check policy path exists if using Path variant
                     if let PolicyConfig::Path { path } = policy {
@@ -170,7 +170,7 @@ impl RaArgsUnchecked {
                     // Check reference value payload paths
                     for rv in reference_values {
                         if let ReferenceValueConfig::Sample {
-                            payload: PayloadConfig::Path { path },
+                            payload: SampleProvenancePayloadConfig::Path { path },
                         } = rv
                         {
                             if !Path::new(path).exists() {
@@ -201,7 +201,7 @@ impl RaArgsUnchecked {
 }
 
 /// Attestation parameters configuration enum
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "model")]
 #[serde(try_from = "maybe_tagged_attest_args::MaybeTaggedAttestArgs")]
 pub enum AttestArgs {
@@ -331,7 +331,7 @@ mod maybe_tagged_attest_args {
 }
 
 /// Attestation agent parameters configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationAgentArgs {
     /// Attestation agent address
     pub aa_addr: String,
@@ -359,7 +359,7 @@ impl AttestationAgentArgs {
 }
 
 /// Verification parameters configuration enum
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "model")]
 #[serde(try_from = "maybe_tagged_verify_args::MaybeTaggedVerifyArgs")]
 pub enum VerifyArgs {
@@ -379,7 +379,7 @@ pub enum VerifyArgs {
     },
 
     /// Builtin mode - local AS verification
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     Builtin {
         /// OPA policy configuration (default: use AS built-in default policy)
         #[serde(default)]
@@ -434,7 +434,7 @@ mod maybe_tagged_verify_args {
             token_verify: AttestationServiceTokenVerifyAdditionalArgs,
         },
 
-        #[cfg(feature = "builtin-as")]
+        #[cfg(feature = "__builtin-as")]
         Builtin {
             policy: rats_cert::cert::verify::PolicyConfig,
             #[serde(default)]
@@ -472,7 +472,7 @@ mod maybe_tagged_verify_args {
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Passport { token_verify }) => {
                     VerifyArgs::Passport { token_verify }
                 }
-                #[cfg(feature = "builtin-as")]
+                #[cfg(feature = "__builtin-as")]
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Builtin {
                     policy,
                     reference_values,
@@ -481,11 +481,11 @@ mod maybe_tagged_verify_args {
                     reference_values,
                 },
                 MaybeTaggedVerifyArgs::Tagged(TaggedVerifyArgs::Unknown) => {
-                    #[cfg(feature = "builtin-as")]
+                    #[cfg(feature = "__builtin-as")]
                     bail!(
                         r#"unsupported value for "model" field, should be one of ["background_check", "passport", "builtin"]"#
                     );
-                    #[cfg(not(feature = "builtin-as"))]
+                    #[cfg(not(feature = "__builtin-as"))]
                     bail!(
                         r#"unsupported value for "model" field, should be one of ["background_check", "passport"]"#
                     )
@@ -496,7 +496,7 @@ mod maybe_tagged_verify_args {
 }
 
 /// Attestation service parameters configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationServiceArgs {
     #[serde(flatten)]
     pub as_addr_config: AttestationServiceAddrArgs,
@@ -506,7 +506,7 @@ pub struct AttestationServiceArgs {
 }
 
 /// Attestation service token verification parameters configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationServiceTokenVerifyArgs {
     /// Policy ID list
     pub policy_ids: Vec<String>,
@@ -521,7 +521,7 @@ pub struct AttestationServiceTokenVerifyArgs {
 }
 
 /// Attestation service token verification parameters additional configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationServiceTokenVerifyAdditionalArgs {
     /// Trusted certificate paths list, optional
     #[serde(default = "Default::default")]
@@ -533,13 +533,14 @@ pub struct AttestationServiceTokenVerifyAdditionalArgs {
 // ============================================================================
 
 // Re-export config types from rats-cert to ensure consistency
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 pub use rats_cert::cert::verify::{
-    PayloadConfig, PolicyConfig, ProvenanceSource, ReferenceValueConfig,
+    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+    SlsaReferenceValuePayloadConfig,
 };
 
 /// Builtin attestation agent configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuiltinAttestationAgentArgs {
     /// Evidence refresh interval (seconds), optional
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -894,7 +895,7 @@ mod tests {
     // Builtin mode tests
     // =====================================================================
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     #[test]
     fn test_builtin_verify_with_inline_policy() {
         let json = json!(
@@ -934,7 +935,7 @@ mod tests {
         assert!(serialized.contains(r#""type":"inline""#));
     }
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     #[test]
     fn test_builtin_verify_with_path_policy() {
         let json = json!(
@@ -963,7 +964,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     #[test]
     fn test_builtin_verify_with_sample_reference() {
         let json = json!(
@@ -996,7 +997,7 @@ mod tests {
                 assert_eq!(reference_values.len(), 1);
                 match &reference_values[0] {
                     ReferenceValueConfig::Sample { payload } => match payload {
-                        PayloadConfig::Path { path } => {
+                        SampleProvenancePayloadConfig::Path { path } => {
                             assert_eq!(path, "/path/to/payload.json");
                         }
                         _ => panic!("Expected Path payload"),
@@ -1008,7 +1009,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     #[test]
     fn test_builtin_verify_with_slsa_reference() {
         let json = json!(
@@ -1045,24 +1046,32 @@ mod tests {
             }) => {
                 assert_eq!(reference_values.len(), 1);
                 match &reference_values[0] {
-                    ReferenceValueConfig::Slsa {
-                        id,
-                        version,
-                        artifact_type,
-                        rekor_url,
-                        rekor_api_version,
-                        provenance_source,
-                    } => {
-                        assert_eq!(id, "my-artifact");
-                        assert_eq!(version, "1.0.0");
-                        assert_eq!(artifact_type, "container-image");
-                        assert_eq!(rekor_url, "https://rekor.sigstore.dev");
-                        assert_eq!(*rekor_api_version, 2); // default value
-                        assert!(provenance_source.is_some());
-                        let ps = provenance_source.as_ref().unwrap();
-                        assert_eq!(ps.protocol, "oci");
-                        assert_eq!(ps.uri, "oci://registry/repo:tag");
-                        assert_eq!(ps.artifact, Some("bundle".to_string()));
+                    ReferenceValueConfig::Slsa { payload } => {
+                        // Verify payload is inline with ReferenceValueListPayload content
+                        match payload {
+                            SlsaReferenceValuePayloadConfig::Inline { content } => {
+                                assert_eq!(content.rv_list.len(), 1);
+                                let rv = &content.rv_list[0];
+                                assert_eq!(rv.id, "my-artifact");
+                                assert_eq!(rv.version, "1.0.0");
+                                assert_eq!(rv.rv_type, "container-image");
+                                assert_eq!(
+                                    rv.provenance_info.provenance_type,
+                                    "slsa-intoto-statements"
+                                );
+                                assert_eq!(
+                                    rv.provenance_info.rekor_url,
+                                    "https://rekor.sigstore.dev"
+                                );
+                                assert_eq!(rv.provenance_info.rekor_api_version, Some(2));
+                                assert!(rv.provenance_source.is_some());
+                                let ps = rv.provenance_source.as_ref().unwrap();
+                                assert_eq!(ps.protocol, "oci");
+                                assert_eq!(ps.uri, "oci://registry/repo:tag");
+                                assert_eq!(ps.artifact, Some("bundle".to_string()));
+                            }
+                            _ => panic!("Expected Inline payload"),
+                        }
                     }
                     _ => panic!("Expected Slsa reference value"),
                 }

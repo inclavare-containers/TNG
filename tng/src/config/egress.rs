@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ra::RaArgsUnchecked, Endpoint};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddEgressArgs {
     #[serde(flatten)]
     pub egress_mode: EgressMode,
@@ -11,7 +11,7 @@ pub struct AddEgressArgs {
     pub common: CommonArgs,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommonArgs {
     #[serde(alias = "decap_from_http")]
@@ -24,24 +24,24 @@ pub struct CommonArgs {
     pub ra_args: RaArgsUnchecked,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DirectForwardRules(pub Vec<DirectForwardRule>);
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DirectForwardRule {
     pub http_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressMappingArgs {
     pub r#in: Endpoint,
     pub out: Endpoint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressNetfilterArgs {
     pub capture_dst: Endpoint,
@@ -56,7 +56,7 @@ pub struct EgressNetfilterArgs {
     pub so_mark: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum EgressMode {
     #[serde(rename = "mapping")]
@@ -72,7 +72,7 @@ pub enum EgressMode {
 /// including cross-origin settings and key management strategy.
 ///
 /// By default, if not explicitly configured, OHTTP is disabled.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OHttpArgs {
     /// **(Deprecated)** Regular expressions matching paths that are allowed to bypass
@@ -136,7 +136,7 @@ pub struct OHttpArgs {
 ///
 /// This is a tagged enum (`source` field) that specifies the key management model.
 /// Only one variant can be active at a time.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "source")]
 #[allow(clippy::large_enum_variant)]
 pub enum KeyArgs {
@@ -195,7 +195,7 @@ pub enum KeyArgs {
 ///   }
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerSharedArgs {
     /// Interval (in seconds) between automatic key rotations.
     ///
@@ -247,7 +247,7 @@ impl Default for KeyArgs {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CorsConfig {
     /// Allow origins for CORS, e.g. ["https://example.com", "https://app.example.com"]
@@ -271,7 +271,7 @@ pub struct CorsConfig {
     pub allow_credentials: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AllowNonTngTrafficRegexes(Vec<String>);
 

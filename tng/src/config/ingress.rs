@@ -5,7 +5,7 @@ use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
 use super::{ra::RaArgsUnchecked, Endpoint};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddIngressArgs {
     #[serde(flatten)]
     pub ingress_mode: IngressMode,
@@ -14,7 +14,7 @@ pub struct AddIngressArgs {
     pub common: CommonArgs,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommonArgs {
     #[serde(default = "Option::default")]
@@ -28,7 +28,7 @@ pub struct CommonArgs {
     pub ra_args: RaArgsUnchecked,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum IngressMode {
     #[serde(rename = "mapping")]
@@ -44,7 +44,7 @@ pub enum IngressMode {
     Socks5(IngressSocks5Args),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressMappingArgs {
     #[serde(rename = "in")]
     pub r#in: Endpoint,
@@ -52,7 +52,7 @@ pub struct IngressMappingArgs {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressHttpProxyArgs {
     pub proxy_listen: Endpoint,
 
@@ -65,7 +65,7 @@ pub struct IngressHttpProxyArgs {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressNetfilterArgs {
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
@@ -89,7 +89,7 @@ pub struct IngressNetfilterArgs {
 
 /// Instead of using the IngressNetfilterCaptureDst directly, here we define a common struct for json parsing to get better deserialization error message.
 /// See https://github.com/serde-rs/serde/issues/2157
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IngressNetfilterCaptureDstArgs {
     host: Option<Ipv4Cidr>,
@@ -126,7 +126,7 @@ pub enum IngressNetfilterCaptureDst {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressSocks5Args {
     pub proxy_listen: Endpoint,
 
@@ -136,28 +136,28 @@ pub struct IngressSocks5Args {
 
     pub auth: Option<Socks5AuthArgs>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Socks5AuthArgs {
     pub username: String,
 
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OHttpArgs {
     #[serde(default)]
     pub path_rewrites: Vec<PathRewrite>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PathRewrite {
     pub match_regex: String,
     pub substitution: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EndpointFilter {
     /// Host name to match.
@@ -183,13 +183,18 @@ mod tests {
     use super::{IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs};
 
     fn test_deserialize_netfilter_common(value: serde_json::Value) -> Result<()> {
+        // Check deserialize
         let config: TngConfig = serde_json::from_value(value)?;
 
         let config_json = serde_json::to_string_pretty(&config)?;
 
-        let config2 = serde_json::from_str(&config_json)?;
+        // Check deserialize
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
 
-        assert_eq!(config, config2);
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
         Ok(())
     }
 

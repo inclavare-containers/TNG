@@ -25,10 +25,21 @@ use signature::Verifier;
 use x509_cert::Certificate;
 
 // Re-export builtin config types for external use
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 pub use crate::tee::coco::converter::builtin::{
-    PayloadConfig, PolicyConfig, ProvenanceSource, ReferenceValueConfig, DEFAULT_POLICY_ID,
+    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+    SlsaReferenceValuePayloadConfig, DEFAULT_POLICY_ID,
 };
+
+// Re-export reference value list types from RVPS
+#[cfg(feature = "__builtin-as")]
+pub use reference_value_provider_service::rv_list::{
+    ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+};
+
+// Re-export Provenance type from RVPS
+#[cfg(feature = "__builtin-as")]
+pub use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 
 /// Evidence extracted from certificate - either raw evidence or already-verified token
 pub enum CertEvidence {

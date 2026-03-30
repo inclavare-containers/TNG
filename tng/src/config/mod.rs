@@ -10,7 +10,7 @@ pub mod ingress;
 pub mod observability;
 pub mod ra;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TngConfig {
     #[serde(default = "Option::default")]
@@ -37,7 +37,7 @@ pub struct TngConfig {
     pub admin_bind: Option<Endpoint>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Endpoint {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,7 +46,7 @@ pub struct Endpoint {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use anyhow::Result;
     use egress::EgressMode;
     use ingress::{IngressMode, PathRewrite};
@@ -139,9 +139,12 @@ mod tests {
 
         let config_json = serde_json::to_string_pretty(&config)?;
 
-        let config2 = serde_json::from_str(&config_json)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
 
-        assert_eq!(config, config2);
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
 
         Ok(())
     }

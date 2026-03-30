@@ -719,39 +719,94 @@ Builtin模式是TNG提供的一种本地Attestation Service验证模式。与Bac
 **Sample模式**：直接提供参考值payload
 
 - **`type`** (string): 设置为`"sample"`
-- **`payload`** (PayloadConfig): 参考值payload配置
+- **`payload`** (SampleProvenancePayloadConfig): 参考值payload配置
 
 **SLSA模式**：从Rekor透明日志获取参考值
 
 - **`type`** (string): 设置为`"slsa"`
-- **`id`** (string): 制品ID
-- **`version`** (string): 制品版本
-- **`artifact_type`** (string): 制品类型
-- **`rekor_url`** (string): Rekor服务器URL
-- **`rekor_api_version`** (integer, 可选，默认为2): Rekor API版本
-- **`provenance_source`** (ProvenanceSource, 可选): 来源配置
+- **`payload`** (SlsaReferenceValuePayloadConfig): 参考值payload配置
 
-##### PayloadConfig
+##### SampleProvenancePayloadConfig
 
-Payload配置指定参考值的具体内容：
+Payload配置指定参考值的具体内容，格式为`Provenance`：
 
 **内联payload（inline）**：
 
 - **`type`** (string): 设置为`"inline"`
-- **`content`** (string): Base64编码的参考值JSON内容
+- **`content`** (object): 参考值JSON对象，格式为`Provenance`
+
+`Provenance`格式示例：
+
+```json
+{
+  "measurement.uki.SHA-384": [
+    "a46e162a57e072be7f660e65504477c646acf6b3bfea4ffc0e3a8ee4f2c2726c2284c8bf1ec2b3bd95b204fe7f4e899c"
+  ]
+}
+```
+
+**字段说明**：
+- 键（key）为任意被度量对象的标识，取决于Policy定义。
+- 值（value）为该被度量对象的预期参考值，与键对应。
 
 **文件路径payload（path）**：
 
 - **`type`** (string): 设置为`"path"`
-- **`path`** (string): 参考值JSON文件的路径
+- **`path`** (string): 参考值JSON文件的路径，文件内容格式为`Provenance`
 
-##### ProvenanceSource
+##### SlsaReferenceValuePayloadConfig
 
-来源配置（用于SLSA模式）：
+SLSA参考值payload配置指定参考值的具体内容，格式为`ReferenceValueListPayload`：
 
-- **`protocol`** (string): 协议类型，如`"oci"`
-- **`uri`** (string): 来源URI
-- **`artifact`** (string, 可选): 制品名称
+**内联payload（inline）**：
+
+- **`type`** (string): 设置为`"inline"`
+- **`content`** (object): 参考值JSON对象，格式为`ReferenceValueListPayload`
+
+**文件路径payload（path）**：
+
+- **`type`** (string): 设置为`"path"`
+- **`path`** (string): 参考值JSON文件的路径，文件内容格式为`ReferenceValueListPayload`
+
+`ReferenceValueListPayload`格式：
+
+```json
+{
+    "rv_list": [
+        {
+            "id": "my-artifact",
+            "version": "1.0.0",
+            "type": "container-image",
+            "provenance_info": {
+                "type": "slsa-intoto-statements",
+                "rekor_url": "https://rekor.sigstore.dev",
+                "rekor_api_version": 2
+            },
+            "provenance_source": {
+                "protocol": "oci",
+                "uri": "oci://registry/repo:tag",
+                "artifact": "bundle"
+            },
+            "operation_type": "add"
+        }
+    ]
+}
+```
+
+**字段说明**：
+- **`rv_list`** (array): 参考值条目数组
+  - **`id`** (string): 制品唯一标识符
+  - **`version`** (string): 制品版本
+  - **`type`** (string): 制品类型，如`"container-image"`、`"binary"`等
+  - **`provenance_info`** (object): 来源信息
+    - **`type`** (string): 来源类型，如`"slsa-intoto-statements"`
+    - **`rekor_url`** (string): Rekor透明日志服务器URL
+    - **`rekor_api_version`** (number, 可选): Rekor API版本，默认为2
+  - **`provenance_source`** (object, 可选): 制品来源配置
+    - **`protocol`** (string): 协议类型，如`"oci"`、`"https"`
+    - **`uri`** (string): 来源URI
+    - **`artifact`** (string, 可选): 制品名称或标识
+  - **`operation_type`** (string): 操作类型，`"refresh"`（刷新）或`"add"`（追加）
 
 #### 示例
 

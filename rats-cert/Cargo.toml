@@ -98,14 +98,14 @@ crypto-rustcrypto = [
 ]
 
 # Builtin Attestation Service features (local evidence verification)
-# builtin-as is auto-enabled when any TEE-specific builtin feature is enabled
-builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen"]
+# __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
+__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen"]
 builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
-builtin-as-sgx = ["builtin-as", "attestation-service/sgx-verifier"]
-builtin-as-snp = ["builtin-as", "attestation-service/snp-verifier"]
-builtin-as-tdx = ["builtin-as", "attestation-service/tdx-verifier"]
+builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
+builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
+builtin-as-tdx = ["__builtin-as", "attestation-service/tdx-verifier"]
 
-default = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]
+default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "builtin-as-tdx"]
 
 [dev-dependencies]
 ctor = {workspace = true}
@@ -114,6 +114,7 @@ rayon = {workspace = true}
 rstest = {workspace = true}
 serial_test = {workspace = true}
 tempfile = {workspace = true}
+tokio = {workspace = true, features = ["rt", "rt-multi-thread", "macros"]}
 tracing-subscriber = {workspace = true}
 
 [build-dependencies]

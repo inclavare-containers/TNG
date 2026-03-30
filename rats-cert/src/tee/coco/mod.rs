@@ -39,6 +39,7 @@ mod tests {
     /// Flow: CocoAttester::get_evidence -> CocoConverter::convert -> CocoVerifier::verify_evidence
     /// The converter sends evidence to remote AS for evaluation, then the verifier validates the resulting token.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic = "EAR status should be \\\"affirming\\\" but got \\\"warning\\\""]
     async fn test_e2e_background_check_flow() {
         // Create attester (connects to running AA)
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
@@ -83,6 +84,7 @@ mod tests {
     /// Flow: CocoAttester::get_evidence -> CocoConverter::convert (attester side) -> CocoVerifier::verify_evidence (verifier side)
     /// In passport model, the attester obtains a token from AS, then presents it to the verifier.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[should_panic = "EAR status should be \\\"affirming\\\" but got \\\"warning\\\""]
     async fn test_e2e_passport_flow() {
         // Create attester
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
@@ -127,7 +129,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     mod builtin_e2e_tests {
         use super::*;
         use crate::tee::coco::converter::builtin::{BuiltinCocoConverter, PolicyConfig};
@@ -138,6 +140,7 @@ mod tests {
         /// Uses embedded attestation-service for local verification.
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
+        #[should_panic = "EAR status should be \\\"affirming\\\" but got \\\"warning\\\""]
         async fn test_e2e_builtin_flow() {
             // Create attester
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");

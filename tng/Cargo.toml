@@ -170,9 +170,9 @@ trace = [
 ]
 
 # Builtin Attestation Service features
-# builtin-as is auto-enabled when any TEE-specific builtin feature is enabled
-builtin-as = ["rats-cert/builtin-as"]
+# __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
+__builtin-as = ["rats-cert/__builtin-as"]
 builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
-builtin-as-sgx = ["builtin-as", "rats-cert/builtin-as-sgx"]
-builtin-as-snp = ["builtin-as", "rats-cert/builtin-as-snp"]
-builtin-as-tdx = ["builtin-as", "rats-cert/builtin-as-tdx"]
+builtin-as-sgx = ["__builtin-as", "rats-cert/builtin-as-sgx"]
+builtin-as-snp = ["__builtin-as", "rats-cert/builtin-as-snp"]
+builtin-as-tdx = ["__builtin-as", "rats-cert/builtin-as-tdx"]

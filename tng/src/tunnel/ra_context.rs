@@ -10,9 +10,9 @@ use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::CocoConverter;
 use rats_cert::tee::coco::verifier::remote::CocoVerifier;
 
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 
 #[cfg(unix)]
@@ -167,7 +167,7 @@ pub enum VerifyContext {
     },
 
     /// Builtin - local conversion and verification
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     Builtin {
         converter: BuiltinCocoConverter,
         verifier: BuiltinCocoVerifier,
@@ -183,7 +183,7 @@ impl std::fmt::Debug for VerifyContext {
             Self::BackgroundCheck { .. } => f
                 .debug_struct("VerifyContext::BackgroundCheck")
                 .finish_non_exhaustive(),
-            #[cfg(feature = "builtin-as")]
+            #[cfg(feature = "__builtin-as")]
             Self::Builtin { .. } => f
                 .debug_struct("VerifyContext::Builtin")
                 .finish_non_exhaustive(),
@@ -225,7 +225,7 @@ impl VerifyContext {
                     verifier,
                 })
             }
-            #[cfg(feature = "builtin-as")]
+            #[cfg(feature = "__builtin-as")]
             VerifyArgs::Builtin {
                 policy,
                 reference_values,
@@ -623,7 +623,7 @@ mod tests {
     // Section 4: Unix + Builtin-AS combined tests (tests 12-13)
     // =========================================================================
 
-    #[cfg(all(unix, feature = "builtin-as"))]
+    #[cfg(all(unix, feature = "__builtin-as"))]
     mod unix_builtin_tests {
         use super::*;
         use crate::config::ra::{AttestArgs, AttestationAgentArgs};
@@ -707,12 +707,13 @@ mod tests {
     // Builtin-specific tests
     // =========================================================================
 
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     mod builtin_tests {
         use super::*;
         use base64::{engine::general_purpose::STANDARD, Engine};
         use rats_cert::cert::verify::{
-            PayloadConfig, PolicyConfig, ProvenanceSource, ReferenceValueConfig,
+            PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+            SlsaReferenceValuePayloadConfig,
         };
         use serial_test::serial;
 
@@ -753,13 +754,17 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_with_sample_reference_inline() {
-            // Sample reference value payload (inline JSON)
-            let payload_json = r#"{"tdx":{}}"#.to_string();
+            use rats_cert::cert::verify::Provenance;
+            use std::collections::HashMap;
+            // Sample reference value payload (inline Provenance)
+            let mut rvs = HashMap::new();
+            rvs.insert("example-measurement".to_string(), vec![]);
+            let provenance = Provenance { rvs };
             let verify_args = VerifyArgs::Builtin {
                 policy: PolicyConfig::Default,
                 reference_values: vec![ReferenceValueConfig::Sample {
-                    payload: PayloadConfig::Inline {
-                        content: payload_json,
+                    payload: SampleProvenancePayloadConfig::Inline {
+                        content: provenance,
                     },
                 }],
             };
@@ -829,7 +834,7 @@ mod tests {
             let verify_args = VerifyArgs::Builtin {
                 policy: PolicyConfig::Default,
                 reference_values: vec![ReferenceValueConfig::Sample {
-                    payload: PayloadConfig::Path {
+                    payload: SampleProvenancePayloadConfig::Path {
                         path: "/nonexistent/ref.json".to_string(),
                     },
                 }],
@@ -877,17 +882,32 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_with_slsa_reference() {
+            use rats_cert::cert::verify::{
+                ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+            };
+
             // Note: This test may fail since Rekor is not available in local environment.
             // We just verify that the creation is attempted correctly.
+            let rv_item = ReferenceValueListItem {
+                id: "test-artifact".to_string(),
+                version: "1.0.0".to_string(),
+                rv_type: "container-image".to_string(),
+                provenance_info: ReferenceValueProvenanceInfo {
+                    provenance_type: "slsa-intoto-statements".to_string(),
+                    rekor_url: "https://rekor.sigstore.dev".to_string(),
+                    rekor_api_version: Some(2),
+                },
+                provenance_source: None,
+                operation_type: "refresh".to_string(),
+            };
+            let payload = ReferenceValueListPayload {
+                rv_list: vec![rv_item],
+            };
+
             let verify_args = VerifyArgs::Builtin {
                 policy: PolicyConfig::Default,
                 reference_values: vec![ReferenceValueConfig::Slsa {
-                    id: "test-artifact".to_string(),
-                    version: "1.0.0".to_string(),
-                    artifact_type: "container-image".to_string(),
-                    rekor_url: "https://rekor.sigstore.dev".to_string(),
-                    rekor_api_version: 2,
-                    provenance_source: None,
+                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
             };
             // This may fail due to Rekor not being available, so we just attempt creation
@@ -898,21 +918,32 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_with_slsa_reference_and_provenance() {
+            use rats_cert::cert::verify::{
+                ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+            };
+
             // Note: This test may fail since Rekor/OCI registry is not available.
             // We just verify that the creation is attempted correctly.
+            let rv_item = ReferenceValueListItem {
+                id: "test-artifact".to_string(),
+                version: "1.0.0".to_string(),
+                rv_type: "container-image".to_string(),
+                provenance_info: ReferenceValueProvenanceInfo {
+                    provenance_type: "slsa-intoto-statements".to_string(),
+                    rekor_url: "https://rekor.sigstore.dev".to_string(),
+                    rekor_api_version: Some(2),
+                },
+                provenance_source: None,
+                operation_type: "refresh".to_string(),
+            };
+            let payload = ReferenceValueListPayload {
+                rv_list: vec![rv_item],
+            };
+
             let verify_args = VerifyArgs::Builtin {
                 policy: PolicyConfig::Default,
                 reference_values: vec![ReferenceValueConfig::Slsa {
-                    id: "test-artifact".to_string(),
-                    version: "1.0.0".to_string(),
-                    artifact_type: "container-image".to_string(),
-                    rekor_url: "https://rekor.sigstore.dev".to_string(),
-                    rekor_api_version: 2,
-                    provenance_source: Some(ProvenanceSource {
-                        protocol: "oci".to_string(),
-                        uri: "oci://registry/repo:tag".to_string(),
-                        artifact: Some("bundle".to_string()),
-                    }),
+                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
             };
             // This may fail due to external services not being available
@@ -923,17 +954,28 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_with_multiple_references() {
+            use rats_cert::cert::verify::Provenance;
+            use std::collections::HashMap;
+
+            let mut rvs1 = HashMap::new();
+            rvs1.insert("component-a".to_string(), vec![]);
+            let provenance1 = Provenance { rvs: rvs1 };
+
+            let mut rvs2 = HashMap::new();
+            rvs2.insert("component-b".to_string(), vec![]);
+            let provenance2 = Provenance { rvs: rvs2 };
+
             let verify_args = VerifyArgs::Builtin {
                 policy: PolicyConfig::Default,
                 reference_values: vec![
                     ReferenceValueConfig::Sample {
-                        payload: PayloadConfig::Inline {
-                            content: r#"{"tdx":{}}"#.to_string(),
+                        payload: SampleProvenancePayloadConfig::Inline {
+                            content: provenance1,
                         },
                     },
                     ReferenceValueConfig::Sample {
-                        payload: PayloadConfig::Inline {
-                            content: r#"{"sample":{}}"#.to_string(),
+                        payload: SampleProvenancePayloadConfig::Inline {
+                            content: provenance2,
                         },
                     },
                 ],

@@ -10,7 +10,7 @@ use crate::tunnel::ohttp::protocol::{
 };
 use crate::tunnel::ra_context::VerifyContext;
 
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::CoCoNonce;
 
 impl OhttpServerApi {
@@ -33,7 +33,7 @@ impl OhttpServerApi {
                         let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
                         Ok(Json(AttestationChallengeResponse { challenge_token }))
                     }
-                    #[cfg(feature = "builtin-as")]
+                    #[cfg(feature = "__builtin-as")]
                     VerifyContext::Builtin { converter, .. } => {
                         // For builtin mode, generate a local challenge
                         let challenge_token = converter
@@ -72,7 +72,7 @@ impl OhttpServerApi {
                             attestation_result: token.into_str(),
                         }))
                     }
-                    #[cfg(feature = "builtin-as")]
+                    #[cfg(feature = "__builtin-as")]
                     VerifyContext::Builtin { converter, .. } => {
                         let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)
                             .map_err(|e| anyhow::anyhow!("Failed to parse evidence: {:?}", e))?;

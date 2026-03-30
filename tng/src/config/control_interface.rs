@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Endpoint;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ControlInterfaceArgs {
     pub restful: Option<RestfulArgs>,
@@ -10,13 +10,13 @@ pub struct ControlInterfaceArgs {
     pub ttrpc: Option<TtrpcArgs>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestfulArgs {
     #[serde(flatten)]
     pub address: Endpoint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TtrpcArgs {
     pub path: String,
 }
@@ -101,7 +101,10 @@ mod tests {
 
         let deserialized: TngConfig = serde_json::from_value(json_value)?;
 
-        assert_eq!(deserialized, expected);
+        assert_eq!(
+            serde_json::to_value(deserialized)?,
+            serde_json::to_value(expected)?
+        );
         Ok(())
     }
 
@@ -167,7 +170,10 @@ mod tests {
 
         let deserialized: TngConfig = serde_json::from_value(json_value)?;
 
-        assert_eq!(deserialized, expected);
+        assert_eq!(
+            serde_json::to_value(deserialized)?,
+            serde_json::to_value(expected)?
+        );
         Ok(())
     }
 }

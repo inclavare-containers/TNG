@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::evidence::{CocoAsToken, CocoEvidence};
 use crate::errors::*;
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 use crate::tee::coco::converter::builtin::BuiltinCocoConverter;
 use crate::tee::coco::evidence::AaTeeType;
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     tee::{GenericConverter, TeeType},
 };
 
-#[cfg(feature = "builtin-as")]
+#[cfg(feature = "__builtin-as")]
 pub mod builtin;
 pub mod grpc;
 pub mod restful;
@@ -62,7 +62,7 @@ impl From<AttestationServiceHashAlgo> for HashAlgo {
 pub enum CocoConverter {
     Grpc(CocoGrpcConverter),
     Restful(CocoRestfulConverter),
-    #[cfg(feature = "builtin-as")]
+    #[cfg(feature = "__builtin-as")]
     Builtin(BuiltinCocoConverter),
 }
 
@@ -84,7 +84,7 @@ impl CocoConverter {
         match self {
             CocoConverter::Grpc(converter) => converter.get_nonce().await,
             CocoConverter::Restful(converter) => converter.get_nonce().await,
-            #[cfg(feature = "builtin-as")]
+            #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(converter) => {
                 let challenge = converter.generate_challenge().await?;
                 Ok(CoCoNonce::Jwt(challenge))
@@ -107,7 +107,7 @@ impl GenericConverter for CocoConverter {
         match self {
             CocoConverter::Grpc(converter) => converter.convert(in_evidence).await,
             CocoConverter::Restful(converter) => converter.convert(in_evidence).await,
-            #[cfg(feature = "builtin-as")]
+            #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(converter) => converter.convert(in_evidence).await,
         }
     }

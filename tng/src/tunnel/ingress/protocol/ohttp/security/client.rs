@@ -345,7 +345,7 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                #[cfg(feature = "builtin-as")]
+                #[cfg(feature = "__builtin-as")]
                 Some(VerifyArgs::Builtin {
                     policy,
                     reference_values,

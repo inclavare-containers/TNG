@@ -77,7 +77,7 @@ impl CoCoCommonCertVerifier {
 
                 token
             }
-            #[cfg(feature = "builtin-as")]
+            #[cfg(feature = "__builtin-as")]
             VerifyContext::Builtin {
                 converter,
                 verifier,
