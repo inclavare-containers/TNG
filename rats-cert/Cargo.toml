@@ -19,6 +19,7 @@ flatten-json-object = {workspace = true, optional = true}
 futures = {workspace = true}
 itertools = {workspace = true}
 jsonwebtoken = {workspace = true}
+kbs-types = {workspace = true}
 p256 = {workspace = true, optional = true}
 pkcs8 = {workspace = true, optional = true}
 prost = {workspace = true, optional = true}

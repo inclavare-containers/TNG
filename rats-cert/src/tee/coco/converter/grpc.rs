@@ -5,14 +5,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::json;
 
-use super::super::evidence::{CocoAsToken, CocoEvidence};
-use super::AttestationServiceHashAlgo;
-use crate::crypto::HashAlgo;
+use super::super::evidence::{
+    tee_to_string, AttestationServiceHashAlgo, CocoAsToken, CocoEvidence,
+};
 use crate::errors::*;
 use crate::tee::coco::converter::{convert_additional_evidence, CoCoNonce};
 use crate::tee::GenericConverter;
-use crate::tee::GenericEvidence;
-use crate::tee::TeeType;
 
 mod as_api {
     pub mod v1_5_2 {
@@ -28,6 +26,12 @@ mod as_api {
             "/attestation-service/v1_6_0/attestation.rs"
         ));
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GrpcAsVersion {
+    V1_5_2,
+    V1_6_0,
 }
 
 pub struct CocoGrpcConverter {
@@ -100,11 +104,8 @@ impl CocoGrpcConverter {
             self.request_metadata.clone(),
             tonic::Extensions::new(),
     as_api::v1_6_0::AttestationRequest {
-            verification_requests: std::iter::once(as_api::v1_6_0::IndividualAttestationRequest {
-                tee: in_evidence
-                    .get_tee_type()
-                    .as_attestation_service_str_id()
-                    .to_owned(),
+            verification_requests: std::iter::once(Ok(as_api::v1_6_0::IndividualAttestationRequest {
+                tee: tee_to_string(*in_evidence.get_tee_type())?,
                 evidence: URL_SAFE_NO_PAD.encode(in_evidence.aa_evidence_ref()),
                 runtime_data: Some(
                     as_api::v1_6_0::individual_attestation_request::RuntimeData::StructuredRuntimeData(
@@ -113,20 +114,20 @@ impl CocoGrpcConverter {
                 ),
                 init_data: None, // TODO: add support for init_data when support on AA is ready
                 runtime_data_hash_algorithm: runtime_data_hash_algorithm.into(),
-            }).chain(
+            })).chain(
                 convert_additional_evidence(in_evidence)?
                     .iter()
                     .map(|(tee_type, evidence)| {
-                        as_api::v1_6_0::IndividualAttestationRequest {
-                            tee: tee_type.as_attestation_service_str_id().to_owned(),
+                        Ok(as_api::v1_6_0::IndividualAttestationRequest {
+                            tee: tee_to_string(*tee_type)?,
                             evidence: URL_SAFE_NO_PAD.encode(evidence.to_string()),
                             init_data: None,
                             runtime_data: None, // Always None for additional evidence
                             runtime_data_hash_algorithm: "".to_owned(),
-                        }
+                        })
                     }),
             )
-            .collect::<Vec<_>>(),
+            .collect::<Result<Vec<_>>>()?,
             policy_ids: self.policy_ids.clone(),
         });
 
@@ -167,7 +168,9 @@ impl CocoGrpcConverter {
             let response: as_api::v1_6_0::AttestationResponse = client
                 .attestation_evaluate(request)
                 .await
-                .map_err(Error::GrpcAttestationEvaluateFailed)?
+                .map_err(|e| {
+                    Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_6_0, e)
+                })?
                 .into_inner();
             Ok::<_, Error>(response)
         };
@@ -208,10 +211,7 @@ impl CocoGrpcConverter {
             self.request_metadata.clone(),
             tonic::Extensions::new(),
             as_api::v1_5_2::AttestationRequest {
-                tee: in_evidence
-                    .get_tee_type()
-                    .as_attestation_service_str_id()
-                    .to_owned(),
+                tee: tee_to_string(*in_evidence.get_tee_type())?,
                 evidence: URL_SAFE_NO_PAD.encode(in_evidence.aa_evidence_ref()),
                 init_data: None, // TODO: add support for init_data when support on AA is ready
                 init_data_hash_algorithm: "".into(),
@@ -262,7 +262,9 @@ impl CocoGrpcConverter {
             let response: as_api::v1_5_2::AttestationResponse = client
                 .attestation_evaluate(request)
                 .await
-                .map_err(Error::GrpcAttestationEvaluateFailed)?
+                .map_err(|e| {
+                    Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_5_2, e)
+                })?
                 .into_inner();
             Ok::<_, Error>(response)
         };

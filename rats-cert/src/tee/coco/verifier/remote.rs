@@ -98,7 +98,8 @@ mod tests {
         let (_dir, cert_path) = write_pem_to_temp_file(
             include_str!("test_cases/simple.as-ca.pem"),
             "simple.as-ca.pem",
-        );
+        )
+        .await;
 
         run_jwt_verification_test(
             include_str!("test_cases/simple.jwt"),
@@ -112,7 +113,7 @@ mod tests {
     #[tokio::test]
     async fn test_verify_ear_jwt_token() {
         let (_dir, cert_path) =
-            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem");
+            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem").await;
 
         run_jwt_verification_test(
             include_str!("test_cases/ear.jwt"),
@@ -129,7 +130,8 @@ mod tests {
         let (_dir, cert_path) = write_pem_to_temp_file(
             include_str!("test_cases/simple.as-ca.pem"),
             "simple.as-ca.pem",
-        );
+        )
+        .await;
 
         run_jwt_verification_test(
             include_str!("test_cases/simple.jwt"),
@@ -144,7 +146,7 @@ mod tests {
     #[should_panic]
     async fn test_verify_ear_jwt_token_policy_id_mismatch() {
         let (_dir, cert_path) =
-            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem");
+            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem").await;
 
         run_jwt_verification_test(
             include_str!("test_cases/ear.jwt"),
@@ -155,10 +157,12 @@ mod tests {
         .await;
     }
 
-    fn write_pem_to_temp_file(pem: &str, filename: &str) -> (tempfile::TempDir, String) {
+    async fn write_pem_to_temp_file(pem: &str, filename: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().expect("to create tempdir for test cert");
         let path = dir.path().join(filename);
-        std::fs::write(&path, pem).expect("to write test cert");
+        tokio::fs::write(&path, pem)
+            .await
+            .expect("to write test cert");
         (dir, path.to_string_lossy().into_owned())
     }
 
@@ -166,7 +170,7 @@ mod tests {
     #[should_panic]
     async fn test_verify_simple_jwt_token_with_wrong_trusted_cert() {
         let (_dir, wrong_cert_path) =
-            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem");
+            write_pem_to_temp_file(include_str!("test_cases/ear.as-ca.pem"), "ear.as-ca.pem").await;
 
         run_jwt_verification_test(
             include_str!("test_cases/simple.jwt"),
@@ -183,7 +187,8 @@ mod tests {
         let (_dir, wrong_cert_path) = write_pem_to_temp_file(
             include_str!("test_cases/simple.as-ca.pem"),
             "simple.as-ca.pem",
-        );
+        )
+        .await;
 
         run_jwt_verification_test(
             include_str!("test_cases/ear.jwt"),
@@ -223,7 +228,8 @@ mod tests {
         let (_dir, cert_path) = write_pem_to_temp_file(
             include_str!("test_cases/ear_with_additional_device.as-ca.pem"),
             "ear_with_additional_device.as-ca.pem",
-        );
+        )
+        .await;
 
         run_jwt_verification_test(
             include_str!("test_cases/ear_with_additional_device.jwt"),

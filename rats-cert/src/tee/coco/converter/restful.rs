@@ -5,22 +5,24 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use kbs_types::Tee;
 use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
-use super::super::evidence::{CocoAsToken, CocoEvidence};
-use super::AttestationServiceHashAlgo;
-use crate::crypto::HashAlgo;
+use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use crate::errors::*;
 use crate::tee::coco::converter::convert_additional_evidence;
 use crate::tee::coco::converter::CoCoNonce;
-use crate::tee::coco::evidence::AaTeeType;
 use crate::tee::GenericConverter;
-use crate::tee::GenericEvidence;
-use crate::tee::TeeType;
+
+#[derive(Debug, Clone, Copy)]
+pub enum RestfulAsApiVersion {
+    V1_5_2,
+    V1_6_0,
+}
 
 #[cfg(unix)]
 pub const RESTFUL_AS_CONNECT_TIMEOUT_DEFAULT: u64 = 5;
@@ -54,7 +56,9 @@ impl CocoRestfulConverter {
             #[cfg(unix)]
             let builder =
                 builder.connect_timeout(Duration::from_secs(RESTFUL_AS_CONNECT_TIMEOUT_DEFAULT));
-            builder.build().map_err(Error::HttpClientBuildFailed)?
+            builder
+                .build()
+                .map_err(Error::AttestationServiceHttpClientBuildFailed)?
         };
 
         Ok(Self {
@@ -77,13 +81,20 @@ impl CocoRestfulConverter {
                 .json(&json!({}))
                 .send()
                 .await
-                .map_err(Error::HttpRequestSendFailed)?;
+                .map_err(|e| {
+                    Error::AttestationServiceChallengeHttpRequestSendFailed(
+                        RestfulAsApiVersion::V1_6_0,
+                        e,
+                    )
+                })?;
 
             let status = response.status();
-            let text = response
-                .text()
-                .await
-                .map_err(Error::HttpResponseReadFailed)?;
+            let text = response.text().await.map_err(|e| {
+                Error::AttestationServiceChallengeHttpResponseReadFailed(
+                    RestfulAsApiVersion::V1_6_0,
+                    e,
+                )
+            })?;
 
             Ok::<_, Error>((status, text))
         };
@@ -115,7 +126,8 @@ impl CocoRestfulConverter {
                     return Ok(CoCoNonce::Jwt("dummy nonce".to_string()));
                 }
 
-                return Err(Error::AttestationServiceHttpError {
+                return Err(Error::AttestationServiceChallengeHttpResponseError {
+                    api_version: RestfulAsApiVersion::V1_6_0,
                     status_code: status.as_u16(),
                     response_body: text,
                 });
@@ -136,7 +148,7 @@ mod as_api {
         // Copy from https://github.com/confidential-containers/trustee/blob/7dbd42f0baeb3d26d75d43ab73b29a168d584472/attestation-service/attestation-service/src/bin/restful/mod.rs#L36-L45
         #[derive(Debug, Serialize, Deserialize)]
         pub struct AttestationRequest {
-            pub tee: String,
+            pub tee: Tee,
             pub evidence: String,
             pub runtime_data: Option<Data>,
             pub init_data: Option<Data>,
@@ -165,7 +177,7 @@ mod as_api {
 
         #[derive(Debug, Serialize, Deserialize)]
         pub struct IndividualAttestationRequest {
-            pub tee: String,
+            pub tee: Tee,
             pub evidence: String,
             pub runtime_data: Option<RuntimeData>,
             pub init_data: Option<InitDataInput>,
@@ -213,10 +225,7 @@ impl CocoRestfulConverter {
         let url = format!("{}/attestation", self.as_addr);
         let body = as_api::v1_6_0::AttestationRequest {
             verification_requests: std::iter::once(as_api::v1_6_0::IndividualAttestationRequest {
-                tee: in_evidence
-                    .get_tee_type()
-                    .as_attestation_service_str_id()
-                    .to_owned(),
+                tee: *in_evidence.get_tee_type(),
                 evidence: URL_SAFE_NO_PAD.encode(in_evidence.aa_evidence_ref()),
                 init_data: None, // TODO: add support for init_data when support on AA is ready
                 runtime_data: Some(as_api::v1_6_0::RuntimeData::Structured(
@@ -230,7 +239,7 @@ impl CocoRestfulConverter {
                     .iter()
                     .map(|(tee_type, evidence)| {
                         as_api::v1_6_0::IndividualAttestationRequest {
-                            tee: tee_type.as_attestation_service_str_id().to_owned(),
+                            tee: *tee_type,
                             evidence: URL_SAFE_NO_PAD.encode(evidence.to_string()),
                             init_data: None,
                             runtime_data: None, // Always None for additional evidence
@@ -244,18 +253,20 @@ impl CocoRestfulConverter {
         let client = self.client.clone();
 
         let fut = async move {
-            let response = client
-                .post(url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(Error::HttpRequestSendFailed)?;
+            let response = client.post(url).json(&body).send().await.map_err(|e| {
+                Error::AttestationServiceAttestationHttpRequestSendFailed(
+                    RestfulAsApiVersion::V1_6_0,
+                    e,
+                )
+            })?;
 
             let status = response.status();
-            let text = response
-                .text()
-                .await
-                .map_err(Error::HttpResponseReadFailed)?;
+            let text = response.text().await.map_err(|e| {
+                Error::AttestationServiceAttestationHttpResponseReadFailed(
+                    RestfulAsApiVersion::V1_6_0,
+                    e,
+                )
+            })?;
             Ok::<_, Error>((status, text))
         };
 
@@ -286,7 +297,8 @@ impl CocoRestfulConverter {
                     return self.convert_v1_5_2(in_evidence).await;
                 }
 
-                return Err(Error::AttestationServiceHttpError {
+                return Err(Error::AttestationServiceAttestationHttpResponseError {
+                    api_version: RestfulAsApiVersion::V1_6_0,
                     status_code: status.as_u16(),
                     response_body: text,
                 });
@@ -308,10 +320,7 @@ impl CocoRestfulConverter {
 
         let url = format!("{}/attestation", self.as_addr);
         let body = as_api::v1_5_2::AttestationRequest {
-            tee: in_evidence
-                .get_tee_type()
-                .as_attestation_service_str_id()
-                .to_owned(),
+            tee: *in_evidence.get_tee_type(),
             evidence: URL_SAFE_NO_PAD.encode(in_evidence.aa_evidence_ref()),
             init_data: None, // TODO: add support for init_data when support on AA is ready
             init_data_hash_algorithm: None,
@@ -325,18 +334,20 @@ impl CocoRestfulConverter {
         let client = self.client.clone();
 
         let fut = async move {
-            let response = client
-                .post(url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(Error::HttpRequestSendFailed)?;
+            let response = client.post(url).json(&body).send().await.map_err(|e| {
+                Error::AttestationServiceAttestationHttpRequestSendFailed(
+                    RestfulAsApiVersion::V1_5_2,
+                    e,
+                )
+            })?;
 
             let status = response.status();
-            let text = response
-                .text()
-                .await
-                .map_err(Error::HttpResponseReadFailed)?;
+            let text = response.text().await.map_err(|e| {
+                Error::AttestationServiceAttestationHttpResponseReadFailed(
+                    RestfulAsApiVersion::V1_5_2,
+                    e,
+                )
+            })?;
             Ok::<_, Error>((status, text))
         };
 
@@ -348,7 +359,8 @@ impl CocoRestfulConverter {
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(|e| Error::TaskSpawnFailed(e))??;
+            .map_err(anyhow::Error::from)
+            .and_then(|e| e)?;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",
@@ -359,7 +371,8 @@ impl CocoRestfulConverter {
         let attestation_token = match status {
             reqwest::StatusCode::OK => text,
             _ => {
-                return Err(Error::AttestationServiceHttpError {
+                return Err(Error::AttestationServiceAttestationHttpResponseError {
+                    api_version: RestfulAsApiVersion::V1_5_2,
                     status_code: status.as_u16(),
                     response_body: text,
                 });

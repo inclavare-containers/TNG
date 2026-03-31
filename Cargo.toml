@@ -64,6 +64,7 @@ indexmap = {version = "2.9.0", features = ["serde"]}
 itertools = "0.14.0"
 js-sys = "0.3.77"
 jsonwebtoken = {version = "9", default-features = false}
+kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "5c029c9"}
 netns-rs = "0.1.0"
 nix = "0.30.1"
 notify = "7.0.0"

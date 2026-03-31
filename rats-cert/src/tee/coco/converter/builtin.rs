@@ -18,6 +18,7 @@ use reference_value_provider_service::extractors::extractor_modules::sample::Pro
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use reference_value_provider_service::storage::{local_json, ReferenceValueStorageConfig};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -27,9 +28,8 @@ use attestation_service::{
     AttestationService, HashAlgorithm, Tee,
 };
 
-use super::super::evidence::{CocoAsToken, CocoEvidence};
+use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use super::convert_additional_evidence;
-use super::AttestationServiceHashAlgo;
 use crate::errors::*;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 use crate::tee::GenericConverter;
@@ -56,10 +56,11 @@ pub struct AttestationServiceWorkDir {
 
 impl AttestationServiceWorkDir {
     /// Create a new working directory with generated certificates
-    fn new() -> Result<Self> {
-        let temp_dir = tempfile::tempdir().map_err(Error::CreateTempDirFailed)?;
+    async fn new() -> Result<Self> {
+        let temp_dir =
+            tempfile::tempdir().map_err(Error::BuilinAttestationServiceCreateWorkDirFailed)?;
 
-        let (cert_chain_path, key_path) = Self::generate_certificates(temp_dir.path())?;
+        let (cert_chain_path, key_path) = Self::generate_certificates(temp_dir.path()).await?;
 
         tracing::debug!(work_dir = ?temp_dir.path(), "Created builtin AS working directory");
 
@@ -86,7 +87,7 @@ impl AttestationServiceWorkDir {
     }
 
     /// Generate CA and AS certificates using rcgen
-    fn generate_certificates(work_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+    async fn generate_certificates(work_dir: &Path) -> Result<(PathBuf, PathBuf)> {
         // Generate CA key pair
         let ca_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
             .map_err(Error::CaCertGenerationFailed)?;
@@ -135,20 +136,22 @@ impl AttestationServiceWorkDir {
 
         // Write AS private key
         let key_path = work_dir.join("as.key");
-        std::fs::write(&key_path, as_key_pair.serialize_pem()).map_err(|e| {
-            Error::WriteAsPrivateKeyFailed {
+        tokio::fs::write(&key_path, as_key_pair.serialize_pem())
+            .await
+            .map_err(|e| Error::WriteAsPrivateKeyFailed {
                 path: key_path.to_string_lossy().to_string(),
                 source: e,
-            }
-        })?;
+            })?;
 
         // Write certificate chain (AS cert + CA cert)
         let cert_chain_path = work_dir.join("as-chain.pem");
         let cert_chain = format!("{}{}", as_cert.pem(), ca_cert.pem());
-        std::fs::write(&cert_chain_path, cert_chain).map_err(|e| Error::WriteCertChainFailed {
-            path: cert_chain_path.to_string_lossy().to_string(),
-            source: e,
-        })?;
+        tokio::fs::write(&cert_chain_path, cert_chain)
+            .await
+            .map_err(|e| Error::WriteCertChainFailed {
+                path: cert_chain_path.to_string_lossy().to_string(),
+                source: e,
+            })?;
 
         Ok((cert_chain_path, key_path))
     }
@@ -225,7 +228,7 @@ impl BuiltinCocoConverter {
         reference_values: &[ReferenceValueConfig],
     ) -> Result<Self> {
         // Create a working directory with generated certificates
-        let work_dir = Arc::new(AttestationServiceWorkDir::new()?);
+        let work_dir = Arc::new(AttestationServiceWorkDir::new().await?);
 
         // Create AS config with token signer configuration
         let config = Config {
@@ -395,23 +398,6 @@ impl BuiltinCocoConverter {
             .map_err(Error::AttestationServiceGenerateChallengeFailed)
     }
 
-    /// Convert TEE type string to attestation-service Tee enum
-    fn tee_str_to_enum(tee_str: &str) -> Result<Tee> {
-        match tee_str.to_lowercase().as_str() {
-            "sample" => Ok(Tee::Sample),
-            "tdx" => Ok(Tee::Tdx),
-            "sgx" => Ok(Tee::Sgx),
-            "snp" | "sev-snp" => Ok(Tee::Snp),
-            "csv" => Ok(Tee::Csv),
-            "cca" => Ok(Tee::Cca),
-            "aztdx" | "az-tdx-vtpm" => Ok(Tee::AzTdxVtpm),
-            "azsnp" | "az-snp-vtpm" => Ok(Tee::AzSnpVtpm),
-            _ => Err(Error::UnknownTeeType {
-                tee_type: tee_str.to_string(),
-            }),
-        }
-    }
-
     /// Convert hash algorithm to attestation-service HashAlgorithm
     fn hash_algo_to_as(hash_algo: &AttestationServiceHashAlgo) -> HashAlgorithm {
         match hash_algo {
@@ -434,9 +420,8 @@ impl GenericConverter for BuiltinCocoConverter {
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!("Convert CoCo evidence to CoCo AS token via builtin-as");
 
-        // Get TEE type from evidence
-        let tee_str = in_evidence.get_tee_type().as_attestation_service_str_id();
-        let tee = Self::tee_str_to_enum(tee_str)?;
+        // Get TEE type from evidence (kbs_types::Tee is compatible with attestation_service::Tee)
+        let tee = in_evidence.get_tee_type();
 
         // Get hash algorithm
         let hash_algo =
@@ -452,7 +437,7 @@ impl GenericConverter for BuiltinCocoConverter {
         let mut verification_requests = vec![attestation_service::VerificationRequest {
             evidence: serde_json::from_slice(in_evidence.aa_evidence_ref())
                 .map_err(Error::ParseEvidenceFromBytesFailed)?,
-            tee,
+            tee: *tee,
             runtime_data: Some(attestation_service::RuntimeData::Structured(runtime_data)),
             runtime_data_hash_algorithm: hash_algorithm,
             init_data: None,
@@ -461,10 +446,9 @@ impl GenericConverter for BuiltinCocoConverter {
 
         // Add additional evidence if present
         for (tee_type, evidence) in convert_additional_evidence(in_evidence)? {
-            let additional_tee = Self::tee_str_to_enum(tee_type.as_attestation_service_str_id())?;
             verification_requests.push(attestation_service::VerificationRequest {
                 evidence,
-                tee: additional_tee,
+                tee: tee_type,
                 runtime_data: None,
                 runtime_data_hash_algorithm: HashAlgorithm::Sha256,
                 init_data: None,
@@ -533,29 +517,11 @@ default file_system := 2"#;
         );
     }
 
-    #[test]
-    fn test_tee_str_to_enum() {
-        assert!(matches!(
-            BuiltinCocoConverter::tee_str_to_enum("sample"),
-            Ok(Tee::Sample)
-        ));
-        assert!(matches!(
-            BuiltinCocoConverter::tee_str_to_enum("tdx"),
-            Ok(Tee::Tdx)
-        ));
-        assert!(matches!(
-            BuiltinCocoConverter::tee_str_to_enum("sgx"),
-            Ok(Tee::Sgx)
-        ));
-        assert!(matches!(
-            BuiltinCocoConverter::tee_str_to_enum("snp"),
-            Ok(Tee::Snp)
-        ));
-    }
-
-    #[test]
-    fn test_attestation_service_work_dir_creation() {
-        let work_dir = AttestationServiceWorkDir::new().expect("Failed to create work dir");
+    #[tokio::test]
+    async fn test_attestation_service_work_dir_creation() {
+        let work_dir = AttestationServiceWorkDir::new()
+            .await
+            .expect("Failed to create work dir");
 
         // Verify directory exists
         assert!(work_dir.path().exists());
@@ -573,13 +539,16 @@ default file_system := 2"#;
         assert_eq!(work_dir.key_path().file_name().unwrap(), "as.key");
     }
 
-    #[test]
-    fn test_attestation_service_work_dir_cert_chain_valid_pem() {
-        let work_dir = AttestationServiceWorkDir::new().expect("Failed to create work dir");
+    #[tokio::test]
+    async fn test_attestation_service_work_dir_cert_chain_valid_pem() {
+        let work_dir = AttestationServiceWorkDir::new()
+            .await
+            .expect("Failed to create work dir");
 
         // Read certificate chain
-        let cert_chain_pem =
-            std::fs::read_to_string(work_dir.cert_chain_path()).expect("Failed to read cert chain");
+        let cert_chain_pem = tokio::fs::read_to_string(work_dir.cert_chain_path())
+            .await
+            .expect("Failed to read cert chain");
 
         // Verify it contains two PEM blocks (AS cert + CA cert)
         let cert_count = cert_chain_pem
@@ -594,12 +563,16 @@ default file_system := 2"#;
         assert_eq!(end_count, 2, "Certificate chain should have 2 END markers");
     }
 
-    #[test]
-    fn test_attestation_service_work_dir_key_valid_pem() {
-        let work_dir = AttestationServiceWorkDir::new().expect("Failed to create work dir");
+    #[tokio::test]
+    async fn test_attestation_service_work_dir_key_valid_pem() {
+        let work_dir = AttestationServiceWorkDir::new()
+            .await
+            .expect("Failed to create work dir");
 
         // Read private key
-        let key_pem = std::fs::read_to_string(work_dir.key_path()).expect("Failed to read key");
+        let key_pem = tokio::fs::read_to_string(work_dir.key_path())
+            .await
+            .expect("Failed to read key");
 
         // Verify it's a valid PEM private key
         assert!(
@@ -612,14 +585,16 @@ default file_system := 2"#;
         );
     }
 
-    #[test]
-    fn test_attestation_service_work_dir_cleanup_on_drop() {
+    #[tokio::test]
+    async fn test_attestation_service_work_dir_cleanup_on_drop() {
         let path;
         let cert_path;
         let key_path;
 
         {
-            let work_dir = AttestationServiceWorkDir::new().expect("Failed to create work dir");
+            let work_dir = AttestationServiceWorkDir::new()
+                .await
+                .expect("Failed to create work dir");
             path = work_dir.path().to_path_buf();
             cert_path = work_dir.cert_chain_path().to_path_buf();
             key_path = work_dir.key_path().to_path_buf();
@@ -643,10 +618,14 @@ default file_system := 2"#;
         assert!(!key_path.exists(), "Key file should be cleaned up on drop");
     }
 
-    #[test]
-    fn test_attestation_service_work_dir_unique_paths() {
-        let work_dir1 = AttestationServiceWorkDir::new().expect("Failed to create work dir 1");
-        let work_dir2 = AttestationServiceWorkDir::new().expect("Failed to create work dir 2");
+    #[tokio::test]
+    async fn test_attestation_service_work_dir_unique_paths() {
+        let work_dir1 = AttestationServiceWorkDir::new()
+            .await
+            .expect("Failed to create work dir 1");
+        let work_dir2 = AttestationServiceWorkDir::new()
+            .await
+            .expect("Failed to create work dir 2");
 
         // Each instance should have unique paths
         assert_ne!(work_dir1.path(), work_dir2.path());
@@ -680,7 +659,8 @@ default file_system := 2"#;
     async fn test_converter_new_with_sample_path_reference() {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
         let ref_path = dir.path().join("ref.json");
-        std::fs::write(&ref_path, r#"{"example-component":["value1", "value2"]}"#)
+        tokio::fs::write(&ref_path, r#"{"example-component":["value1", "value2"]}"#)
+            .await
             .expect("Failed to write ref file");
 
         let reference = ReferenceValueConfig::Sample {

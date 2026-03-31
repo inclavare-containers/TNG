@@ -155,7 +155,7 @@ impl CertVerifier {
                 &raw_evidence,
             ))
             .map_err(|e| {
-                Error::UnrecognizedEvidenceType {
+                Error::DiceParseEvidenceFailed {
                     detail: format!(
                         "Failed to parse CoCo AS token: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
                         cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
@@ -170,7 +170,7 @@ impl CertVerifier {
                 &raw_evidence,
             ))
             .map_err(|e| {
-                Error::UnrecognizedEvidenceType {
+                Error::DiceParseEvidenceFailed {
                     detail: format!(
                         "Failed to parse CoCo evidence: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
                         cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()

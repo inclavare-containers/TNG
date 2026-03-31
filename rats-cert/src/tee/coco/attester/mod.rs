@@ -9,12 +9,12 @@ use self::ttrpc_protocol::attestation_agent::{
     GetAdditionalEvidenceRequest, GetEvidenceRequest, GetTeeTypeRequest,
 };
 use self::ttrpc_protocol::attestation_agent_ttrpc::AttestationAgentServiceClient;
-use super::evidence::AaTeeType;
 use super::evidence::CocoEvidence;
 use super::TTRPC_DEFAULT_TIMEOUT_NANO;
 use crate::crypto::{DefaultCrypto, HashAlgo};
 use crate::errors::*;
-use crate::tee::{GenericAttester, GenericEvidence, ReportData, TeeType};
+use crate::tee::coco::evidence::tee_from_str;
+use crate::tee::{GenericAttester, GenericEvidence, ReportData};
 
 mod ttrpc_protocol;
 
@@ -86,7 +86,7 @@ impl GenericAttester for CocoAttester {
                 &get_tee_type_req,
             )
             .map_err(Error::GetTeeTypeFromAAFailed)?;
-        let tee_type = AaTeeType::from_attestation_agent_str_id(&get_tee_type_res.tee);
+        let tee_type = tee_from_str(&get_tee_type_res.tee)?;
 
         // Attempt to get additional evidence from AA, but don't fail if not supported
         // GetAdditionalEvidence returns GetAdditionalEvidenceResponse which has an 'additional_evidence' field (map)

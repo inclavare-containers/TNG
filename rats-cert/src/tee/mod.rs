@@ -20,7 +20,7 @@ pub enum DiceParseEvidenceOutput<T> {
 impl<T> From<DiceParseEvidenceOutput<T>> for Result<T> {
     fn from(value: DiceParseEvidenceOutput<T>) -> Self {
         match value {
-            crate::tee::DiceParseEvidenceOutput::NotMatch => Err(Error::UnrecognizedEvidenceType {
+            crate::tee::DiceParseEvidenceOutput::NotMatch => Err(Error::DiceParseEvidenceFailed {
                 detail: "CBOR tag does not match".to_string(),
             }),
             crate::tee::DiceParseEvidenceOutput::MatchButInvalid(e) => Err(e),
@@ -128,23 +128,6 @@ where
     async fn get_evidence(&self, report_data: &ReportData) -> Result<Self::Evidence> {
         let evidence = self.attester.get_evidence(report_data).await?;
         self.converter.convert(&evidence).await
-    }
-}
-
-/// Enum representing different types of TEEs.
-#[derive(Debug, PartialEq, EnumIter, Clone, Copy)]
-pub enum TeeType {
-    // This only used for testing with CoCo
-    Sample,
-    // China Secure Virtualization
-    Csv,
-}
-
-impl TeeType {
-    /// Detects the current TEE environment and returns the detected TeeType.
-    pub fn detect_env() -> Option<Self> {
-        // Only CoCo TEE types are supported
-        None
     }
 }
 

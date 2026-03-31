@@ -1,63 +1,19 @@
 use std::collections::HashMap;
 
 use grpc::CocoGrpcConverter;
+use kbs_types::Tee;
 use restful::CocoRestfulConverter;
-use serde::{Deserialize, Serialize};
 
-use super::evidence::{CocoAsToken, CocoEvidence};
+use super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use crate::errors::*;
 #[cfg(feature = "__builtin-as")]
 use crate::tee::coco::converter::builtin::BuiltinCocoConverter;
-use crate::tee::coco::evidence::AaTeeType;
-use crate::{
-    crypto::HashAlgo,
-    tee::{GenericConverter, TeeType},
-};
+use crate::tee::GenericConverter;
 
 #[cfg(feature = "__builtin-as")]
 pub mod builtin;
 pub mod grpc;
 pub mod restful;
-
-#[derive(Serialize, Deserialize)]
-pub enum AttestationServiceHashAlgo {
-    #[serde(rename = "sha256")]
-    Sha256,
-    #[serde(rename = "sha384")]
-    Sha384,
-    #[serde(rename = "sha512")]
-    Sha512,
-}
-
-impl AttestationServiceHashAlgo {
-    pub fn str_id(&self) -> &'static str {
-        match self {
-            Self::Sha256 => "sha256",
-            Self::Sha384 => "sha384",
-            Self::Sha512 => "sha512",
-        }
-    }
-}
-
-impl From<HashAlgo> for AttestationServiceHashAlgo {
-    fn from(hash_algo: HashAlgo) -> Self {
-        match hash_algo {
-            HashAlgo::Sha256 => Self::Sha256,
-            HashAlgo::Sha384 => Self::Sha384,
-            HashAlgo::Sha512 => Self::Sha512,
-        }
-    }
-}
-
-impl From<AttestationServiceHashAlgo> for HashAlgo {
-    fn from(as_hash_algo: AttestationServiceHashAlgo) -> Self {
-        match as_hash_algo {
-            AttestationServiceHashAlgo::Sha256 => Self::Sha256,
-            AttestationServiceHashAlgo::Sha384 => Self::Sha384,
-            AttestationServiceHashAlgo::Sha512 => Self::Sha512,
-        }
-    }
-}
 
 pub enum CocoConverter {
     Grpc(CocoGrpcConverter),
@@ -115,17 +71,12 @@ impl GenericConverter for CocoConverter {
 
 pub(crate) fn convert_additional_evidence(
     in_evidence: &CocoEvidence,
-) -> Result<Vec<(AaTeeType, serde_json::Value)>> {
+) -> Result<Vec<(Tee, serde_json::Value)>> {
     if let Some(json_bytes) = in_evidence.aa_additional_evidence_ref() {
-        let additional_evidence_map: HashMap<String, serde_json::Value> =
+        let additional_evidence_map: HashMap<Tee, serde_json::Value> =
             serde_json::from_slice(json_bytes).map_err(Error::ParseAdditionalEvidenceJsonFailed)?;
 
-        let additional_evidence_map = additional_evidence_map
-            .into_iter()
-            .map(|(k, v)| (AaTeeType::from_attestation_agent_str_id(&k), v))
-            .collect::<Vec<(AaTeeType, serde_json::Value)>>();
-
-        Ok(additional_evidence_map)
+        Ok(additional_evidence_map.into_iter().collect())
     } else {
         Ok(Vec::new())
     }

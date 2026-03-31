@@ -5608,6 +5608,7 @@ dependencies = [
  "hex",
  "itertools 0.14.0",
  "jsonwebtoken",
+ "kbs-types",
  "p256",
  "pkcs8",
  "prost 0.14.3",
