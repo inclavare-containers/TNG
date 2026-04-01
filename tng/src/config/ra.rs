@@ -1023,14 +1023,26 @@ mod tests {
                     "reference_values": [
                         {
                             "type": "slsa",
-                            "id": "my-artifact",
-                            "version": "1.0.0",
-                            "artifact_type": "container-image",
-                            "rekor_url": "https://rekor.sigstore.dev",
-                            "provenance_source": {
-                                "protocol": "oci",
-                                "uri": "oci://registry/repo:tag",
-                                "artifact": "bundle"
+                            "payload": {
+                                "type": "inline",
+                                "content": {
+                                    "rv_list": [{
+                                        "id": "test-artifact",
+                                        "version": "1.0.0",
+                                        "type": "binary",
+                                        "provenance_info": {
+                                            "type": "slsa-intoto-statements",
+                                            "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                                            "rekor_api_version": 2
+                                        },
+                                        "provenance_source": {
+                                            "protocol": "oci",
+                                            "uri": "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0",
+                                            "artifact": "bundle"
+                                        },
+                                        "operation_type": "refresh"
+                                    }]
+                                }
                             }
                         }
                     ]
@@ -1052,22 +1064,25 @@ mod tests {
                             SlsaReferenceValuePayloadConfig::Inline { content } => {
                                 assert_eq!(content.rv_list.len(), 1);
                                 let rv = &content.rv_list[0];
-                                assert_eq!(rv.id, "my-artifact");
+                                assert_eq!(rv.id, "test-artifact");
                                 assert_eq!(rv.version, "1.0.0");
-                                assert_eq!(rv.rv_type, "container-image");
+                                assert_eq!(rv.rv_type, "binary");
                                 assert_eq!(
                                     rv.provenance_info.provenance_type,
                                     "slsa-intoto-statements"
                                 );
                                 assert_eq!(
                                     rv.provenance_info.rekor_url,
-                                    "https://rekor.sigstore.dev"
+                                    "https://log2025-1.rekor.sigstore.dev"
                                 );
                                 assert_eq!(rv.provenance_info.rekor_api_version, Some(2));
                                 assert!(rv.provenance_source.is_some());
                                 let ps = rv.provenance_source.as_ref().unwrap();
                                 assert_eq!(ps.protocol, "oci");
-                                assert_eq!(ps.uri, "oci://registry/repo:tag");
+                                assert_eq!(
+                                    ps.uri,
+                                    "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0"
+                                );
                                 assert_eq!(ps.artifact, Some("bundle".to_string()));
                             }
                             _ => panic!("Expected Inline payload"),

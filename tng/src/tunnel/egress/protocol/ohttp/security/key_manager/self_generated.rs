@@ -43,14 +43,6 @@ impl SelfGeneratedKeyManager {
     pub fn new_with_auto_refresh(
         runtime: TokioRuntime,
         rotation_interval: u64,
-        // callbacks: Option<&[Arc<
-        //     dyn for<'a, 'b> Fn(
-        //             &'a KeyChangeEvent<'b>,
-        //         ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>
-        //         + Send
-        //         + Sync
-        //         + 'static,
-        // >]>
     ) -> Result<Self, TngError> {
         let inner = Arc::new(RandomKeyManagerInner {
             keys: tokio::sync::RwLock::new(HashMap::new()),

@@ -776,10 +776,10 @@ SLSA参考值payload配置指定参考值的具体内容，格式为`ReferenceVa
         {
             "id": "my-artifact",
             "version": "1.0.0",
-            "type": "container-image",
+            "type": "binary",
             "provenance_info": {
                 "type": "slsa-intoto-statements",
-                "rekor_url": "https://rekor.sigstore.dev",
+                "rekor_url": "https://log2025-1.rekor.sigstore.dev",
                 "rekor_api_version": 2
             },
             "provenance_source": {
@@ -797,12 +797,12 @@ SLSA参考值payload配置指定参考值的具体内容，格式为`ReferenceVa
 - **`rv_list`** (array): 参考值条目数组
   - **`id`** (string): 制品唯一标识符
   - **`version`** (string): 制品版本
-  - **`type`** (string): 制品类型，如`"container-image"`、`"binary"`等
+  - **`type`** (string): 制品类型，如`"binary"`等，可自定义。该字段与`id`字段共同决定生成的参考值名称，生成的参考值格式为`measurement.{type}.{id}`
   - **`provenance_info`** (object): 来源信息
     - **`type`** (string): 来源类型，如`"slsa-intoto-statements"`
     - **`rekor_url`** (string): Rekor透明日志服务器URL
-    - **`rekor_api_version`** (number, 可选): Rekor API版本，默认为2
-  - **`provenance_source`** (object, 可选): 制品来源配置
+    - **`rekor_api_version`** (number, 可选): Rekor API版本，支持1或2，默认为2
+  - **`provenance_source`** (object, 可选): 制品来源配置。**注意：当`rekor_api_version`为2时，必须指定此字段**
     - **`protocol`** (string): 协议类型，如`"oci"`、`"https"`
     - **`uri`** (string): 来源URI
     - **`artifact`** (string, 可选): 制品名称或标识
@@ -864,15 +864,26 @@ SLSA参考值payload配置指定参考值的具体内容，格式为`ReferenceVa
         "reference_values": [
             {
                 "type": "slsa",
-                "id": "my-tdx-artifact",
-                "version": "1.0.0",
-                "artifact_type": "container-image",
-                "rekor_url": "https://rekor.sigstore.dev",
-                "rekor_api_version": 2,
-                "provenance_source": {
-                    "protocol": "oci",
-                    "uri": "oci://registry.example.com/my-image:latest",
-                    "artifact": "attestation-bundle"
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "rv_list": [{
+                            "id": "my-tdx-artifact",
+                            "version": "1.0.0",
+                            "type": "binary",
+                            "provenance_info": {
+                                "type": "slsa-intoto-statements",
+                                "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                                "rekor_api_version": 2
+                            },
+                            "provenance_source": {
+                                "protocol": "oci",
+                                "uri": "oci://registry.example.com/my-image:latest",
+                                "artifact": "attestation-bundle"
+                            },
+                            "operation_type": "refresh"
+                        }]
+                    }
                 }
             }
         ]

@@ -72,7 +72,10 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
-      - uses: ./.github/actions/run-aa-as
+      - name: Run Attestation Agent and Attestation Service
+        run: |
+          make test-dep-aa &
+          make test-dep-as &
 
       - name: Run wasm unit test
         run: make wasm-unit-test-chrome

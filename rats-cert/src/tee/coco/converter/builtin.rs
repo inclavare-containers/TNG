@@ -472,7 +472,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use reference_value_provider_service::rv_list::{
-        ReferenceValueListItem, ReferenceValueProvenanceInfo,
+        ReferenceValueListItem, ReferenceValueProvenanceInfo, ReferenceValueProvenanceSource,
     };
     use serial_test::serial;
 
@@ -679,13 +679,17 @@ default file_system := 2"#;
         let rv_item = ReferenceValueListItem {
             id: "test-artifact".to_string(),
             version: "1.0.0".to_string(),
-            rv_type: "container-image".to_string(),
+            rv_type: "binary".to_string(),
             provenance_info: ReferenceValueProvenanceInfo {
                 provenance_type: "slsa-intoto-statements".to_string(),
-                rekor_url: "https://rekor.sigstore.dev".to_string(),
+                rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
                 rekor_api_version: Some(2),
             },
-            provenance_source: None,
+            provenance_source: Some(ReferenceValueProvenanceSource {
+                protocol: "oci".to_string(),
+                uri: "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0".to_string(),
+                artifact: Some("bundle".to_string()),
+            }),
             operation_type: "refresh".to_string(),
         };
         let payload = ReferenceValueListPayload {
@@ -820,13 +824,17 @@ default file_system := 2"#;
         let rv_item = ReferenceValueListItem {
             id: "test-artifact".to_string(),
             version: "1.0.0".to_string(),
-            rv_type: "container-image".to_string(),
+            rv_type: "binary".to_string(),
             provenance_info: ReferenceValueProvenanceInfo {
                 provenance_type: "slsa-intoto-statements".to_string(),
-                rekor_url: "https://rekor.sigstore.dev".to_string(),
+                rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
                 rekor_api_version: Some(2),
             },
-            provenance_source: None,
+            provenance_source: Some(ReferenceValueProvenanceSource {
+                protocol: "oci".to_string(),
+                uri: "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0".to_string(),
+                artifact: Some("bundle".to_string()),
+            }),
             operation_type: "refresh".to_string(),
         };
         let payload = ReferenceValueListPayload {
@@ -904,12 +912,18 @@ default file_system := 2"#;
                 "type": "inline",
                 "content": {
                     "rv_list": [{
-                        "id": "artifact1",
-                        "version": "1.0",
-                        "type": "container",
+                        "id": "test-artifact",
+                        "version": "1.0.0",
+                        "type": "binary",
                         "provenance_info": {
                             "type": "slsa-intoto-statements",
-                            "rekor_url": "https://rekor.sigstore.dev"
+                            "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                            "rekor_api_version": 2
+                        },
+                        "provenance_source": {
+                            "protocol": "oci",
+                            "uri": "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0",
+                            "artifact": "bundle"
                         },
                         "operation_type": "refresh"
                     }]
@@ -922,7 +936,7 @@ default file_system := 2"#;
             ReferenceValueConfig::Slsa { payload } => match payload {
                 SlsaReferenceValuePayloadConfig::Inline { content } => {
                     assert_eq!(content.rv_list.len(), 1);
-                    assert_eq!(content.rv_list[0].id, "artifact1");
+                    assert_eq!(content.rv_list[0].id, "test-artifact");
                 }
                 _ => panic!("Expected Inline payload"),
             },

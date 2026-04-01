@@ -54,6 +54,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aes-kw"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69fa2b352dcefb5f7f3a5fb840e02665d311d878955380515e4fd50095dd3d8c"
+dependencies = [
+ "aes",
+]
+
+[[package]]
 name = "again"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,11 +558,14 @@ checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
 name = "attestation-service"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "aes-kw",
  "anyhow",
  "async-trait",
  "base64 0.21.7",
  "canon-json 0.2.1 (git+https://github.com/inclavare-containers/canon-json-rs)",
  "cfg-if",
+ "concat-kdf",
  "ear",
  "futures",
  "hex",
@@ -562,6 +574,7 @@ dependencies = [
  "lazy_static",
  "log",
  "openssl",
+ "p256",
  "rand 0.8.5",
  "reference-value-provider-service",
  "regorus",
@@ -1251,6 +1264,15 @@ name = "compression-core"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e47641d3deaf41fb1538ac1f54735925e275eaf3bf4d55c81b137fba797e5cbb"
+
+[[package]]
+name = "concat-kdf"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d72c1252426a83be2092dd5884a5f6e3b8e7180f6891b6263d2c21b92ec8816"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "concurrent-queue"

@@ -35,6 +35,7 @@ pub use crate::tee::coco::converter::builtin::{
 #[cfg(feature = "__builtin-as")]
 pub use reference_value_provider_service::rv_list::{
     ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+    ReferenceValueProvenanceSource,
 };
 
 // Re-export Provenance type from RVPS

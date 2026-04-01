@@ -163,7 +163,10 @@ jobs:
         with:
           submodules: 'true'
 
-      - uses: ./.github/actions/run-aa-as
+      - name: Run Attestation Agent and Attestation Service
+        run: |
+          make test-dep-aa &
+          make test-dep-as &
 
       - name: Run integration tests
         run: |

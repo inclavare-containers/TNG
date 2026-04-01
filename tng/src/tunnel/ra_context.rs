@@ -884,20 +884,24 @@ mod tests {
         async fn test_verify_context_builtin_with_slsa_reference() {
             use rats_cert::cert::verify::{
                 ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+                ReferenceValueProvenanceSource,
             };
 
-            // Note: This test may fail since Rekor is not available in local environment.
-            // We just verify that the creation is attempted correctly.
+            // Note: This test requires the test environment set up by `make test-dep-as`.
             let rv_item = ReferenceValueListItem {
                 id: "test-artifact".to_string(),
                 version: "1.0.0".to_string(),
-                rv_type: "container-image".to_string(),
+                rv_type: "binary".to_string(),
                 provenance_info: ReferenceValueProvenanceInfo {
                     provenance_type: "slsa-intoto-statements".to_string(),
-                    rekor_url: "https://rekor.sigstore.dev".to_string(),
+                    rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
                     rekor_api_version: Some(2),
                 },
-                provenance_source: None,
+                provenance_source: Some(ReferenceValueProvenanceSource {
+                    protocol: "oci".to_string(),
+                    uri: "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0".to_string(),
+                    artifact: Some("bundle".to_string()),
+                }),
                 operation_type: "refresh".to_string(),
             };
             let payload = ReferenceValueListPayload {
@@ -920,20 +924,24 @@ mod tests {
         async fn test_verify_context_builtin_with_slsa_reference_and_provenance() {
             use rats_cert::cert::verify::{
                 ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+                ReferenceValueProvenanceSource,
             };
 
-            // Note: This test may fail since Rekor/OCI registry is not available.
-            // We just verify that the creation is attempted correctly.
+            // Note: This test requires the test environment set up by `make test-dep-as`.
             let rv_item = ReferenceValueListItem {
                 id: "test-artifact".to_string(),
                 version: "1.0.0".to_string(),
-                rv_type: "container-image".to_string(),
+                rv_type: "binary".to_string(),
                 provenance_info: ReferenceValueProvenanceInfo {
                     provenance_type: "slsa-intoto-statements".to_string(),
-                    rekor_url: "https://rekor.sigstore.dev".to_string(),
+                    rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
                     rekor_api_version: Some(2),
                 },
-                provenance_source: None,
+                provenance_source: Some(ReferenceValueProvenanceSource {
+                    protocol: "oci".to_string(),
+                    uri: "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0".to_string(),
+                    artifact: Some("bundle".to_string()),
+                }),
                 operation_type: "refresh".to_string(),
             };
             let payload = ReferenceValueListPayload {
@@ -946,9 +954,8 @@ mod tests {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
             };
-            // This may fail due to external services not being available
+            // This test requires external services from `make test-dep-as`
             let _result = VerifyContext::from_verify_args(&verify_args).await;
-            // Either Ok or specific error from network fetch is acceptable
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

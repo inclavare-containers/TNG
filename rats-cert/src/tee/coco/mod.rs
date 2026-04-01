@@ -24,7 +24,7 @@ mod tests {
 
     const TEST_AA_ADDR: &str =
         "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock";
-    const TEST_AS_ADDR: &str = "http://0.0.0.0:8080";
+    const TEST_AS_ADDR: &str = "http://127.0.0.1:8080";
     const TEST_AS_CERT_PATH: &str = "/tmp/as-full.pem";
 
     fn make_as_addr_config() -> AttestationServiceAddrArgs {
@@ -39,7 +39,6 @@ mod tests {
     /// Flow: CocoAttester::get_evidence -> CocoConverter::convert -> CocoVerifier::verify_evidence
     /// The converter sends evidence to remote AS for evaluation, then the verifier validates the resulting token.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[should_panic(expected = "EarStatusNotAffirming")]
     async fn test_e2e_background_check_flow() {
         // Create attester (connects to running AA)
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
@@ -84,7 +83,6 @@ mod tests {
     /// Flow: CocoAttester::get_evidence -> CocoConverter::convert (attester side) -> CocoVerifier::verify_evidence (verifier side)
     /// In passport model, the attester obtains a token from AS, then presents it to the verifier.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[should_panic(expected = "EarStatusNotAffirming")]
     async fn test_e2e_passport_flow() {
         // Create attester
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
