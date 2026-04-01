@@ -667,6 +667,230 @@ Example:
 
 
 
+### Builtin Mode
+
+Builtin mode is a local Attestation Service verification mode provided by TNG. Unlike Background Check and Passport modes, Builtin mode does not require connecting to an external Attestation Service, but instead verifies Evidence locally. This mode is suitable for the following scenarios:
+
+- Network-isolated environments where external Attestation Service is not accessible
+- Latency-sensitive verification requirements
+- Simplified deployment architecture with reduced external dependencies
+
+> [!NOTE]
+> Builtin mode requires TNG to be compiled with the corresponding TEE type features enabled (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`).
+
+> [!NOTE]
+> In the current TNG releases built by GitHub CI, RPM packages and binary artifacts do not support Builtin mode. Only container images support Builtin mode.
+
+> [!WARNING]
+> Currently, Builtin mode only supports the Verify (verifier) role and does not support the Attest (attester) role.
+
+#### Verify (Builtin Mode)
+
+In Builtin mode, the [Verify](#verify) configuration should include the following fields:
+
+- **`model`** (string): Set to `"builtin"` to enable Builtin mode
+- **`policy`** (PolicyConfig, optional, default is `default`): Specifies the OPA verification policy configuration
+- **`reference_values`** (array [ReferenceValueConfig], optional, default is empty array): Specifies the reference value configuration list for verifying Evidence measurements
+
+##### PolicyConfig
+
+The policy configuration specifies the OPA policy used when verifying Evidence, supporting the following three methods:
+
+**Default Policy (default)**:
+
+- **`type`** (string): Set to `"default"`
+- Uses the attestation-service's built-in default policy, which performs comprehensive measurement verification of TEE hardware and software
+- Default policy source code: [ear_default_policy_cpu.rego](https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego)
+
+**Inline Policy (inline)**:
+
+- **`type`** (string): Set to `"inline"`
+- **`content`** (string): Standard Base64-encoded OPA policy content
+
+**File Path Policy (path)**:
+
+- **`type`** (string): Set to `"path"`
+- **`path`** (string): Path to the OPA policy file
+
+##### ReferenceValueConfig
+
+The reference value configuration specifies the source of reference values for verifying Evidence, supporting the following two modes:
+
+**Sample Mode**: Directly provide reference value payload
+
+- **`type`** (string): Set to `"sample"`
+- **`payload`** (SampleProvenancePayloadConfig): Reference value payload configuration
+
+**SLSA Mode**: Obtain reference values from Rekor transparency log
+
+- **`type`** (string): Set to `"slsa"`
+- **`payload`** (SlsaReferenceValuePayloadConfig): Reference value payload configuration
+
+##### SampleProvenancePayloadConfig
+
+The payload configuration specifies the specific content of reference values in `Provenance` format:
+
+**Inline Payload (inline)**:
+
+- **`type`** (string): Set to `"inline"`
+- **`content`** (object): Reference value JSON object in `Provenance` format
+
+`Provenance` format example:
+
+```json
+{
+  "measurement.uki.SHA-384": [
+    "a46e162a57e072be7f660e65504477c646acf6b3bfea4ffc0e3a8ee4f2c2726c2284c8bf1ec2b3bd95b204fe7f4e899c"
+  ]
+}
+```
+
+**Field Description**:
+- The key is an arbitrary identifier for the measured object, depending on the Policy definition.
+- The value is the expected reference value for the measured object, corresponding to the key.
+
+**File Path Payload (path)**:
+
+- **`type`** (string): Set to `"path"`
+- **`path`** (string): Path to the reference value JSON file, with content in `Provenance` format
+
+##### SlsaReferenceValuePayloadConfig
+
+The SLSA reference value payload configuration specifies the specific content of reference values in `ReferenceValueListPayload` format:
+
+**Inline Payload (inline)**:
+
+- **`type`** (string): Set to `"inline"`
+- **`content`** (object): Reference value JSON object in `ReferenceValueListPayload` format
+
+**File Path Payload (path)**:
+
+- **`type`** (string): Set to `"path"`
+- **`path`** (string): Path to the reference value JSON file, with content in `ReferenceValueListPayload` format
+
+`ReferenceValueListPayload` format:
+
+```json
+{
+    "rv_list": [
+        {
+            "id": "my-artifact",
+            "version": "1.0.0",
+            "type": "binary",
+            "provenance_info": {
+                "type": "slsa-intoto-statements",
+                "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                "rekor_api_version": 2
+            },
+            "provenance_source": {
+                "protocol": "oci",
+                "uri": "oci://registry/repo:tag",
+                "artifact": "bundle"
+            },
+            "operation_type": "add"
+        }
+    ]
+}
+```
+
+**Field Description**:
+- **`rv_list`** (array): Reference value entry array
+  - **`id`** (string): Unique artifact identifier
+  - **`version`** (string): Artifact version
+  - **`type`** (string): Artifact type, such as `"binary"`, customizable. This field together with the `id` field determines the generated reference value name, with the format `measurement.{type}.{id}`
+  - **`provenance_info`** (object): Provenance information
+    - **`type`** (string): Provenance type, such as `"slsa-intoto-statements"`
+    - **`rekor_url`** (string): Rekor transparency log server URL
+    - **`rekor_api_version`** (number, optional): Rekor API version, supports 1 or 2, default is 2
+  - **`provenance_source`** (object, optional): Artifact provenance source configuration. **Note: This field must be specified when `rekor_api_version` is 2**
+    - **`protocol`** (string): Protocol type, such as `"oci"`, `"https"`
+    - **`uri`** (string): Source URI
+    - **`artifact`** (string, optional): Artifact name or identifier
+  - **`operation_type`** (string): Operation type, `"refresh"` or `"add"` (append)
+
+#### Examples
+
+##### Example 1: Providing Reference Values Using Sample Mode
+
+The following example demonstrates using inline policy and file path to provide TDX reference values:
+
+```json
+{
+    "verify": {
+        "model": "builtin",
+        "policy": {
+            "type": "inline",
+            "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "path",
+                    "path": "/etc/tng/tdx-reference-values.json"
+                }
+            }
+        ]
+    }
+}
+```
+
+Where the `/etc/tng/tdx-reference-values.json` file content example:
+
+```json
+{
+    "tdx": {
+        "quote": {
+            "body": {
+                "mr_td": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            }
+        }
+    }
+}
+```
+
+##### Example 2: Obtaining Reference Values Using SLSA/Rekor Mode
+
+The following example demonstrates obtaining TDX reference values from Rekor transparency log:
+
+```json
+{
+    "verify": {
+        "model": "builtin",
+        "policy": {
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
+        },
+        "reference_values": [
+            {
+                "type": "slsa",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "rv_list": [{
+                            "id": "my-tdx-artifact",
+                            "version": "1.0.0",
+                            "type": "binary",
+                            "provenance_info": {
+                                "type": "slsa-intoto-statements",
+                                "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                                "rekor_api_version": 2
+                            },
+                            "provenance_source": {
+                                "protocol": "oci",
+                                "uri": "oci://registry.example.com/my-image:latest",
+                                "artifact": "attestation-bundle"
+                            },
+                            "operation_type": "refresh"
+                        }]
+                    }
+                }
+            }
+        ]
+    }
+}
+```
+
 ## OHTTP
 
 Oblivious HTTP (OHTTP) is a network protocol extension designed to enhance privacy protection by encrypting HTTP requests to provide end-to-end privacy protection and anonymity enhancement. TNG can use OHTTP to provide secure communication while maintaining compatibility with existing HTTP infrastructure.
