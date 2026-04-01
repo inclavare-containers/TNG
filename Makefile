@@ -178,7 +178,10 @@ create-tarball:
 
 	# copy source code to src/
 	git clone --no-hardlinks . /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/
-	cd /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src && git clean -xdf
+	# apply uncommitted changes (staged + unstaged) to the cloned copy
+	git diff --binary HEAD | git -C /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src apply --binary --allow-empty
+	# copy untracked (new) files that are not ignored
+	if [ -n "$$(git ls-files --others --exclude-standard)" ] ; then git ls-files --others --exclude-standard -z | xargs -0 tar -c -f - | tar -x -f - -C /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/ ; fi
 
 	# delete all checksum (this is required due to previous patch work)
 	sed -i 's/checksum = ".*//g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/Cargo.lock
