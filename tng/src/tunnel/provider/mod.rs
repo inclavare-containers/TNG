@@ -4,7 +4,6 @@ pub mod evidence;
 pub mod factory;
 pub mod provider_type;
 pub mod token;
-pub mod translate;
 pub mod verifier;
 pub mod verify_policy;
 
@@ -14,6 +13,5 @@ pub use evidence::TngEvidence;
 pub use factory::*;
 pub use provider_type::ProviderType;
 pub use token::TngToken;
-pub use translate::TranslateTo;
 pub use verifier::TngVerifier;
 pub use verify_policy::TngVerifyPolicy;

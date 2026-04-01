@@ -4,7 +4,6 @@ use rats_cert::tee::GenericConverter;
 
 use super::evidence::TngEvidence;
 use super::token::TngToken;
-use super::translate::TranslateTo;
 
 pub enum TngConverter {
     Coco(CocoConverter),
@@ -18,8 +17,8 @@ impl GenericConverter for TngConverter {
     async fn convert(&self, in_evidence: &TngEvidence) -> Result<TngToken> {
         match self {
             Self::Coco(c) => {
-                let inner = in_evidence.translate()?;
-                Ok(c.convert(&inner).await?.into())
+                let native_evidence = in_evidence.try_into()?;
+                Ok(c.convert(&native_evidence).await?.into())
             }
         }
     }

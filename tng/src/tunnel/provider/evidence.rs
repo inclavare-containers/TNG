@@ -15,6 +15,16 @@ impl From<CocoEvidence> for TngEvidence {
     }
 }
 
+/// Translate a TngEvidence into CocoEvidence if it contains a compatible type.
+impl TryFrom<&TngEvidence> for CocoEvidence {
+    type Error = anyhow::Error;
+    fn try_from(e: &TngEvidence) -> Result<Self> {
+        match e {
+            TngEvidence::Coco(inner) => Ok(inner.clone()),
+        }
+    }
+}
+
 impl TngEvidence {
     pub fn provider_type(&self) -> ProviderType {
         match self {
