@@ -142,24 +142,26 @@ default = [
   "tokio-console",
   "metric",
   "trace",
-  "ingress-http-proxy",
-  "ingress-mapping",
-  "ingress-netfilter",
-  "ingress-socks5",
+  "ingress-all",
   "egress-mapping",
-  "egress-netfilter",
-  "builtin-as-tdx",
+  "egress-all",
 ]
-egress = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid"]
-egress-mapping = ["egress"]
-egress-netfilter = ["egress", "dep:which"]
-ingress = ["dep:async-tungstenite"]
-ingress-http-proxy = ["ingress", "hyper/client"]
-ingress-mapping = ["ingress"]
-ingress-netfilter = ["ingress", "dep:portpicker", "dep:which"]
-ingress-socks5 = ["ingress", "dep:fast-socks5"]
-metric = ["dep:tonic", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry-stdout", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+
+__egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid"]
+egress-all = ["egress-mapping", "egress-netfilter"]
+egress-mapping = ["__egress-common"]
+egress-netfilter = ["__egress-common", "dep:which"]
+
+__ingress-common = ["dep:async-tungstenite"]
+ingress-all = ["ingress-http-proxy", "ingress-mapping", "ingress-netfilter", "ingress-socks5"]
+ingress-http-proxy = ["__ingress-common", "hyper/client"]
+ingress-mapping = ["__ingress-common"]
+ingress-netfilter = ["__ingress-common", "dep:portpicker", "dep:which"]
+ingress-socks5 = ["__ingress-common", "dep:fast-socks5"]
+
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
+
+metric = ["dep:tonic", "dep:opentelemetry", "dep:opentelemetry-otlp", "dep:opentelemetry-stdout", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 trace = [
   "dep:tonic",
   "dep:opentelemetry",
@@ -172,7 +174,7 @@ trace = [
 # Builtin Attestation Service features
 # __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
 __builtin-as = ["rats-cert/__builtin-as"]
-builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
+builtin-as-all = ["__builtin-as", "rats-cert/builtin-as-all"]
 builtin-as-sgx = ["__builtin-as", "rats-cert/builtin-as-sgx"]
 builtin-as-snp = ["__builtin-as", "rats-cert/builtin-as-snp"]
 builtin-as-tdx = ["__builtin-as", "rats-cert/builtin-as-tdx"]

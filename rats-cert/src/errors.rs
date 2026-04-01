@@ -49,6 +49,11 @@ pub enum Error {
     NoTrustSource,
 
     // gRPC AS related errors
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        target_vendor = "unknown",
+        target_os = "unknown"
+    )))]
     #[error("Failed to create gRPC endpoint for AS address `{as_addr}`: {source}")]
     GrpcEndpointCreateFailed {
         as_addr: String,
@@ -56,6 +61,11 @@ pub enum Error {
         source: tonic::transport::Error,
     },
 
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        target_vendor = "unknown",
+        target_os = "unknown"
+    )))]
     #[error("Failed to connect to gRPC AS address `{as_addr}`: {source}")]
     GrpcConnectFailed {
         as_addr: String,
@@ -67,12 +77,15 @@ pub enum Error {
     AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion, #[source] tonic::Status),
 
     // AA ttrpc related errors
+    #[cfg(feature = "attester-coco")]
     #[error("Failed to get evidence from Attestation Agent: {0}")]
     GetEvidenceFromAAFailed(#[source] ttrpc::Error),
 
+    #[cfg(feature = "attester-coco")]
     #[error("Failed to get TEE type from Attestation Agent: {0}")]
     GetTeeTypeFromAAFailed(#[source] ttrpc::Error),
 
+    #[cfg(feature = "attester-coco")]
     #[error("Failed to connect to Attestation Agent ttrpc endpoint: {0}")]
     ConnectAttestationAgentTtrpcFailed(#[source] ttrpc::Error),
 
@@ -99,12 +112,15 @@ pub enum Error {
     #[error("Failed to encode certificate: {0}")]
     CertEncodeFailed(#[source] pkcs8::der::Error),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to generate CA certificate: {0}")]
     CaCertGenerationFailed(#[source] rcgen::Error),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to generate AS certificate: {0}")]
     AsCertGenerationFailed(#[source] rcgen::Error),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to create builtin attestation service working directory: {0}")]
     BuilinAttestationServiceCreateWorkDirFailed(#[source] std::io::Error),
 
@@ -186,15 +202,19 @@ pub enum Error {
     InvalidGrpcMetadataValue(#[source] tonic::metadata::errors::InvalidMetadataValue),
 
     // Attestation service operations
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to create attestation service: {0}")]
     AttestationServiceCreateFailed(#[source] attestation_service::ServiceError),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to set attestation policy: {0}")]
     AttestationServiceSetPolicyFailed(#[source] anyhow::Error),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to generate attestation challenge: {0}")]
     AttestationServiceGenerateChallengeFailed(#[source] anyhow::Error),
 
+    #[cfg(feature = "__builtin-as")]
     #[error("Attestation evidence verification failed: {0}")]
     AttestationServiceVerifyFailed(#[source] anyhow::Error),
 
@@ -242,6 +262,19 @@ pub enum Error {
     },
 
     // Task spawning
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_vendor = "unknown",
+        target_os = "unknown"
+    ))]
+    #[error("Failed to spawn async task: {0}")]
+    TaskSpawnFailed(#[source] tokio_with_wasm::task::JoinError),
+
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        target_vendor = "unknown",
+        target_os = "unknown"
+    )))]
     #[error("Failed to spawn async task: {0}")]
     TaskSpawnFailed(#[source] tokio::task::JoinError),
 

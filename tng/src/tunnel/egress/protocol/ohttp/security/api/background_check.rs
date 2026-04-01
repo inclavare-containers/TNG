@@ -10,7 +10,6 @@ use crate::tunnel::ohttp::protocol::{
 };
 use crate::tunnel::ra_context::VerifyContext;
 
-#[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::CoCoNonce;
 
 impl OhttpServerApi {

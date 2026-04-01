@@ -681,6 +681,9 @@ Builtin模式是TNG提供的一种本地Attestation Service验证模式。与Bac
 > [!NOTE]
 > Builtin模式需要TNG在编译时启用对应的TEE类型特性（`builtin-as-tdx`、`builtin-as-sgx`或`builtin-as-snp`）。
 
+> [!NOTE]
+> 当前GitHub CI构建的TNG发行版本中，RPM包和二进制产物不支持Builtin模式，仅容器镜像支持Builtin模式。
+
 > [!WARNING]
 > 当前Builtin模式仅支持Verify（验证方）角色，不支持Attest（证明方）角色。
 

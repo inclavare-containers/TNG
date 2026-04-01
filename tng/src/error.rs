@@ -123,7 +123,7 @@ pub enum TngError {
     #[error("Invalid parameter: {0}")]
     InvalidParameter(#[source] anyhow::Error),
 
-    #[cfg(feature = "egress")]
+    #[cfg(feature = "__egress-common")]
     #[error("Error from serf crate: {0}")]
     SerfCrateError(#[source] anyhow::Error),
 
@@ -214,7 +214,7 @@ impl IntoResponse for TngError {
             | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
-            #[cfg(feature = "egress")]
+            #[cfg(feature = "__egress-common")]
             TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::KeyUpdateMessageEncodeError(..)
             | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,

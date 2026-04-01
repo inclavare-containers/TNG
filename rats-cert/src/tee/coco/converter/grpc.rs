@@ -183,8 +183,7 @@ impl CocoGrpcConverter {
         // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let response = tokio_with_wasm::task::spawn(fut)
             .await
-            .map_err(|e| Error::TaskSpawnFailed(e))?
-            .map_err(|e: Error| e)?;
+            .map_err(Error::TaskSpawnFailed)??;
         #[cfg(not(all(
             target_arch = "wasm32",
             target_vendor = "unknown",

@@ -4,7 +4,7 @@ help:
 
 .PHONE: install-test-deps
 install-test-deps:
-	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset jq
+	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset jq perl openssl-devel clang
 
 .PHONE: run-test
 run-test: install-test-deps
@@ -217,7 +217,7 @@ rpm-build-in-docker:
 	mkdir -p ~/rpmbuild/SOURCES/
 	cp /tmp/trusted-network-gateway-${VERSION}-vendored-source.tar.gz ~/rpmbuild/SOURCES/
 
-	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code registry.openanolis.cn/openanolis/anolisos:8 bash -x -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none ; source \"\$$HOME/.cargo/env\" ; sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec --define 'with_rustup 1'"
+	docker run --rm -v ~/rpmbuild:/root/rpmbuild -v .:/code --workdir=/code alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest bash -x -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none ; source \"\$$HOME/.cargo/env\" ; sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo ; yum install -y rpmdevtools yum-utils; rpmdev-setuptree ; yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec ; rpmbuild -ba ./trusted-network-gateway.spec --define 'with_rustup 1'"
 
 .PHONE: rpm-install
 rpm-install: rpm-build

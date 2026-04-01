@@ -101,12 +101,12 @@ crypto-rustcrypto = [
 # Builtin Attestation Service features (local evidence verification)
 # __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
 __builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen"]
-builtin-as-all = ["builtin-as-tdx", "builtin-as-sgx", "builtin-as-snp"]
+builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
 builtin-as-tdx = ["__builtin-as", "attestation-service/tdx-verifier"]
 
-default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "builtin-as-tdx"]
+default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "__builtin-as"]
 
 [dev-dependencies]
 ctor = {workspace = true}

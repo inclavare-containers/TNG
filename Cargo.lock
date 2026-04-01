@@ -557,13 +557,14 @@ checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
+source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
 dependencies = [
  "aes-gcm",
  "aes-kw",
  "anyhow",
  "async-trait",
  "base64 0.21.7",
- "canon-json 0.2.1 (git+https://github.com/inclavare-containers/canon-json-rs)",
+ "canon-json",
  "cfg-if",
  "concat-kdf",
  "ear",
@@ -859,6 +860,18 @@ dependencies = [
 
 [[package]]
 name = "bitfield"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
+
+[[package]]
+name = "bitfield"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d7e60934ceec538daadb9d8432424ed043a904d8e0243f3c6446bce549a46ac"
+
+[[package]]
+name = "bitfield"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c821a6e124197eb56d907ccc2188eab1038fb919c914f47976e64dd8dbc855d1"
@@ -981,17 +994,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "canon-json"
-version = "0.2.1"
-source = "git+https://github.com/inclavare-containers/canon-json-rs?rev=d6fa90c68f60d3d7a51daf942d882b589541be51#d6fa90c68f60d3d7a51daf942d882b589541be51"
-dependencies = [
- "serde",
- "serde_derive",
- "serde_json",
- "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1580,6 +1582,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv-rs"
+version = "0.1.0"
+source = "git+https://github.com/openanolis/csv-rs?rev=b67a07e#b67a07e4a42030ecd1b35bb281f3e778aeefec81"
+dependencies = [
+ "bincode",
+ "bitfield 0.13.2",
+ "bitflags 1.3.2",
+ "codicon",
+ "dirs",
+ "hex",
+ "hyper 0.14.32",
+ "hyper-tls 0.5.0",
+ "iocuddle",
+ "libc",
+ "log",
+ "openssl",
+ "openssl-sys",
+ "rand 0.8.5",
+ "reqwest 0.11.27",
+ "serde",
+ "serde-big-array",
+ "serde_bytes",
+ "static_assertions",
+ "tokio",
+]
+
+[[package]]
 name = "ctor"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,6 +2039,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumflags2"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1027f7680c853e056ebcec683615fb6fbbc07dbaa13b4d5d9442b146ded4ecef"
+dependencies = [
+ "enumflags2_derive",
+]
+
+[[package]]
+name = "enumflags2_derive"
+version = "0.7.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "env_home"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2081,6 +2130,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
+source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -2982,6 +3032,12 @@ dependencies = [
  "libc",
  "windows-link 0.1.3",
 ]
+
+[[package]]
+name = "hostname-validator"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f558a64ac9af88b5ba400d99b579451af0d39c6d360980045b91aac966d705e2"
 
 [[package]]
 name = "hpke"
@@ -3901,6 +3957,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "mbox"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d142aeadbc4e8c679fc6d93fbe7efe1c021fa7d80629e615915b519e3bc6de"
+dependencies = [
+ "libc",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "memberlist"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4415,6 +4481,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
 
 [[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4491,6 +4568,15 @@ dependencies = [
  "sha2",
  "thiserror 2.0.17",
  "toml 0.9.5",
+]
+
+[[package]]
+name = "oid"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c19903c598813dba001b53beeae59bb77ad4892c5c1b9b3500ce4293a0d06c2"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -4948,6 +5034,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "picky-asn1"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "295eea0f33c16be21e2a98b908fdd4d73c04dd48c8480991b76dbcf0cb58b212"
+dependencies = [
+ "oid",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
+name = "picky-asn1-der"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5df7873a9e36d42dadb393bea5e211fe83d793c172afad5fb4ec846ec582793f"
+dependencies = [
+ "picky-asn1",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
+name = "picky-asn1-x509"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c5f20f71a68499ff32310f418a6fad8816eac1a2859ed3f0c5c741389dd6208"
+dependencies = [
+ "base64 0.21.7",
+ "oid",
+ "picky-asn1",
+ "picky-asn1-der",
+ "serde",
 ]
 
 [[package]]
@@ -5621,7 +5742,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.11.0",
  "bytes",
- "canon-json 0.2.1 (git+https://github.com/inclavare-containers/canon-json-rs?rev=d6fa90c68f60d3d7a51daf942d882b589541be51)",
+ "canon-json",
  "ciborium",
  "const-oid",
  "ctor",
@@ -5746,6 +5867,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
+source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6606,7 +6728,7 @@ checksum = "a97bd0b2e2d937951add10c8512a2dacc6ad29b39e5c5f26565a3e443329857d"
 dependencies = [
  "base64 0.22.1",
  "bincode",
- "bitfield",
+ "bitfield 0.15.0",
  "bitflags 1.3.2",
  "byteorder",
  "codicon",
@@ -7053,6 +7175,12 @@ dependencies = [
  "core-foundation-sys",
  "libc",
 ]
+
+[[package]]
+name = "target-lexicon"
+version = "0.12.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tempfile"
@@ -8003,6 +8131,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tss-esapi"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78ea9ccde878b029392ac97b5be1f470173d06ea41d18ad0bb3c92794c16a0f2"
+dependencies = [
+ "bitfield 0.14.0",
+ "enumflags2",
+ "getrandom 0.2.15",
+ "hostname-validator",
+ "log",
+ "mbox",
+ "num-derive",
+ "num-traits",
+ "oid",
+ "picky-asn1",
+ "picky-asn1-x509",
+ "regex",
+ "serde",
+ "tss-esapi-sys",
+ "zeroize",
+]
+
+[[package]]
+name = "tss-esapi-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "535cd192581c2ec4d5f82e670b1d3fbba6a23ccce8c85de387642051d7cad5b5"
+dependencies = [
+ "pkg-config",
+ "target-lexicon",
+]
+
+[[package]]
 name = "ttrpc"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8263,6 +8424,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
+source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -8273,6 +8435,8 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "chrono",
+ "codicon",
+ "csv-rs",
  "eventlog",
  "eventlog-rs",
  "futures",
@@ -8296,6 +8460,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tonic-build 0.12.3",
+ "tss-esapi",
  "uuid",
  "x509-parser",
 ]

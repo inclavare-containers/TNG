@@ -29,7 +29,7 @@ js-sys = {workspace = true}
 serde = {workspace = true}
 serde-wasm-bindgen = {workspace = true}
 serde_json = {workspace = true}
-tng = {path = "../tng", default-features = false, features = ["ingress"]}
+tng = {path = "../tng", default-features = false, features = ["__ingress-common"]}
 tokio = {workspace = true, default-features = false}
 tokio-graceful = {workspace = true, default-features = false}
 tracing = {workspace = true}
