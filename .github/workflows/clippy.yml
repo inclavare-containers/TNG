@@ -31,7 +31,7 @@ jobs:
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
 
           # install build tools
-          yum install -y git cargo protobuf-devel yum-utils
+          yum install -y make git cargo protobuf-devel yum-utils perl openssl-devel clang
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -46,4 +46,4 @@ jobs:
         run: rustup component add clippy
 
       - name: Cargo Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: make clippy
