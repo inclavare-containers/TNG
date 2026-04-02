@@ -315,8 +315,12 @@ test-dep-aa:
 .PHONY: test-dep-as
 test-dep-as:
 	@echo "=== Starting OCI Registry ==="
-	docker rm -f trustee-local-registry 2>/dev/null || true
-	docker run -d --name trustee-local-registry -p 5000:5000 registry:2
+	@if ! command -v crane > /dev/null; then \
+		curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xzf - -C /usr/local/bin crane ; \
+		chmod +x /usr/local/bin/crane ; \
+	fi
+	@pkill -x crane 2>/dev/null || true
+	crane registry serve --address=:5000 &
 	@for i in $$(seq 1 10); do \
 		if curl -s http://127.0.0.1:5000/v2/ > /dev/null; then \
 			echo "OCI registry is ready"; \
@@ -369,6 +373,7 @@ test-dep-as:
 		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .
 	@echo "=== Starting Attestation Service ==="
 	@if ! command -v restful-as > /dev/null; then \
+		systemctl mask trustee || true; \
 		yum install -y trustee; \
 	fi
 	@systemctl stop trustee || true;

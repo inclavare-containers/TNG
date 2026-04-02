@@ -80,7 +80,7 @@ jobs:
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
 
-          yum install -y git make
+          yum install -y git make tar jq
 
       - name: Install Podman
         run: |
@@ -104,9 +104,47 @@ jobs:
 
       - name: Run Attestation Agent and Attestation Service
         run: |
+          # Start services in background and capture PIDs
           make test-dep-aa &
+          AA_PID=$!
           make test-dep-as &
+          AS_PID=$!
 
+          # Wait for Attestation Agent socket (max 1 minute)
+          echo "Waiting for Attestation Agent (PID: $AA_PID)..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent process exited unexpectedly"
+              exit 1
+            fi
+            if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then
+              echo "Attestation Agent is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for Attestation Agent"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for Attestation Service HTTP (max 1 minute)
+          echo "Waiting for Attestation Service (PID: $AS_PID)..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AS_PID 2>/dev/null; then
+              echo "Attestation Service process exited unexpectedly"
+              exit 1
+            fi
+            if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then
+              echo "Attestation Service is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for Attestation Service"
+              exit 1
+            fi
+            sleep 1
+          done
 
       - name: Run integration tests
         run: |
