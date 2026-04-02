@@ -691,6 +691,7 @@ default file_system := 2"#;
                 artifact: Some("bundle".to_string()),
             }),
             operation_type: "refresh".to_string(),
+            rv_name: None,
         };
         let payload = ReferenceValueListPayload {
             rv_list: vec![rv_item],
@@ -836,6 +837,7 @@ default file_system := 2"#;
                 artifact: Some("bundle".to_string()),
             }),
             operation_type: "refresh".to_string(),
+            rv_name: None,
         };
         let payload = ReferenceValueListPayload {
             rv_list: vec![rv_item],

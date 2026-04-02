@@ -810,6 +810,7 @@ SLSA参考值payload配置指定参考值的具体内容，格式为`ReferenceVa
     - **`uri`** (string): 来源URI
     - **`artifact`** (string, 可选): 制品名称或标识
   - **`operation_type`** (string): 操作类型，`"refresh"`（刷新）或`"add"`（追加）
+  - **`rv_name`** (string, 可选): 自定义参考值名称。当设置时，使用此值作为RVPS参考值名称，而不是默认的`measurement.{type}.{id}`格式
 
 #### 示例
 

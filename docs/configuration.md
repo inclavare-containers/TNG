@@ -807,6 +807,7 @@ The SLSA reference value payload configuration specifies the specific content of
     - **`uri`** (string): Source URI
     - **`artifact`** (string, optional): Artifact name or identifier
   - **`operation_type`** (string): Operation type, `"refresh"` or `"add"` (append)
+  - **`rv_name`** (string, optional): Custom reference value name. When set, use this as the RVPS reference value name instead of the default `measurement.{type}.{id}` format
 
 #### Examples
 
