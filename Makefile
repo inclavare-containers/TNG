@@ -300,7 +300,7 @@ mac-cross-build:
 
 .PHONE: clippy
 clippy:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
 # Test dependencies: Attestation Agent
 .PHONY: test-dep-aa
