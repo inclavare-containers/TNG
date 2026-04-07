@@ -314,37 +314,38 @@ test-dep-aa:
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
 .PHONY: test-dep-as
 test-dep-as:
-	@echo "=== Starting OCI Registry ==="
-	@if ! command -v crane > /dev/null; then \
-		curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xzf - -C /usr/local/bin crane ; \
-		chmod +x /usr/local/bin/crane ; \
-	fi
-	@pkill -x crane 2>/dev/null || true
-	crane registry serve --address=:5000 &
-	@for i in $$(seq 1 10); do \
+	@set -e; \
+	echo "=== Starting OCI Registry ==="; \
+	if ! command -v crane > /dev/null; then \
+		curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xzf - -C /usr/local/bin crane; \
+		chmod +x /usr/local/bin/crane; \
+	fi; \
+	pkill -x crane 2>/dev/null || true; \
+	crane registry serve --address=:5000 & \
+	for i in $$(seq 1 10); do \
 		if curl -s http://127.0.0.1:5000/v2/ > /dev/null; then \
 			echo "OCI registry is ready"; \
 			break; \
 		fi; \
 		echo "Waiting for OCI registry..."; \
 		sleep 1; \
-	done
-	@echo "=== Installing SLSA Tools ==="
-	@if ! command -v cosign > /dev/null; then \
+	done; \
+	echo "=== Installing SLSA Tools ==="; \
+	if ! command -v cosign > /dev/null; then \
 		curl -sSL -o /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64; \
 		chmod +x /usr/local/bin/cosign; \
-	fi
-	@if ! command -v rekor-cli > /dev/null; then \
+	fi; \
+	if ! command -v rekor-cli > /dev/null; then \
 		curl -sSL -o /usr/local/bin/rekor-cli https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64; \
 		chmod +x /usr/local/bin/rekor-cli; \
-	fi
-	@if ! command -v slsa-generator > /dev/null; then \
+	fi; \
+	if ! command -v slsa-generator > /dev/null; then \
 		curl -sSL -o /usr/local/bin/slsa-generator https://github.com/openanolis/trustee/raw/refs/heads/main/tools/slsa/slsa-generator; \
 		chmod +x /usr/local/bin/slsa-generator; \
-	fi
-	@echo "=== Generating SLSA Provenance and Uploading to Rekor ==="
-	mkdir -p /tmp/slsa-test
-	@echo "Working directory: /tmp/slsa-test"
+	fi; \
+	echo "=== Generating SLSA Provenance and Uploading to Rekor ==="; \
+	mkdir -p /tmp/slsa-test; \
+	echo "Working directory: /tmp/slsa-test"; \
 	cd /tmp/slsa-test && \
 		echo '#!/bin/bash' > demo-app.sh && \
 		echo 'echo "Hello, SLSA Provenance Test!"' >> demo-app.sh && \
@@ -366,35 +367,35 @@ test-dep-as:
 			--rekor-api-version 2 \
 			--provenance-store-protocol oci \
 			--provenance-store-uri oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0 \
-			--provenance-store-artifact bundle
-	@echo "=== Verifying OCI Registry Upload ==="
-	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .
+			--provenance-store-artifact bundle; \
+	echo "=== Verifying OCI Registry Upload ==="; \
+	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .; \
 	curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .
-	@echo "=== Starting Attestation Service ==="
-	@if ! command -v restful-as > /dev/null; then \
+		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .; \
+	echo "=== Starting Attestation Service ==="; \
+	if ! command -v restful-as > /dev/null; then \
 		systemctl mask trustee || true; \
 		yum install -y trustee; \
-	fi
-	@systemctl stop trustee || true;
-	@if ! command -v jq > /dev/null; then yum install -y jq; fi
-	@if ! command -v openssl > /dev/null; then yum install -y openssl; fi
-	openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key
+	fi; \
+	systemctl stop trustee || true; \
+	if ! command -v jq > /dev/null; then yum install -y jq; fi; \
+	if ! command -v openssl > /dev/null; then yum install -y openssl; fi; \
+	openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key; \
 	openssl req -x509 -sha256 -nodes -days 365 -key /tmp/as-ca.key -out /tmp/as-ca.pem -subj "/O=Trustee CA" \
-		-addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature
-	openssl ecparam -genkey -name prime256v1 -out /tmp/as.key
-	openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"
-	@echo '[v3_req]' > /tmp/as-ext.cnf
-	@echo 'subjectKeyIdentifier = hash' >> /tmp/as-ext.cnf
+		-addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature; \
+	openssl ecparam -genkey -name prime256v1 -out /tmp/as.key; \
+	openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"; \
+	echo '[v3_req]' > /tmp/as-ext.cnf; \
+	echo 'subjectKeyIdentifier = hash' >> /tmp/as-ext.cnf; \
 	openssl x509 -req -in /tmp/as.csr -CA /tmp/as-ca.pem -CAkey /tmp/as-ca.key -CAcreateserial \
-		-out /tmp/as.pem -days 365 -extensions v3_req -extfile /tmp/as-ext.cnf -sha256
-	cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem
-	mkdir -p /opt/trustee/attestation-service/policies/opa
-	@echo 'package policy' > /opt/trustee/attestation-service/policies/opa/default.rego
-	@echo '' >> /opt/trustee/attestation-service/policies/opa/default.rego
-	@echo 'default executables := 3' >> /opt/trustee/attestation-service/policies/opa/default.rego
-	@echo 'default hardware := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego
-	@echo 'default configuration := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego
-	@echo 'default file_system := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego
-	cat /etc/trustee/as-config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > /tmp/config_with_cert.json
+		-out /tmp/as.pem -days 365 -extensions v3_req -extfile /tmp/as-ext.cnf -sha256; \
+	cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem; \
+	mkdir -p /opt/trustee/attestation-service/policies/opa; \
+	echo 'package policy' > /opt/trustee/attestation-service/policies/opa/default.rego; \
+	echo '' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
+	echo 'default executables := 3' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
+	echo 'default hardware := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
+	echo 'default configuration := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
+	echo 'default file_system := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
+	cat /etc/trustee/as-config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > /tmp/config_with_cert.json; \
 	RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json
