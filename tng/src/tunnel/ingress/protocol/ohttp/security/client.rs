@@ -17,18 +17,12 @@ use rand::SeedableRng as _;
 #[cfg(unix)]
 use rand_chacha::ChaCha12Rng;
 #[cfg(unix)]
-use rats_cert::tee::coco::attester::CocoAttester;
-#[cfg(unix)]
 use rats_cert::tee::AttesterPipeline;
 #[cfg(unix)]
 use rats_cert::tee::GenericAttester as _;
 use rats_cert::tee::{coco::converter::CoCoNonce, ReportData};
 use rats_cert::tee::{
-    coco::{
-        converter::CocoConverter,
-        evidence::{CocoAsToken, CocoEvidence},
-        verifier::remote::CocoVerifier,
-    },
+    coco::evidence::{CocoAsToken, CocoEvidence},
     GenericConverter, GenericVerifier as _,
 };
 #[cfg(unix)]
@@ -45,40 +39,41 @@ use url::Url;
 use std::{pin::Pin, sync::Arc};
 
 #[cfg(unix)]
-use crate::config::ra::AttestArgs;
-#[cfg(unix)]
 use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
+#[cfg(unix)]
+use crate::tunnel::ra_context::AttestContext;
 use crate::{
-    config::ra::{AttestationServiceArgs, AttestationServiceTokenVerifyArgs, VerifyArgs},
+    config::ra::RaArgs,
+    error::TngError,
+    tunnel::{
+        ohttp::{
+            key_config::KeyConfigExtend,
+            protocol::{
+                header::{
+                    OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
+                    OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+                },
+                metadata::ServerKeyConfigHint,
+            },
+        },
+        ra_context::{RaContext, VerifyContext},
+    },
+    AttestationResult, TokioRuntime,
+};
+use crate::{
     error::CheckErrorResponse as _,
     tunnel::{
         ohttp::protocol::{
             metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
             userdata::ServerUserData,
-            AttestationChallengeResponse, AttestationRequest, AttestationResultJwt,
-            AttestationVerifyRequest, AttestationVerifyResponse, HpkeKeyConfig, KeyConfigRequest,
-            KeyConfigResponse, ServerAttestationInfo,
+            AttestationChallengeResponse, AttestationRequest, AttestationVerifyRequest,
+            AttestationVerifyResponse, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
         },
         utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
     },
 };
-use crate::{
-    config::ra::{AttestationServiceTokenVerifyAdditionalArgs, RaArgs},
-    error::TngError,
-    tunnel::ohttp::{
-        key_config::KeyConfigExtend,
-        protocol::{
-            header::{
-                OhttpApi, OHTTP_CHUNKED_REQUEST_CONTENT_TYPE, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
-            },
-            metadata::ServerKeyConfigHint,
-        },
-    },
-    AttestationResult, TokioRuntime,
-};
-use rats_cert::cert::verify::AttestationServiceAddrArgs;
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -88,7 +83,7 @@ pub struct OHttpClient {
 }
 
 pub struct OHttpClientInner {
-    ra_args: RaArgs,
+    ra_context: RaContext,
     http_client: Arc<reqwest::Client>,
     #[cfg(unix)]
     rng: tokio::sync::Mutex<ChaCha12Rng>,
@@ -120,24 +115,27 @@ impl OHttpClient {
         base_url: Url,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let refresh_strategy = match &ra_args {
+        let ra_context = RaContext::from_ra_args(&ra_args).await?;
+
+        let refresh_strategy = {
             #[cfg(unix)]
-            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => match &attest {
-                AttestArgs::Passport { aa_args, .. } | AttestArgs::BackgroundCheck { aa_args } => {
-                    aa_args.refresh_strategy()
+            if let Some(attest_ctx) = ra_context.attest_context() {
+                attest_ctx.refresh_strategy()
+            } else {
+                RefreshStrategy::Periodically {
+                    interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
                 }
-                AttestArgs::PassportBuiltin {
-                    builtin_aa_args, ..
+            }
+            #[cfg(not(unix))]
+            {
+                RefreshStrategy::Periodically {
+                    interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
                 }
-                | AttestArgs::Builtin { builtin_aa_args } => builtin_aa_args.refresh_strategy(),
-            },
-            RaArgs::VerifyOnly(..) | RaArgs::NoRa => RefreshStrategy::Periodically {
-                interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
-            },
+            }
         };
 
         let inner = Arc::new(OHttpClientInner {
-            ra_args,
+            ra_context,
             #[cfg(unix)]
             rng: tokio::sync::Mutex::new(ChaCha12Rng::from_os_rng()),
             http_client,
@@ -198,87 +196,15 @@ impl OHttpClient {
 }
 
 impl OHttpClientInner {
-    async fn verify_token_with_remote_as(
-        server_key_config: &HpkeKeyConfig,
-        attestation_result: &AttestationResultJwt,
-        token_verify: &AttestationServiceTokenVerifyArgs,
-    ) -> Result<CocoAsToken> {
-        let token = CocoAsToken::new(attestation_result.0.to_owned())?;
-        let verifier = CocoVerifier::new(
-            &token_verify.as_addr_config,
-            &token_verify.trusted_certs_paths,
-            &token_verify.policy_ids,
-        )
-        .await?;
-
-        let userdata = ServerUserData {
-            // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
-            challenge_token: None,
-            hpke_key_config: server_key_config.clone(),
-        }
-        .to_claims()?;
-
-        verifier
-            .verify_evidence(&token, &ReportData::Claims(userdata))
-            .await?;
-        Ok(token)
-    }
-
-    async fn verify_evidence_with_remote_as(
-        server_key_config: &HpkeKeyConfig,
-        challenge_token: String,
-        evidence: serde_json::Value,
-        as_args: &AttestationServiceArgs,
-        token_verify: &AttestationServiceTokenVerifyAdditionalArgs,
-    ) -> Result<CocoAsToken> {
-        let coco_evidence = CocoEvidence::deserialize_from_json(evidence)?;
-        let coco_converter = CocoConverter::new(
-            &as_args.as_addr_config.as_addr,
-            &as_args.policy_ids,
-            as_args.as_addr_config.as_is_grpc,
-            &as_args.as_addr_config.as_headers,
-        )?;
-        let token = coco_converter.convert(&coco_evidence).await?;
-
-        let verifier = CocoVerifier::new(
-            &Some(AttestationServiceAddrArgs {
-                as_addr: as_args.as_addr_config.as_addr.clone(),
-                as_is_grpc: as_args.as_addr_config.as_is_grpc,
-                as_headers: as_args.as_addr_config.as_headers.clone(),
-            }),
-            &token_verify.trusted_certs_paths,
-            &as_args.policy_ids,
-        )
-        .await?;
-
-        let userdata = ServerUserData {
-            challenge_token: Some(challenge_token),
-            hpke_key_config: server_key_config.clone(),
-        }
-        .to_claims()?;
-
-        verifier
-            .verify_evidence(&token, &ReportData::Claims(userdata))
-            .await?;
-        Ok(token)
-    }
-
     async fn create_key_store_value(&self) -> Result<(KeyStoreValue, Expire)> {
         // Handle metatdata for self
         let (client_key, client_auth, mut expire) = self.create_attested_client_key().await?;
 
         let (server_key_config, token) = {
-            let verify = match &self.ra_args {
-                RaArgs::VerifyOnly(verify) => Some(verify),
-                #[cfg(unix)]
-                RaArgs::AttestAndVerify(.., verify) => Some(verify),
-                #[cfg(unix)]
-                RaArgs::AttestOnly(..) => None,
-                RaArgs::NoRa => None,
-            };
+            let verify_context = self.ra_context.verify_context();
 
-            match verify {
-                Some(VerifyArgs::Passport { token_verify }) => {
+            match verify_context {
+                Some(VerifyContext::Passport { verifier }) => {
                     // Request hpke configuration for server
                     let response = self
                         .get_hpke_configuration(KeyConfigRequest {
@@ -288,12 +214,19 @@ impl OHttpClientInner {
 
                     let token = match &response.attestation_info {
                         Some(ServerAttestationInfo::Passport { attestation_result }) => {
-                            Self::verify_token_with_remote_as(
-                                &response.hpke_key_config,
-                                attestation_result,
-                                token_verify,
-                            )
-                            .await?
+                            let token = CocoAsToken::new(attestation_result.0.to_owned())?;
+
+                            let userdata = ServerUserData {
+                                // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
+                                challenge_token: None,
+                                hpke_key_config: response.hpke_key_config.clone(),
+                            }
+                            .to_claims()?;
+
+                            verifier
+                                .verify_evidence(&token, &ReportData::Claims(userdata))
+                                .await?;
+                            token
                         }
                         Some(ServerAttestationInfo::BackgroundCheck { .. }) => {
                             bail!("Passport model is expected but got background check attestation from server")
@@ -303,19 +236,12 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                Some(VerifyArgs::BackgroundCheck {
-                    as_args,
-                    token_verify,
+                Some(VerifyContext::BackgroundCheck {
+                    converter,
+                    verifier,
                 }) => {
-                    let coco_converter = CocoConverter::new(
-                        &as_args.as_addr_config.as_addr,
-                        &as_args.policy_ids,
-                        as_args.as_addr_config.as_is_grpc,
-                        &as_args.as_addr_config.as_headers,
-                    )?;
-
                     // fetch a challenge token from attestation service
-                    let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                    let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
 
                     // Request hpke configuration for server
                     let response = self
@@ -328,14 +254,19 @@ impl OHttpClientInner {
 
                     let token = match response.attestation_info {
                         Some(ServerAttestationInfo::BackgroundCheck { evidence }) => {
-                            Self::verify_evidence_with_remote_as(
-                                &response.hpke_key_config,
-                                challenge_token,
-                                evidence,
-                                as_args,
-                                token_verify,
-                            )
-                            .await?
+                            let coco_evidence = CocoEvidence::deserialize_from_json(evidence)?;
+                            let token = converter.convert(&coco_evidence).await?;
+
+                            let userdata = ServerUserData {
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: response.hpke_key_config.clone(),
+                            }
+                            .to_claims()?;
+
+                            verifier
+                                .verify_evidence(&token, &ReportData::Claims(userdata))
+                                .await?;
+                            token
                         }
                         Some(ServerAttestationInfo::Passport { .. }) => {
                             bail!("Background check model is expected but got passport attestation from server")
@@ -346,21 +277,12 @@ impl OHttpClientInner {
                     (response.hpke_key_config, Some(token))
                 }
                 #[cfg(feature = "__builtin-as")]
-                Some(VerifyArgs::Builtin {
-                    policy,
-                    reference_values,
+                Some(VerifyContext::Builtin {
+                    converter,
+                    verifier,
                 }) => {
-                    use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-                    use rats_cert::tee::coco::evidence::CocoEvidence;
-                    use rats_cert::tee::GenericConverter;
-
-                    // Initialize builtin AS converter
-                    let builtin_converter = BuiltinCocoConverter::new(policy, reference_values)
-                        .await
-                        .map_err(|e| anyhow!("Failed to create BuiltinCocoConverter: {:?}", e))?;
-
                     // Generate a local challenge
-                    let challenge_token = builtin_converter
+                    let challenge_token = converter
                         .generate_challenge()
                         .await
                         .map_err(|e| anyhow!("Failed to generate challenge: {:?}", e))?;
@@ -381,12 +303,10 @@ impl OHttpClientInner {
                                 .map_err(|e| anyhow!("Failed to parse evidence: {:?}", e))?;
 
                             // Convert evidence to token using builtin AS
-                            let token = builtin_converter
+                            let token = converter
                                 .convert(&coco_evidence)
                                 .await
                                 .map_err(|e| anyhow!("Builtin AS verification failed: {:?}", e))?;
-
-                            let verifier = builtin_converter.new_verifier().await?;
 
                             let userdata = ServerUserData {
                                 challenge_token: Some(challenge_token),
@@ -460,27 +380,27 @@ impl OHttpClientInner {
         ClientAuth,
         Expire,
     )> {
-        Ok(match &self.ra_args {
-            #[cfg(unix)]
-            RaArgs::AttestOnly(attest) | RaArgs::AttestAndVerify(attest, ..) => {
+        #[cfg(not(unix))]
+        {
+            return Ok((None, ClientAuth::NoAuth(NoAuth {}), Expire::NoExpire));
+        }
+
+        #[cfg(unix)]
+        Ok(match self.ra_context.attest_context() {
+            Some(attest_ctx) => {
                 let client_key = X25519HkdfSha256::gen_keypair(&mut self.rng.lock().await);
                 let pk_s = client_key.1.to_bytes().to_vec();
 
-                let token = match attest {
-                    AttestArgs::Passport { aa_args, as_args } => {
-                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
-                        let coco_converter = CocoConverter::new(
-                            &as_args.as_addr_config.as_addr,
-                            &as_args.policy_ids,
-                            as_args.as_addr_config.as_is_grpc,
-                            &as_args.as_addr_config.as_headers,
-                        )?;
-
+                let token = match attest_ctx {
+                    AttestContext::Passport {
+                        attester,
+                        converter,
+                        ..
+                    } => {
                         // fetch a challenge token from attestation service
-                        let CoCoNonce::Jwt(challenge_token) = coco_converter.get_nonce().await?;
+                        let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
 
-                        let attester_pipeline =
-                            AttesterPipeline::new(&coco_attester, &coco_converter);
+                        let attester_pipeline = AttesterPipeline::new(attester, converter);
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
@@ -492,11 +412,9 @@ impl OHttpClientInner {
                             .get_evidence(&ReportData::Claims(userdata))
                             .await?
                     }
-                    AttestArgs::BackgroundCheck { aa_args } => {
+                    AttestContext::BackgroundCheck { attester, .. } => {
                         let AttestationChallengeResponse { challenge_token } =
                             self.background_check_attestation_challenge().await?;
-
-                        let coco_attester = CocoAttester::new(&aa_args.aa_addr)?;
 
                         let userdata = ClientUserData {
                             challenge_token: Some(challenge_token),
@@ -504,20 +422,12 @@ impl OHttpClientInner {
                         }
                         .to_claims()?;
 
-                        let evidence = coco_attester
-                            .get_evidence(&ReportData::Claims(userdata))
-                            .await?;
+                        let evidence = attester.get_evidence(&ReportData::Claims(userdata)).await?;
 
                         let AttestationVerifyResponse {
                             attestation_result: token,
                         } = self.background_check_verify_attestation(evidence).await?;
                         CocoAsToken::new(token)?
-                    }
-                    AttestArgs::PassportBuiltin { .. } => {
-                        todo!("Builtin AA with remote AS not implemented yet")
-                    }
-                    AttestArgs::Builtin { .. } => {
-                        todo!("Builtin AA not implemented yet")
                     }
                 };
 
@@ -532,7 +442,7 @@ impl OHttpClientInner {
                     token_expire,
                 )
             }
-            RaArgs::VerifyOnly(..) | RaArgs::NoRa => {
+            None => {
                 // Not required
                 (None, ClientAuth::NoAuth(NoAuth {}), Expire::NoExpire)
             }
