@@ -517,7 +517,8 @@ By configuring different combinations of `attest` and `verify` properties at bot
 In the Background Check model, the [Attest](#attest) configuration should include the following fields:
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
-- **`aa_addr`** (string): Address of the Attestation Agent
+- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
+- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
 - **`refresh_interval`** (int, optional, default value is 600): Specifies the cache time for obtaining evidence from the Attestation Agent (in seconds). If set to 0, it requests the latest evidence each time a secure session is established. In Background Check mode, this option only takes effect when communicating using the rats-tls protocol, affecting the frequency of updating its own X.509 certificate. This option has no effect when communicating using the OHTTP protocol.
 
 Example:
@@ -525,6 +526,7 @@ Example:
 ```json
 "attest": {
     // When model is not specified, Background Check mode is used by default
+    "aa_type": "uds",
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
 }
 ```
@@ -532,13 +534,15 @@ Example:
 ```json
 "attest": {
     "model": "background_check",
-    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "aa_type": "uds",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
 }
 ```
 
 ```json
 "attest": {
     "model": "background_check",
+    "aa_type": "uds",
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
     "refresh_interval": 3600
 }
@@ -549,9 +553,11 @@ Example:
 In the Background Check model, the [Verify](#verify) configuration should include the following fields:
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
-- **`as_addr`** (string): Address of the Attestation Service
-- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
+- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc", "builtin"
+- **`as_addr`** (string, required for "restful" and "grpc"): Address of the Attestation Service
 - **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
+- **`policy`** (object, optional for "builtin"): OPA policy configuration for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
+- **`reference_values`** (array, optional for "builtin"): Reference value configurations for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
 
@@ -575,12 +581,26 @@ Example: Connecting to a gRPC type AS service
 
 ```json
 "verify": {
-    "model": "background_check",
+    "as_type": "grpc",
     "as_addr": "http://127.0.0.1:5000/",
-    "as_is_grpc": true,
     "as_headers": {
         "Authorization": "Bearer your-grpc-token"
     },
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+Example: Using Builtin AS
+
+```json
+"verify": {
+    "as_type": "builtin",
+    "policy": {
+        "type": "default"
+    },
+    "reference_values": [],
     "policy_ids": [
         "default"
     ]
@@ -591,7 +611,6 @@ Example: Specifying Root Certificate Paths for Attestation Token Verification
 
 ```json
 "verify": {
-    "model": "background_check",
     "as_addr": "http://127.0.0.1:8080/",
     "policy_ids": [
         "default"
@@ -602,135 +621,59 @@ Example: Specifying Root Certificate Paths for Attestation Token Verification
 }
 ```
 
-### Passport Model
+##### Builtin AS Configuration
 
-In addition to the Background Check model, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
+When `as_type` is set to `"builtin"`, TNG uses the built-in Attestation Service to verify Evidence locally without connecting to an external Attestation Service. This mode is suitable for the following scenarios:
 
-The Passport model is suitable for scenarios with network isolation or high performance requirements, as it reduces the interaction between the Verifier and the Attestation Service.
-
-#### Attest (Passport Model)
-
-In the Passport model, the [Attest](#attest) configuration should include the following fields:
-
-- **`model`** (string): Set to "passport" to enable the Passport model
-- **`aa_addr`** (string): Address of the Attestation Agent
-- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
-- **`as_addr`** (string): Address of the Attestation Service
-- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
-- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
-- **`policy_ids`** (array [string]): List of policy IDs
-
-Example:
-
-```json
-"attest": {
-    "model": "passport",
-    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-    "refresh_interval": 3600,
-    "as_addr": "http://127.0.0.1:8080/",
-    "as_is_grpc": false,
-    "as_headers": {
-        "Authorization": "Bearer your-token-here",
-        "X-Custom-Header": "custom-value"
-    },
-    "policy_ids": [
-        "default"
-    ]
-}
-```
-
-#### Verify (Passport Model)
-
-In the Passport model, the [Verify](#verify) configuration should include the following fields:
-
-- **`model`** (string): Set to "passport" to enable the Passport model
-- **`as_addr`** (string, optional): Attestation service address, used for fetching attestation service certificate, optional. At least one of `as_addr` (or the combination of `as_addr`, `as_is_grpc`, `as_headers` fields) or `trusted_certs_paths` must be specified.
-- **`as_is_grpc`** (boolean, optional, defaults to false): Whether the Attestation Service uses the gRPC protocol
-- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
-- **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
-
-Example:
-
-```json
-"verify": {
-    "model": "passport",
-    "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": [
-        "default"
-    ],
-    "trusted_certs_paths": [
-        "/tmp/as-ca.pem"
-    ]
-}
-```
-
-
-
-### Builtin Mode
-
-Builtin mode is a local Attestation Service verification mode provided by TNG. Unlike Background Check and Passport modes, Builtin mode does not require connecting to an external Attestation Service, but instead verifies Evidence locally. This mode is suitable for the following scenarios:
-
-- Network-isolated environments where external Attestation Service is not accessible
-- Latency-sensitive verification requirements
+- Network-isolated environments where external Attestation Service cannot be reached
+- Latency-sensitive applications requiring fast verification
 - Simplified deployment architecture with reduced external dependencies
 
 > [!NOTE]
-> Builtin mode requires TNG to be compiled with the corresponding TEE type features enabled (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`).
+> Builtin mode requires TNG to be compiled with the corresponding TEE type feature (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`).
 
 > [!NOTE]
-> In the current TNG releases built by GitHub CI, RPM packages and binary artifacts do not support Builtin mode. Only container images support Builtin mode.
+> In current GitHub CI-built TNG release versions, RPM packages and binary artifacts do not support Builtin mode; only container images support Builtin mode.
 
-> [!WARNING]
-> Currently, Builtin mode only supports the Verify (verifier) role and does not support the Attest (attester) role.
+###### PolicyConfig
 
-#### Verify (Builtin Mode)
+Policy configuration specifies the OPA policy used for Evidence verification. Three methods are supported:
 
-In Builtin mode, the [Verify](#verify) configuration should include the following fields:
-
-- **`model`** (string): Set to `"builtin"` to enable Builtin mode
-- **`policy`** (PolicyConfig, optional, default is `default`): Specifies the OPA verification policy configuration
-- **`reference_values`** (array [ReferenceValueConfig], optional, default is empty array): Specifies the reference value configuration list for verifying Evidence measurements
-
-##### PolicyConfig
-
-The policy configuration specifies the OPA policy used when verifying Evidence, supporting the following three methods:
-
-**Default Policy (default)**:
+**Default Policy**:
 
 - **`type`** (string): Set to `"default"`
-- Uses the attestation-service's built-in default policy, which performs comprehensive measurement verification of TEE hardware and software
-- Default policy source code: [ear_default_policy_cpu.rego](https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego)
+- Uses the default policy built into attestation-service, which performs comprehensive measurement verification of TEE hardware and software
+- Default policy source: [ear_default_policy_cpu.rego](https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego)
 
-**Inline Policy (inline)**:
+**Inline Policy**:
 
 - **`type`** (string): Set to `"inline"`
-- **`content`** (string): Standard Base64-encoded OPA policy content
+- **`content`** (string): Base64-encoded OPA policy content
 
-**File Path Policy (path)**:
+**File Path Policy**:
 
 - **`type`** (string): Set to `"path"`
 - **`path`** (string): Path to the OPA policy file
 
-##### ReferenceValueConfig
+###### ReferenceValueConfig
 
-The reference value configuration specifies the source of reference values for verifying Evidence, supporting the following two modes:
+Reference value configuration specifies the source of reference values used for Evidence verification. Two modes are supported:
 
-**Sample Mode**: Directly provide reference value payload
+**Sample Mode**: Provide reference value payload directly
 
 - **`type`** (string): Set to `"sample"`
 - **`payload`** (SampleProvenancePayloadConfig): Reference value payload configuration
 
-**SLSA Mode**: Obtain reference values from Rekor transparency log
+**SLSA Mode**: Retrieve reference values from Rekor transparency log
 
 - **`type`** (string): Set to `"slsa"`
 - **`payload`** (SlsaReferenceValuePayloadConfig): Reference value payload configuration
 
-##### SampleProvenancePayloadConfig
+###### SampleProvenancePayloadConfig
 
-The payload configuration specifies the specific content of reference values in `Provenance` format:
+Payload configuration specifies the specific content of reference values in `Provenance` format:
 
-**Inline Payload (inline)**:
+**Inline payload**:
 
 - **`type`** (string): Set to `"inline"`
 - **`content`** (object): Reference value JSON object in `Provenance` format
@@ -745,28 +688,28 @@ The payload configuration specifies the specific content of reference values in 
 }
 ```
 
-**Field Description**:
-- The key is an arbitrary identifier for the measured object, depending on the Policy definition.
-- The value is the expected reference value for the measured object, corresponding to the key.
+**Field description**:
+- Key: Identifier for any measured object, depending on Policy definition
+- Value: Expected reference value for the measured object, corresponding to the key
 
-**File Path Payload (path)**:
+**File path payload**:
 
 - **`type`** (string): Set to `"path"`
-- **`path`** (string): Path to the reference value JSON file, with content in `Provenance` format
+- **`path`** (string): Path to the reference value JSON file in `Provenance` format
 
-##### SlsaReferenceValuePayloadConfig
+###### SlsaReferenceValuePayloadConfig
 
-The SLSA reference value payload configuration specifies the specific content of reference values in `ReferenceValueListPayload` format:
+SLSA reference value payload configuration specifies the specific content in `ReferenceValueListPayload` format:
 
-**Inline Payload (inline)**:
+**Inline payload**:
 
 - **`type`** (string): Set to `"inline"`
 - **`content`** (object): Reference value JSON object in `ReferenceValueListPayload` format
 
-**File Path Payload (path)**:
+**File path payload**:
 
 - **`type`** (string): Set to `"path"`
-- **`path`** (string): Path to the reference value JSON file, with content in `ReferenceValueListPayload` format
+- **`path`** (string): Path to the reference value JSON file in `ReferenceValueListPayload` format
 
 `ReferenceValueListPayload` format:
 
@@ -793,32 +736,32 @@ The SLSA reference value payload configuration specifies the specific content of
 }
 ```
 
-**Field Description**:
-- **`rv_list`** (array): Reference value entry array
+**Field description**:
+- **`rv_list`** (array): Array of reference value entries
   - **`id`** (string): Unique artifact identifier
   - **`version`** (string): Artifact version
-  - **`type`** (string): Artifact type, such as `"binary"`, customizable. This field together with the `id` field determines the generated reference value name, with the format `measurement.{type}.{id}`
-  - **`provenance_info`** (object): Provenance information
-    - **`type`** (string): Provenance type, such as `"slsa-intoto-statements"`
+  - **`type`** (string): Artifact type, such as `"binary"`, customizable. This field together with `id` determines the generated reference value name in format `measurement.{type}.{id}`
+  - **`provenance_info`** (object): Source information
+    - **`type`** (string): Source type, such as `"slsa-intoto-statements"`
     - **`rekor_url`** (string): Rekor transparency log server URL
-    - **`rekor_api_version`** (number, optional): Rekor API version, supports 1 or 2, default is 2
-  - **`provenance_source`** (object, optional): Artifact provenance source configuration. **Note: This field must be specified when `rekor_api_version` is 2**
+    - **`rekor_api_version`** (number, optional): Rekor API version, supports 1 or 2, defaults to 2
+  - **`provenance_source`** (object, optional): Artifact source configuration. **Note: When `rekor_api_version` is 2, this field must be specified**
     - **`protocol`** (string): Protocol type, such as `"oci"`, `"https"`
     - **`uri`** (string): Source URI
     - **`artifact`** (string, optional): Artifact name or identifier
-  - **`operation_type`** (string): Operation type, `"refresh"` or `"add"` (append)
-  - **`rv_name`** (string, optional): Custom reference value name. When set, use this as the RVPS reference value name instead of the default `measurement.{type}.{id}` format
+  - **`operation_type`** (string): Operation type, `"refresh"` or `"add"`
+  - **`rv_name`** (string, optional): Custom reference value name. When set, uses this value as the RVPS reference value name instead of the default `measurement.{type}.{id}` format
 
-#### Examples
+###### Complete Examples
 
-##### Example 1: Providing Reference Values Using Sample Mode
+**Example 1: Using Sample Mode to Provide Reference Values**
 
-The following example demonstrates using inline policy and file path to provide TDX reference values:
+The following example shows using inline policy and file path method to provide TDX reference values:
 
 ```json
 {
     "verify": {
-        "model": "builtin",
+        "as_type": "builtin",
         "policy": {
             "type": "inline",
             "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
@@ -836,7 +779,7 @@ The following example demonstrates using inline policy and file path to provide 
 }
 ```
 
-Where the `/etc/tng/tdx-reference-values.json` file content example:
+Example content of `/etc/tng/tdx-reference-values.json`:
 
 ```json
 {
@@ -850,17 +793,16 @@ Where the `/etc/tng/tdx-reference-values.json` file content example:
 }
 ```
 
-##### Example 2: Obtaining Reference Values Using SLSA/Rekor Mode
+**Example 2: Using SLSA Mode to Provide Reference Values**
 
-The following example demonstrates obtaining TDX reference values from Rekor transparency log:
+The following example shows using SLSA mode to retrieve reference values from Rekor transparency log:
 
 ```json
 {
     "verify": {
-        "model": "builtin",
+        "as_type": "builtin",
         "policy": {
-            "type": "path",
-            "path": "/etc/tng/policy.rego"
+            "type": "default"
         },
         "reference_values": [
             {
@@ -868,27 +810,88 @@ The following example demonstrates obtaining TDX reference values from Rekor tra
                 "payload": {
                     "type": "inline",
                     "content": {
-                        "rv_list": [{
-                            "id": "my-tdx-artifact",
-                            "version": "1.0.0",
-                            "type": "binary",
-                            "provenance_info": {
-                                "type": "slsa-intoto-statements",
-                                "rekor_url": "https://log2025-1.rekor.sigstore.dev",
-                                "rekor_api_version": 2
-                            },
-                            "provenance_source": {
-                                "protocol": "oci",
-                                "uri": "oci://registry.example.com/my-image:latest",
-                                "artifact": "attestation-bundle"
-                            },
-                            "operation_type": "refresh"
-                        }]
+                        "rv_list": [
+                            {
+                                "id": "my-artifact",
+                                "version": "1.0.0",
+                                "type": "binary",
+                                "provenance_info": {
+                                    "type": "slsa-intoto-statements",
+                                    "rekor_url": "https://log2025-1.rekor.sigstore.dev"
+                                },
+                                "operation_type": "add"
+                            }
+                        ]
                     }
                 }
             }
         ]
     }
+}
+```
+
+### Passport Model
+
+In addition to the Background Check model, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
+
+The Passport model is suitable for scenarios with network isolation or high performance requirements, as it reduces the interaction between the Verifier and the Attestation Service.
+
+#### Attest (Passport Model)
+
+In the Passport model, the [Attest](#attest) configuration should include the following fields:
+
+- **`model`** (string): Set to "passport" to enable the Passport model
+- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
+- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
+- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
+- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
+- **`as_addr`** (string): Address of the Attestation Service
+- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
+- **`policy_ids`** (array [string]): List of policy IDs
+
+Example:
+
+```json
+"attest": {
+    "model": "passport",
+    "aa_type": "uds",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600,
+    "as_type": "restful",
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_headers": {
+        "Authorization": "Bearer your-token-here",
+        "X-Custom-Header": "custom-value"
+    },
+    "policy_ids": [
+        "default"
+    ]
+}
+```
+
+#### Verify (Passport Model)
+
+In the Passport model, the [Verify](#verify) configuration should include the following fields:
+
+- **`model`** (string): Set to "passport" to enable the Passport model
+- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
+- **`as_addr`** (string, optional): Attestation service address, used for fetching attestation service certificate, optional. At least one of `as_addr` (or the combination of `as_type`, `as_addr`, `as_headers` fields) or `trusted_certs_paths` must be specified.
+- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
+- **`policy_ids`** (array [string]): List of policy IDs
+- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
+
+Example:
+
+```json
+"verify": {
+    "model": "passport",
+    "as_addr": "http://127.0.0.1:8080/",
+    "policy_ids": [
+        "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
+    ]
 }
 ```
 
@@ -1224,7 +1227,6 @@ Example configuration:
                     },
                     "verify": {
                         "as_addr": "http://as.example.com:8080/",
-                        "as_is_grpc": false,
                         "policy_ids": ["default"]
                     }
                 }

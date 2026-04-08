@@ -128,7 +128,7 @@ mod tests {
     use anyhow::bail;
 
     use crate::{
-        config::ra::{AttestArgs, AttestationAgentArgs},
+        config::ra::{AttestArgs, AttestationAgentArgs, AttestationAgentType},
         tests::run_test_with_tokio_runtime,
     };
 
@@ -139,9 +139,11 @@ mod tests {
         run_test_with_tokio_runtime(|runtime| async move {
             let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
                 aa_args: AttestationAgentArgs {
-                    aa_addr:
-                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                            .to_owned(),
+                    aa_type: AttestationAgentType::Uds {
+                        aa_addr:
+                            "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                .to_owned(),
+                    },
                     refresh_interval: Some(3),
                 },
             })?;
@@ -192,9 +194,11 @@ mod tests {
         run_test_with_tokio_runtime(|runtime| async move {
             let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
                 aa_args: AttestationAgentArgs {
-                    aa_addr:
-                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                            .to_owned(),
+                    aa_type: AttestationAgentType::Uds {
+                        aa_addr:
+                            "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                                .to_owned(),
+                    },
                     refresh_interval: Some(0),
                 },
             })?;

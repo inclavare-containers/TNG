@@ -5,11 +5,11 @@ use crate::tee::coco::verifier::token::{AttestationTokenVerifierConfig, TokenVer
 use crate::tee::ReportData;
 use crate::{errors::*, tee::GenericVerifier};
 
-pub struct CocoVerifier {
+pub struct CocoRemoteVerifier {
     inner: CommonCocoVerifier,
 }
 
-impl CocoVerifier {
+impl CocoRemoteVerifier {
     pub async fn new(
         as_addr_config: &Option<AttestationServiceAddrArgs>,
         trusted_certs_paths: &Option<Vec<String>>,
@@ -54,7 +54,7 @@ impl CocoVerifier {
 }
 
 #[async_trait::async_trait]
-impl GenericVerifier for CocoVerifier {
+impl GenericVerifier for CocoRemoteVerifier {
     type Evidence = CocoAsToken;
 
     async fn verify_evidence(
@@ -71,7 +71,7 @@ impl GenericVerifier for CocoVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tee::{claims::Claims, coco::verifier::remote::CocoVerifier};
+    use crate::tee::{claims::Claims, coco::verifier::remote::CocoRemoteVerifier};
 
     /// Helper function to run JWT verification tests
     async fn run_jwt_verification_test(
@@ -85,9 +85,9 @@ mod tests {
 
         let report_data = ReportData::Claims(Claims::default());
 
-        let verifier = CocoVerifier::new(&None, &trusted_certs_paths, &policy_ids)
+        let verifier = CocoRemoteVerifier::new(&None, &trusted_certs_paths, &policy_ids)
             .await
-            .expect("Failed to create CocoVerifier");
+            .expect("Failed to create CocoRemoteVerifier");
 
         let result = verifier.verify_evidence(&token, &report_data).await;
         result.unwrap();

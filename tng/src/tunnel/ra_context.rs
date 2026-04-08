@@ -8,16 +8,15 @@ use anyhow::Result;
 #[cfg(unix)]
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::CocoConverter;
-use rats_cert::tee::coco::verifier::remote::CocoVerifier;
+use rats_cert::tee::coco::verifier::remote::CocoRemoteVerifier;
+use rats_cert::tee::coco::verifier::CocoVerifier;
 
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-#[cfg(feature = "__builtin-as")]
-use rats_cert::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 
-#[cfg(unix)]
-use crate::config::ra::AttestArgs;
-use crate::config::ra::{RaArgs, VerifyArgs};
+use crate::config::ra::{
+    AttestArgs, AttestationAgentType, AttestationServiceType, RaArgs, VerifyArgs,
+};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
@@ -111,13 +110,31 @@ impl AttestContext {
     pub fn from_attest_args(attest_args: &AttestArgs) -> Result<Self> {
         match attest_args {
             AttestArgs::Passport { aa_args, as_args } => {
-                let attester = CocoAttester::new(&aa_args.aa_addr)?;
-                let converter = CocoConverter::new(
-                    &as_args.as_addr_config.as_addr,
-                    &as_args.policy_ids,
-                    as_args.as_addr_config.as_is_grpc,
-                    &as_args.as_addr_config.as_headers,
-                )?;
+                // Extract aa_addr from AttestationAgentType
+                let aa_addr = match &aa_args.aa_type {
+                    AttestationAgentType::Uds { aa_addr } => aa_addr.clone(),
+                    AttestationAgentType::Builtin => {
+                        anyhow::bail!("Builtin AA is not supported in Passport mode with remote AS. Use PassportBuiltin model instead.")
+                    }
+                };
+                let attester = CocoAttester::new(&aa_addr)?;
+                // Extract address and headers from AttestationServiceType
+                let (as_addr, is_grpc, as_headers) = match &as_args.as_type {
+                    AttestationServiceType::Restful {
+                        as_addr,
+                        as_headers,
+                    } => (as_addr.clone(), false, as_headers.clone()),
+                    AttestationServiceType::Grpc {
+                        as_addr,
+                        as_headers,
+                    } => (as_addr.clone(), true, as_headers.clone()),
+                    #[cfg(feature = "__builtin-as")]
+                    AttestationServiceType::Builtin { .. } => {
+                        anyhow::bail!("Builtin AS is not supported in Passport mode")
+                    }
+                };
+                let converter =
+                    CocoConverter::new(&as_addr, &as_args.policy_ids, is_grpc, &as_headers)?;
                 Ok(Self::Passport {
                     attester,
                     converter,
@@ -125,17 +142,18 @@ impl AttestContext {
                 })
             }
             AttestArgs::BackgroundCheck { aa_args } => {
-                let attester = CocoAttester::new(&aa_args.aa_addr)?;
+                // Extract aa_addr from AttestationAgentType
+                let aa_addr = match &aa_args.aa_type {
+                    AttestationAgentType::Uds { aa_addr } => aa_addr.clone(),
+                    AttestationAgentType::Builtin => {
+                        anyhow::bail!("Builtin AA is not supported in BackgroundCheck mode. Use Builtin model instead.")
+                    }
+                };
+                let attester = CocoAttester::new(&aa_addr)?;
                 Ok(Self::BackgroundCheck {
                     attester,
                     refresh_strategy: aa_args.refresh_strategy(),
                 })
-            }
-            AttestArgs::PassportBuiltin { .. } => {
-                anyhow::bail!("Builtin AA with remote AS not implemented yet")
-            }
-            AttestArgs::Builtin { .. } => {
-                anyhow::bail!("Builtin AA not implemented yet")
             }
         }
     }
@@ -170,7 +188,7 @@ pub enum VerifyContext {
     #[cfg(feature = "__builtin-as")]
     Builtin {
         converter: BuiltinCocoConverter,
-        verifier: BuiltinCocoVerifier,
+        verifier: CocoVerifier,
     },
 }
 
@@ -196,43 +214,60 @@ impl VerifyContext {
     pub async fn from_verify_args(verify_args: &VerifyArgs) -> Result<Self> {
         match verify_args {
             VerifyArgs::Passport { token_verify } => {
-                let verifier = CocoVerifier::new(
-                    &token_verify.as_addr_config,
-                    &token_verify.trusted_certs_paths,
-                    &token_verify.policy_ids,
-                )
-                .await?;
+                let verifier = CocoVerifier::Remote(
+                    CocoRemoteVerifier::new(
+                        &token_verify.as_addr_config,
+                        &token_verify.trusted_certs_paths,
+                        &token_verify.policy_ids,
+                    )
+                    .await?,
+                );
                 Ok(Self::Passport { verifier })
             }
             VerifyArgs::BackgroundCheck {
                 as_args,
                 token_verify,
             } => {
-                let converter = CocoConverter::new(
-                    &as_args.as_addr_config.as_addr,
-                    &as_args.policy_ids,
-                    as_args.as_addr_config.as_is_grpc,
-                    &as_args.as_addr_config.as_headers,
-                )?;
-                let verifier = CocoVerifier::new(
-                    &Some(as_args.as_addr_config.clone()),
-                    &token_verify.trusted_certs_paths,
-                    &as_args.policy_ids,
-                )
-                .await?;
+                // Extract address and headers from AttestationServiceType
+                let (as_addr, is_grpc, as_headers) = match &as_args.as_type {
+                    AttestationServiceType::Restful {
+                        as_addr,
+                        as_headers,
+                    } => (as_addr.clone(), false, as_headers.clone()),
+                    AttestationServiceType::Grpc {
+                        as_addr,
+                        as_headers,
+                    } => (as_addr.clone(), true, as_headers.clone()),
+                    #[cfg(feature = "__builtin-as")]
+                    AttestationServiceType::Builtin {
+                        policy,
+                        reference_values,
+                    } => {
+                        let converter = BuiltinCocoConverter::new(policy, reference_values).await?;
+                        let verifier = CocoVerifier::Builtin(converter.new_verifier().await?);
+                        return Ok(Self::Builtin {
+                            converter,
+                            verifier,
+                        });
+                    }
+                };
+                let converter =
+                    CocoConverter::new(&as_addr, &as_args.policy_ids, is_grpc, &as_headers)?;
+                // Create AttestationServiceAddrArgs for verifier
+                let as_addr_config = Some(rats_cert::cert::verify::AttestationServiceAddrArgs {
+                    as_addr,
+                    as_is_grpc: is_grpc,
+                    as_headers,
+                });
+                let verifier = CocoVerifier::Remote(
+                    CocoRemoteVerifier::new(
+                        &as_addr_config,
+                        &token_verify.trusted_certs_paths,
+                        &as_args.policy_ids,
+                    )
+                    .await?,
+                );
                 Ok(Self::BackgroundCheck {
-                    converter,
-                    verifier,
-                })
-            }
-            #[cfg(feature = "__builtin-as")]
-            VerifyArgs::Builtin {
-                policy,
-                reference_values,
-            } => {
-                let converter = BuiltinCocoConverter::new(policy, reference_values).await?;
-                let verifier = converter.new_verifier().await?;
-                Ok(Self::Builtin {
                     converter,
                     verifier,
                 })
@@ -245,10 +280,10 @@ impl VerifyContext {
 mod tests {
     use super::*;
     use crate::config::ra::{
-        AttestationServiceAddrArgs, AttestationServiceArgs,
-        AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceTokenVerifyArgs, RaArgs,
-        VerifyArgs,
+        AttestationServiceArgs, AttestationServiceTokenVerifyAdditionalArgs,
+        AttestationServiceTokenVerifyArgs, RaArgs, VerifyArgs,
     };
+    use rats_cert::cert::verify::AttestationServiceAddrArgs;
     use std::collections::HashMap;
 
     // =========================================================================
@@ -274,7 +309,10 @@ mod tests {
 
     fn make_as_args() -> AttestationServiceArgs {
         AttestationServiceArgs {
-            as_addr_config: make_as_addr_config(),
+            as_type: AttestationServiceType::Restful {
+                as_addr: TEST_AS_ADDR.to_string(),
+                as_headers: HashMap::new(),
+            },
             policy_ids: vec!["default".to_string()],
         }
     }
@@ -382,20 +420,24 @@ mod tests {
     #[cfg(unix)]
     mod unix_tests {
         use super::*;
-        use crate::config::ra::{AttestArgs, AttestationAgentArgs, BuiltinAttestationAgentArgs};
+        use crate::config::ra::{AttestArgs, AttestationAgentArgs, AttestationAgentType};
         use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
         // Helper functions for Unix tests
         fn make_aa_args() -> AttestationAgentArgs {
             AttestationAgentArgs {
-                aa_addr: TEST_AA_ADDR.to_string(),
+                aa_type: AttestationAgentType::Uds {
+                    aa_addr: TEST_AA_ADDR.to_string(),
+                },
                 refresh_interval: None,
             }
         }
 
         fn make_aa_args_with_interval(interval: Option<u64>) -> AttestationAgentArgs {
             AttestationAgentArgs {
-                aa_addr: TEST_AA_ADDR.to_string(),
+                aa_type: AttestationAgentType::Uds {
+                    aa_addr: TEST_AA_ADDR.to_string(),
+                },
                 refresh_interval: interval,
             }
         }
@@ -471,41 +513,6 @@ mod tests {
             assert!(
                 matches!(ctx.refresh_strategy(), RefreshStrategy::Always),
                 "Expected Always refresh strategy"
-            );
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn test_attest_context_passport_builtin_not_implemented() {
-            let attest_args = AttestArgs::PassportBuiltin {
-                builtin_aa_args: BuiltinAttestationAgentArgs {
-                    refresh_interval: None,
-                },
-                as_args: make_as_args(),
-            };
-            let result = AttestContext::from_attest_args(&attest_args);
-            assert!(result.is_err(), "Expected error for PassportBuiltin");
-            let err = result.err().unwrap();
-            assert!(
-                err.to_string().contains("not implemented"),
-                "Error should mention 'not implemented', got: {}",
-                err
-            );
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn test_attest_context_builtin_not_implemented() {
-            let attest_args = AttestArgs::Builtin {
-                builtin_aa_args: BuiltinAttestationAgentArgs {
-                    refresh_interval: None,
-                },
-            };
-            let result = AttestContext::from_attest_args(&attest_args);
-            assert!(result.is_err(), "Expected error for Builtin");
-            let err = result.err().unwrap();
-            assert!(
-                err.to_string().contains("not implemented"),
-                "Error should mention 'not implemented', got: {}",
-                err
             );
         }
 
@@ -626,21 +633,36 @@ mod tests {
     #[cfg(all(unix, feature = "__builtin-as"))]
     mod unix_builtin_tests {
         use super::*;
-        use crate::config::ra::{AttestArgs, AttestationAgentArgs};
+        use crate::config::ra::{
+            AttestArgs, AttestationAgentArgs, AttestationAgentType, AttestationServiceArgs,
+            AttestationServiceType,
+        };
         use rats_cert::cert::verify::PolicyConfig;
         use serial_test::serial;
 
         fn make_aa_args() -> AttestationAgentArgs {
             AttestationAgentArgs {
-                aa_addr: TEST_AA_ADDR.to_string(),
+                aa_type: AttestationAgentType::Uds {
+                    aa_addr: TEST_AA_ADDR.to_string(),
+                },
                 refresh_interval: None,
+            }
+        }
+
+        fn make_builtin_as_args() -> AttestationServiceArgs {
+            AttestationServiceArgs {
+                as_type: AttestationServiceType::Builtin {
+                    policy: PolicyConfig::Default,
+                    reference_values: vec![],
+                },
+                policy_ids: vec!["default".to_string()],
             }
         }
 
         fn make_attest_passport_args() -> AttestArgs {
             AttestArgs::Passport {
                 aa_args: make_aa_args(),
-                as_args: make_as_args(),
+                as_args: make_builtin_as_args(),
             }
         }
 
@@ -650,40 +672,31 @@ mod tests {
             }
         }
 
+        fn make_verify_builtin_args() -> VerifyArgs {
+            VerifyArgs::BackgroundCheck {
+                as_args: make_builtin_as_args(),
+                token_verify: AttestationServiceTokenVerifyAdditionalArgs {
+                    trusted_certs_paths: None,
+                },
+            }
+        }
+
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
+        // Test Passport mode with Builtin AS should failed
         async fn test_ra_context_two_way_passport_builtin() {
             let attest_args = make_attest_passport_args();
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args();
             let ra_args = RaArgs::AttestAndVerify(attest_args, verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
-            assert!(result.is_ok(), "Failed: {:?}", result.err());
-            let ctx = result.unwrap();
-            assert!(
-                matches!(ctx, RaContext::AttestAndVerify { .. }),
-                "Expected AttestAndVerify variant"
-            );
-            assert!(
-                ctx.verify_context().is_some(),
-                "AttestAndVerify should have verify context"
-            );
-            assert!(
-                ctx.attest_context().is_some(),
-                "AttestAndVerify should have attest context"
-            );
+            assert!(result.is_err());
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_ra_context_two_way_bgcheck_builtin() {
             let attest_args = make_attest_bgcheck_args();
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args();
             let ra_args = RaArgs::AttestAndVerify(attest_args, verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
@@ -710,6 +723,7 @@ mod tests {
     #[cfg(feature = "__builtin-as")]
     mod builtin_tests {
         use super::*;
+        use crate::config::ra::{AttestationServiceArgs, AttestationServiceType};
         use base64::{engine::general_purpose::STANDARD, Engine};
         use rats_cert::cert::verify::{
             PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
@@ -717,13 +731,28 @@ mod tests {
         };
         use serial_test::serial;
 
+        fn make_verify_builtin_args(
+            policy: PolicyConfig,
+            reference_values: Vec<ReferenceValueConfig>,
+        ) -> VerifyArgs {
+            VerifyArgs::BackgroundCheck {
+                as_args: AttestationServiceArgs {
+                    as_type: AttestationServiceType::Builtin {
+                        policy,
+                        reference_values,
+                    },
+                    policy_ids: vec!["default".to_string()],
+                },
+                token_verify: AttestationServiceTokenVerifyAdditionalArgs {
+                    trusted_certs_paths: None,
+                },
+            }
+        }
+
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_creation_with_default_policy() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args(PolicyConfig::Default, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
@@ -737,12 +766,12 @@ mod tests {
         async fn test_verify_context_builtin_with_inline_policy() {
             // "package policy\ndefault allow = true" encoded in base64
             let policy_content = STANDARD.encode("package policy\ndefault allow = true");
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Inline {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Inline {
                     content: policy_content,
                 },
-                reference_values: vec![],
-            };
+                vec![],
+            );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
@@ -760,14 +789,14 @@ mod tests {
             let mut rvs = HashMap::new();
             rvs.insert("example-measurement".to_string(), vec![]);
             let provenance = Provenance { rvs };
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![ReferenceValueConfig::Sample {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Inline {
                         content: provenance,
                     },
                 }],
-            };
+            );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
@@ -779,10 +808,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_ra_context_verify_only_builtin() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args(PolicyConfig::Default, vec![]);
             let ra_args = RaArgs::VerifyOnly(verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
@@ -800,10 +826,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_debug_format() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args(PolicyConfig::Default, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
@@ -818,12 +841,12 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_error_invalid_policy_path() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Path {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Path {
                     path: "/nonexistent/policy.rego".to_string(),
                 },
-                reference_values: vec![],
-            };
+                vec![],
+            );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_err(), "Should fail with nonexistent policy path");
         }
@@ -831,14 +854,14 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_error_invalid_reference_path() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![ReferenceValueConfig::Sample {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Path {
                         path: "/nonexistent/ref.json".to_string(),
                     },
                 }],
-            };
+            );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(
                 result.is_err(),
@@ -849,10 +872,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_challenge_generation() {
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![],
-            };
+            let verify_args = make_verify_builtin_args(PolicyConfig::Default, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(
                 result.is_ok(),
@@ -890,6 +910,7 @@ mod tests {
             // Note: This test requires the test environment set up by `make test-dep-as`.
             let rv_item = ReferenceValueListItem {
                 id: "test-artifact".to_string(),
+                rv_name: Some("test-artifact".to_string()),
                 version: "1.0.0".to_string(),
                 rv_type: "binary".to_string(),
                 provenance_info: ReferenceValueProvenanceInfo {
@@ -908,12 +929,12 @@ mod tests {
                 rv_list: vec![rv_item],
             };
 
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![ReferenceValueConfig::Slsa {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
-            };
+            );
             // This may fail due to Rekor not being available, so we just attempt creation
             let _result = VerifyContext::from_verify_args(&verify_args).await;
             // Either Ok or specific error from Rekor fetch is acceptable
@@ -930,6 +951,7 @@ mod tests {
             // Note: This test requires the test environment set up by `make test-dep-as`.
             let rv_item = ReferenceValueListItem {
                 id: "test-artifact".to_string(),
+                rv_name: Some("test-artifact".to_string()),
                 version: "1.0.0".to_string(),
                 rv_type: "binary".to_string(),
                 provenance_info: ReferenceValueProvenanceInfo {
@@ -948,12 +970,12 @@ mod tests {
                 rv_list: vec![rv_item],
             };
 
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![ReferenceValueConfig::Slsa {
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
-            };
+            );
             // This test requires external services from `make test-dep-as`
             let _result = VerifyContext::from_verify_args(&verify_args).await;
         }
@@ -972,9 +994,9 @@ mod tests {
             rvs2.insert("component-b".to_string(), vec![]);
             let provenance2 = Provenance { rvs: rvs2 };
 
-            let verify_args = VerifyArgs::Builtin {
-                policy: PolicyConfig::Default,
-                reference_values: vec![
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![
                     ReferenceValueConfig::Sample {
                         payload: SampleProvenancePayloadConfig::Inline {
                             content: provenance1,
@@ -986,7 +1008,7 @@ mod tests {
                         },
                     },
                 ],
-            };
+            );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {

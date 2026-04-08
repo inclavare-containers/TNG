@@ -55,8 +55,8 @@ pub mod tests {
     use crate::config::{
         egress::EgressMappingArgs,
         ra::{
-            AttestationAgentArgs, AttestationServiceAddrArgs, AttestationServiceArgs,
-            AttestationServiceTokenVerifyAdditionalArgs,
+            AttestationAgentArgs, AttestationAgentType, AttestationServiceArgs,
+            AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceType,
         },
     };
 
@@ -93,9 +93,8 @@ pub mod tests {
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
                             as_args: AttestationServiceArgs{
-                                as_addr_config: AttestationServiceAddrArgs {
+                                as_type: AttestationServiceType::Restful {
                                     as_addr: "http://127.0.0.1:8080/".to_owned(),
-                                    as_is_grpc: false,
                                     as_headers: Default::default(),
                                 },
                                 policy_ids: vec!["default".to_owned()],
@@ -128,7 +127,9 @@ pub mod tests {
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
                         attest: Some(AttestArgs::BackgroundCheck { aa_args: AttestationAgentArgs {
-                            aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                            aa_type: AttestationAgentType::Uds {
+                                aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                            },
                             refresh_interval: None,
                         }}),
                         verify: None,

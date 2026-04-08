@@ -207,17 +207,18 @@ fn bind_attestation_result(
                     .map(|addr| addr.as_addr.clone());
                 attest_info.policy_ids = Some(token_verify.policy_ids.clone());
             }
-            VerifyArgs::BackgroundCheck {
-                as_args:
-                    tng::config::ra::AttestationServiceArgs {
-                        as_addr_config,
-                        policy_ids,
-                        ..
-                    },
-                ..
-            } => {
-                attest_info.as_addr = Some(as_addr_config.as_addr.clone());
-                attest_info.policy_ids = Some(policy_ids.clone());
+            VerifyArgs::BackgroundCheck { as_args, .. } => {
+                // Extract address from AttestationServiceType
+                let as_addr = match &as_args.as_type {
+                    tng::config::ra::AttestationServiceType::Restful { as_addr, .. } => {
+                        as_addr.clone()
+                    }
+                    tng::config::ra::AttestationServiceType::Grpc { as_addr, .. } => {
+                        as_addr.clone()
+                    }
+                };
+                attest_info.as_addr = Some(as_addr);
+                attest_info.policy_ids = Some(as_args.policy_ids.clone());
             }
         },
         RaArgs::NoRa => { /* nothing */ }
