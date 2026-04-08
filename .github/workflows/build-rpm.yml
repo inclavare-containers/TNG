@@ -166,9 +166,10 @@ jobs:
       - name: Run Attestation Agent and Attestation Service
         run: |
           # Start services in background and capture PIDs
-          make test-dep-aa &
+          # Use nohup + redirect to avoid Broken pipe when this step's shell exits
+          nohup make test-dep-aa > /tmp/aa.log 2>&1 &
           AA_PID=$!
-          make test-dep-as &
+          nohup make test-dep-as > /tmp/as.log 2>&1 &
           AS_PID=$!
 
           # Wait for Attestation Agent socket (max 1 minute)
@@ -216,6 +217,14 @@ jobs:
           echo "nameserver 8.8.8.8" >> /etc/resolv.conf
           # Run test
           make run-test-on-bin
+
+      - name: Print background service logs
+        if: always()
+        run: |
+          echo "=== Attestation Agent Log ==="
+          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
+          echo "=== Attestation Service Log ==="
+          cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
