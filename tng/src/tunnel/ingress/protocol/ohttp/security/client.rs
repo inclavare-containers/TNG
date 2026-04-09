@@ -45,7 +45,18 @@ use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 #[cfg(unix)]
 use crate::tunnel::ra_context::AttestContext;
 use crate::{
-    config::ra::RaArgs,
+    error::CheckErrorResponse as _,
+    tunnel::{
+        ohttp::protocol::{
+            metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
+            userdata::ServerUserData,
+            AttestationChallengeResponse, AttestationRequest, AttestationVerifyRequest,
+            AttestationVerifyResponse, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
+        },
+        utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
+    },
+};
+use crate::{
     error::TngError,
     tunnel::{
         ohttp::{
@@ -62,18 +73,6 @@ use crate::{
     },
     AttestationResult, TokioRuntime,
 };
-use crate::{
-    error::CheckErrorResponse as _,
-    tunnel::{
-        ohttp::protocol::{
-            metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
-            userdata::ServerUserData,
-            AttestationChallengeResponse, AttestationRequest, AttestationVerifyRequest,
-            AttestationVerifyResponse, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
-        },
-        utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
-    },
-};
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
 
@@ -83,7 +82,7 @@ pub struct OHttpClient {
 }
 
 pub struct OHttpClientInner {
-    ra_context: RaContext,
+    ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     #[cfg(unix)]
     rng: tokio::sync::Mutex<ChaCha12Rng>,
@@ -110,13 +109,11 @@ struct KeyStoreValue {
 
 impl OHttpClient {
     pub async fn new(
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         http_client: Arc<reqwest::Client>,
         base_url: Url,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let ra_context = RaContext::from_ra_args(&ra_args).await?;
-
         let refresh_strategy = {
             #[cfg(unix)]
             if let Some(attest_ctx) = ra_context.attest_context() {
@@ -681,6 +678,12 @@ impl OHttpClientInner {
 
         let HttpMessage::Response(response) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpResponse);
+        };
+
+        let response = {
+            let (head, body) = response.into_parts();
+            tracing::debug!(response = ?head, "Decrypted response head from upstream server");
+            http::Response::from_parts(head, body)
         };
 
         Ok(axum::response::IntoResponse::into_response(response))

@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use crate::{
-    config::ra::RaArgs,
-    tunnel::egress::{
-        protocol::rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
-        stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+    tunnel::{
+        egress::{
+            protocol::rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
+            stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+        },
+        ra_context::RaContext,
     },
     CommonStreamTrait, TokioRuntime,
 };
@@ -21,9 +25,9 @@ pub struct RatsTlsStreamDecoder {
 }
 
 impl RatsTlsStreamDecoder {
-    pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
+    pub async fn new(ra_context: Arc<RaContext>, runtime: TokioRuntime) -> Result<Self> {
         Ok(Self {
-            security_layer: RatsTlsSecurityLayer::new(ra_args, runtime.clone()).await?,
+            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone()).await?,
             runtime,
         })
     }

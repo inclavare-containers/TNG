@@ -8,7 +8,6 @@ use anyhow::Result;
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::config::egress::KeyArgs;
-use crate::config::ra::RaArgs;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::file::FileBasedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::PeerSharedKeyManager;
@@ -46,17 +45,10 @@ impl OhttpServerApi {
     ///
     /// This function creates an OHTTP server API with a default random key manager.
     pub async fn new(
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         key: KeyArgs,
         runtime: TokioRuntime,
     ) -> Result<Self, TngError> {
-        // Pre-instantiate RA components
-        let ra_context = Arc::new(
-            RaContext::from_ra_args(&ra_args)
-                .await
-                .map_err(TngError::RaContextCreationFailed)?,
-        );
-
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
             KeyArgs::SelfGenerated { rotation_interval } => Arc::new(

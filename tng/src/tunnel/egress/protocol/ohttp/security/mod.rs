@@ -1,11 +1,16 @@
+use std::sync::Arc;
+
 use anyhow::{anyhow, Result};
 use hyper_util::rt::TokioIo;
 use tower::Service;
 use tracing::Instrument;
 
 use crate::{
-    config::{egress::OHttpArgs, ra::RaArgs},
-    tunnel::egress::protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
+    config::egress::OHttpArgs,
+    tunnel::{
+        egress::protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
+        ra_context::RaContext,
+    },
     AttestationResult, CommonStreamTrait, TokioRuntime,
 };
 
@@ -22,13 +27,13 @@ pub struct OHttpSecurityLayer {
 
 impl OHttpSecurityLayer {
     pub async fn new(
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         Ok(Self {
             runtime: runtime.clone(),
-            ohttp_server: OhttpServer::new(ra_args, ohttp_args, runtime).await?,
+            ohttp_server: OhttpServer::new(ra_context, ohttp_args, runtime).await?,
         })
     }
     pub async fn handle_stream(

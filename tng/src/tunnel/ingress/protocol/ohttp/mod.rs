@@ -8,13 +8,14 @@ mod unix_specific_module {
     use std::{convert::Infallible, pin::Pin, sync::Arc};
 
     use crate::{
-        config::{ingress::OHttpArgs, ra::RaArgs},
+        config::ingress::OHttpArgs,
         tunnel::{
             endpoint::TngEndpoint,
             ingress::protocol::{
                 ohttp::security::OHttpSecurityLayer, ProtocolStreamForwarder,
                 ProtocolStreamForwarderOutput,
             },
+            ra_context::RaContext,
         },
         CommonStreamTrait, TokioIo, TokioRuntime,
     };
@@ -34,7 +35,7 @@ mod unix_specific_module {
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             transport_so_mark: Option<u32>,
             ohttp_args: &OHttpArgs,
-            ra_args: RaArgs,
+            ra_context: Arc<RaContext>,
             runtime: TokioRuntime,
         ) -> Result<Self> {
             Ok(Self {
@@ -47,7 +48,7 @@ mod unix_specific_module {
                         ))]
                         transport_so_mark,
                         ohttp_args,
-                        ra_args,
+                        ra_context,
                         runtime.clone(),
                     )
                     .await?,

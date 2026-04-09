@@ -20,9 +20,8 @@ pub struct CertManager {
 }
 
 impl CertManager {
-    pub async fn new(attest_ctx: AttestContext, runtime: TokioRuntime) -> Result<Self> {
+    pub async fn new(attest_ctx: Arc<AttestContext>, runtime: TokioRuntime) -> Result<Self> {
         let refresh_strategy = attest_ctx.refresh_strategy();
-        let attest_ctx = Arc::new(attest_ctx);
 
         let cert = MaybeCached::new(runtime, refresh_strategy, move || {
             let attest_ctx = attest_ctx.clone();
@@ -147,7 +146,7 @@ mod tests {
                     refresh_interval: Some(3),
                 },
             })?;
-            let mut cert_manager = CertManager::new(attest_ctx, runtime).await?;
+            let mut cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 
             let old_cert = cert_manager.get_latest_cert().await?;
             assert!(Arc::ptr_eq(
@@ -202,7 +201,7 @@ mod tests {
                     refresh_interval: Some(0),
                 },
             })?;
-            let cert_manager = CertManager::new(attest_ctx, runtime).await?;
+            let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 
             let old_cert = cert_manager.get_latest_cert().await?;
 

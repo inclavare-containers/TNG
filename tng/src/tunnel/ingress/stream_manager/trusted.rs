@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
 
@@ -7,6 +8,7 @@ use crate::tunnel::ingress::protocol::ohttp::OHttpStreamForwarder;
 use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
 use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
+use crate::tunnel::ra_context::RaContext;
 use crate::CommonStreamTrait;
 use crate::{
     config::ingress::CommonArgs,
@@ -34,6 +36,7 @@ impl TrustedStreamManager {
         }
 
         let ra_args = common_args.ra_args.clone().into_checked()?;
+        let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
 
         Ok(Self {
             stream_forwarder: {
@@ -47,7 +50,7 @@ impl TrustedStreamManager {
                             ))]
                             transport_so_mark,
                             ohttp_args,
-                            ra_args,
+                            ra_context,
                             runtime.clone(),
                         )
                         .await?,
@@ -61,7 +64,7 @@ impl TrustedStreamManager {
                                 target_os = "linux"
                             ))]
                             transport_so_mark,
-                            ra_args,
+                            ra_context,
                             runtime.clone(),
                         )
                         .await?,

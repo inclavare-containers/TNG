@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use crate::{
-    config::{egress::OHttpArgs, ra::RaArgs},
-    tunnel::egress::{
-        protocol::ohttp::security::OHttpSecurityLayer,
-        stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+    config::egress::OHttpArgs,
+    tunnel::{
+        egress::{
+            protocol::ohttp::security::OHttpSecurityLayer,
+            stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+        },
+        ra_context::RaContext,
     },
     CommonStreamTrait, TokioRuntime,
 };
@@ -23,13 +26,13 @@ pub struct OHttpStreamDecoder {
 
 impl OHttpStreamDecoder {
     pub async fn new(
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: Arc::new(
-                OHttpSecurityLayer::new(ra_args, ohttp_args, runtime.clone()).await?,
+                OHttpSecurityLayer::new(ra_context, ohttp_args, runtime.clone()).await?,
             ),
             runtime,
         })

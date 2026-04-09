@@ -14,11 +14,9 @@ use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders},
 };
 
+use crate::tunnel::ra_context::RaContext;
 use crate::{
-    config::{
-        egress::{CorsConfig, OHttpArgs},
-        ra::{AttestArgs, RaArgs},
-    },
+    config::egress::{CorsConfig, OHttpArgs},
     error::TngError,
     tunnel::ohttp::protocol::{
         header::{OhttpApi, OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE},
@@ -45,22 +43,12 @@ pub struct OhttpServer {
 impl OhttpServer {
     /// Create a new TNG HTTP server instance
     pub async fn new(
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        if let RaArgs::AttestOnly(AttestArgs::BackgroundCheck { aa_args })
-        | RaArgs::AttestAndVerify(AttestArgs::BackgroundCheck { aa_args }, ..) = &ra_args
-        {
-            if aa_args.refresh_interval.is_some() {
-                tracing::warn!(
-                    "`refresh_interval` in your configuration is set but will be ignored for background check"
-                );
-            }
-        }
-
         Ok(Self {
-            api: Arc::new(OhttpServerApi::new(ra_args, ohttp_args.key, runtime).await?),
+            api: Arc::new(OhttpServerApi::new(ra_context, ohttp_args.key, runtime).await?),
             cors_layer: match &ohttp_args.cors {
                 Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
                 None => None,

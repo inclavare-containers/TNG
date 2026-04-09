@@ -15,7 +15,6 @@ use tokio_util::compat::TokioAsyncReadCompatExt as _;
 use tokio_util::compat::TokioAsyncWriteCompatExt as _;
 
 use crate::{
-    config::ra::RaArgs,
     tunnel::{
         egress::{
             protocol::rats_tls::RatsTlsStreamDecoder,
@@ -23,6 +22,7 @@ use crate::{
         },
         endpoint::TngEndpoint,
         ingress::protocol::rats_tls::RatsTlsStreamForwarder,
+        ra_context::RaContext,
     },
     CommonStreamTrait, TokioRuntime,
 };
@@ -38,16 +38,16 @@ impl<R: Runtime> StreamLayer for RatsTls<R> {
     type Runtime = R;
     type Listener = RatsTlsListener<R>;
     type Stream = RatsTlsStream<R>;
-    type Options = (RaArgs, TokioRuntime);
+    type Options = (Arc<RaContext>, TokioRuntime);
 
     #[inline]
-    async fn new((ra_args, runtime): Self::Options) -> io::Result<Self> {
+    async fn new((ra_context, runtime): Self::Options) -> io::Result<Self> {
         Ok(Self {
             forwarder: Arc::new(
                 RatsTlsStreamForwarder::new(
                     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                     None,
-                    ra_args.clone(),
+                    ra_context.clone(),
                     runtime.clone(),
                 )
                 .await
@@ -55,7 +55,7 @@ impl<R: Runtime> StreamLayer for RatsTls<R> {
                 .map_err(io::Error::other)?,
             ),
             decoder: Arc::new(
-                RatsTlsStreamDecoder::new(ra_args, runtime)
+                RatsTlsStreamDecoder::new(ra_context, runtime)
                     .await
                     .context("Failed to create rats-tls stream decoder")
                     .map_err(io::Error::other)?,

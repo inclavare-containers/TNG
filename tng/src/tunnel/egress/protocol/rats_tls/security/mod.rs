@@ -3,13 +3,11 @@ mod rustls_config;
 
 use std::sync::Arc;
 
-use crate::{
-    config::ra::RaArgs,
-    tunnel::{
-        attestation_result::AttestationResult,
-        stream::CommonStreamTrait,
-        utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
-    },
+use crate::tunnel::{
+    attestation_result::AttestationResult,
+    ra_context::RaContext,
+    stream::CommonStreamTrait,
+    utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
 };
 use anyhow::{Context as _, Result};
 use rustls_config::OnetimeTlsServerConfig;
@@ -21,8 +19,8 @@ pub(super) struct RatsTlsSecurityLayer {
 }
 
 impl RatsTlsSecurityLayer {
-    pub async fn new(ra_args: RaArgs, runtime: TokioRuntime) -> Result<Self> {
-        let tls_config_generator = TlsConfigGenerator::new(ra_args, runtime).await?;
+    pub async fn new(ra_context: Arc<RaContext>, runtime: TokioRuntime) -> Result<Self> {
+        let tls_config_generator = TlsConfigGenerator::new(ra_context, runtime).await?;
 
         Ok(Self {
             tls_config_generator,

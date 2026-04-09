@@ -8,11 +8,12 @@ use crate::tunnel::utils::socket::{
     TCP_KEEPALIVE_IDLE_SECS, TCP_KEEPALIVE_INTERVAL_SECS, TCP_KEEPALIVE_PROBE_COUNT,
 };
 use crate::{
-    config::{ingress::OHttpArgs, ra::RaArgs},
+    config::ingress::OHttpArgs,
     error::TngError,
     tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::ohttp::security::{client::OHttpClient, path_rewrite::PathRewriteGroup},
+        ra_context::RaContext,
     },
     AttestationResult, TokioRuntime, HTTP_REQUEST_USER_AGENT_HEADER,
 };
@@ -22,7 +23,7 @@ use tokio::sync::{OnceCell, RwLock};
 use url::Url;
 
 pub struct OHttpSecurityLayer {
-    ra_args: RaArgs,
+    ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     ohttp_clients: RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>,
     path_rewrite_group: PathRewriteGroup,
@@ -34,7 +35,7 @@ impl OHttpSecurityLayer {
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         ohttp_args: &OHttpArgs,
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let http_client = {
@@ -69,7 +70,7 @@ impl OHttpSecurityLayer {
         };
 
         Ok(Self {
-            ra_args,
+            ra_context,
             http_client: Arc::new(http_client),
             ohttp_clients: Default::default(),
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
@@ -154,7 +155,7 @@ impl OHttpSecurityLayer {
         cell.get_or_try_init(|| async {
             Ok(Arc::new(
                 OHttpClient::new(
-                    self.ra_args.clone(),
+                    self.ra_context.clone(),
                     self.http_client.clone(),
                     base_url,
                     self.runtime.clone(),

@@ -4,6 +4,8 @@
 //! components based on `RaArgs` configuration. This avoids repeated creation
 //! of attester/converter/verifier instances at each API call.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 #[cfg(unix)]
 use rats_cert::tee::coco::attester::CocoAttester;
@@ -27,16 +29,16 @@ use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 pub enum RaContext {
     /// Attest only mode - server attests itself
     #[cfg(unix)]
-    AttestOnly(AttestContext),
+    AttestOnly(Arc<AttestContext>),
 
     /// Verify only mode - server verifies client
-    VerifyOnly(VerifyContext),
+    VerifyOnly(Arc<VerifyContext>),
 
     /// Both attest and verify
     #[cfg(unix)]
     AttestAndVerify {
-        attest: AttestContext,
-        verify: VerifyContext,
+        attest: Arc<AttestContext>,
+        verify: Arc<VerifyContext>,
     },
 
     /// No remote attestation
@@ -48,17 +50,17 @@ impl RaContext {
     pub async fn from_ra_args(ra_args: &RaArgs) -> Result<Self> {
         match ra_args {
             RaArgs::NoRa => Ok(Self::NoRa),
-            RaArgs::VerifyOnly(verify_args) => Ok(Self::VerifyOnly(
+            RaArgs::VerifyOnly(verify_args) => Ok(Self::VerifyOnly(Arc::new(
                 VerifyContext::from_verify_args(verify_args).await?,
-            )),
+            ))),
             #[cfg(unix)]
-            RaArgs::AttestOnly(attest_args) => Ok(Self::AttestOnly(
+            RaArgs::AttestOnly(attest_args) => Ok(Self::AttestOnly(Arc::new(
                 AttestContext::from_attest_args(attest_args)?,
-            )),
+            ))),
             #[cfg(unix)]
             RaArgs::AttestAndVerify(attest_args, verify_args) => Ok(Self::AttestAndVerify {
-                attest: AttestContext::from_attest_args(attest_args)?,
-                verify: VerifyContext::from_verify_args(verify_args).await?,
+                attest: Arc::new(AttestContext::from_attest_args(attest_args)?),
+                verify: Arc::new(VerifyContext::from_verify_args(verify_args).await?),
             }),
         }
     }
@@ -150,6 +152,12 @@ impl AttestContext {
                     }
                 };
                 let attester = CocoAttester::new(&aa_addr)?;
+
+                if aa_args.refresh_interval.is_some() {
+                    tracing::warn!(
+                        "`refresh_interval` in your configuration is set, but it will be ignored for background check if you are using OHTTP protocol"
+                    );
+                }
                 Ok(Self::BackgroundCheck {
                     attester,
                     refresh_strategy: aa_args.refresh_strategy(),

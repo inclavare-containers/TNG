@@ -26,11 +26,11 @@ use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
 
 use crate::{
-    config::ra::RaArgs,
     tunnel::{
         attestation_result::AttestationResult,
         endpoint::TngEndpoint,
         ingress::protocol::rats_tls::wrapping::RatsTlsWrappingLayer,
+        ra_context::RaContext,
         utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
     },
     CommonStreamTrait,
@@ -56,7 +56,7 @@ impl RatsTlsSecurityLayer {
     pub async fn new(
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
@@ -64,7 +64,7 @@ impl RatsTlsSecurityLayer {
             transport_so_mark,
         );
         let tls_config_generator =
-            Arc::new(TlsConfigGenerator::new(ra_args, runtime.clone()).await?);
+            Arc::new(TlsConfigGenerator::new(ra_context, runtime.clone()).await?);
 
         Ok(Self {
             next_id: AtomicU64::new(0),

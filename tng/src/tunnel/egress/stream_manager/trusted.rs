@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
@@ -10,6 +12,7 @@ use crate::{
             },
             stream_manager::NextStream,
         },
+        ra_context::RaContext,
         stream::CommonStreamTrait,
         utils::runtime::TokioRuntime,
     },
@@ -45,6 +48,7 @@ pub struct TrustedStreamManager {
 impl TrustedStreamManager {
     pub async fn new(common_args: &CommonArgs, runtime: TokioRuntime) -> Result<Self> {
         let ra_args = common_args.ra_args.clone().into_checked()?;
+        let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
 
         Ok(Self {
             transport_layer: TransportLayer::new(
@@ -54,9 +58,9 @@ impl TrustedStreamManager {
             decoder: match &common_args.ohttp {
                 // Note that ohttp.allow_non_tng_traffic_regexes is handled by TransportLayer so we don't need to handle it here.
                 Some(ohttp) => Box::new(
-                    OHttpStreamDecoder::new(ra_args, ohttp.clone(), runtime.clone()).await?,
+                    OHttpStreamDecoder::new(ra_context, ohttp.clone(), runtime.clone()).await?,
                 ),
-                None => Box::new(RatsTlsStreamDecoder::new(ra_args, runtime.clone()).await?),
+                None => Box::new(RatsTlsStreamDecoder::new(ra_context, runtime.clone()).await?),
             },
             runtime,
         })

@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::{bail, Result};
 use tng::{
     config::{ingress::OHttpArgs, ra::RaArgs},
     tunnel::{endpoint::TngEndpoint, ingress::protocol::ohttp::security::OHttpSecurityLayer},
-    AttestationResult, TokioRuntime,
+    AttestationResult, RaContext, TokioRuntime,
 };
 
 use anyhow::{anyhow, Context as _};
@@ -258,8 +260,8 @@ async fn send_request_async_impl(
     let shutdown = tokio_graceful::Shutdown::no_signal();
     let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
 
-    let ohttp_security_layer =
-        OHttpSecurityLayer::new(ohttp, ra_args.clone(), runtime.clone()).await?;
+    let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
+    let ohttp_security_layer = OHttpSecurityLayer::new(ohttp, ra_context, runtime.clone()).await?;
 
     let (response, attestation_result) = ohttp_security_layer
         .forward_http_request(endpoint, request)

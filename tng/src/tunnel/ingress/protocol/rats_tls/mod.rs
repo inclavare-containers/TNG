@@ -1,13 +1,14 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use crate::{
-    config::ra::RaArgs,
     tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::{
             rats_tls::security::RatsTlsSecurityLayer, ProtocolStreamForwarder,
             ProtocolStreamForwarderOutput,
         },
+        ra_context::RaContext,
         utils,
     },
     AttestationResult, CommonStreamTrait, TokioRuntime,
@@ -28,14 +29,14 @@ impl RatsTlsStreamForwarder {
     pub async fn new(
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
-        ra_args: RaArgs,
+        ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
-                ra_args,
+                ra_context,
                 runtime,
             )
             .await?,

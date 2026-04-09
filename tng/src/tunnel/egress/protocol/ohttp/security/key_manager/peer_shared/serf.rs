@@ -36,6 +36,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::tunnel::ra_context::RaContext;
 use crate::tunnel::utils::file_watcher::FileWatcher;
 use std::path::Path;
 
@@ -143,10 +144,16 @@ impl PeerSharedKeyManager {
             ?node_id,
             "Launching peer shared key manager with serf protocol"
         );
+        let ra_args = peer_shared.ra_args.clone().into_checked()?;
+        let ra_context = Arc::new(
+            RaContext::from_ra_args(&ra_args)
+                .await
+                .map_err(TngError::InvalidParameter)?,
+        );
         let net_opts =
             NetTransportOptions::<_, SocketAddrResolver<InstrumentedTokioRuntime>, _>::with_stream_layer_options(
                 node_id,
-                (peer_shared.ra_args.clone().into_checked()?, runtime.clone()),
+                (ra_context, runtime.clone()),
             )
             .with_bind_addresses(
                 [{
