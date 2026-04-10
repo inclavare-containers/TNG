@@ -174,13 +174,7 @@ async fn handler(
             )
             .await
         }
-        OhttpApi::Tunnel => api
-            .process_encrypted_request(request, context)
-            .await
-            .map_err(|error| {
-                tracing::error!(?error, "Failed to process received OHTTP request");
-                error
-            }),
+        OhttpApi::Tunnel => api.process_encrypted_request(request, context).await,
         OhttpApi::BackgroundCheckChallenge => api
             .get_attestation_challenge()
             .await

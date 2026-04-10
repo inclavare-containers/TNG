@@ -14,9 +14,9 @@ pub const TTRPC_DEFAULT_TIMEOUT_NANO: i64 = 50 * 1000 * 1000 * 1000;
 mod tests {
     use crate::cert::verify::AttestationServiceAddrArgs;
     use crate::tee::coco::attester::CocoAttester;
-use crate::tee::coco::converter::restful::CocoRestfulConverter;
+    use crate::tee::coco::converter::restful::CocoRestfulConverter;
     use crate::tee::coco::converter::CocoConverter;
-use crate::tee::coco::verifier::remote::CocoRemoteVerifier;
+    use crate::tee::coco::verifier::remote::CocoRemoteVerifier;
     use crate::tee::coco::verifier::CocoVerifier;
     use crate::tee::GenericAttester;
     use crate::tee::GenericConverter;
@@ -47,8 +47,8 @@ use crate::tee::coco::verifier::remote::CocoRemoteVerifier;
 
         // Create converter (sends evidence to remote AS for verification)
         let converter =
-CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
-        .expect("Failed to create converter");
+            CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
+                .expect("Failed to create converter");
 
         // Create verifier (validates AS-issued token)
         let verifier = CocoRemoteVerifier::new(
@@ -87,8 +87,8 @@ CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::
 
         // Create converter (attester-side, converts evidence to token via AS)
         let converter =
-CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
-        .expect("Failed to create converter");
+            CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
+                .expect("Failed to create converter");
 
         // Get evidence
         let report_data = ReportData::Claims(serde_json::Map::new());
@@ -132,7 +132,6 @@ CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::
         /// Uses embedded attestation-service for local verification.
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
-        #[should_panic(expected = "EarStatusNotAffirming")]
         async fn test_e2e_builtin_flow() {
             // Create attester
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
@@ -156,17 +155,26 @@ CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::
                 .expect("Failed to get evidence");
 
             // Convert evidence to token using builtin AS
-            let token = converter
-                .convert(&evidence)
-                .await
-                .expect("Failed to convert evidence via builtin AS");
+            let token = converter.convert(&evidence).await;
+
+            if let Err(error) = &token {
+                assert!(
+                    format!("{error:?}")
+                        .contains("feature `tdx-verifier` is not enabled for `verifier` crate"),
+                    "{error:?}"
+                );
+                return;
+            }
+
+            let token = token.expect("Failed to convert evidence via builtin AS");
 
             // Verify the token
             let result = verifier.verify_evidence(&token, &report_data).await;
+            assert!(result.is_err());
+            let error = result.unwrap_err();
             assert!(
-                result.is_ok(),
-                "Builtin verification failed: {:?}",
-                result.err()
+                format!("{error:?}").contains("EarStatusNotAffirming"),
+                "{error:?}"
             );
         }
     }

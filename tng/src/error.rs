@@ -27,19 +27,19 @@ pub enum TngError {
     #[error("Base64 decode error: {0}")]
     Base64DecodeError(#[from] base64::DecodeError),
 
-    #[error("Failed to read metadata: {0}")]
+    #[error("Failed to read metadata")]
     MetadataReadError(#[source] std::io::Error),
 
     #[error("The metadata is too long")]
     MetadataTooLong,
 
-    #[error("Failed to decode metadata: {0}")]
+    #[error("Failed to decode metadata")]
     MetadataDecodeError(#[source] prost::DecodeError),
 
-    #[error("Failed to encode metadata: {0}")]
+    #[error("Failed to encode metadata")]
     MetadataEncodeError(#[source] prost::EncodeError),
 
-    #[error("Failed to validate metadata: {0}")]
+    #[error("Failed to validate metadata")]
     MetadataValidateError(#[source] anyhow::Error),
 
     #[error("Not a valid http request")]
@@ -48,52 +48,52 @@ pub enum TngError {
     #[error("Not a valid http response")]
     InvalidHttpResponse,
 
-    #[error("Http error during forwarding HTTP plain text to upstream: {0}")]
+    #[error("Http error during forwarding HTTP plain text to upstream")]
     HttpPlainTextForwardError(#[source] hyper::Error),
 
-    #[error("Http error during forwarding HTTP cipher text to upstream: {0}")]
+    #[error("Http error during forwarding HTTP cipher text to upstream")]
     HttpCipherTextForwardError(#[source] reqwest::Error),
 
-    #[error("Got bad response during forwarding HTTP cipher text to upstream: {0}")]
+    #[error("Got bad response during forwarding HTTP cipher text to upstream")]
     HttpCipherTextBadResponse(#[source] anyhow::Error),
 
-    #[error("Failed to get attestation challenge from server: {0}")]
+    #[error("Failed to get attestation challenge from server")]
     ClientGetAttestationChallengeFaild(#[source] anyhow::Error),
 
-    #[error("Failed to get client background check result from server: {0}")]
+    #[error("Failed to get client background check result from server")]
     ClientGetBackgroundCheckResultFaild(#[source] anyhow::Error),
 
-    #[error("Failed to get challenge token for client: {0}")]
+    #[error("Failed to get challenge token for client")]
     ServerVerifyClientGetChallengeTokenFailed(#[source] anyhow::Error),
 
-    #[error("Failed to verify client evidence: {0}")]
+    #[error("Failed to verify client evidence")]
     ServerVerifyClientEvidenceFailed(#[source] anyhow::Error),
 
-    #[error("Failed to request key config from ohttp server: {0}")]
+    #[error("Failed to request key config from ohttp server")]
     RequestKeyConfigFailed(#[source] anyhow::Error),
 
     #[error("Failed to connect to upstream")]
     ConnectUpstreamFailed,
 
-    #[error("Failed to construct http response: {0}")]
+    #[error("Failed to construct http response")]
     ConstructHttpResponseFailed(#[source] http::Error),
 
-    #[error("Failed to select a hpke configuration: {0}")]
+    #[error("Failed to select a hpke configuration")]
     ClientSelectHpkeConfigurationFailed(#[source] anyhow::Error),
 
-    #[error("Failed to generate hpke configuration response: {0}")]
+    #[error("Failed to generate hpke configuration response")]
     GenServerHpkeConfigurationResponseFailed(#[source] anyhow::Error),
 
-    #[error("Not a valid OHTTP request: {0}")]
+    #[error("Not a valid OHTTP request")]
     InvalidOHttpRequest(#[source] anyhow::Error),
 
-    #[error("Not a valid OHTTP response: {0}")]
+    #[error("Not a valid OHTTP response")]
     InvalidOHttpResponse(#[source] anyhow::Error),
 
-    #[error("Failed to create OHTTP client: {0}")]
+    #[error("Failed to create OHTTP client")]
     CreateOHttpClientFailed(#[source] anyhow::Error),
 
-    #[error("Failed to create RA context: {0}")]
+    #[error("Failed to create RA context")]
     RaContextCreationFailed(#[source] anyhow::Error),
 
     #[error("Access to this service requires a TNG-secured connection. Ensure your client connects via TNG. To bypass, update the direct_forward rules in the TNG server side configuration.")]
@@ -117,26 +117,26 @@ pub enum TngError {
     #[error("The server has no active key")]
     NoActiveKey,
 
-    #[error("Failed to load private key {0}: {1}")]
+    #[error("Failed to load private key {0}")]
     LoadPrivateKeyFailed(PathBuf, #[source] anyhow::Error),
 
-    #[error("Invalid parameter: {0}")]
+    #[error("Invalid parameter")]
     InvalidParameter(#[source] anyhow::Error),
 
     #[cfg(feature = "__egress-common")]
-    #[error("Error from serf crate: {0}")]
+    #[error("Error from serf crate")]
     SerfCrateError(#[source] anyhow::Error),
 
-    #[error("Failed to decode KeyUpdateMessage: {0}")]
+    #[error("Failed to decode KeyUpdateMessage")]
     KeyUpdateMessageDecodeError(#[source] anyhow::Error),
 
-    #[error("Failed to encode KeyUpdateMessage: {0}")]
+    #[error("Failed to encode KeyUpdateMessage")]
     KeyUpdateMessageEncodeError(#[source] prost::EncodeError),
 
-    #[error("Should request new KeyConfig from server because: {0}")]
+    #[error("Should request new KeyConfig from server")]
     ShouldRequestNewKeyConfigFromServerError(#[source] anyhow::Error),
 
-    #[error("Failed to watch file {0}: {1}")]
+    #[error("Failed to watch file {0}")]
     WatchFileFailed(PathBuf, #[source] anyhow::Error),
 }
 

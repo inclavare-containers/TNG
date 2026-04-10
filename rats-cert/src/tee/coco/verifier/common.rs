@@ -31,7 +31,7 @@ impl CommonCocoVerifier {
             .token_verifier
             .verify(token.to_string())
             .await
-            .map_err(Error::CocoVerifyTokenFailed)?;
+            .map_err(Error::CocoTokenVerifierError)?;
 
         let is_ear = if let Some(eat_profile) = claims_value.get("eat_profile") {
             if eat_profile != "tag:github.com,2024:confidential-containers/Trustee" {

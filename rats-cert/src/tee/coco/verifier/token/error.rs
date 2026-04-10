@@ -9,13 +9,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Error, AsRefStr, Debug)]
 pub enum Error {
-    #[error("Failed to verify Attestation Token: {source}")]
+    #[error("Failed to verify Attestation Token")]
     TokenVerificationFailed {
         #[source]
         source: anyhow::Error,
     },
 
-    #[error("Failed to initialize Token Verifier: {source}")]
+    #[error("Failed to initialize Token Verifier")]
     TokenVerifierInitialization {
         #[source]
         source: anyhow::Error,

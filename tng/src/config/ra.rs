@@ -984,10 +984,11 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
         let result = ra_args.into_checked();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("trusted certificate path does not exist"));
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("trusted certificate path does not exist"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1006,10 +1007,11 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
         let result = ra_args.into_checked();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("trusted certificate path does not exist"));
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("trusted certificate path does not exist"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1027,10 +1029,11 @@ mod tests {
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
         let result = ra_args.into_checked();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid attestation service address"));
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("Invalid attestation service address"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1062,10 +1065,11 @@ mod tests {
             serde_json::from_value::<RaArgsUnchecked>(json).expect("Failed to deserialize");
         let result = ra_args.into_checked();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid attestation service address"));
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("Invalid attestation service address"),
+            "{error:?}"
+        );
     }
 
     // =====================================================================

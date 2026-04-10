@@ -975,6 +975,14 @@ default file_system := 2"#;
                 .await
                 .expect("Failed to get evidence");
             let token = converter.convert(&evidence).await;
+            if let Err(error) = &token {
+                assert!(
+                    format!("{error:?}")
+                        .contains("feature `tdx-verifier` is not enabled for `verifier` crate"),
+                    "{error:?}"
+                );
+                return;
+            }
             assert!(token.is_ok(), "Convert failed: {:?}", token.err());
         }
 
@@ -1005,6 +1013,15 @@ default file_system := 2"#,
                 .await
                 .expect("Failed to get evidence");
             let token = converter.convert(&evidence).await;
+            if let Err(error) = &token {
+                assert!(
+                    format!("{error:?}")
+                        .contains("feature `tdx-verifier` is not enabled for `verifier` crate"),
+                    "{error:?}"
+                );
+                return;
+            }
+
             assert!(
                 token.is_ok(),
                 "Convert with inline policy failed: {:?}",
@@ -1014,7 +1031,6 @@ default file_system := 2"#,
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
-        #[should_panic(expected = "EarStatusNotAffirming")]
         async fn test_builtin_convert_and_verify_roundtrip() {
             let converter = BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
                 .await
@@ -1031,16 +1047,24 @@ default file_system := 2"#,
                 .await
                 .expect("Failed to get evidence");
 
-            let token = converter
-                .convert(&evidence)
-                .await
-                .expect("Failed to convert evidence");
+            // Convert evidence to token using builtin AS
+            let token = converter.convert(&evidence).await;
+            if let Err(error) = &token {
+                assert!(
+                    format!("{error:?}")
+                        .contains("feature `tdx-verifier` is not enabled for `verifier` crate"),
+                    "{error:?}"
+                );
+                return;
+            }
+            let token = token.expect("Failed to convert evidence");
 
             let result = verifier.verify_evidence(&token, &report_data).await;
+            assert!(result.is_err());
+            let error = result.unwrap_err();
             assert!(
-                result.is_ok(),
-                "Roundtrip verify failed: {:?}",
-                result.err()
+                format!("{error:?}").contains("EarStatusNotAffirming"),
+                "{error:?}"
             );
         }
     }

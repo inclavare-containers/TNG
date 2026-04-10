@@ -26,7 +26,7 @@ impl BuiltinCocoVerifier {
 
         let token_verifier = TokenVerifier::from_config(config)
             .await
-            .map_err(Error::CocoVerifyTokenFailed)?;
+            .map_err(Error::CocoTokenVerifierError)?;
 
         Ok(Self {
             inner: CommonCocoVerifier {
