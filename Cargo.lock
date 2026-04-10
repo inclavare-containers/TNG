@@ -4548,7 +4548,7 @@ dependencies = [
 [[package]]
 name = "ohttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=ea5c92cd6c13a2326a6bbcf94b89a2da8d52cb88#ea5c92cd6c13a2326a6bbcf94b89a2da8d52cb88"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=89a6520b01b78d87bf4fa88dad07cac60b711fdb#89a6520b01b78d87bf4fa88dad07cac60b711fdb"
 dependencies = [
  "aead",
  "aes-gcm",
