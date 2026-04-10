@@ -273,57 +273,6 @@ impl OHttpClientInner {
 
                     (response.hpke_key_config, Some(token))
                 }
-                #[cfg(feature = "__builtin-as")]
-                Some(VerifyContext::Builtin {
-                    converter,
-                    verifier,
-                }) => {
-                    // Generate a local challenge
-                    let challenge_token = converter
-                        .generate_challenge()
-                        .await
-                        .map_err(|e| anyhow!("Failed to generate challenge: {:?}", e))?;
-
-                    // Request hpke configuration from server with background check request
-                    let response = self
-                        .get_hpke_configuration(KeyConfigRequest {
-                            attestation_request: Some(AttestationRequest::BackgroundCheck {
-                                challenge_token: challenge_token.clone(),
-                            }),
-                        })
-                        .await?;
-
-                    let token = match response.attestation_info {
-                        Some(ServerAttestationInfo::BackgroundCheck { evidence }) => {
-                            // Parse evidence JSON to CocoEvidence
-                            let coco_evidence = CocoEvidence::deserialize_from_json(evidence)
-                                .map_err(|e| anyhow!("Failed to parse evidence: {:?}", e))?;
-
-                            // Convert evidence to token using builtin AS
-                            let token = converter
-                                .convert(&coco_evidence)
-                                .await
-                                .map_err(|e| anyhow!("Builtin AS verification failed: {:?}", e))?;
-
-                            let userdata = ServerUserData {
-                                challenge_token: Some(challenge_token),
-                                hpke_key_config: response.hpke_key_config.clone(),
-                            }
-                            .to_claims()?;
-
-                            verifier
-                                .verify_evidence(&token, &ReportData::Claims(userdata))
-                                .await?;
-                            token
-                        }
-                        Some(ServerAttestationInfo::Passport { .. }) => {
-                            bail!("Background check model is expected but got passport attestation from server")
-                        }
-                        None => bail!("Missing attestation info from server"),
-                    };
-
-                    (response.hpke_key_config, Some(token))
-                }
                 // No verification required
                 None => {
                     // Request hpke configuration for server

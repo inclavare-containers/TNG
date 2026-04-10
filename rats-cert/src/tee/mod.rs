@@ -85,8 +85,11 @@ pub trait GenericVerifier {
 pub trait GenericConverter {
     type InEvidence: GenericEvidence;
     type OutEvidence: GenericEvidence;
+    type Nonce;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence>;
+
+    async fn get_nonce(&self) -> Result<Self::Nonce>;
 }
 
 /// Blanket implementation for references to attesters.
@@ -97,9 +100,14 @@ where
 {
     type InEvidence = A::InEvidence;
     type OutEvidence = A::OutEvidence;
+    type Nonce = A::Nonce;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         (*self).convert(in_evidence).await
+    }
+
+    async fn get_nonce(&self) -> Result<Self::Nonce> {
+        (*self).get_nonce().await
     }
 }
 

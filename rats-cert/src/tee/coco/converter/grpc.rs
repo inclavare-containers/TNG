@@ -62,20 +62,13 @@ impl CocoGrpcConverter {
             request_metadata,
         })
     }
-
-    pub async fn get_nonce(&self) -> Result<CoCoNonce> {
-        // grpc-as does not support the /challenge api, so we return a dummy nonce here
-        tracing::warn!(
-            "Connected to an grpc-as instance that does not support challenge token retrieval; falling back to dummy nonce. This may compromise freshness guarantees of evidence."
-        );
-        Ok(CoCoNonce::Jwt("dummy nonce".to_string()))
-    }
 }
 
 #[async_trait::async_trait]
 impl GenericConverter for CocoGrpcConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
+    type Nonce = CoCoNonce;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!(
@@ -90,6 +83,14 @@ impl GenericConverter for CocoGrpcConverter {
                 self.convert_v1_5_2(in_evidence).await
             }
         }
+    }
+
+    async fn get_nonce(&self) -> Result<Self::Nonce> {
+        // grpc-as does not support the /challenge api, so we return a dummy nonce here
+        tracing::warn!(
+            "Connected to an grpc-as instance that does not support challenge token retrieval; falling back to dummy nonce. This may compromise freshness guarantees of evidence."
+        );
+        Ok(CoCoNonce::Jwt("dummy nonce".to_string()))
     }
 }
 

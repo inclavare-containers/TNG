@@ -22,33 +22,6 @@ pub enum CocoConverter {
     Builtin(BuiltinCocoConverter),
 }
 
-impl CocoConverter {
-    pub fn new(
-        as_addr: &str,
-        policy_ids: &Vec<String>,
-        as_is_grpc: bool,
-        as_headers: &HashMap<String, String>,
-    ) -> Result<Self> {
-        Ok(if as_is_grpc {
-            Self::Grpc(CocoGrpcConverter::new(as_addr, policy_ids, as_headers)?)
-        } else {
-            Self::Restful(CocoRestfulConverter::new(as_addr, policy_ids, as_headers)?)
-        })
-    }
-
-    pub async fn get_nonce(&self) -> Result<CoCoNonce> {
-        match self {
-            CocoConverter::Grpc(converter) => converter.get_nonce().await,
-            CocoConverter::Restful(converter) => converter.get_nonce().await,
-            #[cfg(feature = "__builtin-as")]
-            CocoConverter::Builtin(converter) => {
-                let challenge = converter.generate_challenge().await?;
-                Ok(CoCoNonce::Jwt(challenge))
-            }
-        }
-    }
-}
-
 pub enum CoCoNonce {
     Jwt(String),
 }
@@ -58,6 +31,7 @@ pub enum CoCoNonce {
 impl GenericConverter for CocoConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
+    type Nonce = CoCoNonce;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         match self {
@@ -65,6 +39,15 @@ impl GenericConverter for CocoConverter {
             CocoConverter::Restful(converter) => converter.convert(in_evidence).await,
             #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(converter) => converter.convert(in_evidence).await,
+        }
+    }
+
+    async fn get_nonce(&self) -> Result<Self::Nonce> {
+        match self {
+            CocoConverter::Grpc(converter) => converter.get_nonce().await,
+            CocoConverter::Restful(converter) => converter.get_nonce().await,
+            #[cfg(feature = "__builtin-as")]
+            CocoConverter::Builtin(converter) => converter.get_nonce().await,
         }
     }
 }

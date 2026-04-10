@@ -15,7 +15,7 @@ mod tests {
     use crate::cert::verify::AttestationServiceAddrArgs;
     use crate::tee::coco::attester::CocoAttester;
     use crate::tee::coco::converter::CocoConverter;
-    use crate::tee::coco::verifier::remote::CocoVerifier;
+    use crate::tee::coco::verifier::CocoVerifier;
     use crate::tee::GenericAttester;
     use crate::tee::GenericConverter;
     use crate::tee::GenericVerifier;

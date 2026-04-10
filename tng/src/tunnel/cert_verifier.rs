@@ -77,35 +77,6 @@ impl CoCoCommonCertVerifier {
 
                 token
             }
-            #[cfg(feature = "__builtin-as")]
-            VerifyContext::Builtin {
-                converter,
-                verifier,
-            } => {
-                // Builtin mode: certificate should contain raw evidence
-                let evidence = match &pending_result.evidence {
-                    CertEvidence::Evidence(e) => e,
-                    CertEvidence::Token(_) => {
-                        return Err(anyhow!(
-                            "Expected CoCo evidence in certificate for builtin mode, but got token"
-                        ))
-                    }
-                };
-
-                // Convert evidence to token via local builtin AS
-                let token = converter
-                    .convert(evidence)
-                    .await
-                    .map_err(|e| anyhow!("Builtin AS verification failed: {:?}", e))?;
-
-                // Verify the token via local builtin AS
-                verifier
-                    .verify_evidence(&token, &pending_result.report_data)
-                    .await
-                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
-
-                token
-            }
         };
 
         tracing::debug!("rats-rs cert verify finished successfully");

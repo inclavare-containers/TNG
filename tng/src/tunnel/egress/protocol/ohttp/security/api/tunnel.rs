@@ -216,20 +216,6 @@ impl OhttpServerApi {
                             .verify_evidence(&token, &ReportData::Claims(userdata))
                             .await?;
                     }
-                    #[cfg(feature = "__builtin-as")]
-                    VerifyContext::Builtin { verifier, .. } => {
-                        let token = CocoAsToken::new(attestation_result)?;
-
-                        let userdata = ClientUserData {
-                            challenge_token: None,
-                            pk_s: BASE64_STANDARD.encode(&pk_s),
-                        }
-                        .to_claims()?;
-
-                        verifier
-                            .verify_evidence(&token, &ReportData::Claims(userdata))
-                            .await?;
-                    }
                 }
             }
             (Some(ClientAuth::NoAuth(NoAuth {})), None) => {

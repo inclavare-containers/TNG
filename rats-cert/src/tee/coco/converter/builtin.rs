@@ -31,6 +31,7 @@ use attestation_service::{
 use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use super::convert_additional_evidence;
 use crate::errors::*;
+use crate::tee::coco::converter::CoCoNonce;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 use crate::tee::GenericConverter;
 
@@ -390,14 +391,6 @@ impl BuiltinCocoConverter {
         Ok(())
     }
 
-    /// Generate a challenge nonce for the attestation
-    pub async fn generate_challenge(&self) -> Result<String> {
-        self.attestation_service
-            .generate_challenge(None, None)
-            .await
-            .map_err(Error::AttestationServiceGenerateChallengeFailed)
-    }
-
     /// Convert hash algorithm to attestation-service HashAlgorithm
     fn hash_algo_to_as(hash_algo: &AttestationServiceHashAlgo) -> HashAlgorithm {
         match hash_algo {
@@ -416,6 +409,7 @@ impl BuiltinCocoConverter {
 impl GenericConverter for BuiltinCocoConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
+    type Nonce = CoCoNonce;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!("Convert CoCo evidence to CoCo AS token via builtin-as");
@@ -464,6 +458,15 @@ impl GenericConverter for BuiltinCocoConverter {
             .map_err(Error::AttestationServiceVerifyFailed)?;
 
         CocoAsToken::new(token)
+    }
+
+    async fn get_nonce(&self) -> Result<Self::Nonce> {
+        // Generate a challenge nonce for the attestation
+        self.attestation_service
+            .generate_challenge(None, None)
+            .await
+            .map_err(Error::AttestationServiceGenerateChallengeFailed)
+            .map(CoCoNonce::Jwt)
     }
 }
 

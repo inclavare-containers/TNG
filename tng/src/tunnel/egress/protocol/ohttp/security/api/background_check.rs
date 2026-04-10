@@ -32,15 +32,6 @@ impl OhttpServerApi {
                         let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
                         Ok(Json(AttestationChallengeResponse { challenge_token }))
                     }
-                    #[cfg(feature = "__builtin-as")]
-                    VerifyContext::Builtin { converter, .. } => {
-                        // For builtin mode, generate a local challenge
-                        let challenge_token = converter
-                            .generate_challenge()
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Failed to generate challenge: {:?}", e))?;
-                        Ok(Json(AttestationChallengeResponse { challenge_token }))
-                    }
                 },
                 None => bail!("client attestation is not required"),
             }
@@ -67,18 +58,6 @@ impl OhttpServerApi {
                     VerifyContext::BackgroundCheck { converter, .. } => {
                         let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
                         let token = converter.convert(&coco_evidence).await?;
-                        Ok(Json(AttestationVerifyResponse {
-                            attestation_result: token.into_str(),
-                        }))
-                    }
-                    #[cfg(feature = "__builtin-as")]
-                    VerifyContext::Builtin { converter, .. } => {
-                        let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)
-                            .map_err(|e| anyhow::anyhow!("Failed to parse evidence: {:?}", e))?;
-                        let token = converter
-                            .convert(&coco_evidence)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Builtin AS verification failed: {:?}", e))?;
                         Ok(Json(AttestationVerifyResponse {
                             attestation_result: token.into_str(),
                         }))

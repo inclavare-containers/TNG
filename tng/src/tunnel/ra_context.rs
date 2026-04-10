@@ -9,7 +9,8 @@ use std::sync::Arc;
 use anyhow::Result;
 #[cfg(unix)]
 use rats_cert::tee::coco::attester::CocoAttester;
-use rats_cert::tee::coco::converter::CocoConverter;
+use rats_cert::tee::coco::converter::restful::CocoRestfulConverter;
+use rats_cert::tee::coco::converter::{grpc::CocoGrpcConverter, CocoConverter};
 use rats_cert::tee::coco::verifier::remote::CocoRemoteVerifier;
 use rats_cert::tee::coco::verifier::CocoVerifier;
 
@@ -121,22 +122,28 @@ impl AttestContext {
                 };
                 let attester = CocoAttester::new(&aa_addr)?;
                 // Extract address and headers from AttestationServiceType
-                let (as_addr, is_grpc, as_headers) = match &as_args.as_type {
+                let converter = match &as_args.as_type {
                     AttestationServiceType::Restful {
                         as_addr,
                         as_headers,
-                    } => (as_addr.clone(), false, as_headers.clone()),
+                    } => CocoConverter::Restful(CocoRestfulConverter::new(
+                        as_addr,
+                        &as_args.policy_ids,
+                        as_headers,
+                    )?),
                     AttestationServiceType::Grpc {
                         as_addr,
                         as_headers,
-                    } => (as_addr.clone(), true, as_headers.clone()),
+                    } => CocoConverter::Grpc(CocoGrpcConverter::new(
+                        as_addr,
+                        &as_args.policy_ids,
+                        as_headers,
+                    )?),
                     #[cfg(feature = "__builtin-as")]
                     AttestationServiceType::Builtin { .. } => {
                         anyhow::bail!("Builtin AS is not supported in Passport mode")
                     }
                 };
-                let converter =
-                    CocoConverter::new(&as_addr, &as_args.policy_ids, is_grpc, &as_headers)?;
                 Ok(Self::Passport {
                     attester,
                     converter,
@@ -191,13 +198,6 @@ pub enum VerifyContext {
         converter: CocoConverter,
         verifier: CocoVerifier,
     },
-
-    /// Builtin - local conversion and verification
-    #[cfg(feature = "__builtin-as")]
-    Builtin {
-        converter: BuiltinCocoConverter,
-        verifier: CocoVerifier,
-    },
 }
 
 impl std::fmt::Debug for VerifyContext {
@@ -208,10 +208,6 @@ impl std::fmt::Debug for VerifyContext {
                 .finish_non_exhaustive(),
             Self::BackgroundCheck { .. } => f
                 .debug_struct("VerifyContext::BackgroundCheck")
-                .finish_non_exhaustive(),
-            #[cfg(feature = "__builtin-as")]
-            Self::Builtin { .. } => f
-                .debug_struct("VerifyContext::Builtin")
                 .finish_non_exhaustive(),
         }
     }
@@ -236,16 +232,53 @@ impl VerifyContext {
                 as_args,
                 token_verify,
             } => {
-                // Extract address and headers from AttestationServiceType
-                let (as_addr, is_grpc, as_headers) = match &as_args.as_type {
+                let (converter, verifier) = match &as_args.as_type {
                     AttestationServiceType::Restful {
                         as_addr,
                         as_headers,
-                    } => (as_addr.clone(), false, as_headers.clone()),
+                    } => {
+                        let converter = CocoConverter::Restful(CocoRestfulConverter::new(
+                            as_addr,
+                            &as_args.policy_ids,
+                            as_headers,
+                        )?);
+                        let verifier = CocoVerifier::Remote(
+                            CocoRemoteVerifier::new(
+                                &Some(rats_cert::cert::verify::AttestationServiceAddrArgs {
+                                    as_addr: as_addr.clone(),
+                                    as_is_grpc: false,
+                                    as_headers: as_headers.clone(),
+                                }),
+                                &token_verify.trusted_certs_paths,
+                                &as_args.policy_ids,
+                            )
+                            .await?,
+                        );
+                        (converter, verifier)
+                    }
                     AttestationServiceType::Grpc {
                         as_addr,
                         as_headers,
-                    } => (as_addr.clone(), true, as_headers.clone()),
+                    } => {
+                        let converter = CocoConverter::Grpc(CocoGrpcConverter::new(
+                            as_addr,
+                            &as_args.policy_ids,
+                            as_headers,
+                        )?);
+                        let verifier = CocoVerifier::Remote(
+                            CocoRemoteVerifier::new(
+                                &Some(rats_cert::cert::verify::AttestationServiceAddrArgs {
+                                    as_addr: as_addr.clone(),
+                                    as_is_grpc: true,
+                                    as_headers: as_headers.clone(),
+                                }),
+                                &token_verify.trusted_certs_paths,
+                                &as_args.policy_ids,
+                            )
+                            .await?,
+                        );
+                        (converter, verifier)
+                    }
                     #[cfg(feature = "__builtin-as")]
                     AttestationServiceType::Builtin {
                         policy,
@@ -253,28 +286,9 @@ impl VerifyContext {
                     } => {
                         let converter = BuiltinCocoConverter::new(policy, reference_values).await?;
                         let verifier = CocoVerifier::Builtin(converter.new_verifier().await?);
-                        return Ok(Self::Builtin {
-                            converter,
-                            verifier,
-                        });
+                        (CocoConverter::Builtin(converter), verifier)
                     }
                 };
-                let converter =
-                    CocoConverter::new(&as_addr, &as_args.policy_ids, is_grpc, &as_headers)?;
-                // Create AttestationServiceAddrArgs for verifier
-                let as_addr_config = Some(rats_cert::cert::verify::AttestationServiceAddrArgs {
-                    as_addr,
-                    as_is_grpc: is_grpc,
-                    as_headers,
-                });
-                let verifier = CocoVerifier::Remote(
-                    CocoRemoteVerifier::new(
-                        &as_addr_config,
-                        &token_verify.trusted_certs_paths,
-                        &as_args.policy_ids,
-                    )
-                    .await?,
-                );
                 Ok(Self::BackgroundCheck {
                     converter,
                     verifier,
@@ -733,9 +747,12 @@ mod tests {
         use super::*;
         use crate::config::ra::{AttestationServiceArgs, AttestationServiceType};
         use base64::{engine::general_purpose::STANDARD, Engine};
-        use rats_cert::cert::verify::{
-            PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-            SlsaReferenceValuePayloadConfig,
+        use rats_cert::{
+            cert::verify::{
+                PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+                SlsaReferenceValuePayloadConfig,
+            },
+            tee::coco::converter::CoCoNonce,
         };
         use serial_test::serial;
 
@@ -764,7 +781,10 @@ mod tests {
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
-                VerifyContext::Builtin { .. } => {} // expected
+                VerifyContext::BackgroundCheck {
+                    converter: CocoConverter::Builtin(..),
+                    ..
+                } => {} // expected
                 other => panic!("Expected Builtin variant, got {:?}", other),
             }
         }
@@ -783,7 +803,10 @@ mod tests {
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
-                VerifyContext::Builtin { .. } => {} // expected
+                VerifyContext::BackgroundCheck {
+                    converter: CocoConverter::Builtin(..),
+                    ..
+                } => {} // expected
                 other => panic!("Expected Builtin variant, got {:?}", other),
             }
         }
@@ -808,7 +831,10 @@ mod tests {
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
-                VerifyContext::Builtin { .. } => {} // expected
+                VerifyContext::BackgroundCheck {
+                    converter: CocoConverter::Builtin(..),
+                    ..
+                } => {} // expected
                 other => panic!("Expected Builtin variant, got {:?}", other),
             }
         }
@@ -889,14 +915,18 @@ mod tests {
             );
             let ctx = result.unwrap();
             match ctx {
-                VerifyContext::Builtin { converter, .. } => {
-                    let challenge_result = converter.generate_challenge().await;
+                VerifyContext::BackgroundCheck {
+                    converter: CocoConverter::Builtin(converter),
+                    ..
+                } => {
+                    use rats_cert::tee::GenericConverter;
+                    let challenge_result = converter.get_nonce().await;
                     assert!(
                         challenge_result.is_ok(),
                         "Failed to generate challenge: {:?}",
                         challenge_result.err()
                     );
-                    let challenge = challenge_result.unwrap();
+                    let CoCoNonce::Jwt(challenge) = challenge_result.unwrap();
                     assert!(!challenge.is_empty(), "Challenge should be non-empty");
                 }
                 other => panic!("Expected Builtin variant, got {:?}", other),
@@ -1020,7 +1050,10 @@ mod tests {
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             match result.unwrap() {
-                VerifyContext::Builtin { .. } => {} // expected
+                VerifyContext::BackgroundCheck {
+                    converter: CocoConverter::Builtin(..),
+                    ..
+                } => {} // expected
                 other => panic!("Expected Builtin variant, got {:?}", other),
             }
         }

@@ -9,7 +9,7 @@ use base64::Engine as _;
 use itertools::Itertools;
 use ohttp::KeyConfig;
 use rats_cert::tee::coco::converter::CoCoNonce;
-use rats_cert::tee::{AttesterPipeline, GenericAttester as _, ReportData};
+use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericConverter as _, ReportData};
 
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;

@@ -67,8 +67,83 @@ impl CocoRestfulConverter {
             policy_ids: policy_ids.to_owned(),
         })
     }
+}
 
-    pub async fn get_nonce(&self) -> Result<CoCoNonce> {
+mod as_api {
+    pub mod v1_5_2 {
+        use super::super::*;
+
+        // Copy from https://github.com/confidential-containers/trustee/blob/7dbd42f0baeb3d26d75d43ab73b29a168d584472/attestation-service/attestation-service/src/bin/restful/mod.rs#L36-L45
+        #[derive(Debug, Serialize, Deserialize)]
+        pub struct AttestationRequest {
+            pub tee: Tee,
+            pub evidence: String,
+            pub runtime_data: Option<Data>,
+            pub init_data: Option<Data>,
+            pub runtime_data_hash_algorithm: Option<String>,
+            pub init_data_hash_algorithm: Option<String>,
+            pub policy_ids: Vec<String>,
+        }
+
+        // Copy from https://github.com/confidential-containers/trustee/blob/7dbd42f0baeb3d26d75d43ab73b29a168d584472/attestation-service/attestation-service/src/bin/restful/mod.rs#L55-L60
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Data {
+            Raw(String),
+            Structured(Value),
+        }
+    }
+
+    pub mod v1_6_0 {
+        use super::super::*;
+
+        #[derive(Debug, Serialize, Deserialize)]
+        pub struct AttestationRequest {
+            pub verification_requests: Vec<IndividualAttestationRequest>,
+            pub policy_ids: Vec<String>,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        pub struct IndividualAttestationRequest {
+            pub tee: Tee,
+            pub evidence: String,
+            pub runtime_data: Option<RuntimeData>,
+            pub init_data: Option<InitDataInput>,
+            pub runtime_data_hash_algorithm: Option<String>,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum RuntimeData {
+            Raw(String),
+            Structured(Value),
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum InitDataInput {
+            InitDataDigest(String),
+            InitDataToml(String),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericConverter for CocoRestfulConverter {
+    type InEvidence = CocoEvidence;
+    type OutEvidence = CocoAsToken;
+    type Nonce = CoCoNonce;
+
+    async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
+        tracing::debug!(
+            "Convert CoCo evidence to CoCo AS token via restful-as with policy ids: {:?}",
+            self.policy_ids
+        );
+
+        self.convert_v1_6_0_or_fallback(in_evidence).await
+    }
+
+    async fn get_nonce(&self) -> Result<Self::Nonce> {
         tracing::debug!("Connect to restful-as with protobuf version 1.6.0");
 
         let url = format!("{}/challenge", self.as_addr);
@@ -138,80 +213,6 @@ impl CocoRestfulConverter {
             .map_err(Error::ParseChallengeResponseFailed)?;
 
         Ok(CoCoNonce::Jwt(challenge_response.extra_params.jwt))
-    }
-}
-
-mod as_api {
-    pub mod v1_5_2 {
-        use super::super::*;
-
-        // Copy from https://github.com/confidential-containers/trustee/blob/7dbd42f0baeb3d26d75d43ab73b29a168d584472/attestation-service/attestation-service/src/bin/restful/mod.rs#L36-L45
-        #[derive(Debug, Serialize, Deserialize)]
-        pub struct AttestationRequest {
-            pub tee: Tee,
-            pub evidence: String,
-            pub runtime_data: Option<Data>,
-            pub init_data: Option<Data>,
-            pub runtime_data_hash_algorithm: Option<String>,
-            pub init_data_hash_algorithm: Option<String>,
-            pub policy_ids: Vec<String>,
-        }
-
-        // Copy from https://github.com/confidential-containers/trustee/blob/7dbd42f0baeb3d26d75d43ab73b29a168d584472/attestation-service/attestation-service/src/bin/restful/mod.rs#L55-L60
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum Data {
-            Raw(String),
-            Structured(Value),
-        }
-    }
-
-    pub mod v1_6_0 {
-        use super::super::*;
-
-        #[derive(Debug, Serialize, Deserialize)]
-        pub struct AttestationRequest {
-            pub verification_requests: Vec<IndividualAttestationRequest>,
-            pub policy_ids: Vec<String>,
-        }
-
-        #[derive(Debug, Serialize, Deserialize)]
-        pub struct IndividualAttestationRequest {
-            pub tee: Tee,
-            pub evidence: String,
-            pub runtime_data: Option<RuntimeData>,
-            pub init_data: Option<InitDataInput>,
-            pub runtime_data_hash_algorithm: Option<String>,
-        }
-
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum RuntimeData {
-            Raw(String),
-            Structured(Value),
-        }
-
-        #[derive(Debug, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum InitDataInput {
-            InitDataDigest(String),
-            InitDataToml(String),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl GenericConverter for CocoRestfulConverter {
-    type InEvidence = CocoEvidence;
-    type OutEvidence = CocoAsToken;
-
-    async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
-        tracing::debug!(
-            "Convert CoCo evidence to CoCo AS token via restful-as with policy ids: {:?}",
-            self.policy_ids
-        );
-
-        self.convert_v1_6_0_or_fallback(in_evidence).await
     }
 }
 
