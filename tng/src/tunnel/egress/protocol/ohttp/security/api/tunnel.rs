@@ -6,8 +6,9 @@ use bhttp::http_compat::encode::BhttpEncoder;
 use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
-use rats_cert::tee::coco::evidence::CocoAsToken;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
+
+use crate::tunnel::provider::TngToken;
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
@@ -203,7 +204,7 @@ impl OhttpServerApi {
                 match verify_ctx {
                     VerifyContext::Passport { verifier }
                     | VerifyContext::BackgroundCheck { verifier, .. } => {
-                        let token = CocoAsToken::new(attestation_result)?;
+                        let token = TngToken::from_wire(attestation_result)?;
 
                         let userdata = ClientUserData {
                             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.

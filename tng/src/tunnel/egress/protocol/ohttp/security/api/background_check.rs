@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
 use axum::Json;
-use rats_cert::tee::coco::evidence::CocoEvidence;
 use rats_cert::tee::GenericConverter;
 
 use crate::error::TngError;
@@ -8,9 +7,8 @@ use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationVerifyRequest, AttestationVerifyResponse,
 };
+use crate::tunnel::provider::TngEvidence;
 use crate::tunnel::ra_context::VerifyContext;
-
-use rats_cert::tee::coco::converter::CoCoNonce;
 
 impl OhttpServerApi {
     /// Interface 3: Attestation Forward - Get Challenge
@@ -29,7 +27,7 @@ impl OhttpServerApi {
                     }
                     VerifyContext::BackgroundCheck { converter, .. } => {
                         // Forward the request to the actual AS challenge endpoint
-                        let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
+                        let challenge_token = converter.get_nonce().await?;
                         Ok(Json(AttestationChallengeResponse { challenge_token }))
                     }
                 },
@@ -56,8 +54,8 @@ impl OhttpServerApi {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyContext::BackgroundCheck { converter, .. } => {
-                        let coco_evidence = CocoEvidence::deserialize_from_json(payload.evidence)?;
-                        let token = converter.convert(&coco_evidence).await?;
+                        let evidence = TngEvidence::deserialize_from_json(payload.evidence)?;
+                        let token = converter.convert(&evidence).await?;
                         Ok(Json(AttestationVerifyResponse {
                             attestation_result: token.into_str(),
                         }))

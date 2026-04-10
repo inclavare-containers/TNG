@@ -8,6 +8,7 @@ pub mod endpoint;
 #[cfg(feature = "__ingress-common")]
 pub mod ingress;
 pub(crate) mod ohttp;
+pub(crate) mod provider;
 pub(crate) mod ra_context;
 #[cfg(unix)]
 pub(crate) mod service_metrics;

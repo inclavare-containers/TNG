@@ -55,8 +55,8 @@ pub mod tests {
     use crate::config::{
         egress::EgressMappingArgs,
         ra::{
-            AttestationAgentArgs, AttestationAgentType, AttestationServiceArgs,
-            AttestationServiceTokenVerifyAdditionalArgs, AttestationServiceType,
+            AttesterArgs, CocoAttesterArgs, CocoConverterArgs, CocoVerifierArgs, ConverterArgs,
+            VerifierArgs,
         },
     };
 
@@ -92,16 +92,17 @@ pub mod tests {
                         no_ra: false,
                         attest: None,
                         verify: Some(VerifyArgs::BackgroundCheck {
-                            as_args: AttestationServiceArgs{
-                                as_type: AttestationServiceType::Restful {
-                                    as_addr: "http://127.0.0.1:8080/".to_owned(),
-                                    as_headers: Default::default(),
-                                },
+                            converter: ConverterArgs::Coco(CocoConverterArgs::Restful {
+                                as_addr: "http://127.0.0.1:8080/".to_owned(),
                                 policy_ids: vec!["default".to_owned()],
-                            },
-                            token_verify: AttestationServiceTokenVerifyAdditionalArgs {
+                                as_headers: Default::default(),
+                            }),
+                            verifier: VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                                as_addr: Some("http://127.0.0.1:8080/".to_owned()),
+                                policy_ids: vec!["default".to_owned()],
+                                as_headers: Default::default(),
                                 trusted_certs_paths: Some(vec!["/tmp/as.pem".to_owned()]),
-                            },
+                            }),
                         })
                     },
                 }
@@ -126,12 +127,12 @@ pub mod tests {
                     }),
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
-                        attest: Some(AttestArgs::BackgroundCheck { aa_args: AttestationAgentArgs {
-                            aa_type: AttestationAgentType::Uds {
+                        attest: Some(AttestArgs::BackgroundCheck {
+                            attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
                                 aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
-                            },
+                            }),
                             refresh_interval: None,
-                        }}),
+                        }),
                         verify: None,
                     },
                 }

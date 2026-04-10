@@ -5,15 +5,17 @@ use rats_cert::cert::verify::{CertEvidence, CertVerifier};
 use rats_cert::tee::GenericConverter;
 use rats_cert::tee::GenericVerifier;
 
-use crate::{tunnel::attestation_result::AttestationResult, tunnel::ra_context::VerifyContext};
+use crate::tunnel::attestation_result::AttestationResult;
+use crate::tunnel::provider::{TngEvidence, TngToken};
+use crate::tunnel::ra_context::VerifyContext;
 
 #[derive(Debug)]
-pub struct CoCoCommonCertVerifier {
+pub struct TngCommonCertVerifier {
     verify_ctx: Arc<VerifyContext>,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
-impl CoCoCommonCertVerifier {
+impl TngCommonCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
         Self {
             verify_ctx,
@@ -41,8 +43,12 @@ impl CoCoCommonCertVerifier {
             VerifyContext::Passport { verifier } => {
                 // Passport mode: certificate should contain a token
                 let token = match pending_result.evidence {
-                    CertEvidence::Token(t) => t,
-                    CertEvidence::Evidence(_) => return Err(anyhow!("Expected CoCo AS token in certificate for passport mode, but got raw evidence")),
+                    CertEvidence::Token(t) => TngToken::Coco(t),
+                    CertEvidence::Evidence(_) => {
+                        return Err(anyhow!(
+                            "Expected token in certificate for passport mode, but got raw evidence"
+                        ))
+                    }
                 };
 
                 // Verify the token using pre-instantiated verifier
@@ -59,13 +65,17 @@ impl CoCoCommonCertVerifier {
             } => {
                 // BackgroundCheck mode: certificate should contain raw evidence
                 let evidence = match &pending_result.evidence {
-                    CertEvidence::Evidence(e) => e,
-                    CertEvidence::Token(_) => return Err(anyhow!("Expected CoCo evidence in certificate for background check mode, but got token")),
+                    CertEvidence::Evidence(e) => TngEvidence::Coco(e.clone()),
+                    CertEvidence::Token(_) => {
+                        return Err(anyhow!(
+                            "Expected evidence in certificate for background check mode, but got token"
+                        ))
+                    }
                 };
 
                 // Convert evidence to token via remote AS
                 let token = converter
-                    .convert(evidence)
+                    .convert(&evidence)
                     .await
                     .map_err(|e| anyhow!("Failed to convert evidence to token: {:?}", e))?;
 
@@ -81,7 +91,7 @@ impl CoCoCommonCertVerifier {
 
         tracing::debug!("rats-rs cert verify finished successfully");
 
-        Ok(AttestationResult::from_coco_as_token(token))
+        Ok(AttestationResult::from_token(token))
     }
 
     pub fn verify_cert(

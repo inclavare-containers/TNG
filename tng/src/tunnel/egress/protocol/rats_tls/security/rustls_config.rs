@@ -4,7 +4,7 @@ use crate::tunnel::utils::rustls_config::{RustlsDummyCert, TlsConfigGenerator};
 use anyhow::Result;
 use rustls::ServerConfig;
 
-use super::cert_verifier::CoCoClientCertVerifier;
+use super::cert_verifier::TngClientCertVerifier;
 
 impl TlsConfigGenerator {
     pub async fn get_one_time_rustls_server_config(&self) -> Result<OnetimeTlsServerConfig> {
@@ -17,7 +17,7 @@ impl TlsConfigGenerator {
                 OnetimeTlsServerConfig(tls_server_config, None)
             }
             TlsConfigGenerator::Verify(verify_ctx) => {
-                let verifier = Arc::new(CoCoClientCertVerifier::new(verify_ctx.clone())?);
+                let verifier = Arc::new(TngClientCertVerifier::new(verify_ctx.clone())?);
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
@@ -34,7 +34,7 @@ impl TlsConfigGenerator {
                 OnetimeTlsServerConfig(tls_server_config, None)
             }
             TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
-                let verifier = Arc::new(CoCoClientCertVerifier::new(verify_ctx.clone())?);
+                let verifier = Arc::new(TngClientCertVerifier::new(verify_ctx.clone())?);
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
@@ -52,5 +52,5 @@ impl TlsConfigGenerator {
 
 pub struct OnetimeTlsServerConfig(
     pub rustls::ServerConfig,
-    pub Option<Arc<CoCoClientCertVerifier>>,
+    pub Option<Arc<TngClientCertVerifier>>,
 );

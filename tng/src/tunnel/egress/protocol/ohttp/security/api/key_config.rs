@@ -8,7 +8,6 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use itertools::Itertools;
 use ohttp::KeyConfig;
-use rats_cert::tee::coco::converter::CoCoNonce;
 use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericConverter as _, ReportData};
 
 use crate::error::TngError;
@@ -138,7 +137,7 @@ impl OhttpServerApi {
                 Some(attest_ctx) => match (attestation_request, attest_ctx) {
                     (Some(AttestationRequest::Passport), AttestContext::Passport { attester, converter, .. }) => {
                         // fetch a challenge token from attestation service
-                        let CoCoNonce::Jwt(challenge_token) = converter.get_nonce().await?;
+                        let challenge_token = converter.get_nonce().await?;
 
                         let attester_pipeline = AttesterPipeline::new(attester, converter);
 

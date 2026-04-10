@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use rats_cert::tee::coco::evidence::CocoAsToken;
 use serde::Serialize;
+
+use super::provider::TngToken;
 
 /// The result of remote attestation.
 ///
@@ -10,7 +11,7 @@ use serde::Serialize;
 pub struct AttestationResult {
     /// Use Arc to avoid cloning the claims to save memory.
     #[allow(unused)]
-    token: Arc<CocoAsToken>,
+    token: Arc<TngToken>,
 }
 
 impl Serialize for AttestationResult {
@@ -31,7 +32,7 @@ impl std::fmt::Debug for AttestationResult {
 }
 
 impl AttestationResult {
-    pub fn from_coco_as_token(token: CocoAsToken) -> Self {
+    pub fn from_token(token: TngToken) -> Self {
         Self {
             token: Arc::new(token),
         }

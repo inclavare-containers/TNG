@@ -127,7 +127,7 @@ mod tests {
     use anyhow::bail;
 
     use crate::{
-        config::ra::{AttestArgs, AttestationAgentArgs, AttestationAgentType},
+        config::ra::{AttestArgs, AttesterArgs, CocoAttesterArgs},
         tests::run_test_with_tokio_runtime,
     };
 
@@ -137,14 +137,12 @@ mod tests {
     async fn test_cert_gen_with_nonzero_interval() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
             let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
-                aa_args: AttestationAgentArgs {
-                    aa_type: AttestationAgentType::Uds {
-                        aa_addr:
-                            "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                                .to_owned(),
-                    },
-                    refresh_interval: Some(3),
-                },
+                attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
+                    aa_addr:
+                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            .to_owned(),
+                }),
+                refresh_interval: Some(3),
             })?;
             let mut cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 
@@ -192,14 +190,12 @@ mod tests {
     async fn test_cert_gen_with_zero_interval() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
             let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
-                aa_args: AttestationAgentArgs {
-                    aa_type: AttestationAgentType::Uds {
-                        aa_addr:
-                            "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                                .to_owned(),
-                    },
-                    refresh_interval: Some(0),
-                },
+                attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
+                    aa_addr:
+                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            .to_owned(),
+                }),
+                refresh_interval: Some(0),
             })?;
             let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 

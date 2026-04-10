@@ -5,28 +5,27 @@ use rustls::client::{danger::ServerCertVerified, WebPkiServerVerifier};
 use tokio_rustls::rustls::RootCertStore;
 
 use crate::tunnel::{
-    attestation_result::AttestationResult, cert_verifier::CoCoCommonCertVerifier,
+    attestation_result::AttestationResult, cert_verifier::TngCommonCertVerifier,
     ra_context::VerifyContext, utils::certs::TNG_DUMMY_CERT,
 };
 
 #[derive(Debug)]
-pub struct CoCoServerCertVerifier {
+pub struct TngServerCertVerifier {
     inner: Arc<WebPkiServerVerifier>,
-    common: CoCoCommonCertVerifier,
+    common: TngCommonCertVerifier,
 }
 
-impl CoCoServerCertVerifier {
+impl TngServerCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
         let mut roots = RootCertStore::empty();
         roots.add_parsable_certificates(certs);
-        /* The WebPkiServerVerifier requires that the root certs not empty, or it will failed with 'no root trust anchors were provided'. So let's put a dummy cert here as a root cert to make WebPkiServerVerifier happy. */
         let verifier = WebPkiServerVerifier::builder(Arc::new(roots)).build()?;
 
         Ok(Self {
             inner: verifier,
-            common: CoCoCommonCertVerifier::new(verify_ctx),
+            common: TngCommonCertVerifier::new(verify_ctx),
         })
     }
 
@@ -35,7 +34,7 @@ impl CoCoServerCertVerifier {
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for CoCoServerCertVerifier {
+impl rustls::client::danger::ServerCertVerifier for TngServerCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
