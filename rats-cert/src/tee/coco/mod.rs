@@ -14,7 +14,9 @@ pub const TTRPC_DEFAULT_TIMEOUT_NANO: i64 = 50 * 1000 * 1000 * 1000;
 mod tests {
     use crate::cert::verify::AttestationServiceAddrArgs;
     use crate::tee::coco::attester::CocoAttester;
+use crate::tee::coco::converter::restful::CocoRestfulConverter;
     use crate::tee::coco::converter::CocoConverter;
+use crate::tee::coco::verifier::remote::CocoRemoteVerifier;
     use crate::tee::coco::verifier::CocoVerifier;
     use crate::tee::GenericAttester;
     use crate::tee::GenericConverter;
@@ -44,16 +46,12 @@ mod tests {
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
 
         // Create converter (sends evidence to remote AS for verification)
-        let converter = CocoConverter::new(
-            TEST_AS_ADDR,
-            &vec!["default".to_string()],
-            false,
-            &HashMap::new(),
-        )
+        let converter =
+CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
         .expect("Failed to create converter");
 
         // Create verifier (validates AS-issued token)
-        let verifier = CocoVerifier::new(
+        let verifier = CocoRemoteVerifier::new(
             &Some(make_as_addr_config()),
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
@@ -88,12 +86,8 @@ mod tests {
         let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
 
         // Create converter (attester-side, converts evidence to token via AS)
-        let converter = CocoConverter::new(
-            TEST_AS_ADDR,
-            &vec!["default".to_string()],
-            false,
-            &HashMap::new(),
-        )
+        let converter =
+CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
         .expect("Failed to create converter");
 
         // Get evidence
@@ -110,7 +104,7 @@ mod tests {
             .expect("Failed to convert evidence to token");
 
         // Create verifier (verifier side - only verifies token, no converter needed)
-        let verifier = CocoVerifier::new(
+        let verifier = CocoRemoteVerifier::new(
             &Some(make_as_addr_config()),
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
