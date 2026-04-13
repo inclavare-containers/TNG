@@ -374,6 +374,6 @@ async fn serve_http_proxy_no_throw_error(
     }
     .await
     {
-        tracing::error!(?error, "Failed to serve connection");
+        tracing::error!(?error, "Failed to serve HTTP proxy downstream connection");
     }
 }

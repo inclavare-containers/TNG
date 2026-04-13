@@ -64,7 +64,10 @@ impl RatsTlsWrappingLayer {
             .instrument(span)
             .await
         {
-            tracing::error!(?error, "Failed to serve connection");
+            tracing::error!(
+                ?error,
+                "Failed to serve HTTP/2 connection on RATS-TLS wrapping layer"
+            );
         }
     }
 

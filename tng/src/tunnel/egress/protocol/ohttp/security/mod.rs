@@ -62,7 +62,9 @@ impl OHttpSecurityLayer {
             hyper_util::server::conn::auto::Builder::new(self.runtime.clone())
                 .serve_connection_with_upgrades(TokioIo::new(stream), hyper_service)
                 .await
-                .map_err(|error| anyhow!("failed to serve connection: {error:?}"))
+                .map_err(|error| {
+                    anyhow!("failed to serve egress OHTTP security layer connection: {error:?}")
+                })
         }
         .instrument(tracing::info_span!("security"))
         .await

@@ -405,7 +405,7 @@ mod tests {
                 .serve_connection_with_upgrades(TokioIo::new(unmodified_stream), svc)
                 .await
             {
-                tracing::error!(?error, "Failed to serve connection");
+                tracing::error!(?error, "Failed to serve HTTP inspector connection");
             }
 
             Ok::<_, anyhow::Error>(())
