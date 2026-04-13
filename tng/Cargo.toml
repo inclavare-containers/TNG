@@ -40,7 +40,7 @@ hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
 nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "990bc9a7add7025b020444c1a6802b500fb08e9a"}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "89a6520b01b78d87bf4fa88dad07cac60b711fdb"}
 opentelemetry = {workspace = true, optional = true}
 opentelemetry-otlp = {workspace = true, features = [
   "logs",

@@ -128,7 +128,15 @@ impl OhttpServer {
     pub fn create_routes(&self) -> Router<TngStreamContext> {
         let router = Router::new().fallback({
             let api = Arc::clone(&self.api);
-            move |State(state): State<TngStreamContext>, req| handler(state, api.clone(), req)
+            move |State(state): State<TngStreamContext>, req| async move {
+                handler(state, api.clone(), req)
+                    .await
+                    .map_err(|error: TngError| {
+                        // Let's log the error before return to client
+                        tracing::error!(?error, "OHTTP server failed to handle request");
+                        error
+                    })
+            }
         });
 
         let router = if let Some(cors) = &self.cors_layer {
@@ -166,13 +174,7 @@ async fn handler(
             )
             .await
         }
-        OhttpApi::Tunnel => api
-            .process_encrypted_request(request, context)
-            .await
-            .map_err(|error| {
-                tracing::error!(?error, "Failed to process received OHTTP request");
-                error
-            }),
+        OhttpApi::Tunnel => api.process_encrypted_request(request, context).await,
         OhttpApi::BackgroundCheckChallenge => api
             .get_attestation_challenge()
             .await
