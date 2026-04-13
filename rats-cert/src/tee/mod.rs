@@ -17,6 +17,23 @@ pub enum DiceParseEvidenceOutput<T> {
     Ok(T),
 }
 
+impl<T> DiceParseEvidenceOutput<T> {
+    pub fn map_ok<U: From<T>>(self) -> DiceParseEvidenceOutput<U> {
+        match self {
+            Self::Ok(v) => DiceParseEvidenceOutput::Ok(v.into()),
+            Self::MatchButInvalid(e) => DiceParseEvidenceOutput::MatchButInvalid(e),
+            Self::NotMatch => DiceParseEvidenceOutput::NotMatch,
+        }
+    }
+
+    pub fn or_else(self, f: impl FnOnce() -> DiceParseEvidenceOutput<T>) -> Self {
+        match self {
+            Self::NotMatch => f(),
+            other => other,
+        }
+    }
+}
+
 impl<T> From<DiceParseEvidenceOutput<T>> for Result<T> {
     fn from(value: DiceParseEvidenceOutput<T>) -> Self {
         match value {

@@ -42,11 +42,12 @@ impl TngToken {
         }
     }
 
-    /// Construct from a wire token string. Currently assumes CoCo since
-    /// only one provider exists. When a second provider is added, the wire
-    /// protocol should include a provider tag (similar to TngEvidence).
-    pub fn from_wire(raw: String) -> Result<Self> {
-        Ok(Self::Coco(CocoAsToken::new(raw)?))
+    /// Construct from a wire token string. The `provider` parameter determines
+    /// which provider-specific token type to construct.
+    pub fn from_wire(provider: ProviderType, raw: String) -> Result<Self> {
+        match provider {
+            ProviderType::Coco => Ok(Self::Coco(CocoAsToken::new(raw)?)),
+        }
     }
 }
 
@@ -73,14 +74,6 @@ impl GenericEvidence for TngToken {
         cbor_tag: u64,
         raw_evidence: &[u8],
     ) -> DiceParseEvidenceOutput<Self> {
-        match CocoAsToken::create_evidence_from_dice(cbor_tag, raw_evidence) {
-            DiceParseEvidenceOutput::Ok(t) => return DiceParseEvidenceOutput::Ok(t.into()),
-            DiceParseEvidenceOutput::MatchButInvalid(e) => {
-                return DiceParseEvidenceOutput::MatchButInvalid(e)
-            }
-            DiceParseEvidenceOutput::NotMatch => {}
-        }
-
-        DiceParseEvidenceOutput::NotMatch
+        CocoAsToken::create_evidence_from_dice(cbor_tag, raw_evidence).map_ok::<Self>()
     }
 }

@@ -89,14 +89,6 @@ impl GenericEvidence for TngEvidence {
         cbor_tag: u64,
         raw_evidence: &[u8],
     ) -> DiceParseEvidenceOutput<Self> {
-        match CocoEvidence::create_evidence_from_dice(cbor_tag, raw_evidence) {
-            DiceParseEvidenceOutput::Ok(e) => return DiceParseEvidenceOutput::Ok(e.into()),
-            DiceParseEvidenceOutput::MatchButInvalid(e) => {
-                return DiceParseEvidenceOutput::MatchButInvalid(e)
-            }
-            DiceParseEvidenceOutput::NotMatch => {}
-        }
-
-        DiceParseEvidenceOutput::NotMatch
+        CocoEvidence::create_evidence_from_dice(cbor_tag, raw_evidence).map_ok::<Self>()
     }
 }

@@ -6,10 +6,17 @@ use super::evidence::TngEvidence;
 use super::token::TngToken;
 
 /// Provider-polymorphic converter. Converts evidence into an AS token.
-/// Uses `try_into()` on evidence to enable cross-provider compatibility
-/// (e.g., a future ITA attester producing CoCo-compatible evidence).
+/// Uses `try_into()` on evidence to enable cross-provider compatibility.
 pub enum TngConverter {
     Coco(CocoConverter),
+}
+
+impl TngConverter {
+    pub fn provider_type(&self) -> super::provider_type::ProviderType {
+        match self {
+            Self::Coco(_) => super::provider_type::ProviderType::Coco,
+        }
+    }
 }
 
 #[async_trait::async_trait]

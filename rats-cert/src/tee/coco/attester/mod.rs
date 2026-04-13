@@ -16,7 +16,7 @@ use crate::errors::*;
 use crate::tee::coco::evidence::tee_from_str;
 use crate::tee::{GenericAttester, GenericEvidence, ReportData};
 
-mod ttrpc_protocol;
+pub(crate) mod ttrpc_protocol;
 
 pub struct CocoAttester {
     client: AttestationAgentServiceClient,

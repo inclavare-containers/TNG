@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use super::dice::cbor::OCBR_TAG_EVIDENCE_COCO_TOKEN;
 use super::dice::cbor::{
     generate_pubkey_hash_value_buffer, parse_claims_buffer, parse_evidence_buffer_with_tag,
 };
@@ -9,11 +8,9 @@ use super::CLAIM_NAME_PUBLIC_KEY_HASH;
 use crate::crypto::DefaultCrypto;
 use crate::crypto::HashAlgo;
 use crate::errors::*;
-use crate::tee::coco::evidence::{CocoAsToken, CocoEvidence};
 use crate::tee::ReportData;
-use crate::tee::{claims::Claims, GenericEvidence};
+use crate::tee::claims::Claims;
 
-use anyhow::Context;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use const_oid::ObjectIdentifier;
@@ -42,21 +39,16 @@ pub use reference_value_provider_service::rv_list::{
 #[cfg(feature = "__builtin-as")]
 pub use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 
-/// Evidence extracted from certificate - either raw evidence or already-verified token
-pub enum CertEvidence {
-    /// Raw CoCo evidence that needs to be verified by an Attestation Service
-    Evidence(CocoEvidence),
-    /// CoCo AS token that has already been verified (passport mode)
-    Token(CocoAsToken),
-}
-
-/// Pending result from certificate verification
+/// Provider-agnostic pending result from certificate verification.
 ///
-/// Contains the extracted evidence and expected report data.
-/// The caller should use an appropriate verifier to complete the verification.
+/// Contains the raw CBOR tag, raw evidence bytes, and expected report data.
+/// The caller (e.g. `TngCommonCertVerifier`) is responsible for parsing the
+/// raw evidence into the appropriate provider-specific type.
 pub struct CertVerifyPendingResult {
-    /// The extracted evidence from the certificate
-    pub evidence: CertEvidence,
+    /// The CBOR tag identifying the evidence type
+    pub cbor_tag: u64,
+    /// The raw evidence bytes (not yet parsed into a provider-specific type)
+    pub raw_evidence: Vec<u8>,
     /// The expected report data (containing pubkey hash) for verification
     pub report_data: ReportData,
 }
@@ -148,41 +140,9 @@ impl CertVerifier {
         );
         let report_data = ReportData::Claims(expected_claims);
 
-        /* Parse evidence based on CBOR tag */
-        let evidence = if cbor_tag == OCBR_TAG_EVIDENCE_COCO_TOKEN {
-            // This is a CoCo AS token (passport mode)
-            let token = Into::<Result<_>>::into(CocoAsToken::create_evidence_from_dice(
-                cbor_tag,
-                &raw_evidence,
-            ))
-            .map_err(|e| {
-                Error::DiceParseEvidenceFailed {
-                    detail: format!(
-                        "Failed to parse CoCo AS token: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
-                        cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
-                    ),
-                }
-            })?;
-            CertEvidence::Token(token)
-        } else {
-            // This is raw evidence (background check or builtin mode)
-            let evidence = Into::<Result<_>>::into(CocoEvidence::create_evidence_from_dice(
-                cbor_tag,
-                &raw_evidence,
-            ))
-            .map_err(|e| {
-                Error::DiceParseEvidenceFailed {
-                    detail: format!(
-                        "Failed to parse CoCo evidence: cbor_tag: {:#x?}, raw_evidence: {:02x?}...({}bytes): {e}",
-                        cbor_tag, &raw_evidence[..raw_evidence.len().min(10)], raw_evidence.len()
-                    ),
-                }
-            })?;
-            CertEvidence::Evidence(evidence)
-        };
-
         Ok(CertVerifyPendingResult {
-            evidence,
+            cbor_tag,
+            raw_evidence,
             report_data,
         })
     }

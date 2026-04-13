@@ -9,6 +9,14 @@ pub enum TngVerifier {
     Coco(CocoVerifier),
 }
 
+impl TngVerifier {
+    pub fn provider_type(&self) -> super::provider_type::ProviderType {
+        match self {
+            Self::Coco(_) => super::provider_type::ProviderType::Coco,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl GenericVerifier for TngVerifier {
     type Evidence = TngToken;

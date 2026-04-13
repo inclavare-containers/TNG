@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use rats_cert::cert::verify::{CertEvidence, CertVerifier};
+use rats_cert::cert::verify::CertVerifier;
 use rats_cert::tee::GenericConverter;
+use rats_cert::tee::GenericEvidence;
 use rats_cert::tee::GenericVerifier;
 
 use crate::tunnel::attestation_result::AttestationResult;
@@ -42,16 +43,20 @@ impl TngCommonCertVerifier {
         let token = match &*self.verify_ctx {
             VerifyContext::Passport { verifier } => {
                 // Passport mode: certificate should contain a token
-                let token = match pending_result.evidence {
-                    CertEvidence::Token(t) => TngToken::Coco(t),
-                    CertEvidence::Evidence(_) => {
-                        return Err(anyhow!(
-                            "Expected token in certificate for passport mode, but got raw evidence"
-                        ))
-                    }
-                };
+                let parse_result: rats_cert::errors::Result<TngToken> =
+                    TngToken::create_evidence_from_dice(
+                        pending_result.cbor_tag,
+                        &pending_result.raw_evidence,
+                    )
+                    .into();
+                let token = parse_result.map_err(|e| {
+                    anyhow!(
+                        "Failed to parse token from DICE cert (cbor_tag={:#x}): {:?}",
+                        pending_result.cbor_tag,
+                        e
+                    )
+                })?;
 
-                // Verify the token using pre-instantiated verifier
                 verifier
                     .verify_evidence(&token, &pending_result.report_data)
                     .await
@@ -63,15 +68,20 @@ impl TngCommonCertVerifier {
                 converter,
                 verifier,
             } => {
-                // BackgroundCheck mode: certificate should contain raw evidence
-                let evidence = match &pending_result.evidence {
-                    CertEvidence::Evidence(e) => TngEvidence::Coco(e.clone()),
-                    CertEvidence::Token(_) => {
-                        return Err(anyhow!(
-                            "Expected evidence in certificate for background check mode, but got token"
-                        ))
-                    }
-                };
+                 // BackgroundCheck mode: certificate should contain raw evidence
+                let parse_result: rats_cert::errors::Result<TngEvidence> =
+                    TngEvidence::create_evidence_from_dice(
+                        pending_result.cbor_tag,
+                        &pending_result.raw_evidence,
+                    )
+                    .into();
+                let evidence = parse_result.map_err(|e| {
+                    anyhow!(
+                        "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {:?}",
+                        pending_result.cbor_tag,
+                        e
+                    )
+                })?;
 
                 // Convert evidence to token via remote AS
                 let token = converter

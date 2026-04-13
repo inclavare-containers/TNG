@@ -204,7 +204,7 @@ impl OhttpServerApi {
                 match verify_ctx {
                     VerifyContext::Passport { verifier }
                     | VerifyContext::BackgroundCheck { verifier, .. } => {
-                        let token = TngToken::from_wire(attestation_result)?;
+                        let token = TngToken::from_wire(verify_ctx.provider_type(), attestation_result)?;
 
                         let userdata = ClientUserData {
                             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
