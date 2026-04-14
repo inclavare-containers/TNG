@@ -10,6 +10,26 @@ use crate::tunnel::attestation_result::AttestationResult;
 use crate::tunnel::provider::{TngEvidence, TngToken};
 use crate::tunnel::ra_context::VerifyContext;
 
+fn parse_token_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngToken> {
+    rats_cert::errors::Result::from(TngToken::create_evidence_from_dice(cbor_tag, raw_evidence))
+        .map_err(|e| {
+            anyhow!(
+                "Failed to parse AS token from DICE cert (cbor_tag={:#x}): {e:#}",
+                cbor_tag
+            )
+        })
+}
+
+fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngEvidence> {
+    rats_cert::errors::Result::from(TngEvidence::create_evidence_from_dice(cbor_tag, raw_evidence))
+        .map_err(|e| {
+            anyhow!(
+                "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {e:#}",
+                cbor_tag
+            )
+        })
+}
+
 #[derive(Debug)]
 pub struct TngCommonCertVerifier {
     verify_ctx: Arc<VerifyContext>,
@@ -42,21 +62,13 @@ impl TngCommonCertVerifier {
         // Step 2: Based on verify mode, convert evidence to token and verify
         let token = match &*self.verify_ctx {
             VerifyContext::Passport { verifier } => {
-                // Passport mode: certificate should contain a token
-                let parse_result: rats_cert::errors::Result<TngToken> =
-                    TngToken::create_evidence_from_dice(
-                        pending_result.cbor_tag,
-                        &pending_result.raw_evidence,
-                    )
-                    .into();
-                let token = parse_result.map_err(|e| {
-                    anyhow!(
-                        "Failed to parse token from DICE cert (cbor_tag={:#x}): {:?}",
-                        pending_result.cbor_tag,
-                        e
-                    )
-                })?;
+                // Passport: extension must parse as an AS token (not raw evidence).
+                let token = parse_token_from_dice_cert(
+                    pending_result.cbor_tag,
+                    &pending_result.raw_evidence,
+                )?;
 
+                // Verify the token using pre-instantiated verifier
                 verifier
                     .verify_evidence(&token, &pending_result.report_data)
                     .await
@@ -68,20 +80,11 @@ impl TngCommonCertVerifier {
                 converter,
                 verifier,
             } => {
-                 // BackgroundCheck mode: certificate should contain raw evidence
-                let parse_result: rats_cert::errors::Result<TngEvidence> =
-                    TngEvidence::create_evidence_from_dice(
-                        pending_result.cbor_tag,
-                        &pending_result.raw_evidence,
-                    )
-                    .into();
-                let evidence = parse_result.map_err(|e| {
-                    anyhow!(
-                        "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {:?}",
-                        pending_result.cbor_tag,
-                        e
-                    )
-                })?;
+                // BackgroundCheck: extension must parse as raw evidence (then convert via AS).
+                let evidence = parse_evidence_from_dice_cert(
+                    pending_result.cbor_tag,
+                    &pending_result.raw_evidence,
+                )?;
 
                 // Convert evidence to token via remote AS
                 let token = converter

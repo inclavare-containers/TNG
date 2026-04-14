@@ -4,7 +4,7 @@ use crate::tunnel::utils::rustls_config::TlsConfigGenerator;
 use anyhow::Result;
 use rustls::RootCertStore;
 
-use super::cert_verifier::{coco::TngServerCertVerifier, dummy::DummyServerCertVerifier};
+use super::cert_verifier::{dummy::DummyServerCertVerifier, ra::TngServerCertVerifier};
 
 impl TlsConfigGenerator {
     pub async fn get_one_time_rustls_client_config(&self) -> Result<OnetimeTlsClientConfig> {

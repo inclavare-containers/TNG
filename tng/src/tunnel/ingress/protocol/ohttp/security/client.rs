@@ -210,7 +210,10 @@ impl OHttpClientInner {
 
                     let token = match &response.attestation_info {
                         Some(ServerAttestationInfo::Passport { attestation_result }) => {
-                            let token = TngToken::from_wire(verifier.provider_type(), attestation_result.0.to_owned())?;
+                            let token = TngToken::from_wire(
+                                verifier.provider_type(),
+                                attestation_result.0.to_owned(),
+                            )?;
 
                             let userdata = ServerUserData {
                                 // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
@@ -342,6 +345,7 @@ impl OHttpClientInner {
                         converter,
                         ..
                     } => {
+                         // fetch a challenge token from attestation service
                         let challenge_token = converter.get_nonce().await?;
 
                         let attester_pipeline = AttesterPipeline::new(attester, converter);
@@ -371,6 +375,7 @@ impl OHttpClientInner {
                         let AttestationVerifyResponse {
                             attestation_result: token,
                         } = self.background_check_verify_attestation(evidence).await?;
+                        // todo problematic as provider types can be different
                         TngToken::from_wire(attest_ctx.provider_type(), token)?
                     }
                 };

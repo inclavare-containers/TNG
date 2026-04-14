@@ -1,13 +1,10 @@
+//! Rustls server certificate verifier that validates the peer using remote attestation
+//! ([`TngCommonCertVerifier`]) when the client is configured to verify the server.
+
 use std::sync::Arc;
 
 use anyhow::Result;
-use rustls::{
-    server::{
-        danger::{ClientCertVerified, ClientCertVerifier},
-        WebPkiClientVerifier,
-    },
-    Error,
-};
+use rustls::client::{danger::ServerCertVerified, WebPkiServerVerifier};
 use tokio_rustls::rustls::RootCertStore;
 
 use crate::tunnel::{
@@ -16,19 +13,18 @@ use crate::tunnel::{
 };
 
 #[derive(Debug)]
-pub struct TngClientCertVerifier {
-    inner: Arc<dyn ClientCertVerifier>,
+pub struct TngServerCertVerifier {
+    inner: Arc<WebPkiServerVerifier>,
     common: TngCommonCertVerifier,
 }
 
-impl TngClientCertVerifier {
+impl TngServerCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
         let mut roots = RootCertStore::empty();
         roots.add_parsable_certificates(certs);
-        /* The WebPkiServerVerifier requires that the root certs not empty, or it will failed with 'no root trust anchors were provided'. So let's put a dummy cert here as a root cert to make WebPkiServerVerifier happy. */
-        let verifier = WebPkiClientVerifier::builder(Arc::new(roots)).build()?;
+        let verifier = WebPkiServerVerifier::builder(Arc::new(roots)).build()?;
 
         Ok(Self {
             inner: verifier,
@@ -41,20 +37,18 @@ impl TngClientCertVerifier {
     }
 }
 
-impl rustls::server::danger::ClientCertVerifier for TngClientCertVerifier {
-    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
-        &[]
-    }
-
-    fn verify_client_cert(
+impl rustls::client::danger::ServerCertVerifier for TngServerCertVerifier {
+    fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
         _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
-    ) -> std::result::Result<rustls::server::danger::ClientCertVerified, Error> {
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         self.common
             .verify_cert(end_entity)
-            .map(|()| ClientCertVerified::assertion())
+            .map(|_| ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -62,7 +56,7 @@ impl rustls::server::danger::ClientCertVerifier for TngClientCertVerifier {
         message: &[u8],
         cert: &rustls::pki_types::CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, Error> {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         self.inner.verify_tls12_signature(message, cert, dss)
     }
 
@@ -71,7 +65,7 @@ impl rustls::server::danger::ClientCertVerifier for TngClientCertVerifier {
         message: &[u8],
         cert: &rustls::pki_types::CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, Error> {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         self.inner.verify_tls13_signature(message, cert, dss)
     }
 

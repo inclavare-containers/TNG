@@ -8,8 +8,8 @@ use super::CLAIM_NAME_PUBLIC_KEY_HASH;
 use crate::crypto::DefaultCrypto;
 use crate::crypto::HashAlgo;
 use crate::errors::*;
-use crate::tee::ReportData;
 use crate::tee::claims::Claims;
+use crate::tee::ReportData;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;

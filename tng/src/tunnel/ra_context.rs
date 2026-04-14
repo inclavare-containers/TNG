@@ -10,20 +10,21 @@ use anyhow::Result;
 
 use crate::config::ra::{AttestArgs, RaArgs, VerifyArgs};
 #[cfg(feature = "__builtin-as")]
-use crate::config::ra::{CocoConverterArgs, ConverterArgs};
-#[cfg(unix)]
-use crate::tunnel::utils::maybe_cached::RefreshStrategy;
-
-use super::provider::{
-    create_attester, create_converter, create_verifier, TngAttester, TngConverter, TngVerifier,
-};
-
-#[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::CocoConverter;
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::verifier::CocoVerifier;
+
+use crate::config::ra::{CocoConverterArgs, ConverterArgs};
+#[cfg(unix)]
+use crate::tunnel::utils::maybe_cached::RefreshStrategy;
+
+use crate::tunnel::provider::{
+    create_attester, create_converter, create_verifier, TngAttester, TngConverter, TngVerifier,
+};
+
+
 
 /// Pre-instantiated RA context for OHTTP security
 ///
@@ -100,6 +101,7 @@ pub enum AttestContext {
         converter: TngConverter,
         refresh_strategy: RefreshStrategy,
     },
+
     /// Background check mode - just attest via AA (client verifies)
     BackgroundCheck {
         attester: TngAttester,
@@ -147,6 +149,7 @@ impl AttestContext {
     }
 
     /// Get the provider type from the attester component.
+    /// todo tackle ambiguity between attester and converter provider types
     pub fn provider_type(&self) -> super::provider::ProviderType {
         match self {
             Self::Passport { attester, .. } | Self::BackgroundCheck { attester, .. } => {
@@ -224,10 +227,8 @@ impl VerifyContext {
                     reference_values,
                 }) = converter_args
                 {
-                    let builtin_converter =
-                        BuiltinCocoConverter::new(policy, reference_values).await?;
-                    let builtin_verifier =
-                        CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
+                    let builtin_converter = BuiltinCocoConverter::new(policy, reference_values).await?;
+                    let builtin_verifier = CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
                     return Ok(Self::BackgroundCheck {
                         converter: TngConverter::Coco(CocoConverter::Builtin(builtin_converter)),
                         verifier: TngVerifier::Coco(builtin_verifier),
@@ -366,6 +367,10 @@ mod tests {
             matches!(ctx, RaContext::VerifyOnly(_)),
             "Expected VerifyOnly variant"
         );
+        assert!(
+            ctx.verify_context().is_some(),
+            "VerifyOnly should have verify context"
+        );
     }
 
     // =========================================================================
@@ -486,9 +491,18 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(matches!(ctx, RaContext::AttestAndVerify { .. }));
-            assert!(ctx.verify_context().is_some());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                matches!(ctx, RaContext::AttestAndVerify { .. }),
+                "Expected AttestAndVerify variant"
+            );
+            assert!(
+                ctx.verify_context().is_some(),
+                "AttestAndVerify should have verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestAndVerify should have attest context"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -499,9 +513,18 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(matches!(ctx, RaContext::AttestAndVerify { .. }));
-            assert!(ctx.verify_context().is_some());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                matches!(ctx, RaContext::AttestAndVerify { .. }),
+                "Expected AttestAndVerify variant"
+            );
+            assert!(
+                ctx.verify_context().is_some(),
+                "AttestAndVerify should have verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestAndVerify should have attest context"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -512,9 +535,18 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(matches!(ctx, RaContext::AttestAndVerify { .. }));
-            assert!(ctx.verify_context().is_some());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                matches!(ctx, RaContext::AttestAndVerify { .. }),
+                "Expected AttestAndVerify variant"
+            );
+            assert!(
+                ctx.verify_context().is_some(),
+                "AttestAndVerify should have verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestAndVerify should have attest context"
+            );
         }
 
         // =====================================================================
@@ -528,8 +560,14 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(ctx.verify_context().is_none());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                ctx.verify_context().is_none(),
+                "AttestOnly should have no verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestOnly should have attest context"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -540,8 +578,14 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(ctx.verify_context().is_some());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                ctx.verify_context().is_some(),
+                "AttestAndVerify should have verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestAndVerify should have attest context"
+            );
         }
     }
 
@@ -588,9 +632,9 @@ mod tests {
             }
         }
 
-        // Test Passport mode with Builtin AS should failed
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
+        // Test Passport mode with Builtin AS should failed
         async fn test_ra_context_two_way_passport_builtin() {
             let attest_args = make_attest_passport_args();
             let verify_args = make_verify_builtin_args();
@@ -608,9 +652,18 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(matches!(ctx, RaContext::AttestAndVerify { .. }));
-            assert!(ctx.verify_context().is_some());
-            assert!(ctx.attest_context().is_some());
+            assert!(
+                matches!(ctx, RaContext::AttestAndVerify { .. }),
+                "Expected AttestAndVerify variant"
+            );
+            assert!(
+                ctx.verify_context().is_some(),
+                "AttestAndVerify should have verify context"
+            );
+            assert!(
+                ctx.attest_context().is_some(),
+                "AttestAndVerify should have attest context"
+            );
         }
     }
 
@@ -621,10 +674,14 @@ mod tests {
     #[cfg(feature = "__builtin-as")]
     mod builtin_tests {
         use super::*;
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use crate::tunnel::provider::TngConverter;
         use rats_cert::cert::verify::{
             PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
             SlsaReferenceValuePayloadConfig,
         };
+        use rats_cert::tee::coco::converter::CoCoNonce;
+        use rats_cert::tee::GenericConverter;
         use serial_test::serial;
 
         fn make_verify_builtin_args(
@@ -640,22 +697,33 @@ mod tests {
             }
         }
 
+        /// Builtin verify path is `BackgroundCheck` with `TngConverter::Coco(CocoConverter::Builtin(..))`.
+        fn assert_verify_context_builtin_background_check(ctx: &VerifyContext) {
+            match ctx {
+                VerifyContext::BackgroundCheck { converter, .. } => match converter {
+                    TngConverter::Coco(CocoConverter::Builtin(..)) => {}
+                    // `TngConverter` is currently only `Coco`; discriminate the inner converter.
+                    TngConverter::Coco(c) => panic!(
+                        "Expected Coco Builtin converter, got CocoConverter discriminant {:?}",
+                        std::mem::discriminant(c)
+                    ),
+                },
+                other => panic!("Expected BackgroundCheck variant, got {:?}", other),
+            }
+        }
+
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_creation_with_default_policy() {
             let verify_args = make_verify_builtin_args(PolicyConfig::Default, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
-            assert!(matches!(
-                result.unwrap(),
-                VerifyContext::BackgroundCheck { .. }
-            ));
+            assert_verify_context_builtin_background_check(&result.unwrap());
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_with_inline_policy() {
-            use base64::{engine::general_purpose::STANDARD, Engine};
             // "package policy\ndefault allow = true" encoded in base64
             let policy_content = STANDARD.encode("package policy\ndefault allow = true");
             let verify_args = make_verify_builtin_args(
@@ -666,6 +734,7 @@ mod tests {
             );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
+            assert_verify_context_builtin_background_check(&result.unwrap());
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -687,6 +756,7 @@ mod tests {
             );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
+            assert_verify_context_builtin_background_check(&result.unwrap());
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -697,8 +767,14 @@ mod tests {
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
-            assert!(matches!(ctx, RaContext::VerifyOnly(_)));
-            assert!(ctx.verify_context().is_some());
+            assert!(
+                matches!(ctx, RaContext::VerifyOnly(_)),
+                "Expected VerifyOnly variant"
+            );
+            let verify = ctx
+                .verify_context()
+                .expect("VerifyOnly should have verify context");
+            assert_verify_context_builtin_background_check(verify);
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -715,10 +791,6 @@ mod tests {
                 debug_str
             );
         }
-
-        // =====================================================================
-        // Section 6: New Builtin Tests
-        // =====================================================================
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
@@ -765,8 +837,6 @@ mod tests {
             match ctx {
                 VerifyContext::BackgroundCheck { converter, .. } => match converter {
                     TngConverter::Coco(CocoConverter::Builtin(converter)) => {
-                        use rats_cert::tee::GenericConverter;
-                        use rats_cert::tee::coco::converter::CoCoNonce;
                         let challenge_result = converter.get_nonce().await;
                         assert!(
                             challenge_result.is_ok(),
@@ -776,11 +846,18 @@ mod tests {
                         let CoCoNonce::Jwt(challenge) = challenge_result.unwrap();
                         assert!(!challenge.is_empty(), "Challenge should be non-empty");
                     }
-                    other => panic!("Expected Builtin converter variant, got other: {:?}", std::mem::discriminant(&other)),
+                    TngConverter::Coco(c) => panic!(
+                        "Expected Coco Builtin converter, got CocoConverter discriminant {:?}",
+                        std::mem::discriminant(&c)
+                    ),
                 },
                 other => panic!("Expected BackgroundCheck variant, got {:?}", other),
             }
         }
+
+        // =====================================================================
+        // Section 6: New Builtin Tests
+        // =====================================================================
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
@@ -894,10 +971,7 @@ mod tests {
             );
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
-            assert!(matches!(
-                result.unwrap(),
-                VerifyContext::BackgroundCheck { .. }
-            ));
+            assert_verify_context_builtin_background_check(&result.unwrap());
         }
     }
 }

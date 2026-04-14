@@ -1,6 +1,6 @@
 use anyhow::Result;
-use rats_cert::tee::coco::evidence::CocoAsToken;
 use rats_cert::tee::claims::Claims;
+use rats_cert::tee::coco::evidence::CocoAsToken;
 use rats_cert::tee::{DiceParseEvidenceOutput, GenericEvidence};
 
 use super::provider_type::ProviderType;
