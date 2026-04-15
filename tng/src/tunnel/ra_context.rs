@@ -149,16 +149,6 @@ impl AttestContext {
         }
     }
 
-    /// Get the provider type from the attester component.
-    /// todo tackle ambiguity between attester and converter provider types
-    pub fn provider_type(&self) -> super::provider::ProviderType {
-        match self {
-            Self::Passport { attester, .. } | Self::BackgroundCheck { attester, .. } => {
-                attester.provider_type()
-            }
-        }
-    }
-
     /// Get refresh strategy for caching
     pub fn refresh_strategy(&self) -> RefreshStrategy {
         match self {
@@ -183,16 +173,6 @@ pub enum VerifyContext {
         converter: TngConverter,
         verifier: TngVerifier,
     },
-}
-
-impl VerifyContext {
-    /// Get the provider type from the verifier component.
-    pub fn provider_type(&self) -> super::provider::ProviderType {
-        match self {
-            Self::Passport { verifier } => verifier.provider_type(),
-            Self::BackgroundCheck { verifier, .. } => verifier.provider_type(),
-        }
-    }
 }
 
 impl std::fmt::Debug for VerifyContext {
