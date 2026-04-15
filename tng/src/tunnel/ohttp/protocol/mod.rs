@@ -97,3 +97,86 @@ pub struct AttestationVerifyResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub as_provider: Option<ProviderType>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_passport_info_deserializes_without_provider() {
+        let json = json!({
+            "model": "passport",
+            "attestation_result": "eyJ0eXAiOiJKV1QifQ.e30.dummysig"
+        });
+        let info: ServerAttestationInfo = serde_json::from_value(json).unwrap();
+        match info {
+            ServerAttestationInfo::Passport { as_provider, .. } => assert!(as_provider.is_none()),
+            _ => panic!("expected Passport"),
+        }
+    }
+
+    #[test]
+    fn legacy_background_check_info_deserializes_without_provider() {
+        let json = json!({
+            "model": "background_check",
+            "evidence": {}
+        });
+        let info: ServerAttestationInfo = serde_json::from_value(json).unwrap();
+        match info {
+            ServerAttestationInfo::BackgroundCheck { aa_provider, .. } => {
+                assert!(aa_provider.is_none())
+            }
+            _ => panic!("expected BackgroundCheck"),
+        }
+    }
+
+    #[test]
+    fn provider_fields_present_when_set_and_absent_when_none() {
+        let with = ServerAttestationInfo::Passport {
+            attestation_result: "jwt".into(),
+            as_provider: Some(ProviderType::Coco),
+        };
+        let without = ServerAttestationInfo::Passport {
+            attestation_result: "jwt".into(),
+            as_provider: None,
+        };
+        let json_with = serde_json::to_value(&with).unwrap();
+        let json_without = serde_json::to_value(&without).unwrap();
+
+        assert_eq!(json_with["as_provider"], "coco");
+        assert!(json_without.get("as_provider").is_none());
+    }
+
+    #[test]
+    fn verify_request_legacy_round_trip() {
+        let legacy = json!({"evidence": {}});
+        let req: AttestationVerifyRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(req.aa_provider.is_none());
+        assert_eq!(serde_json::to_value(&req).unwrap(), legacy);
+    }
+
+    #[test]
+    fn verify_request_with_provider_round_trip() {
+        let wire = json!({"evidence": {}, "aa_provider": "coco"});
+        let req: AttestationVerifyRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(req.aa_provider.unwrap(), ProviderType::Coco);
+        assert_eq!(serde_json::to_value(&req).unwrap(), wire);
+    }
+
+    #[test]
+    fn verify_response_legacy_round_trip() {
+        let legacy = json!({"attestation_result": "jwt"});
+        let resp: AttestationVerifyResponse = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(resp.as_provider.is_none());
+        assert_eq!(serde_json::to_value(&resp).unwrap(), legacy);
+    }
+
+    #[test]
+    fn verify_response_with_provider_round_trip() {
+        let wire = json!({"attestation_result": "jwt", "as_provider": "coco"});
+        let resp: AttestationVerifyResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(resp.as_provider.unwrap(), ProviderType::Coco);
+        assert_eq!(serde_json::to_value(&resp).unwrap(), wire);
+    }
+}
