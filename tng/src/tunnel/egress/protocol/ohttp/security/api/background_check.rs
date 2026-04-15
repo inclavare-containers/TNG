@@ -7,7 +7,7 @@ use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::ohttp::protocol::{
     AttestationChallengeResponse, AttestationVerifyRequest, AttestationVerifyResponse,
 };
-use crate::tunnel::provider::TngEvidence;
+use crate::tunnel::provider::{ProviderType, TngEvidence};
 use crate::tunnel::ra_context::VerifyContext;
 
 impl OhttpServerApi {
@@ -54,10 +54,15 @@ impl OhttpServerApi {
                         bail!("Passport model is expected but got background check attestation from client")
                     }
                     VerifyContext::BackgroundCheck { converter, .. } => {
-                        let evidence = TngEvidence::deserialize_from_json(payload.evidence)?;
+                        let evidence = TngEvidence::deserialize_from_json(
+                            ProviderType::from_optional_wire(payload.aa_provider),
+                            payload.evidence,
+                        )?;
                         let token = converter.convert(&evidence).await?;
+                        let as_provider = token.provider_type();
                         Ok(Json(AttestationVerifyResponse {
                             attestation_result: token.into_str(),
+                            as_provider: Some(as_provider),
                         }))
                     }
                 },

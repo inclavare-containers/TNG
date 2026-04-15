@@ -49,6 +49,31 @@ impl TngToken {
             ProviderType::Coco => Ok(Self::Coco(CocoAsToken::new(raw)?)),
         }
     }
+
+    /// JSON string value containing the JWT. OHTTP adds `as_provider` beside this in API types.
+    pub fn serialize_to_json(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::Value::String(self.as_str().to_owned()))
+    }
+
+    /// Deserialize a JSON string JWT. `provider` comes from OHTTP `as_provider` (same idea as evidence).
+    pub fn deserialize_from_json(provider: ProviderType, value: serde_json::Value) -> Result<Self> {
+        match value {
+            serde_json::Value::String(s) => Self::from_wire(provider, s),
+            _ => Err(anyhow::anyhow!(
+                "attestation token JSON must be a string (JWT)"
+            )),
+        }
+    }
+
+    /// Raw JWT for protobuf `string` fields (OHTTP request metadata); not JSON text.
+    pub fn serialize_to_wire_str(&self) -> Result<String> {
+        Ok(self.as_str().to_owned())
+    }
+
+    /// Parse [`Self::serialize_to_wire_str`] — thin wrapper around [`Self::from_wire`] for UTF-8 metadata.
+    pub fn deserialize_from_wire_str(provider: ProviderType, s: &str) -> Result<Self> {
+        Self::from_wire(provider, s.to_owned())
+    }
 }
 
 impl GenericEvidence for TngToken {
@@ -75,5 +100,35 @@ impl GenericEvidence for TngToken {
         raw_evidence: &[u8],
     ) -> DiceParseEvidenceOutput<Self> {
         CocoAsToken::create_evidence_from_dice(cbor_tag, raw_evidence).map_ok::<Self>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_jwt() -> String {
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+            .to_string()
+    }
+
+    #[test]
+    fn json_string_round_trip() {
+        let jwt = minimal_jwt();
+        let t = TngToken::deserialize_from_json(
+            ProviderType::Coco,
+            serde_json::Value::String(jwt.clone()),
+        )
+        .expect("tok");
+        assert_eq!(t.serialize_to_json().expect("ser"), serde_json::Value::String(jwt));
+    }
+
+    #[test]
+    fn wire_str_round_trip() {
+        let jwt = minimal_jwt();
+        let t = TngToken::from_wire(ProviderType::Coco, jwt.clone()).expect("tok");
+        let s = t.serialize_to_wire_str().expect("wire");
+        let t2 = TngToken::deserialize_from_wire_str(ProviderType::Coco, &s).expect("parse");
+        assert_eq!(t.as_str(), t2.as_str());
     }
 }

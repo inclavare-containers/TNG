@@ -23,7 +23,7 @@ use rats_cert::tee::GenericAttester as _;
 use rats_cert::tee::ReportData;
 use rats_cert::tee::{GenericConverter, GenericVerifier as _};
 
-use crate::tunnel::provider::{TngEvidence, TngToken};
+use crate::tunnel::provider::{ProviderType, TngEvidence, TngToken};
 #[cfg(unix)]
 use tokio::io::AsyncReadExt;
 use tokio_util::{
@@ -209,10 +209,13 @@ impl OHttpClientInner {
                         .await?;
 
                     let token = match &response.attestation_info {
-                        Some(ServerAttestationInfo::Passport { attestation_result }) => {
+                        Some(ServerAttestationInfo::Passport {
+                            attestation_result,
+                            as_provider,
+                        }) => {
                             let token = TngToken::from_wire(
-                                verifier.provider_type(),
-                                attestation_result.0.to_owned(),
+                                ProviderType::from_optional_wire(*as_provider),
+                                attestation_result.clone(),
                             )?;
 
                             let userdata = ServerUserData {
@@ -252,8 +255,14 @@ impl OHttpClientInner {
                         .await?;
 
                     let token = match response.attestation_info {
-                        Some(ServerAttestationInfo::BackgroundCheck { evidence }) => {
-                            let evidence = TngEvidence::deserialize_from_json(evidence)?;
+                        Some(ServerAttestationInfo::BackgroundCheck {
+                            evidence,
+                            aa_provider,
+                        }) => {
+                            let evidence = TngEvidence::deserialize_from_json(
+                                ProviderType::from_optional_wire(aa_provider),
+                                evidence,
+                            )?;
                             let token = converter.convert(&evidence).await?;
 
                             let userdata = ServerUserData {
@@ -356,9 +365,11 @@ impl OHttpClientInner {
                         }
                         .to_claims()?;
 
-                        attester_pipeline
-                            .get_evidence(&ReportData::Claims(userdata))
-                            .await?
+                        TngToken::from(
+                            attester_pipeline
+                                .get_evidence(&ReportData::Claims(userdata))
+                                .await?,
+                        )
                     }
                     AttestContext::BackgroundCheck { attester, .. } => {
                         let AttestationChallengeResponse { challenge_token } =
@@ -373,10 +384,13 @@ impl OHttpClientInner {
                         let evidence = attester.get_evidence(&ReportData::Claims(userdata)).await?;
 
                         let AttestationVerifyResponse {
-                            attestation_result: token,
+                            attestation_result,
+                            as_provider,
                         } = self.background_check_verify_attestation(evidence).await?;
-                        // todo problematic as provider types can be different
-                        TngToken::from_wire(attest_ctx.provider_type(), token)?
+                        TngToken::from_wire(
+                            ProviderType::from_optional_wire(as_provider),
+                            attestation_result,
+                        )?
                     }
                 };
 
@@ -385,8 +399,9 @@ impl OHttpClientInner {
                 (
                     Some(client_key),
                     ClientAuth::AttestedPublicKey(AttestedPublicKey {
-                        attestation_result: token.into_str(),
+                        attestation_result: token.serialize_to_wire_str()?,
                         pk_s,
+                        as_provider: token.provider_type().as_str().to_string(),
                     }),
                     token_expire,
                 )
@@ -683,6 +698,7 @@ impl OHttpClientInner {
             evidence: evidence
                 .serialize_to_json()
                 .map_err(|e| TngError::ClientGetBackgroundCheckResultFaild(e.into()))?,
+            aa_provider: Some(evidence.provider_type()),
         };
 
         let result: AttestationVerifyResponse = self

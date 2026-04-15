@@ -8,7 +8,7 @@ use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
 
-use crate::tunnel::provider::TngToken;
+use crate::tunnel::provider::{ProviderType, TngToken};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt as _;
 use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
@@ -198,14 +198,16 @@ impl OhttpServerApi {
                 Some(ClientAuth::AttestedPublicKey(AttestedPublicKey {
                     attestation_result,
                     pk_s,
+                    as_provider,
                 })),
                 Some(verify_ctx),
             ) => {
                 match verify_ctx {
                     VerifyContext::Passport { verifier }
                     | VerifyContext::BackgroundCheck { verifier, .. } => {
+                        let provider = ProviderType::from_optional_wire_str(&as_provider)?;
                         let token =
-                            TngToken::from_wire(verify_ctx.provider_type(), attestation_result)?;
+                            TngToken::deserialize_from_wire_str(provider, &attestation_result)?;
 
                         let userdata = ClientUserData {
                             // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.

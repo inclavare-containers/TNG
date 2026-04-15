@@ -50,6 +50,11 @@ message AttestedPublicKey {
   // The client(sender)'s public key, encoded in binary format
   // Used by the server to establish secure channel only.
   bytes pk_s = 2;
+
+  // Which attestation-service / token provider produced `attestation_result`
+  // (same string values as OHTTP `as_provider`, e.g. "coco").
+  // Unset or empty means legacy clients that predate this field (CoCo only).
+  string as_provider = 3;
 }
 
 // Hint for the server to identify the key configuration needed to decrypt the

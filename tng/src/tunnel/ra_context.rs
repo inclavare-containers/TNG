@@ -16,6 +16,7 @@ use rats_cert::tee::coco::converter::CocoConverter;
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::verifier::CocoVerifier;
 
+#[cfg(feature = "__builtin-as")]
 use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
