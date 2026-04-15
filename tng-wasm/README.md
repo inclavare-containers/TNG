@@ -110,6 +110,7 @@ Add the following code to your HTML page to use the TNG SDK:
           ohttp: {},
           verify: {
             model: "background_check",
+            as_type: "restful",
             as_addr: asAddr,
             policy_ids: policyIds,
           },

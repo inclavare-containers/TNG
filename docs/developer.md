@@ -5,6 +5,7 @@ This guide is intended for developers who need to modify the TNG source code or 
 ## Project Structure Overview
 
 - **tng/**: Core service implementation, including command-line entry, configuration parsing, tunnel (Ingress/Egress), remote attestation, observability, and other main logic.
+- **tng/src/tunnel/provider/**: Pluggable remote-attestation provider layer (evidence, token, attester, converter, and verifier wiring) to support multiple providers for attestation-agent and attestation-service. Currently implements and defaults to CoCo provider. 
 - **tng-testsuite/**: Integration test suite, providing orchestratable "scenario tasks" covering typical usage such as HTTP proxy, transparent proxy, Socks5, and unidirectional/bidirectional remote attestation.
 - **tng-wasm/**: Browser-side JavaScript SDK, providing interfaces like `tng_fetch`, used in conjunction with OHTTP and remote attestation. For specific usage, see `tng-wasm/README.md`.
 - **docs/**: User and development documentation, including the configuration manual (`configuration.md`) and this developer guide.

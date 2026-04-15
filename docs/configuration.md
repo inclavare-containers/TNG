@@ -468,6 +468,9 @@ Remote attestation is one of the core security mechanisms of trusted computing, 
 
 In the TNG architecture, we have integrated a standardized remote attestation process that supports flexibly configuring TNG endpoints as either **Attester** or **Verifier** roles, thus achieving bidirectional trusted authentication and establishing secure communication links.
 
+> [!NOTE]
+> **Provider selection**: The Attestation Agent stack and the Attestation Service stack are selected with **`aa_provider`** and **`as_provider`** respectively. If `aa_provider` or `as_provider` is omitted, it defaults to **`"coco"`** (Confidential Containers), which is the only provider supported today.
+
 <a name="attest"></a>
 ### Attester: The Initiator Proving Its Trustworthiness
 
