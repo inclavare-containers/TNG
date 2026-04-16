@@ -3,7 +3,6 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context as _, Result};
 use serde::de::Deserializer;
-use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -11,9 +10,26 @@ use crate::error::TngError;
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
+// ---------------------------------------------------------------------------
+// Custom Deserialize on RaArgsUnchecked
+// ---------------------------------------------------------------------------
+// The JSON config format mixes an optional `model` tag with provider-specific
+// keys (`aa_provider`, `as_provider`, `aa_type`, `as_type`) in one flat object.
+// Serde has no built-in "default variant when tag is missing", so we inject
+// defaults (`model`, provider tags, sub-type tags) into the raw JSON here
+// before delegating to the serde-derived `AttestArgs` / `VerifyArgs`.
+//
+// Compared with the previous MaybeTagged-style split (tagged + untagged
+// wrapper structs with TryFrom):
+// 1. Provider enums (`AttesterArgs`, `ConverterArgs`, …) use plain serde
+//    derives — no field duplication across extra layers.
+// 2. `AttestArgs` / `VerifyArgs` are also serde-derived (`#[serde(tag, flatten)]`)
+//    — no manual Serialize/Deserialize, so the structure is self-documenting.
+// 3. Default injection lives in one place (here), keeping the downstream
+//    types unaware of backward-compat defaulting.
+
 /// Remote Attestation configuration parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RaArgsUnchecked {
     /// Whether to disable Remote Attestation functionality
     #[serde(default = "bool::default")]
@@ -26,6 +42,51 @@ pub struct RaArgsUnchecked {
     /// Verification parameters configuration (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyArgs>,
+}
+
+impl<'de> Deserialize<'de> for RaArgsUnchecked {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        /// Mirrors `RaArgsUnchecked` but keeps `attest`/`verify` as raw JSON
+        /// so we can inject tag defaults before parsing.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default)]
+            no_ra: bool,
+            attest: Option<serde_json::Value>,
+            verify: Option<serde_json::Value>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+
+        let attest = raw
+            .attest
+            .map(|mut v| {
+                if let Some(obj) = v.as_object_mut() {
+                    inject_tag_defaults(obj);
+                }
+                serde_json::from_value::<AttestArgs>(v)
+            })
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+
+        let verify = raw
+            .verify
+            .map(|mut v| {
+                if let Some(obj) = v.as_object_mut() {
+                    inject_tag_defaults(obj);
+                }
+                serde_json::from_value::<VerifyArgs>(v)
+            })
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+
+        Ok(RaArgsUnchecked {
+            no_ra: raw.no_ra,
+            attest,
+            verify,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -334,18 +395,8 @@ pub enum CocoVerifierArgs {
 }
 
 // ---------------------------------------------------------------------------
-// AttestArgs / VerifyArgs (custom serde)
+// AttestArgs / VerifyArgs (serde-derived)
 // ---------------------------------------------------------------------------
-// The wire format mixes an optional `model` field with provider-specific keys in one flat JSON
-// object, so `AttestArgs` / `VerifyArgs` use manual Serialize/Deserialize. Nested provider types
-// (`AttesterArgs`, `ConverterArgs`, …) still use ordinary serde derives with optional tags inserted
-// before hand.
-//
-// Compared with a MaybeTagged-style split between tagged and untagged wrapper structs, this:
-// 1. Avoids duplicating provider fields across those extra layers.
-// 2. Keeps validation on the same serde-derived provider enums used at runtime.
-// 3. Feeds the same deserialized args into provider factories and the RA stack without an extra
-//    mapping layer.
 
 const EVIDENCE_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 
@@ -354,17 +405,21 @@ const EVIDENCE_REFRESH_INTERVAL_SECOND: u64 = 10 * 60; // 10 minutes
 /// ConverterArgs/VerifierArgs (all plain enums). If desired, it could be moved
 /// into AttesterArgs via a struct wrapper at the cost of one more level of
 /// indirection and inconsistency with the ConverterArgs/VerifierArgs enums.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "model", rename_all = "snake_case")]
 pub enum AttestArgs {
     /// Passport mode attestation parameters
     Passport {
+        #[serde(flatten)]
         attester: AttesterArgs,
+        #[serde(flatten)]
         converter: ConverterArgs,
         /// Evidence refresh interval (seconds), optional
         refresh_interval: Option<u64>,
     },
     /// Background check mode attestation parameters
     BackgroundCheck {
+        #[serde(flatten)]
         attester: AttesterArgs,
         /// Evidence refresh interval (seconds), optional
         refresh_interval: Option<u64>,
@@ -390,169 +445,35 @@ impl AttestArgs {
     }
 }
 
-impl<'de> Deserialize<'de> for AttestArgs {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        if let Some(obj) = value.as_object_mut() {
-            inject_provider_defaults(obj);
-        }
-        let model = value
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("background_check");
-        match model {
-            "passport" => {
-                let attester: AttesterArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                let converter: ConverterArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                let refresh_interval = value.get("refresh_interval").and_then(|v| v.as_u64());
-                Ok(AttestArgs::Passport {
-                    attester,
-                    converter,
-                    refresh_interval,
-                })
-            }
-            "background_check" => {
-                let attester: AttesterArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                let refresh_interval = value.get("refresh_interval").and_then(|v| v.as_u64());
-                Ok(AttestArgs::BackgroundCheck {
-                    attester,
-                    refresh_interval,
-                })
-            }
-            other => Err(serde::de::Error::custom(format!(
-                r#"unsupported value for "model": "{other}", should be one of ["background_check", "passport"]"#
-            ))),
-        }
-    }
-}
-
-impl Serialize for AttestArgs {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut obj = serde_json::Map::new();
-        match self {
-            AttestArgs::Passport {
-                attester,
-                converter,
-                refresh_interval,
-            } => {
-                obj.insert("model".into(), "passport".into());
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(attester).map_err(serde::ser::Error::custom)?,
-                );
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(converter).map_err(serde::ser::Error::custom)?,
-                );
-                if let Some(ri) = refresh_interval {
-                    obj.insert("refresh_interval".into(), (*ri).into());
-                }
-            }
-            AttestArgs::BackgroundCheck {
-                attester,
-                refresh_interval,
-            } => {
-                obj.insert("model".into(), "background_check".into());
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(attester).map_err(serde::ser::Error::custom)?,
-                );
-                if let Some(ri) = refresh_interval {
-                    obj.insert("refresh_interval".into(), (*ri).into());
-                }
-            }
-        }
-        serde_json::Value::Object(obj).serialize(serializer)
-    }
-}
-
 /// Verification parameters configuration enum.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "model", rename_all = "snake_case")]
 pub enum VerifyArgs {
     /// Passport mode verification parameters
-    Passport { verifier: VerifierArgs },
-    /// Background check mode verification parameters
-    BackgroundCheck {
-        converter: ConverterArgs,
+    Passport {
+        #[serde(flatten)]
         verifier: VerifierArgs,
     },
-}
-
-impl<'de> Deserialize<'de> for VerifyArgs {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        if let Some(obj) = value.as_object_mut() {
-            inject_provider_defaults(obj);
-        }
-        let model = value
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("background_check");
-        match model {
-            "passport" => {
-                let verifier: VerifierArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                Ok(VerifyArgs::Passport { verifier })
-            }
-            "background_check" => {
-                let converter: ConverterArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                let verifier: VerifierArgs =
-                    serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-                Ok(VerifyArgs::BackgroundCheck {
-                    converter,
-                    verifier,
-                })
-            }
-            other => Err(serde::de::Error::custom(format!(
-                r#"unsupported value for "model": "{other}", should be one of ["background_check", "passport"]"#
-            ))),
-        }
-    }
-}
-
-impl Serialize for VerifyArgs {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut obj = serde_json::Map::new();
-        match self {
-            VerifyArgs::Passport { verifier } => {
-                obj.insert("model".into(), "passport".into());
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(verifier).map_err(serde::ser::Error::custom)?,
-                );
-            }
-            VerifyArgs::BackgroundCheck {
-                converter,
-                verifier,
-            } => {
-                obj.insert("model".into(), "background_check".into());
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(converter).map_err(serde::ser::Error::custom)?,
-                );
-                merge_into(
-                    &mut obj,
-                    &serde_json::to_value(verifier).map_err(serde::ser::Error::custom)?,
-                );
-            }
-        }
-        serde_json::Value::Object(obj).serialize(serializer)
-    }
+    /// Background check mode verification parameters
+    BackgroundCheck {
+        #[serde(flatten)]
+        converter: ConverterArgs,
+        #[serde(flatten)]
+        verifier: VerifierArgs,
+    },
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Inject default provider tags and CoCo-specific sub-type defaults into the
-/// raw JSON before delegation to derived serde. This avoids field duplication
-/// that serde's MaybeTagged/try_from workarounds require, since serde has no
-/// built-in "default variant when tag is missing".
-fn inject_provider_defaults(obj: &mut serde_json::Map<String, serde_json::Value>) {
+/// Inject default tag values into raw JSON before delegation to serde-derived
+/// deserializers. Covers the `model` discriminator, provider tags
+/// (`aa_provider`/`as_provider`), and CoCo-specific sub-type tags
+/// (`aa_type`/`as_type`) so that omitting any of them gives
+/// backward-compatible defaults.
+fn inject_tag_defaults(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    obj.entry("model").or_insert("background_check".into());
     obj.entry("aa_provider").or_insert("coco".into());
     obj.entry("as_provider").or_insert("coco".into());
 
@@ -562,17 +483,6 @@ fn inject_provider_defaults(obj: &mut serde_json::Map<String, serde_json::Value>
     }
     if obj.get("as_provider").and_then(|v| v.as_str()) == Some("coco") {
         obj.entry("as_type").or_insert("restful".into());
-    }
-}
-
-/// Merge a serde_json::Value (expected to be an Object) into a Map.
-fn merge_into(target: &mut serde_json::Map<String, serde_json::Value>, source: &serde_json::Value) {
-    if let serde_json::Value::Object(src) = source {
-        for (k, v) in src {
-            if !v.is_null() {
-                target.insert(k.clone(), v.clone());
-            }
-        }
     }
 }
 

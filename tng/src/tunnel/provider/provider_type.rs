@@ -53,7 +53,7 @@ impl FromStr for ProviderType {
         ALL.iter()
             .find(|p| p.as_str() == s)
             .copied()
-            .ok_or_else(|| anyhow::anyhow!("unsupported provider: {s}"))
+            .ok_or_else(|| anyhow::anyhow!("unrecognized provider: {s}"))
     }
 }
 
