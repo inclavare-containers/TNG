@@ -16,7 +16,7 @@ use http_body_util::BodyDataStream;
 use serde::Serialize;
 use tng::config::{
     ingress::{self},
-    ra::VerifyArgs,
+    ra::{CocoConverterArgs, CocoVerifierArgs, ConverterArgs, VerifierArgs, VerifyArgs},
 };
 use wasm_bindgen::prelude::*;
 
@@ -202,26 +202,40 @@ fn bind_attestation_result(
 
     match ra_args {
         RaArgs::VerifyOnly(verify_args) => match verify_args {
-            VerifyArgs::Passport { token_verify } => {
-                attest_info.as_addr = token_verify
-                    .as_addr_config
-                    .as_ref()
-                    .map(|addr| addr.as_addr.clone());
-                attest_info.policy_ids = Some(token_verify.policy_ids.clone());
-            }
-            VerifyArgs::BackgroundCheck { as_args, .. } => {
-                // Extract address from AttestationServiceType
-                let as_addr = match &as_args.as_type {
-                    tng::config::ra::AttestationServiceType::Restful { as_addr, .. } => {
-                        as_addr.clone()
+            VerifyArgs::Passport { verifier } => match verifier {
+                VerifierArgs::Coco(coco) => match coco {
+                    CocoVerifierArgs::Restful {
+                        as_addr,
+                        policy_ids,
+                        ..
                     }
-                    tng::config::ra::AttestationServiceType::Grpc { as_addr, .. } => {
-                        as_addr.clone()
+                    | CocoVerifierArgs::Grpc {
+                        as_addr,
+                        policy_ids,
+                        ..
+                    } => {
+                        attest_info.as_addr = as_addr.clone();
+                        attest_info.policy_ids = Some(policy_ids.clone());
                     }
-                };
-                attest_info.as_addr = Some(as_addr);
-                attest_info.policy_ids = Some(as_args.policy_ids.clone());
-            }
+                },
+            },
+            VerifyArgs::BackgroundCheck { converter, .. } => match converter {
+                ConverterArgs::Coco(coco) => match coco {
+                    CocoConverterArgs::Restful {
+                        as_addr,
+                        policy_ids,
+                        ..
+                    }
+                    | CocoConverterArgs::Grpc {
+                        as_addr,
+                        policy_ids,
+                        ..
+                    } => {
+                        attest_info.as_addr = Some(as_addr.clone());
+                        attest_info.policy_ids = Some(policy_ids.clone());
+                    }
+                },
+            },
         },
         RaArgs::NoRa => { /* nothing */ }
     }
