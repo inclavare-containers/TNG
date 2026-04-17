@@ -18,7 +18,6 @@ use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
 use crate::tunnel::ohttp::protocol::{
     AttestationRequest, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
 };
-use crate::tunnel::provider::TngToken;
 use crate::tunnel::ra_context::{AttestContext, RaContext};
 use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached};
 
@@ -150,12 +149,11 @@ impl OhttpServerApi {
                         let token = attester_pipeline
                             .get_evidence(&ReportData::Claims(userdata))
                             .await?;
-                        let tng_token = TngToken::from(token);
-                        let as_provider = tng_token.provider_type();
+                        let as_provider = token.provider_type();
                         KeyConfigResponse {
                             hpke_key_config,
                             attestation_info: Some(ServerAttestationInfo::Passport {
-                                attestation_result: tng_token.into_str(),
+                                attestation_result: token.into_str(),
                                 as_provider: Some(as_provider),
                             }),
                         }

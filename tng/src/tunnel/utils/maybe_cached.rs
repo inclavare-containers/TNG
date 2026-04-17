@@ -223,6 +223,7 @@ impl<
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum RefreshStrategy {
     Periodically { interval: u64 },
     Always,

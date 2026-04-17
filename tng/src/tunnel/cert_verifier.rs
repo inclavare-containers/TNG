@@ -21,13 +21,16 @@ fn parse_token_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngT
 }
 
 fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngEvidence> {
-    rats_cert::errors::Result::from(TngEvidence::create_evidence_from_dice(cbor_tag, raw_evidence))
-        .map_err(|e| {
-            anyhow!(
-                "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {e:#}",
-                cbor_tag
-            )
-        })
+    rats_cert::errors::Result::from(TngEvidence::create_evidence_from_dice(
+        cbor_tag,
+        raw_evidence,
+    ))
+    .map_err(|e| {
+        anyhow!(
+            "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {e:#}",
+            cbor_tag
+        )
+    })
 }
 
 #[derive(Debug)]

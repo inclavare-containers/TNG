@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(unix)]
 use rats_cert::tee::coco::attester::CocoAttester;
 use rats_cert::tee::coco::converter::grpc::CocoGrpcConverter;
 use rats_cert::tee::coco::converter::restful::CocoRestfulConverter;
@@ -6,16 +7,17 @@ use rats_cert::tee::coco::converter::CocoConverter;
 use rats_cert::tee::coco::verifier::remote::CocoRemoteVerifier;
 use rats_cert::tee::coco::verifier::CocoVerifier;
 
-use crate::config::ra::{
-    AttesterArgs, CocoAttesterArgs, CocoConverterArgs, CocoVerifierArgs, ConverterArgs,
-    VerifierArgs,
-};
+#[cfg(unix)]
+use crate::config::ra::{AttesterArgs, CocoAttesterArgs};
+use crate::config::ra::{CocoConverterArgs, CocoVerifierArgs, ConverterArgs, VerifierArgs};
 
+#[cfg(unix)]
 use super::attester::TngAttester;
 use super::converter::TngConverter;
 use super::verifier::TngVerifier;
 
 /// Instantiate a `TngAttester` from config. Dispatches on provider, then sub-type.
+#[cfg(unix)]
 pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
     match config {
         AttesterArgs::Coco(coco) => match coco {
@@ -48,9 +50,7 @@ pub fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
             ))),
             #[cfg(feature = "__builtin-as")]
             CocoConverterArgs::Builtin { .. } => {
-                anyhow::bail!(
-                    "Builtin AS converter creation via factory is not supported"
-                )
+                anyhow::bail!("Builtin AS converter creation via factory is not supported")
             }
         },
     }
@@ -99,9 +99,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
             }
             #[cfg(feature = "__builtin-as")]
             CocoVerifierArgs::Builtin => {
-                anyhow::bail!(
-                    "Builtin AS verifier creation via factory is not supported"
-                )
+                anyhow::bail!("Builtin AS verifier creation via factory is not supported")
             }
         },
     }

@@ -354,7 +354,7 @@ impl OHttpClientInner {
                         converter,
                         ..
                     } => {
-                         // fetch a challenge token from attestation service
+                        // fetch a challenge token from attestation service
                         let challenge_token = converter.get_nonce().await?;
 
                         let attester_pipeline = AttesterPipeline::new(attester, converter);
@@ -365,11 +365,9 @@ impl OHttpClientInner {
                         }
                         .to_claims()?;
 
-                        TngToken::from(
-                            attester_pipeline
-                                .get_evidence(&ReportData::Claims(userdata))
-                                .await?,
-                        )
+                        attester_pipeline
+                            .get_evidence(&ReportData::Claims(userdata))
+                            .await?
                     }
                     AttestContext::BackgroundCheck { attester, .. } => {
                         let AttestationChallengeResponse { challenge_token } =

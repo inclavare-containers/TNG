@@ -120,7 +120,10 @@ mod tests {
             serde_json::Value::String(jwt.clone()),
         )
         .expect("tok");
-        assert_eq!(t.serialize_to_json().expect("ser"), serde_json::Value::String(jwt));
+        assert_eq!(
+            t.serialize_to_json().expect("ser"),
+            serde_json::Value::String(jwt)
+        );
     }
 
     #[test]

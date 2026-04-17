@@ -15,6 +15,7 @@
 //! legacy evidence and token shapes; new fields are optional and can be omitted
 //! for legacy-default behavior.
 
+#[cfg(unix)]
 pub mod attester;
 pub mod converter;
 pub mod evidence;
@@ -23,6 +24,7 @@ pub mod provider_type;
 pub mod token;
 pub mod verifier;
 
+#[cfg(unix)]
 pub use attester::TngAttester;
 pub use converter::TngConverter;
 pub use evidence::TngEvidence;

@@ -34,9 +34,9 @@ impl TngEvidence {
     }
 
     /// Serialize to the CoCo evidence JSON object. OHTTP adds `aa_provider` beside this value.
-    pub fn serialize_to_json(&self) -> Result<serde_json::Value> {
+    pub fn serialize_to_json(&self) -> serde_json::Result<serde_json::Value> {
         match self {
-            Self::Coco(e) => Ok(e.serialize_to_json()?),
+            Self::Coco(e) => e.serialize_to_json(),
         }
     }
 
@@ -92,7 +92,8 @@ mod tests {
     #[test]
     fn coco_evidence_json_round_trip() {
         let inner = minimal_legacy_coco_evidence_json();
-        let ev = TngEvidence::deserialize_from_json(ProviderType::Coco, inner.clone()).expect("deserialize");
+        let ev = TngEvidence::deserialize_from_json(ProviderType::Coco, inner.clone())
+            .expect("deserialize");
         assert_eq!(ev.serialize_to_json().expect("serialize"), inner);
     }
 }

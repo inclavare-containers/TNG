@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::config::ra::{AttestArgs, RaArgs, VerifyArgs};
+#[cfg(unix)]
+use crate::config::ra::AttestArgs;
+use crate::config::ra::{RaArgs, VerifyArgs};
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
 #[cfg(feature = "__builtin-as")]
@@ -21,11 +23,9 @@ use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
-use crate::tunnel::provider::{
-    create_attester, create_converter, create_verifier, TngAttester, TngConverter, TngVerifier,
-};
-
-
+#[cfg(unix)]
+use crate::tunnel::provider::{create_attester, TngAttester};
+use crate::tunnel::provider::{create_converter, create_verifier, TngConverter, TngVerifier};
 
 /// Pre-instantiated RA context for OHTTP security
 ///
@@ -208,8 +208,10 @@ impl VerifyContext {
                     reference_values,
                 }) = converter_args
                 {
-                    let builtin_converter = BuiltinCocoConverter::new(policy, reference_values).await?;
-                    let builtin_verifier = CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
+                    let builtin_converter =
+                        BuiltinCocoConverter::new(policy, reference_values).await?;
+                    let builtin_verifier =
+                        CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
                     return Ok(Self::BackgroundCheck {
                         converter: TngConverter::Coco(CocoConverter::Builtin(builtin_converter)),
                         verifier: TngVerifier::Coco(builtin_verifier),
@@ -655,8 +657,8 @@ mod tests {
     #[cfg(feature = "__builtin-as")]
     mod builtin_tests {
         use super::*;
-        use base64::{engine::general_purpose::STANDARD, Engine};
         use crate::tunnel::provider::TngConverter;
+        use base64::{engine::general_purpose::STANDARD, Engine};
         use rats_cert::cert::verify::{
             PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
             SlsaReferenceValuePayloadConfig,
