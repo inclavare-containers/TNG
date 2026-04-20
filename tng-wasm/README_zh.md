@@ -334,7 +334,7 @@ const policyIds = ["default"];
 首先安装 miniserve
 
 ```sh
-cargo +nightly-2025-07-07 install miniserve
+cargo +nightly-2025-12-01 install miniserve
 ```
 
 运行 miniserve
