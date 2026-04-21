@@ -7,6 +7,8 @@ pub mod token;
 pub mod attester;
 #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
 pub mod converter;
+#[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
+mod retry;
 #[cfg(feature = "verifier-ita")]
 pub mod verifier;
 
