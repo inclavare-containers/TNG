@@ -26,6 +26,7 @@ pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
                 anyhow::bail!("Builtin AA is not yet implemented")
             }
         },
+        AttesterArgs::Ita(args) => Ok(TngAttester::Ita(args.to_attester()?)),
     }
 }
 
@@ -53,6 +54,7 @@ pub fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
                 anyhow::bail!("Builtin AS converter creation via factory is not supported")
             }
         },
+        ConverterArgs::Ita(args) => Ok(TngConverter::Ita(args.to_converter()?)),
     }
 }
 
@@ -102,5 +104,6 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 anyhow::bail!("Builtin AS verifier creation via factory is not supported")
             }
         },
+        VerifierArgs::Ita(args) => Ok(TngVerifier::Ita(args.to_verifier()?)),
     }
 }

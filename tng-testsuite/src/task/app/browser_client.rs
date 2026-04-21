@@ -100,22 +100,38 @@ pub async fn launch_browser_client(
                                         throw new Error('attest_info not exist');
                                     }
 
-                                    if (!passport_mode) {
-                                        if (!(response.attest_info.as_addr !== undefined && response.attest_info.as_addr !== null)) {
-                                            throw new Error('attest_info.as_addr not exist');
-                                        }
-                                    }
+                                    const info = response.attest_info;
 
-                                    if (!(response.attest_info.policy_ids !== undefined && response.attest_info.policy_ids !== null)) {
-                                        throw new Error('attest_info.policy_ids not exist');
-                                    }
-
-                                    if (!Array.isArray(response.attest_info.policy_ids)) {
-                                        throw new Error(`attest_info.policy_ids should be a array but got ${response.attest_info.policy_ids}`);
-                                    }
-
-                                    if (!(response.attest_info.attestation_result !== undefined && response.attest_info.attestation_result !== null)) {
+                                    if (!(info.attestation_result !== undefined && info.attestation_result !== null)) {
                                         throw new Error('attest_info.attestation_result not exist');
+                                    }
+
+                                    const provider = info.as_provider;
+                                    if (!provider) {
+                                        throw new Error('attest_info.as_provider not exist');
+                                    }
+
+                                    if (provider === 'coco') {
+                                        if (!passport_mode) {
+                                            if (!(info.as_addr !== undefined && info.as_addr !== null)) {
+                                                throw new Error('attest_info.as_addr not exist (coco)');
+                                            }
+                                        }
+                                        if (!(info.policy_ids !== undefined && info.policy_ids !== null)) {
+                                            throw new Error('attest_info.policy_ids not exist (coco)');
+                                        }
+                                        if (!Array.isArray(info.policy_ids)) {
+                                            throw new Error(`attest_info.policy_ids should be an array but got ${info.policy_ids}`);
+                                        }
+                                    } else if (provider === 'ita') {
+                                        if (!(info.policy_ids !== undefined && info.policy_ids !== null)) {
+                                            throw new Error('attest_info.policy_ids not exist (ita)');
+                                        }
+                                        if (!Array.isArray(info.policy_ids)) {
+                                            throw new Error(`attest_info.policy_ids should be an array but got ${info.policy_ids}`);
+                                        }
+                                    } else {
+                                        throw new Error(`Unknown as_provider: ${provider}`);
                                     }
                                 }
                                 "#;

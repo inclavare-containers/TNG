@@ -6,6 +6,7 @@ name = "rats-cert"
 version.workspace = true
 
 [dependencies]
+again = {workspace = true, optional = true}
 anyhow = {workspace = true}
 as-any = {workspace = true}
 async-trait = {workspace = true}
@@ -17,6 +18,7 @@ ciborium = {workspace = true}
 const-oid = {workspace = true, optional = true}
 flatten-json-object = {workspace = true, optional = true}
 futures = {workspace = true}
+hex = {workspace = true}
 itertools = {workspace = true}
 jsonwebtoken = {workspace = true}
 kbs-types = {workspace = true}
@@ -86,6 +88,16 @@ verifier-coco = [
   "dep:flatten-json-object",
 ]
 
+attester-ita = [
+  "attester-coco",
+  "dep:again",
+]
+verifier-ita = [
+  "dep:again",
+  "dep:reqwest",
+  "dep:flatten-json-object",
+]
+
 crypto-rustcrypto = [
   "dep:x509-cert",
   "dep:sha2",
@@ -110,7 +122,6 @@ default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "__builtin-as"
 
 [dev-dependencies]
 ctor = {workspace = true}
-hex = {workspace = true}
 rayon = {workspace = true}
 rstest = {workspace = true}
 serial_test = {workspace = true}

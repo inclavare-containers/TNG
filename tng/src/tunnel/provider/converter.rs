@@ -1,5 +1,6 @@
 use rats_cert::errors::*;
 use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
+use rats_cert::tee::ita::ItaConverter;
 use rats_cert::tee::GenericConverter;
 
 use super::evidence::TngEvidence;
@@ -9,12 +10,14 @@ use super::token::TngToken;
 /// Uses `try_into()` on evidence to enable cross-provider compatibility.
 pub enum TngConverter {
     Coco(CocoConverter),
+    Ita(ItaConverter),
 }
 
 impl TngConverter {
     pub fn provider_type(&self) -> super::provider_type::ProviderType {
         match self {
             Self::Coco(_) => super::provider_type::ProviderType::Coco,
+            Self::Ita(_) => super::provider_type::ProviderType::Ita,
         }
     }
 }
@@ -31,6 +34,10 @@ impl GenericConverter for TngConverter {
                 let native_evidence = in_evidence.try_into()?;
                 Ok(c.convert(&native_evidence).await?.into())
             }
+            Self::Ita(c) => {
+                let native_evidence = in_evidence.try_into()?;
+                Ok(c.convert(&native_evidence).await?.into())
+            }
         }
     }
 
@@ -40,6 +47,7 @@ impl GenericConverter for TngConverter {
                 let CoCoNonce::Jwt(token) = c.get_nonce().await?;
                 Ok(token)
             }
+            Self::Ita(c) => c.get_nonce().await,
         }
     }
 }

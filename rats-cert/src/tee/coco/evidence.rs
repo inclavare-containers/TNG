@@ -5,7 +5,7 @@ use flatten_json_object::Flattener;
 use kbs_types::Tee;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::cert::dice::cbor::{
     HashAlgoIanaId, OCBR_TAG_EVIDENCE_COCO_EVIDENCE, OCBR_TAG_EVIDENCE_COCO_TOKEN,
@@ -13,7 +13,7 @@ use crate::cert::dice::cbor::{
 use crate::crypto::HashAlgo;
 use crate::errors::*;
 use crate::tee::claims::Claims;
-use crate::tee::{DiceParseEvidenceOutput, GenericEvidence, ReportData};
+use crate::tee::{DiceParseEvidenceOutput, GenericEvidence};
 
 /// Hash algorithm types used by attestation-service
 #[derive(Serialize, Deserialize)]
@@ -122,19 +122,6 @@ impl CocoEvidence {
 
     pub(crate) fn get_aa_runtime_data_hash_algo(&self) -> HashAlgo {
         self.aa_runtime_data_hash_algo
-    }
-
-    pub(crate) fn wrap_runtime_data_as_structed(
-        report_data: &ReportData,
-    ) -> Result<serde_json::Value> {
-        match report_data {
-            ReportData::Raw(report_data) => {
-                Ok(json!({"rats-rs.raw_runtime_data": URL_SAFE_NO_PAD.encode(report_data)}))
-            }
-            ReportData::Claims(claims) => {
-                serde_json::to_value(claims).map_err(Error::SerializeClaimsToJsonFailed)
-            }
-        }
     }
 
     pub fn serialize_to_json(&self) -> serde_json::Result<serde_json::Value> {
