@@ -238,7 +238,7 @@ docker-build:
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \
-		cargo +nightly-2025-07-07 install wasm-pack ; \
+		cargo +nightly-2025-07-07 install wasm-pack --locked ; \
 	fi
 	if ! rustup component list --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu | grep rust-src | grep installed >/dev/null; then \
 		rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu ; \
