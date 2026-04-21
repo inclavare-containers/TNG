@@ -5735,6 +5735,7 @@ dependencies = [
 name = "rats-cert"
 version = "2.5.0"
 dependencies = [
+ "again",
  "anyhow",
  "as-any",
  "async-trait",

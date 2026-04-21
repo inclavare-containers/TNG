@@ -1,4 +1,4 @@
-use super::super::evidence::{CocoAsToken, CocoEvidence};
+use super::super::evidence::CocoAsToken;
 use crate::tee::ReportData;
 use crate::{errors::*, tee::GenericVerifier};
 
@@ -45,7 +45,7 @@ impl CommonCocoVerifier {
         };
 
         /* Check report_data matchs */
-        let runtime_data_expected = CocoEvidence::wrap_runtime_data_as_structed(report_data)?;
+        let runtime_data_expected = crate::tee::wrap_runtime_data_as_structed(report_data)?;
         let runtime_data_in_token = if is_ear {
             // EAR JWT route
             claims_value

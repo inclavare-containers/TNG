@@ -1,5 +1,8 @@
 use std::any::Any;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use serde_json::json;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -10,6 +13,9 @@ pub mod claims;
 
 #[cfg(any(feature = "attester-coco", feature = "verifier-coco"))]
 pub mod coco;
+
+#[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
+pub mod ita;
 
 pub enum DiceParseEvidenceOutput<T> {
     NotMatch,
@@ -161,4 +167,27 @@ where
 pub enum ReportData {
     Raw(Vec<u8>),
     Claims(Claims),
+}
+
+/// Wrap [`ReportData`] into a structured JSON value suitable for embedding
+/// into TEE REPORTDATA.  Used by both CoCo and ITA attesters/verifiers.
+pub(crate) fn wrap_runtime_data_as_structed(report_data: &ReportData) -> Result<serde_json::Value> {
+    match report_data {
+        ReportData::Raw(report_data) => {
+            Ok(json!({"rats-rs.raw_runtime_data": URL_SAFE_NO_PAD.encode(report_data)}))
+        }
+        ReportData::Claims(claims) => {
+            serde_json::to_value(claims).map_err(Error::SerializeClaimsToJsonFailed)
+        }
+    }
+}
+
+/// Deterministic canonical-JSON serialization via [`canon_json`].
+#[cfg(feature = "attester-coco")]
+pub(crate) fn serialize_canon_json<T: serde::Serialize>(value: T) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut ser =
+        serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
+    serde::Serialize::serialize(&value, &mut ser).map_err(Error::SerializeCanonicalJsonFailed)?;
+    Ok(buf)
 }

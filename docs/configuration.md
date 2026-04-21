@@ -469,7 +469,9 @@ Remote attestation is one of the core security mechanisms of trusted computing, 
 In the TNG architecture, we have integrated a standardized remote attestation process that supports flexibly configuring TNG endpoints as either **Attester** or **Verifier** roles, thus achieving bidirectional trusted authentication and establishing secure communication links.
 
 > [!NOTE]
-> **Provider selection**: The Attestation Agent stack and the Attestation Service stack are selected with **`aa_provider`** and **`as_provider`** respectively. If `aa_provider` or `as_provider` is omitted, it defaults to **`"coco"`** (Confidential Containers), which is the only provider supported today.
+> **Provider selection**: The Attestation Agent stack and the Attestation Service stack are selected with **`aa_provider`** and **`as_provider`** respectively. If `aa_provider` or `as_provider` is omitted, it defaults to **`"coco"`** (Confidential Containers). Currently supported providers are:
+> - **`"coco"`** — [Confidential Containers](https://github.com/confidential-containers) (default). Interfaces with the CoCo Attestation Agent and CoCo Attestation Service.
+> - **`"ita"`** — [Intel Trust Authority](https://www.intel.com/content/www/us/en/security/trust-authority.html). Interfaces with the CoCo Attestation Agent for evidence collection and the Intel Trust Authority cloud service for attestation and token verification.
 
 <a name="attest"></a>
 ### Attester: The Initiator Proving Its Trustworthiness
@@ -482,6 +484,7 @@ In TNG, you can configure any endpoint as an Attester role, enabling it to respo
 > **Current Implementation Notes**:  
 > Currently, TNG only supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent).  
 > The Attestation Agent runs in a protected guest environment, responsible for interacting with the underlying TEE and encapsulating standardized attestation data, ensuring the security and portability of the attestation process.
+> Both the **CoCo** and **ITA** providers use the same Attestation Agent for evidence collection, but differ in how the runtime data is processed and injected into the evidence (according to the requirements of the respective attestation services).
 
 <a name="verify"></a>
 ### Verifier: The Decision Maker Verifying Peer Trustworthiness
@@ -491,8 +494,8 @@ In TNG, you can configure any endpoint as an Attester role, enabling it to respo
 In the TNG architecture, the Verifier can be part of the control plane or service gateway, actively or passively verifying the identity and trust level of accessing nodes.
 
 > **Current Implementation Notes**:  
-> The current Verifier functionality of TNG relies on the [Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service) to consume and verify received Evidence.  
-> The Attestation Service provides a unified interface for parsing and verifying attestation data of different TEE types, and supports integration with the Trustee Server to achieve centralized policy management and root of trust distribution.
+> For the **CoCo** provider, the Verifier relies on the [CoCo Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service) to verify received Evidence. It provides a unified interface for parsing and verifying attestation data of different TEE types, and supports integration with the Trustee Server to achieve centralized policy management and root of trust distribution.  
+> For the **ITA** provider, the Verifier relies on the Intel Trust Authority attestation service (https://www.intel.com/content/www/us/en/security/trust-authority.html) to verify received Evidence. It can parse and verify attestation data for TDX Confidential VMs and Nvidia GPUs, and supports policy management and enforcement.
 
 
 ## Attester and Verifier Combinations and Bidirectional Remote Attestation
@@ -517,7 +520,7 @@ By configuring different combinations of `attest` and `verify` properties at bot
 
 #### Attest (Background Check Model)
 
-In the Background Check model, the [Attest](#attest) configuration should include the following fields:
+In the Background Check model, the [Attest](#attest) configuration should include the following fields. The fields below apply to the default CoCo provider (`aa_provider` = `"coco"` or omitted):
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
 - **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
@@ -551,9 +554,26 @@ Example:
 }
 ```
 
+##### Using the ITA Provider
+
+When `aa_provider` is set to `"ita"`, the Attest configuration uses the following fields:
+
+- **`aa_provider`** (string): Set to `"ita"`
+- **`aa_addr`** (string, required): Attestation Agent Unix socket address (e.g., `"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"`)
+- **`refresh_interval`** (int, optional, default value is 600): Same behavior as described above for the CoCo provider.
+
+Example:
+
+```json
+"attest": {
+    "aa_provider": "ita",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+}
+```
+
 #### Verify (Background Check Model)
 
-In the Background Check model, the [Verify](#verify) configuration should include the following fields:
+In the Background Check model, the [Verify](#verify) configuration should include the following fields. The fields below apply to the default CoCo provider (`as_provider` = `"coco"` or omitted):
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
 - **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc", "builtin"
@@ -833,6 +853,29 @@ The following example shows using SLSA mode to retrieve reference values from Re
 }
 ```
 
+##### Using the ITA Provider
+
+When `as_provider` is set to `"ita"`, the Verify configuration uses the following fields:
+
+- **`as_provider`** (string): Set to `"ita"`
+- **`as_addr`** (string, optional, default is `"https://api.trustauthority.intel.com"`): Intel Trust Authority API base URL
+- **`api_key`** (string, optional): Intel Trust Authority API key. Can be set directly in the config or via the **`ITA_API_KEY`** environment variable. If both are set, the config value takes precedence.
+- **`ita_jwks_addr`** (string, optional, default is `"https://portal.trustauthority.intel.com"`): Intel Trust Authority portal URL used to fetch JWKS signing keys for token verification
+- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs that must match for attestation to succeed
+
+Example:
+
+```json
+"verify": {
+    "as_provider": "ita",
+    "api_key": "your-ita-api-key",
+    "policy_ids": ["my-policy"]
+}
+```
+
+> [!NOTE]
+> The `api_key` can be omitted from the config JSON if the `ITA_API_KEY` environment variable is set. TNG automatically reads it from the environment at startup. This is the recommended approach for API key provisioning.
+
 ### Passport Model
 
 In addition to the Background Check model, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
@@ -841,7 +884,7 @@ The Passport model is suitable for scenarios with network isolation or high perf
 
 #### Attest (Passport Model)
 
-In the Passport model, the [Attest](#attest) configuration should include the following fields:
+In the Passport model, the [Attest](#attest) configuration should include the following fields. The fields below apply to the default CoCo provider (`aa_provider` = `"coco"` or omitted, `as_provider` = `"coco"` or omitted):
 
 - **`model`** (string): Set to "passport" to enable the Passport model
 - **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
@@ -872,9 +915,34 @@ Example:
 }
 ```
 
+##### Using the ITA Provider
+
+When `aa_provider` and `as_provider` are set to `"ita"`, the Attest configuration uses the following fields:
+
+- **`model`** (string): Set to `"passport"`
+- **`aa_provider`** (string): Set to `"ita"`
+- **`aa_addr`** (string, required): Attestation Agent Unix socket address
+- **`as_provider`** (string): Set to `"ita"`
+- **`as_addr`** (string, optional, default is `"https://api.trustauthority.intel.com"`): Intel Trust Authority API base URL
+- **`api_key`** (string, optional): Intel Trust Authority API key. Can also be set via the **`ITA_API_KEY`** environment variable.
+- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs that must match for attestation to succeed
+
+Example:
+
+```json
+"attest": {
+    "model": "passport",
+    "aa_provider": "ita",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "as_provider": "ita",
+    "api_key": "your-ita-api-key",
+    "policy_ids": ["my-policy"]
+}
+```
+
 #### Verify (Passport Model)
 
-In the Passport model, the [Verify](#verify) configuration should include the following fields:
+In the Passport model, the [Verify](#verify) configuration should include the following fields. The fields below apply to the default CoCo provider (`as_provider` = `"coco"` or omitted):
 
 - **`model`** (string): Set to "passport" to enable the Passport model
 - **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
@@ -895,6 +963,25 @@ Example:
     "trusted_certs_paths": [
         "/tmp/as-ca.pem"
     ]
+}
+```
+
+##### Using the ITA Provider
+
+When `as_provider` is set to `"ita"`, the Verify configuration uses the following fields:
+
+- **`model`** (string): Set to `"passport"`
+- **`as_provider`** (string): Set to `"ita"`
+- **`ita_jwks_addr`** (string, optional, default is `"https://portal.trustauthority.intel.com"`): Intel Trust Authority portal URL used to fetch JWKS signing keys for token verification
+- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs. The verifier checks that all specified policy IDs appear in the token's `policy_ids_matched` claim.
+
+Example:
+
+```json
+"verify": {
+    "model": "passport",
+    "as_provider": "ita",
+    "policy_ids": ["my-policy"]
 }
 ```
 

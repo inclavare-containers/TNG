@@ -178,13 +178,20 @@ async fn convert_to_web_response(
     )
 }
 
+/// Non-sensitive subset of verification config exposed to JavaScript.
+///
+/// Only public, non-secret fields are extracted here.  Sensitive values
+/// (`api_key`, `as_headers`, `trusted_certs_paths`, …) are intentionally
+/// omitted.  The explicit match arms ensure a compile error when a new
+/// provider variant is added, forcing a review of which fields to expose.
 #[derive(Serialize)]
 struct AttestationInfo {
-    /// Attestation service address
     as_addr: Option<String>,
-    /// Policy ID list
     policy_ids: Option<Vec<String>>,
-    /// A JWT string which represent the result of remote attestation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    as_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ita_jwks_addr: Option<String>,
     attestation_result: AttestationResult,
 }
 
@@ -193,15 +200,23 @@ fn bind_attestation_result(
     attestation_result: AttestationResult,
     ra_args: &RaArgs,
 ) -> Result<web_sys::Response, JsValue> {
-    // Create the attest_info object
     let mut attest_info = AttestationInfo {
         as_addr: None,
         policy_ids: None,
+        as_provider: None,
+        ita_jwks_addr: None,
         attestation_result,
     };
 
-    match ra_args {
-        RaArgs::VerifyOnly(verify_args) => match verify_args {
+    let verify_args = match ra_args {
+        RaArgs::VerifyOnly(v) => Some(v),
+        RaArgs::NoRa => None,
+        #[allow(unreachable_patterns)]
+        _ => None,
+    };
+
+    if let Some(verify_args) = verify_args {
+        match verify_args {
             VerifyArgs::Passport { verifier } => match verifier {
                 VerifierArgs::Coco(coco) => match coco {
                     CocoVerifierArgs::Restful {
@@ -214,12 +229,21 @@ fn bind_attestation_result(
                         policy_ids,
                         ..
                     } => {
+                        attest_info.as_provider = Some("coco".into());
                         attest_info.as_addr = as_addr.clone();
                         attest_info.policy_ids = Some(policy_ids.clone());
                     }
                 },
+                VerifierArgs::Ita(ita) => {
+                    attest_info.as_provider = Some("ita".into());
+                    attest_info.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
+                    attest_info.policy_ids = Some(ita.policy_ids.clone());
+                }
             },
-            VerifyArgs::BackgroundCheck { converter, .. } => match converter {
+            VerifyArgs::BackgroundCheck {
+                converter,
+                verifier,
+            } => match converter {
                 ConverterArgs::Coco(coco) => match coco {
                     CocoConverterArgs::Restful {
                         as_addr,
@@ -231,13 +255,21 @@ fn bind_attestation_result(
                         policy_ids,
                         ..
                     } => {
+                        attest_info.as_provider = Some("coco".into());
                         attest_info.as_addr = Some(as_addr.clone());
                         attest_info.policy_ids = Some(policy_ids.clone());
                     }
                 },
+                ConverterArgs::Ita(ita) => {
+                    attest_info.as_provider = Some("ita".into());
+                    attest_info.as_addr = Some(ita.as_addr.clone());
+                    attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    if let VerifierArgs::Ita(v) = verifier {
+                        attest_info.ita_jwks_addr = Some(v.ita_jwks_addr.clone());
+                    }
+                }
             },
-        },
-        RaArgs::NoRa => { /* nothing */ }
+        }
     }
 
     // Create a JavaScript object

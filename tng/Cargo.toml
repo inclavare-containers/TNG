@@ -107,7 +107,7 @@ async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-run
 atty = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
 notify = {workspace = true}
-rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco"]}
+rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "time", "process"]}
 tower-http = {workspace = true, features = ["trace", "set-header", "cors", "compression-br", "compression-gzip", "compression-zstd"]}
@@ -115,7 +115,7 @@ ws_stream_tungstenite = {workspace = true}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
 axum = {workspace = true, default-features = false, features = ["json"]}# to disable mio
-rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "verifier-coco"]}
+rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "verifier-coco", "verifier-ita"]}
 ring = {workspace = true, features = ["wasm32_unknown_unknown_js"]}
 rustls-pki-types = {version = "*", features = ["web"]}
 serde-wasm-bindgen = {workspace = true}

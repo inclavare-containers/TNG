@@ -370,4 +370,37 @@ pub enum Error {
 
     #[error("Failed to serialize canonical JSON")]
     SerializeCanonicalJsonFailed(#[source] serde_json::Error),
+
+    #[error("Failed to serialize JSON")]
+    SerializeJsonFailed(#[source] serde_json::Error),
+
+    // ITA-specific errors
+    #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
+    #[error("ITA HTTP request to `{endpoint}` failed: {source}")]
+    ItaHttpRequestFailed {
+        endpoint: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
+    #[error(
+        "ITA HTTP response error from `{endpoint}`: status={status_code}, body={response_body}"
+    )]
+    ItaHttpResponseError {
+        endpoint: String,
+        status_code: u16,
+        response_body: String,
+    },
+
+    #[cfg(feature = "verifier-ita")]
+    #[error("ITA JWT verification failed: {0}")]
+    ItaVerifyTokenFailed(#[source] jsonwebtoken::errors::Error),
+
+    #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
+    #[error("ITA error: {0}")]
+    ItaError(String),
+
+    #[error("Incompatible types: {detail}")]
+    IncompatibleTypes { detail: String },
 }
