@@ -8,7 +8,7 @@ async fn sleep(duration: Duration) {
         target_os = "unknown"
     ))]
     {
-        tokio_with_wasm::time::sleep(duration).await;
+        tokio_with_wasm::alias::time::sleep(duration).await;
     }
     #[cfg(not(all(
         target_arch = "wasm32",
@@ -64,5 +64,49 @@ impl RetryPolicy {
             }
         }
         unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn policy() -> RetryPolicy {
+        RetryPolicy::exponential(Duration::from_millis(1)).with_max_retries(2)
+    }
+
+    #[tokio::test]
+    async fn succeeds_immediately() {
+        let r: Result<_, &str> = policy().retry(|| async { Ok("ok") }).await;
+        assert_eq!(r.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn retries_then_succeeds() {
+        let calls = Cell::new(0);
+        let r: Result<_, &str> = policy()
+            .retry(|| {
+                let n = calls.get();
+                calls.set(n + 1);
+                async move { if n < 2 { Err("fail") } else { Ok("ok") } }
+            })
+            .await;
+        assert_eq!(r.unwrap(), "ok");
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn exhausts_retries() {
+        let calls = Cell::new(0);
+        let r: Result<(), _> = policy()
+            .retry(|| {
+                let n = calls.get();
+                calls.set(n + 1);
+                async move { Err(format!("e{n}")) }
+            })
+            .await;
+        assert_eq!(r.unwrap_err(), "e2");
+        assert_eq!(calls.get(), 3);
     }
 }
