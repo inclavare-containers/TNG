@@ -191,11 +191,10 @@ impl IngressFlow {
 
                     // let forward_stream_task = pin!(forward_stream_task);
                     match forward_stream_task.await {
-                        Err(e) => {
-                            let error = format!("{e:#}");
+                        Err(error) => {
                             tracing::error!(
                                 %dst,
-                                error,
+                                ?error,
                                 "Failed during forwarding to upstream"
                             );
                         }

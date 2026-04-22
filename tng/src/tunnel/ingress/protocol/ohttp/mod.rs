@@ -97,7 +97,9 @@ mod unix_specific_module {
                         hyper_util::server::conn::auto::Builder::new(runtime)
                             .serve_connection_with_upgrades(TokioIo::new(downstream), hyper_service)
                             .await
-                            .map_err(|error| anyhow!("failed to serve connection: {error:?}"))
+                            .map_err(|error| {
+                                anyhow!("failed to serve OHTTP protocol on downstream: {error:?}")
+                            })
                     }) as Pin<Box<_>>,
                     // TODO: ohttp always return None attestation result in stream level, which may cause misunderstanding when user is reading the logs.
                     None,

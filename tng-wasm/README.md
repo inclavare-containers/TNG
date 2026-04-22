@@ -191,7 +191,7 @@ Use [dummyhttp](https://github.com/svenstaro/dummyhttp), a simple HTTP server pr
 Installation
 
 ```sh
-cargo install dummyhttp
+cargo install dummyhttp --locked
 ```
 
 Run this HTTP server and make it listen on port 30001. Now we have a backend HTTP service listening on port 30001.
@@ -336,7 +336,7 @@ const policyIds = ["default"];
 First install miniserve
 
 ```sh
-cargo +nightly-2025-12-01 install miniserve
+cargo +nightly-2025-07-07 install miniserve --locked
 ```
 
 Run miniserve

@@ -18,7 +18,7 @@ If you only want to compile and run TNG locally, you can focus on the `tng/` dir
 This project requires two versions of the Rust toolchain:
 
 - `1.89.0`: This is the minimum supported Rust version required to build TNG binaries or RPM packages (whether from source or the released source tarball).
-- `nightly-2025-12-01`: This is the Rust toolchain required for the following scenarios:
+- `nightly-2025-07-07`: This is the Rust toolchain required for the following scenarios:
     - Building the TNG JavaScript SDK. For details, see [tng-wasm/README.md](../tng-wasm/README.md).
     - Creating the source code tarball using the `make create-tarball` command. This is because some of our crate dependencies require a newer Rust toolchain to resolve.
 

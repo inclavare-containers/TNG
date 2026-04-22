@@ -15,7 +15,7 @@ authors = ["Kun Lai <laikun@linux.alibaba.com>"]
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/inclavare-containers/tng"
-version = "2.5.0"
+version = "2.6.0"
 
 [workspace.dependencies]
 again = "0.1.2"
@@ -89,7 +89,7 @@ rayon = "1.10.0"
 rcgen = "0.13.2"
 reference-value-provider-service = {git = "https://github.com/openanolis/trustee/", rev = "45e63a747914b10381d33b5cd313d23268c2781a", default-features = false}
 regex = "1.11.1"
-reqwest = {version = "<=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
+reqwest = {version = "=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
 ring = "0.17.8"
 rsa = {version = "0.9.7", features = ["sha2"]}
 rstest = "0.25.0"
