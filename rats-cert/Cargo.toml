@@ -120,11 +120,13 @@ default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "__builtin-as"
 [dev-dependencies]
 ctor = {workspace = true}
 rayon = {workspace = true}
+rsa = {workspace = true}
 rstest = {workspace = true}
 serial_test = {workspace = true}
 tempfile = {workspace = true}
 tokio = {workspace = true, features = ["rt", "rt-multi-thread", "macros"]}
 tracing-subscriber = {workspace = true}
+wiremock = "0.6"
 
 [build-dependencies]
 tonic-prost-build = {workspace = true, optional = true}

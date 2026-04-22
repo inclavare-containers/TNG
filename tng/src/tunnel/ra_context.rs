@@ -685,10 +685,13 @@ mod tests {
             match ctx {
                 VerifyContext::BackgroundCheck { converter, .. } => match converter {
                     TngConverter::Coco(CocoConverter::Builtin(..)) => {}
-                    // `TngConverter` is currently only `Coco`; discriminate the inner converter.
                     TngConverter::Coco(c) => panic!(
                         "Expected Coco Builtin converter, got CocoConverter discriminant {:?}",
                         std::mem::discriminant(c)
+                    ),
+                    other => panic!(
+                        "Expected Coco converter, got {:?}",
+                        std::mem::discriminant(other)
                     ),
                 },
                 other => panic!("Expected BackgroundCheck variant, got {:?}", other),
@@ -832,6 +835,10 @@ mod tests {
                     TngConverter::Coco(c) => panic!(
                         "Expected Coco Builtin converter, got CocoConverter discriminant {:?}",
                         std::mem::discriminant(&c)
+                    ),
+                    other => panic!(
+                        "Expected Coco converter, got {:?}",
+                        std::mem::discriminant(&other)
                     ),
                 },
                 other => panic!("Expected BackgroundCheck variant, got {:?}", other),

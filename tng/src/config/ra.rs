@@ -1458,7 +1458,7 @@ mod tests {
     // =====================================================================
 
     #[test]
-    fn test_ita_attest_config_passport() {
+    fn test_ita_passport_attest_config() {
         let aa_addr = "unix:///tmp/ita-aa.sock";
         let as_addr = "https://api.trustauthority.intel.com";
         let api_key = "test-key";
@@ -1500,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ita_attest_config_background_check() {
+    fn test_ita_background_check_attest_config() {
         let aa_addr = "unix:///tmp/ita-aa.sock";
         let json = json!({
             "attest": {
@@ -1651,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ita_verify_into_checked_rejects_missing_api_key() {
+    fn test_ita_background_check_verify_into_checked_rejects_missing_api_key() {
         std::env::remove_var(ITA_API_KEY_ENV);
         let json = json!({
             "verify": {
@@ -1665,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ita_verify_into_checked_rejects_invalid_as_addr() {
+    fn test_ita_background_check_verify_into_checked_rejects_invalid_as_addr() {
         let json = json!({
             "verify": {
                 "model": "background_check",
@@ -1708,5 +1708,62 @@ mod tests {
         });
         let ra: RaArgsUnchecked = serde_json::from_value(json).unwrap();
         assert!(ra.into_checked().is_err());
+    }
+
+    #[test]
+    fn test_ita_passport_verify_into_checked_succeeds() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_provider": "ita",
+                "ita_jwks_addr": "https://portal.trustauthority.intel.com",
+                "policy_ids": ["test-policy"]
+            }
+        });
+        let ra: RaArgsUnchecked = serde_json::from_value(json).unwrap();
+        let checked = ra.into_checked();
+        assert!(
+            checked.is_ok(),
+            "valid ITA verify config should pass into_checked: {checked:?}"
+        );
+    }
+
+    #[test]
+    fn test_ita_background_check_verify_into_checked_succeeds() {
+        let json = json!({
+            "verify": {
+                "model": "background_check",
+                "as_provider": "ita",
+                "as_addr": "https://api.trustauthority.intel.com",
+                "api_key": "test-key-123",
+                "ita_jwks_addr": "https://portal.trustauthority.intel.com",
+                "policy_ids": ["test-policy"]
+            }
+        });
+        let ra: RaArgsUnchecked = serde_json::from_value(json).unwrap();
+        let checked = ra.into_checked();
+        assert!(
+            checked.is_ok(),
+            "valid ITA background_check verify config should pass into_checked: {checked:?}"
+        );
+    }
+
+    #[test]
+    fn test_ita_converter_args_debug_redacts_api_key() {
+        let secret = "super-secret-key-12345";
+        let args = ItaConverterArgs {
+            as_addr: "https://api.trustauthority.intel.com".to_string(),
+            api_key: Some(secret.to_string()),
+            policy_ids: vec![],
+        };
+        let debug_output = format!("{:?}", args);
+        assert!(
+            !debug_output.contains(secret),
+            "Debug output must not contain the raw API key"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output should show [REDACTED] for api_key"
+        );
     }
 }

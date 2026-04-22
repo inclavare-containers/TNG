@@ -307,11 +307,127 @@ struct CachedKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use rsa::pkcs8::EncodePrivateKey;
+    use rsa::traits::PublicKeyParts;
+    use rsa::RsaPrivateKey;
     use serde_json::json;
 
     fn verifier(policy_ids: &[&str]) -> ItaVerifier {
         let ids: Vec<String> = policy_ids.iter().copied().map(String::from).collect();
         ItaVerifier::new("https://portal.trustauthority.intel.com", &ids).unwrap()
+    }
+
+    /// Generate an RSA key pair, sign a JWT with PS384, and pre-populate JWKS_CACHE
+    /// so that `verify_jwt` can succeed without any network call.
+    async fn setup_cached_key(jwks_url: &str, kid: &str, claims: &Value) -> String {
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = rsa::RsaPublicKey::from(&private_key);
+
+        let n = URL_SAFE_NO_PAD.encode(public_key.n().to_bytes_be());
+        let e = URL_SAFE_NO_PAD.encode(public_key.e().to_bytes_be());
+
+        {
+            let mut cache = JWKS_CACHE.write().await;
+            cache.insert(
+                jwks_url.to_string(),
+                vec![CachedKey {
+                    kid: kid.to_string(),
+                    n,
+                    e,
+                }],
+            );
+        }
+
+        let pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
+        let mut header = jsonwebtoken::Header::new(Algorithm::PS384);
+        header.kid = Some(kid.to_string());
+        jsonwebtoken::encode(&header, claims, &encoding_key).unwrap()
+    }
+
+    // ---- verify_jwt happy path ----
+
+    #[tokio::test]
+    async fn verify_jwt_with_cached_key_succeeds() {
+        let base = "https://test-verify-happy.example.com";
+        let jwks_url = format!("{base}{ITA_JWKS_PATH}");
+        let sub = "test-subject";
+        let claims = json!({
+            "iss": ITA_TOKEN_ISSUERS[1],
+            "exp": 9999999999u64,
+            "sub": sub
+        });
+        let token = setup_cached_key(&jwks_url, "test-kid-1", &claims).await;
+
+        let v = ItaVerifier::new(base, &[]).unwrap();
+        let result = v.verify_jwt(&token).await.unwrap();
+        assert_eq!(result["sub"], sub);
+    }
+
+    // ---- verify_jwt error paths ----
+
+    #[tokio::test]
+    async fn verify_jwt_rejects_non_https() {
+        let v = ItaVerifier::new("http://bad.example.com", &[]).unwrap();
+        let err = v.verify_jwt("any.jwt.here").await.unwrap_err();
+        assert!(
+            matches!(&err, Error::ItaError(msg) if msg.contains("HTTPS")),
+            "expected HTTPS error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_jwt_rejects_missing_kid() {
+        let v = verifier(&[]);
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"PS384"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"test"}"#);
+        let token = format!("{header}.{payload}.fake-sig");
+        let err = v.verify_jwt(&token).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::ItaError(msg) if msg.contains("kid")),
+            "expected missing kid error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_jwt_rejects_wrong_algorithm() {
+        let v = verifier(&[]);
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","kid":"k1"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"test"}"#);
+        let token = format!("{header}.{payload}.fake-sig");
+        let err = v.verify_jwt(&token).await.unwrap_err();
+        assert!(
+            matches!(&err, Error::ItaError(msg) if msg.contains("PS384")),
+            "expected algorithm error, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_jwt_kid_not_in_cache_fails() {
+        let base = "https://test-kid-miss.example.com";
+        let jwks_url = format!("{base}{ITA_JWKS_PATH}");
+        let claims = json!({
+            "iss": ITA_TOKEN_ISSUERS[1],
+            "exp": 9999999999u64,
+        });
+        let token = setup_cached_key(&jwks_url, "cached-kid", &claims).await;
+
+        // Replace the kid in the token header to cause a mismatch
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"PS384","kid":"unknown-kid"}"#);
+        let parts: Vec<&str> = token.split('.').collect();
+        let tampered = format!("{header}.{}.{}", parts[1], parts[2]);
+
+        let v = ItaVerifier::new(base, &[]).unwrap();
+        let err = v.verify_jwt(&tampered).await.unwrap_err();
+        assert!(
+            matches!(err, Error::ItaHttpRequestFailed { .. }),
+            "expected refresh failure for unknown kid, got: {err:?}"
+        );
     }
 
     // ---- check_policy_matching ----
@@ -353,6 +469,13 @@ mod tests {
     fn policy_ids_configured_but_field_missing_fails() {
         let v = verifier(&["p1"]);
         assert!(v.check_policy_matching(&json!({})).is_err());
+    }
+
+    #[test]
+    fn policy_ids_matched_not_array_fails() {
+        let v = verifier(&["p1"]);
+        let claims = json!({"policy_ids_matched": "not-an-array"});
+        assert!(v.check_policy_matching(&claims).is_err());
     }
 
     // ---- check_runtime_data_binding ----
