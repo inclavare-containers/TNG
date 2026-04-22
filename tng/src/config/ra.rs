@@ -175,6 +175,22 @@ impl RaArgsUnchecked {
                     }
                 },
             };
+
+            if let AttestArgs::Passport {
+                converter: ConverterArgs::Ita(ita),
+                ..
+            } = attest_args
+            {
+                Url::parse(&ita.as_addr)
+                    .with_context(|| format!("Invalid ITA API address: {}", ita.as_addr))
+                    .map_err(TngError::InvalidParameter)?;
+                if ita.api_key.is_none() {
+                    return Err(TngError::InvalidParameter(anyhow!(
+                        "ITA api_key is required: set it in config or via ${} env var",
+                        ITA_API_KEY_ENV
+                    )));
+                }
+            }
         }
 
         // Sanity check for the verify_args.
@@ -1653,6 +1669,38 @@ mod tests {
         let json = json!({
             "verify": {
                 "model": "background_check",
+                "as_provider": "ita",
+                "as_addr": "not a url",
+                "api_key": "key"
+            }
+        });
+        let ra: RaArgsUnchecked = serde_json::from_value(json).unwrap();
+        assert!(ra.into_checked().is_err());
+    }
+
+    #[test]
+    fn test_ita_passport_attest_into_checked_rejects_missing_api_key() {
+        std::env::remove_var(ITA_API_KEY_ENV);
+        let json = json!({
+            "attest": {
+                "model": "passport",
+                "aa_provider": "ita",
+                "aa_addr": "unix:///dev/null",
+                "as_provider": "ita"
+            }
+        });
+        let ra: RaArgsUnchecked = serde_json::from_value(json).unwrap();
+        ra.into_checked()
+            .expect_err("should reject missing api_key");
+    }
+
+    #[test]
+    fn test_ita_passport_attest_into_checked_rejects_invalid_as_addr() {
+        let json = json!({
+            "attest": {
+                "model": "passport",
+                "aa_provider": "ita",
+                "aa_addr": "unix:///dev/null",
                 "as_provider": "ita",
                 "as_addr": "not a url",
                 "api_key": "key"
