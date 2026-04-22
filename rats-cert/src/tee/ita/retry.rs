@@ -89,7 +89,13 @@ mod tests {
             .retry(|| {
                 let n = calls.get();
                 calls.set(n + 1);
-                async move { if n < 2 { Err("fail") } else { Ok("ok") } }
+                async move {
+                    if n < 2 {
+                        Err("fail")
+                    } else {
+                        Ok("ok")
+                    }
+                }
             })
             .await;
         assert_eq!(r.unwrap(), "ok");
