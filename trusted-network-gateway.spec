@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.5.0
+Version: 2.6.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -77,6 +77,47 @@ install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/
 
 
 %changelog
+* Wed Apr 22 2026 Kun Lai <laikun@linux.alibaba.com> - 2.6.0-1
+- fix(build): use --locked flag for cargo install commands
+- Revert "fix(build): update nightly toolchain from 2025-07-07 to 2025-12-01"
+- refactor: improve error messages for hyper serve_connection call sites
+- fix(build): update nightly toolchain from 2025-07-07 to 2025-12-01
+- docs: add CLAUDE.md with project development guidelines
+- Fix fmt, clippy, wasm build failures
+- Update as_addr extraction in tng wasm fetch
+- Move custom deserialization level in config parsing
+- Remove coco.rs as it is renamed to ra.rs
+- Add provider wire format compat test
+- Update docs for multi-provider feat
+- Remove ambigious provider type accessors
+- Change evidence/token backcompat approach
+- Refactor evidence wire format and cert verifier/config
+- Refactor multi-provider layer
+- ohttp: Fix unexpected unreachable panic in ChunkWriter flush handling
+- refactor(error): remove redundant source placeholders from error messages
+- Add multi-provider layer
+- feat(ohttp): add error logging for OHTTP server request failures
+- test(coco): update integration tests to use concrete converter/verifier types
+- ohttp: Fix intermittent Aead(Error) caused by truncated varint-encoded chunk length
+- refactor(ra): remove VerifyContext::Builtin variant and simplify converter instantiation
+- refactor(tunnel): convert RaArgs to Arc<RaContext> at entry points
+- refactor(config): restructure builtin provider with explicit type tags
+- fix(ci): use nohup with output redirection to prevent Broken pipe in background services
+- fix(Makefile): consolidate test-dep-as into a single shell to prevent zombie crane process
+- refactor(ohttp): use AttestContext from ra_context instead of constructing RA components directly
+- ci(clippy): add missing build dependencies
+- docs: add rv_name field documentation for ReferenceValueListItem
+- fix(makefile): remove --all-features from clippy to fix compilation errors
+- ci: improve trustee service startup reliability in GitHub Actions
+- docs: add Builtin mode documentation to English configuration guide
+- fix(build): fix RPM and container build issues
+- build: preserve uncommitted changes when creating source tarball
+- fix(test): align SLSA test configurations with Makefile test environment
+- refactor(rats-cert): replace custom TeeType/AaTeeType with kbs_types::Tee
+- refactor(rats-cert): restructure error types with thiserror and source chains
+- feat(builtin-as): refactor reference value configuration to use typed payload structures
+- feat: add builtin attestation service (AS) support for local evidence verification
+
 * Thu Mar 19 2026 Kun Lai <laikun@linux.alibaba.com> - 2.5.0-1
 - ci: add GitHub Release notes generation with robust tag detection
 - ci: upgrade GitHub Actions to v6/v8 for Node.js 24 compatibility
