@@ -173,6 +173,16 @@ impl RaArgsUnchecked {
                             )));
                         }
                     }
+                    AttesterArgs::CocoAsr(args) => {
+                        Url::parse(&args.asr_addr)
+                            .with_context(|| format!("Invalid ASR address: {}", args.asr_addr))
+                            .map_err(TngError::InvalidParameter)?;
+                    }
+                    AttesterArgs::ItaAsr(args) => {
+                        Url::parse(&args.asr_addr)
+                            .with_context(|| format!("Invalid ASR address: {}", args.asr_addr))
+                            .map_err(TngError::InvalidParameter)?;
+                    }
                 },
             };
 
@@ -330,6 +340,8 @@ impl RaArgsUnchecked {
 pub enum AttesterArgs {
     Coco(CocoAttesterArgs),
     Ita(ItaAttesterArgs),
+    CocoAsr(CocoAsrAttesterArgs),
+    ItaAsr(ItaAsrAttesterArgs),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +354,34 @@ pub struct ItaAttesterArgs {
 impl ItaAttesterArgs {
     pub fn to_attester(&self) -> anyhow::Result<rats_cert::tee::ita::ItaAttester> {
         rats_cert::tee::ita::ItaAttester::new(&self.aa_addr).map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CocoAsrAttesterArgs {
+    /// API Server Rest HTTP address (e.g. `"http://127.0.0.1:8006"`)
+    pub asr_addr: String,
+}
+
+#[cfg(unix)]
+impl CocoAsrAttesterArgs {
+    pub fn to_attester(
+        &self,
+    ) -> anyhow::Result<rats_cert::tee::coco::asr_attester::CocoAsrAttester> {
+        rats_cert::tee::coco::asr_attester::CocoAsrAttester::new(&self.asr_addr).map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItaAsrAttesterArgs {
+    /// API Server Rest HTTP address (e.g. `"http://127.0.0.1:8006"`)
+    pub asr_addr: String,
+}
+
+#[cfg(unix)]
+impl ItaAsrAttesterArgs {
+    pub fn to_attester(&self) -> anyhow::Result<rats_cert::tee::ita::ItaAsrAttester> {
+        rats_cert::tee::ita::ItaAsrAttester::new(&self.asr_addr).map_err(Into::into)
     }
 }
 

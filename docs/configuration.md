@@ -470,8 +470,10 @@ In the TNG architecture, we have integrated a standardized remote attestation pr
 
 > [!NOTE]
 > **Provider selection**: The Attestation Agent stack and the Attestation Service stack are selected with **`aa_provider`** and **`as_provider`** respectively. If `aa_provider` or `as_provider` is omitted, it defaults to **`"coco"`** (Confidential Containers). Currently supported providers are:
-> - **`"coco"`** — [Confidential Containers](https://github.com/confidential-containers) (default). Interfaces with the CoCo Attestation Agent and CoCo Attestation Service.
-> - **`"ita"`** — [Intel Trust Authority](https://www.intel.com/content/www/us/en/security/trust-authority.html). Interfaces with the CoCo Attestation Agent for evidence collection and the Intel Trust Authority cloud service for attestation and token verification.
+> - **`"coco"`** — [Confidential Containers](https://github.com/confidential-containers) (default). Interfaces with the CoCo Attestation Agent (AA) and CoCo Attestation Service.
+> - **`"ita"`** — [Intel Trust Authority](https://www.intel.com/content/www/us/en/security/trust-authority.html). Interfaces with the CoCo Attestation Agent (AA) for evidence collection and the Intel Trust Authority cloud service for attestation and token verification.
+> - **`"coco_asr"`** (`aa_provider` only) — Same as `"coco"` but collects evidence via the CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy instead of connecting directly to the AA. Useful when TNG runs in a container without direct access to the AA Unix socket.
+> - **`"ita_asr"`** (`aa_provider` only) — Same as `"ita"` but collects evidence via the CoCo API Server Rest (ASR) HTTP proxy instead of connecting directly to the AA.
 
 <a name="attest"></a>
 ### Attester: The Initiator Proving Its Trustworthiness
@@ -482,8 +484,8 @@ In TNG, you can configure any endpoint as an Attester role, enabling it to respo
 
 > [!NOTE]
 > **Current Implementation Notes**:  
-> Currently, TNG only supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent).  
-> The Attestation Agent runs in a protected guest environment, responsible for interacting with the underlying TEE and encapsulating standardized attestation data, ensuring the security and portability of the attestation process.
+> Currently, TNG supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent) (AA) either directly (`"coco"` / `"ita"` providers) or indirectly via the [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy (`"coco_asr"` / `"ita_asr"` providers).  
+> The ASR providers are useful when TNG runs in a container that does not have direct access to the AA Unix socket.
 > Both the **CoCo** and **ITA** providers use the same Attestation Agent for evidence collection, but differ in how the runtime data is processed and injected into the evidence (according to the requirements of the respective attestation services).
 
 <a name="verify"></a>
@@ -527,6 +529,8 @@ In the Background Check model, the [Attest](#attest) configuration should includ
 - **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
 - **`refresh_interval`** (int, optional, default value is 600): Specifies the cache time for obtaining evidence from the Attestation Agent (in seconds). If set to 0, it requests the latest evidence each time a secure session is established. In Background Check mode, this option only takes effect when communicating using the rats-tls protocol, affecting the frequency of updating its own X.509 certificate. This option has no effect when communicating using the OHTTP protocol.
 
+Alternatively, to collect evidence via the CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy instead of connecting directly to the AA (useful when TNG runs in a container), set `aa_provider` to `"coco_asr"` and provide **`asr_addr`** (the ASR HTTP address, e.g. `"http://127.0.0.1:8006"`) instead of `aa_addr`.
+
 Example:
 
 ```json
@@ -554,6 +558,15 @@ Example:
 }
 ```
 
+Example using the ASR proxy:
+
+```json
+"attest": {
+    "aa_provider": "coco_asr",
+    "asr_addr": "http://127.0.0.1:8006"
+}
+```
+
 ##### Using the ITA Provider
 
 When `aa_provider` is set to `"ita"`, the Attest configuration uses the following fields:
@@ -562,12 +575,23 @@ When `aa_provider` is set to `"ita"`, the Attest configuration uses the followin
 - **`aa_addr`** (string, required): Attestation Agent Unix socket address (e.g., `"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"`)
 - **`refresh_interval`** (int, optional, default value is 600): Same behavior as described above for the CoCo provider.
 
+Alternatively, set `aa_provider` to `"ita_asr"` and provide **`asr_addr`** instead of `aa_addr` to collect ITA evidence via the ASR HTTP proxy.
+
 Example:
 
 ```json
 "attest": {
     "aa_provider": "ita",
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+}
+```
+
+Example using the ASR proxy:
+
+```json
+"attest": {
+    "aa_provider": "ita_asr",
+    "asr_addr": "http://127.0.0.1:8006"
 }
 ```
 
@@ -895,6 +919,8 @@ In the Passport model, the [Attest](#attest) configuration should include the fo
 - **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
 - **`policy_ids`** (array [string]): List of policy IDs
 
+As with Background Check mode, you can use `aa_provider` = `"coco_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
+
 Example:
 
 ```json
@@ -926,6 +952,8 @@ When `aa_provider` and `as_provider` are set to `"ita"`, the Attest configuratio
 - **`as_addr`** (string, optional, default is `"https://api.trustauthority.intel.com"`): Intel Trust Authority API base URL
 - **`api_key`** (string, optional): Intel Trust Authority API key. Can also be set via the **`ITA_API_KEY`** environment variable.
 - **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs that must match for attestation to succeed
+
+As with Background Check mode, you can use `aa_provider` = `"ita_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
 
 Example:
 
