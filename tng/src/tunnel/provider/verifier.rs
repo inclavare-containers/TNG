@@ -34,3 +34,24 @@ impl GenericVerifier for TngVerifier {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::provider_type::ProviderType;
+    use super::*;
+
+    #[tokio::test]
+    async fn verify_evidence_rejects_provider_mismatch() {
+        let ita_verifier = ItaVerifier::new("https://unused.example.com", &[]).unwrap();
+        let verifier = TngVerifier::Ita(ita_verifier);
+
+        let coco_token = TngToken::from_wire(ProviderType::Coco, "fake.jwt.token".into()).unwrap();
+        let report_data = ReportData::Claims(Default::default());
+
+        let err = verifier.verify_evidence(&coco_token, &report_data).await;
+        assert!(
+            matches!(err, Err(Error::IncompatibleTypes { .. })),
+            "ITA verifier with Coco token should fail with IncompatibleTypes"
+        );
+    }
+}

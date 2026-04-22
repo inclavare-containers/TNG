@@ -12,7 +12,7 @@ use crate::tee::{DiceParseEvidenceOutput, GenericEvidence};
 ///
 /// This is the ITA equivalent of `CocoAsToken`. It wraps the raw JWT string
 /// and implements `GenericEvidence` for DICE cert embedding and claims extraction.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ItaToken {
     data: String,
 }

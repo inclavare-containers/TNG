@@ -234,3 +234,163 @@ impl GenericConverter for ItaConverter {
         ItaToken::new(attest_resp.token)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // -- is_retryable_error --
+
+    #[test]
+    fn retryable_on_server_error() {
+        assert!(ItaConverter::is_retryable_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            ""
+        ));
+        assert!(ItaConverter::is_retryable_error(
+            reqwest::StatusCode::BAD_GATEWAY,
+            ""
+        ));
+    }
+
+    #[test]
+    fn retryable_on_gpu_verification_failure() {
+        assert!(ItaConverter::is_retryable_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            "Failed to verify GPU evidence: transient NRAS error"
+        ));
+    }
+
+    #[test]
+    fn not_retryable_on_other_client_errors() {
+        assert!(!ItaConverter::is_retryable_error(
+            reqwest::StatusCode::BAD_REQUEST,
+            "request body describing non-GPU evidence verification error"
+        ));
+        assert!(!ItaConverter::is_retryable_error(
+            reqwest::StatusCode::NOT_FOUND,
+            ""
+        ));
+        assert!(!ItaConverter::is_retryable_error(
+            reqwest::StatusCode::OK,
+            ""
+        ));
+    }
+
+    // -- wiremock: get_nonce --
+
+    #[tokio::test]
+    async fn get_nonce_parses_response() {
+        let server = MockServer::start().await;
+        let expected_nonce = ItaNonce {
+            val: "dGVzdC12YWw=".into(),
+            iat: "dGVzdC1pYXQ=".into(),
+            signature: "dGVzdC1zaWc=".into(),
+        };
+
+        Mock::given(method("GET"))
+            .and(path(ITA_NONCE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::to_value(&expected_nonce).unwrap()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let converter = ItaConverter::new("test-key", &server.uri(), &[]).unwrap();
+        let nonce_str = converter.get_nonce().await.unwrap();
+        let nonce: ItaNonce = serde_json::from_str(&nonce_str).unwrap();
+        assert_eq!(nonce.val, expected_nonce.val);
+        assert_eq!(nonce.iat, expected_nonce.iat);
+        assert_eq!(nonce.signature, expected_nonce.signature);
+    }
+
+    // -- wiremock: convert --
+
+    #[tokio::test]
+    async fn convert_returns_token() {
+        let server = MockServer::start().await;
+        let expected_jwt = "fake-jwt-token";
+
+        Mock::given(method("POST"))
+            .and(path(ITA_ATTEST_PATH))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"token": expected_jwt})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let converter = ItaConverter::new("test-key", &server.uri(), &[]).unwrap();
+        let evidence = ItaEvidence::new(b"fake-quote".to_vec(), None, b"{}".to_vec(), None);
+        let token = converter.convert(&evidence).await.unwrap();
+        assert_eq!(token.as_str(), expected_jwt);
+    }
+
+    // -- wiremock: retry paths --
+
+    #[tokio::test]
+    async fn convert_retries_on_server_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path(ITA_ATTEST_PATH))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .expect((ITA_MAX_RETRIES + 1) as u64) // 1 initial + N retries
+            .mount(&server)
+            .await;
+
+        let converter = ItaConverter::new("key", &server.uri(), &[]).unwrap();
+        let evidence = ItaEvidence::new(b"fake-quote".to_vec(), None, b"{}".to_vec(), None);
+        let err = converter.convert(&evidence).await.unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ItaHttpResponseError {
+                status_code: 500,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn convert_no_retry_on_non_retryable_400() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path(ITA_ATTEST_PATH))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid request body"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let converter = ItaConverter::new("key", &server.uri(), &[]).unwrap();
+        let evidence = ItaEvidence::new(b"fake-quote".to_vec(), None, b"{}".to_vec(), None);
+        let err = converter.convert(&evidence).await.unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ItaHttpResponseError {
+                status_code: 400,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_nonce_unparseable_body_fails() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path(ITA_NONCE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not valid json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let converter = ItaConverter::new("key", &server.uri(), &[]).unwrap();
+        assert!(converter.get_nonce().await.is_err());
+    }
+}

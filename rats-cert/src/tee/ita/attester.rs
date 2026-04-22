@@ -225,3 +225,135 @@ impl GenericAttester for ItaAttester {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_RUNTIME_DATA: &[u8] = br#"{"a":"12","b":"34","c":"56"}"#;
+
+    fn sample_nonce() -> ItaNonce {
+        ItaNonce {
+            val: "aGVsbG8=".into(), // base64("hello")
+            iat: "d29ybGQ=".into(), // base64("world")
+            signature: "dGVzdC1zaWc=".into(),
+        }
+    }
+
+    fn bad_nonce() -> ItaNonce {
+        ItaNonce {
+            val: "!!!not-base64!!!".into(),
+            iat: "d29ybGQ=".into(),
+            signature: "sig".into(),
+        }
+    }
+
+    // -- parse_aa_gpu_evidence --
+
+    #[test]
+    fn parse_gpu_evidence_valid_nvidia_blob() {
+        let raw_bytes = vec![1u8, 2, 3];
+        let input_b64 = BASE64.encode(&raw_bytes);
+        let cert = "test-cert-pem";
+        let arch = "hopper";
+        let blob = serde_json::json!({
+            "nvidia": {
+                "device_evidence_list": [{
+                    "evidence": input_b64,
+                    "certificate": cert,
+                    "arch": arch
+                }]
+            }
+        });
+        let hash = [0xABu8; 32];
+        let result =
+            parse_aa_gpu_evidence(serde_json::to_vec(&blob).unwrap().as_slice(), hash).unwrap();
+
+        let gpu = result.expect("should return Some for valid nvidia blob");
+        assert_eq!(gpu.certificate, cert);
+        assert_eq!(gpu.arch, arch);
+        assert_eq!(gpu.runtime_data_hash, hash);
+        let expected_evidence = BASE64.encode(hex::encode(&raw_bytes).as_bytes());
+        assert_eq!(gpu.evidence, expected_evidence);
+    }
+
+    #[test]
+    fn parse_gpu_evidence_no_nvidia_key() {
+        let blob = serde_json::json!({"sample": {}});
+        let result =
+            parse_aa_gpu_evidence(serde_json::to_vec(&blob).unwrap().as_slice(), [0u8; 32])
+                .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_gpu_evidence_empty_device_list() {
+        let blob = serde_json::json!({
+            "nvidia": {"device_evidence_list": []}
+        });
+        let result =
+            parse_aa_gpu_evidence(serde_json::to_vec(&blob).unwrap().as_slice(), [0u8; 32])
+                .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_gpu_evidence_invalid_json() {
+        assert!(parse_aa_gpu_evidence(b"not json", [0u8; 32]).is_err());
+    }
+
+    // -- derive_additional_evidence_runtime_data_hash --
+
+    #[test]
+    fn additional_evidence_hash_known_answer() {
+        let hash = derive_additional_evidence_runtime_data_hash(&sample_nonce()).unwrap();
+        // SHA-256("hello" || "world")
+        assert_eq!(
+            hex::encode(hash),
+            "936a185caaa266bb9cbe981e9e05cb78cd732b0b3280eb944412bb6f8f8f07af"
+        );
+    }
+
+    #[test]
+    fn additional_evidence_hash_invalid_base64() {
+        assert!(derive_additional_evidence_runtime_data_hash(&bad_nonce()).is_err());
+    }
+
+    // -- derive_runtime_data_hash --
+
+    #[test]
+    fn runtime_data_hash_with_nonce_known_answer() {
+        let nonce = sample_nonce();
+        let hash = derive_runtime_data_hash(Some(&nonce), SAMPLE_RUNTIME_DATA).unwrap();
+        // SHA-512("hello" || "world" || SAMPLE_RUNTIME_DATA)
+        assert_eq!(
+            hex::encode(&hash),
+            "c2bd195b9104a139a2aa82584870446c7efb0fa6d4f4fb0c5db668382bde9710\
+             e874010639b54b49adfd56f2f98e687f04dbcff7bf32f7f8fa7c1001c846e05c"
+        );
+    }
+
+    #[test]
+    fn runtime_data_hash_without_nonce_known_answer() {
+        let hash = derive_runtime_data_hash(None, SAMPLE_RUNTIME_DATA).unwrap();
+        // SHA-512(SAMPLE_RUNTIME_DATA)
+        assert_eq!(
+            hex::encode(&hash),
+            "e01416f798823156a9241bfd0d9da76b3f8dd3c2313cd91bcf4021e4b7519ecc\
+             f68e454bf1198d71ddfcedfc6ad153dd697f1fa740e2ef78629cff3e3fd4d43c"
+        );
+    }
+
+    #[test]
+    fn runtime_data_hash_nonce_participates() {
+        let nonce = sample_nonce();
+        let with = derive_runtime_data_hash(Some(&nonce), SAMPLE_RUNTIME_DATA).unwrap();
+        let without = derive_runtime_data_hash(None, SAMPLE_RUNTIME_DATA).unwrap();
+        assert_ne!(with, without);
+    }
+
+    #[test]
+    fn runtime_data_hash_invalid_base64_nonce() {
+        assert!(derive_runtime_data_hash(Some(&bad_nonce()), SAMPLE_RUNTIME_DATA).is_err());
+    }
+}
