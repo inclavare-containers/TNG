@@ -224,6 +224,10 @@ impl ItaVerifier {
                         "ITA token has unmatched policy IDs: {ids:?}"
                     )));
                 }
+            } else {
+                return Err(Error::ItaError(
+                    "policy_ids_unmatched is not an array".to_string(),
+                ));
             }
         }
 
