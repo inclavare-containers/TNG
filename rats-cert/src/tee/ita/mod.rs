@@ -4,7 +4,11 @@ pub mod evidence;
 pub mod token;
 
 #[cfg(feature = "attester-ita")]
-pub mod attester;
+mod asr_attester;
+#[cfg(feature = "attester-ita")]
+mod attester;
+#[cfg(feature = "attester-ita")]
+mod attester_common;
 #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
 pub mod converter;
 #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
@@ -17,6 +21,8 @@ pub use evidence::{ItaEvidence, ItaNonce};
 #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]
 pub use token::ItaToken;
 
+#[cfg(feature = "attester-ita")]
+pub use asr_attester::ItaAsrAttester;
 #[cfg(feature = "attester-ita")]
 pub use attester::ItaAttester;
 #[cfg(any(feature = "attester-ita", feature = "verifier-ita"))]

@@ -27,6 +27,8 @@ pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
             }
         },
         AttesterArgs::Ita(args) => Ok(TngAttester::Ita(args.to_attester()?)),
+        AttesterArgs::CocoAsr(args) => Ok(TngAttester::CocoAsr(args.to_attester()?)),
+        AttesterArgs::ItaAsr(args) => Ok(TngAttester::ItaAsr(args.to_attester()?)),
     }
 }
 

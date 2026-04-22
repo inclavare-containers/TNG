@@ -1,7 +1,6 @@
-use super::evidence::CocoEvidence;
 use crate::crypto::{DefaultCrypto, HashAlgo};
 use crate::errors::*;
-use crate::tee::coco::evidence::tee_from_str;
+use crate::tee::coco::evidence::{tee_from_str, CocoEvidence};
 use crate::tee::{
     serialize_canon_json, wrap_runtime_data_as_structed, GenericAttester, ReportData,
 };

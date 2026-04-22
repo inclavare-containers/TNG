@@ -403,4 +403,23 @@ pub enum Error {
 
     #[error("Incompatible types: {detail}")]
     IncompatibleTypes { detail: String },
+
+    // ASR (API Server Rest) errors
+    #[cfg(feature = "attester-coco")]
+    #[error("ASR HTTP request to `{endpoint}` failed: {source}")]
+    AsrHttpRequestFailed {
+        endpoint: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[cfg(feature = "attester-coco")]
+    #[error(
+        "ASR HTTP response error from `{endpoint}`: status={status_code}, body={response_body}"
+    )]
+    AsrHttpResponseError {
+        endpoint: String,
+        status_code: u16,
+        response_body: String,
+    },
 }
