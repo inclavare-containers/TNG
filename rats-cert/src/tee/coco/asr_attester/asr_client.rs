@@ -210,8 +210,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/info"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"tee": tee_type})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": tee_type})),
             )
             .expect(1)
             .mount(&server)
