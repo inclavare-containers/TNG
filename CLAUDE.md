@@ -21,6 +21,23 @@ cargo build        # Compilation
 
 Fix any errors or warnings reported before proceeding with the commit.
 
+### Known Environment Limitations
+
+The following failures are pre-existing environment issues, not caused by code changes:
+
+- **`clippy`/`rustfmt` not installed for active toolchain**: The active toolchain (e.g. `1.89.0-x86_64-unknown-linux-gnu`) may be missing components. Install them before running checks:
+  ```bash
+  rustup component add clippy
+  rustup component add rustfmt
+  ```
+
+- **`make clippy` fails with 403 from crates.io**: Some crates (e.g. `alloc-no-stdlib`) fail to download due to network restrictions in the CI environment. This is an infrastructure issue; proceed if the code change does not touch the affected crates.
+
+- **`cargo build` fails with "Could not find `protoc`"**: The `rats-cert` crate generates gRPC code at build time and requires the Protocol Buffers compiler. Install it before running checks:
+  ```bash
+  apt-get install protobuf-compiler
+  ```
+
 ## Pre-Push Checks
 
 Before pushing, verify that no commits in the push carry a gpgsig header or a Claude committer identity:
