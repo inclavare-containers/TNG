@@ -153,3 +153,103 @@ impl AsrClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn get_evidence_returns_response_bytes() {
+        let server = MockServer::start().await;
+        let expected_evidence = b"fake-tdx-quote-bytes";
+
+        Mock::given(method("GET"))
+            .and(path("/aa/evidence"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(expected_evidence.to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = AsrClient::new(&server.uri()).unwrap();
+        let evidence = client.get_evidence(b"test-hash".to_vec()).await.unwrap();
+        assert_eq!(evidence, expected_evidence);
+    }
+
+    #[tokio::test]
+    async fn get_evidence_returns_error_on_non_success() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/aa/evidence"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = AsrClient::new(&server.uri()).unwrap();
+        let err = client
+            .get_evidence(b"test-hash".to_vec())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::AsrHttpResponseError {
+                status_code: 500,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_tee_type_parses_info_response() {
+        let server = MockServer::start().await;
+        let tee_type = "tdx";
+
+        Mock::given(method("GET"))
+            .and(path("/info"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"tee": tee_type})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = AsrClient::new(&server.uri()).unwrap();
+        assert_eq!(client.get_tee_type().await.unwrap(), tee_type);
+    }
+
+    #[tokio::test]
+    async fn get_additional_evidence_returns_none_on_failure() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/aa/additional_evidence"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = AsrClient::new(&server.uri()).unwrap();
+        assert!(client.get_additional_evidence(vec![]).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_additional_evidence_returns_bytes_on_success() {
+        let server = MockServer::start().await;
+        let expected = b"gpu-evidence-blob";
+
+        Mock::given(method("GET"))
+            .and(path("/aa/additional_evidence"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(expected.to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = AsrClient::new(&server.uri()).unwrap();
+        let result = client.get_additional_evidence(vec![]).await;
+        assert_eq!(result.unwrap(), expected);
+    }
+}
