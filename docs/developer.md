@@ -178,6 +178,26 @@ RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-con
 
 This will run an attestation-agent instance and create a ttrpc listener at `/run/confidential-containers/attestation-agent/attestation-agent.sock`.
 
+### Running API Server Rest (ASR)
+
+Some tests (e.g. the `coco_asr` and `ita_asr` e2e tests in `rats-cert`) require a running [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) instance that proxies HTTP requests to the attestation-agent. The ASR must be reachable at `http://127.0.0.1:8006`.
+
+> [!NOTE]
+> At the time of writing, the upstream ASR is missing two interface features needed by TNG: an `encoding` parameter on `/aa/evidence` for hex-encoded runtime data, and an `/aa/additional_evidence` endpoint for fetching additional evidence (for devices such as GPU). These are implemented in the [Cohere fork](https://github.com/cohere-ai/guest-components/tree/cohere) ([PR](https://github.com/cohere-ai/guest-components/pull/2)).
+
+1. Clone and run the ASR from the Cohere fork with the `attestation` feature enabled:
+
+```sh
+git clone https://github.com/cohere-ai/guest-components.git --branch cohere
+cd guest-components
+cargo run --release -p api-server-rest -- --features attestation
+```
+
+This will listen on `127.0.0.1:8006` by default and connect to the attestation-agent at its default Unix socket path (`/run/confidential-containers/attestation-agent/attestation-agent.sock`). Ensure the attestation-agent is already running before starting the ASR.
+
+> [!IMPORTANT]
+> The ASR rejects any request whose source IP is not loopback (`127.0.0.1`), returning `403 Forbidden`. The tests and the ASR must therefore run on the same host.
+
 ### Running attestation-service
 
 1. Obtain the latest trustee RPM package from [here](https://github.com/openanolis/trustee/releases) and install it using yum.
