@@ -4,6 +4,7 @@ use std::fmt::{Debug, Display};
 pub struct TngEndpoint {
     host: String,
     port: u16,
+    scheme: Option<String>,
 }
 
 impl TngEndpoint {
@@ -11,7 +12,13 @@ impl TngEndpoint {
         Self {
             host: host.into(),
             port,
+            scheme: None,
         }
+    }
+
+    pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = Some(scheme.into());
+        self
     }
 
     pub fn host(&self) -> &str {
@@ -20,6 +27,10 @@ impl TngEndpoint {
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    pub fn scheme(&self) -> Option<&str> {
+        self.scheme.as_deref()
     }
 }
 

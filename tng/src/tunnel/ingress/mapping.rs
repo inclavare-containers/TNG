@@ -18,6 +18,7 @@ pub struct MappingIngress {
     listen_port: u16,
     upstream_addr: String,
     upstream_port: u16,
+    upstream_scheme: Option<String>,
 }
 
 impl MappingIngress {
@@ -37,6 +38,7 @@ impl MappingIngress {
             .context("'host' of 'out' field must be set")?
             .to_owned();
         let upstream_port = mapping_args.out.port;
+        let upstream_scheme = mapping_args.out.scheme.clone();
 
         Ok(Self {
             id,
@@ -44,6 +46,7 @@ impl MappingIngress {
             listen_port,
             upstream_addr,
             upstream_port,
+            upstream_scheme,
         })
     }
 }
@@ -85,7 +88,13 @@ impl IngressTrait for MappingIngress {
                     Ok((stream, peer_addr)) => yield Ok(AcceptedStream{
                         stream: Box::new(stream),
                         src: peer_addr,
-                        dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
+                        dst: {
+                            let ep = TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port);
+                            match &self.upstream_scheme {
+                                Some(s) => ep.with_scheme(s.clone()),
+                                None => ep,
+                            }
+                        },
                         via_tunnel: true,
                     }),
                     Err(e) => yield Err(anyhow!(e)),

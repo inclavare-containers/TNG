@@ -71,6 +71,7 @@ mod tests {
                     address: Endpoint {
                         host: Some("0.0.0.0".to_owned()),
                         port: 50000,
+                        ..Default::default()
                     },
                 }),
                 ..Default::default()
@@ -80,10 +81,12 @@ mod tests {
                     r#in: Endpoint {
                         host: None,
                         port: 10001,
+                        ..Default::default()
                     },
                     out: Endpoint {
                         host: Some("127.0.0.1".to_owned()),
                         port: 30001,
+                        ..Default::default()
                     },
                 }),
                 common: ingress::CommonArgs {
@@ -149,10 +152,12 @@ mod tests {
                     r#in: Endpoint {
                         host: None,
                         port: 10001,
+                        ..Default::default()
                     },
                     out: Endpoint {
                         host: Some("127.0.0.1".to_owned()),
                         port: 30001,
+                        ..Default::default()
                     },
                 }),
                 common: ingress::CommonArgs {
