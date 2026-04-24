@@ -148,8 +148,7 @@ mod tests {
         });
         let hash = [0xABu8; 32];
         let result =
-            parse_gpu_evidence(serde_json::to_vec(&blob).unwrap().as_slice(), hash)
-                .unwrap();
+            parse_gpu_evidence(serde_json::to_vec(&blob).unwrap().as_slice(), hash).unwrap();
 
         let gpu = result.expect("should return Some for valid nvidia blob");
         assert_eq!(gpu.certificate, cert);
