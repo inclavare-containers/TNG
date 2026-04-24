@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use kbs_types::Tee;
+use rand::RngCore;
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::errors::*;
@@ -167,23 +168,27 @@ impl GenericAttester for ItaAttester {
             .transpose()?;
 
         // Collect additional evidence FIRST (order reversed from CoCo).
-        // When a nonce is present (OHTTP flow), derive appropriate runtime data hash.
-        // Without a nonce (RA-TLS), pass empty runtime data (still want additional evidence).
+        // When a nonce is present (OHTTP flow), derive the hash from the nonce.
+        // Without a nonce (RA-TLS), generate a random gpu nonce — ITA requires
+        // a non-empty gpu_nonce whenever nvgpu evidence is included, matching
+        // the Go client's behaviour for the GPU-only / no-verifier-nonce case.
         let ae_runtime_data_hash = match nonce {
-            Some(ref n) => Some(derive_additional_evidence_runtime_data_hash(n)?),
-            None => None,
+            Some(ref n) => derive_additional_evidence_runtime_data_hash(n)?,
+            None => {
+                let mut random_bytes = [0u8; 32];
+                rand::thread_rng().fill_bytes(&mut random_bytes);
+                Sha256::digest(random_bytes).into()
+            }
         };
 
-        let aa_additional_evidence = self.aa.get_additional_evidence(
-            ae_runtime_data_hash
-                .map(|rd| rd.to_vec())
-                .unwrap_or_default(),
-        );
+        let aa_additional_evidence = self
+            .aa
+            .get_additional_evidence(ae_runtime_data_hash.to_vec());
 
         // Parse AA's blob into structured NVGPU evidence (if present).
-        let nvgpu_evidence = match (&aa_additional_evidence, ae_runtime_data_hash) {
-            (Some(blob), Some(hash)) => parse_aa_gpu_evidence(blob, hash)?,
-            _ => None,
+        let nvgpu_evidence = match &aa_additional_evidence {
+            Some(blob) => parse_aa_gpu_evidence(blob, ae_runtime_data_hash)?,
+            None => None,
         };
 
         // If additional evidence is present, embed it into the runtime_data
