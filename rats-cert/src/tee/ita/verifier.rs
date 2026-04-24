@@ -169,6 +169,17 @@ impl ItaVerifier {
     fn check_runtime_data_binding(claims: &Value, report_data: &ReportData) -> Result<()> {
         let runtime_data_expected = crate::tee::wrap_runtime_data_as_structed(report_data)?;
 
+        let expected_map =
+            runtime_data_expected
+                .as_object()
+                .ok_or_else(|| Error::IncompatibleTypes {
+                    detail: "runtime_data_expected is not a map".to_string(),
+                })?;
+
+        if expected_map.is_empty() {
+            return Ok(());
+        }
+
         let tdx_claims = claims.get("tdx");
 
         let runtime_data_in_token = tdx_claims
@@ -181,13 +192,6 @@ impl ItaVerifier {
                     .to_string(),
             ));
         };
-
-        let expected_map =
-            runtime_data_expected
-                .as_object()
-                .ok_or_else(|| Error::IncompatibleTypes {
-                    detail: "runtime_data_expected is not a map".to_string(),
-                })?;
 
         let token_map =
             runtime_data_in_token
@@ -513,6 +517,17 @@ mod tests {
         let report_data =
             ReportData::Claims(serde_json::from_value(json!({"key": "value"})).unwrap());
         assert!(ItaVerifier::check_runtime_data_binding(&json!({}), &report_data).is_err());
+    }
+
+    #[test]
+    fn runtime_data_binding_empty_claims_skips_check() {
+        let report_data = ReportData::Claims(serde_json::Map::new());
+        ItaVerifier::check_runtime_data_binding(&json!({}), &report_data).unwrap();
+        ItaVerifier::check_runtime_data_binding(
+            &json!({"tdx": {"attester_runtime_data": {"extra": true}}}),
+            &report_data,
+        )
+        .unwrap();
     }
 
     #[test]
