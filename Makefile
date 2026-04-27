@@ -302,14 +302,31 @@ mac-cross-build:
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
-# Test dependencies: Attestation Agent
+# Test dependencies: Attestation Agent + trustiflux-api-server (RESTful bridge)
 .PHONY: test-dep-aa
 test-dep-aa:
-	@echo "=== Starting Attestation Agent ==="
+	@echo "=== Installing dependencies ==="
 	@if ! command -v attestation-agent > /dev/null; then \
 		yum install -y attestation-agent; \
 	fi
-	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock
+	@if ! command -v trustiflux-api-server > /dev/null; then \
+		yum install -y trustiflux-api-server; \
+	fi
+	@echo "=== Starting Attestation Agent (background) ==="
+	@mkdir -p /run/confidential-containers/attestation-agent
+	@pkill -x attestation-agent 2>/dev/null || true
+	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock &
+	@echo "Waiting for Attestation Agent socket..."
+	@for i in $$(seq 1 30); do \
+		if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then \
+			echo "Attestation Agent is ready"; \
+			break; \
+		fi; \
+		sleep 1; \
+	done
+	@echo "=== Starting trustiflux-api-server (port 8006) ==="
+	@pkill -x trustiflux-api-server 2>/dev/null || true
+	trustiflux-api-server --config /etc/trustiflux/trustiflux-api-server.toml
 
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
 .PHONY: test-dep-as
