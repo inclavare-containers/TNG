@@ -13,9 +13,10 @@ pub const TTRPC_DEFAULT_TIMEOUT_NANO: i64 = 50 * 1000 * 1000 * 1000;
 #[cfg(all(test, feature = "attester-coco", feature = "verifier-coco"))]
 mod tests {
     use crate::cert::verify::AttestationServiceAddrArgs;
-    use crate::tee::coco::attester::CocoAttester;
+    use crate::tee::coco::attester::{CocoAttester, CocoRestfulAttester};
     use crate::tee::coco::converter::restful::CocoRestfulConverter;
     use crate::tee::coco::converter::CocoConverter;
+    use crate::tee::coco::evidence::tee_from_str;
     use crate::tee::coco::verifier::remote::CocoRemoteVerifier;
     use crate::tee::coco::verifier::CocoVerifier;
     use crate::tee::GenericAttester;
@@ -26,6 +27,8 @@ mod tests {
 
     const TEST_AA_ADDR: &str =
         "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock";
+    /// Address of api-server-rest for RESTful AA tests (default port 8006)
+    const TEST_AA_RESTFUL_ADDR: &str = "http://127.0.0.1:8006";
     const TEST_AS_ADDR: &str = "http://127.0.0.1:8080";
     const TEST_AS_CERT_PATH: &str = "/tmp/as-full.pem";
 
@@ -113,6 +116,82 @@ mod tests {
         .expect("Failed to create verifier");
 
         // Verify the token (verifier side)
+        let result = verifier.verify_evidence(&token, &report_data).await;
+        assert!(
+            result.is_ok(),
+            "Passport verification failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// E2E test: BackgroundCheck model via RESTful AA (api-server-rest)
+    /// Flow: CocoRestfulAttester::get_evidence -> CocoConverter::convert -> CocoVerifier::verify_evidence
+    /// Requires api-server-rest running at TEST_AA_RESTFUL_ADDR and AS at TEST_AS_ADDR.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_background_check_flow_restful_aa() {
+        let tee_type = tee_from_str("tdx").expect("Failed to parse tee type");
+        let attester = CocoRestfulAttester::new(TEST_AA_RESTFUL_ADDR, tee_type)
+            .expect("Failed to create restful attester");
+
+        let converter =
+            CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
+                .expect("Failed to create converter");
+
+        let verifier = CocoRemoteVerifier::new(
+            &Some(make_as_addr_config()),
+            &Some(vec![TEST_AS_CERT_PATH.to_string()]),
+            &vec!["default".to_string()],
+        )
+        .await
+        .expect("Failed to create verifier");
+
+        let report_data = ReportData::Claims(serde_json::Map::new());
+        let evidence = attester
+            .get_evidence(&report_data)
+            .await
+            .expect("Failed to get evidence via RESTful AA");
+
+        let token = converter
+            .convert(&evidence)
+            .await
+            .expect("Failed to convert evidence");
+
+        let result = verifier.verify_evidence(&token, &report_data).await;
+        assert!(result.is_ok(), "Verification failed: {:?}", result.err());
+    }
+
+    /// E2E test: Passport model via RESTful AA (api-server-rest)
+    /// Flow: CocoRestfulAttester::get_evidence -> CocoConverter::convert (attester side) -> CocoVerifier::verify_evidence (verifier side)
+    /// Requires api-server-rest running at TEST_AA_RESTFUL_ADDR and AS at TEST_AS_ADDR.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_e2e_passport_flow_restful_aa() {
+        let tee_type = tee_from_str("tdx").expect("Failed to parse tee type");
+        let attester = CocoRestfulAttester::new(TEST_AA_RESTFUL_ADDR, tee_type)
+            .expect("Failed to create restful attester");
+
+        let converter =
+            CocoRestfulConverter::new(TEST_AS_ADDR, &vec!["default".to_string()], &HashMap::new())
+                .expect("Failed to create converter");
+
+        let report_data = ReportData::Claims(serde_json::Map::new());
+        let evidence = attester
+            .get_evidence(&report_data)
+            .await
+            .expect("Failed to get evidence via RESTful AA");
+
+        let token = converter
+            .convert(&evidence)
+            .await
+            .expect("Failed to convert evidence to token");
+
+        let verifier = CocoRemoteVerifier::new(
+            &Some(make_as_addr_config()),
+            &Some(vec![TEST_AS_CERT_PATH.to_string()]),
+            &vec!["default".to_string()],
+        )
+        .await
+        .expect("Failed to create verifier");
+
         let result = verifier.verify_evidence(&token, &report_data).await;
         assert!(
             result.is_ok(),

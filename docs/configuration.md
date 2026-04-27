@@ -520,8 +520,9 @@ By configuring different combinations of `attest` and `verify` properties at bot
 In the Background Check model, the [Attest](#attest) configuration should include the following fields:
 
 - **`model`** (string, optional): Set to "background_check" to enable the Background Check model
-- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
-- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
+- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin", "restful"
+- **`aa_addr`** (string, required for "uds" and "restful"): Attestation Agent address. For "uds", this is the unix socket path (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"). For "restful", this is the HTTP base URL of [api-server-rest](https://github.com/inclavare-containers/guest-components/tree/main/api-server-rest) (e.g., "http://localhost:8006").
+- **`tee`** (string, required for "restful"): TEE type (e.g., "tdx", "sgx", "sample"). Required when `aa_type` is "restful" because the REST API does not expose a TEE-type query endpoint.
 - **`refresh_interval`** (int, optional, default value is 600): Specifies the cache time for obtaining evidence from the Attestation Agent (in seconds). If set to 0, it requests the latest evidence each time a secure session is established. In Background Check mode, this option only takes effect when communicating using the rats-tls protocol, affecting the frequency of updating its own X.509 certificate. This option has no effect when communicating using the OHTTP protocol.
 
 Example:
@@ -531,6 +532,15 @@ Example:
     // When model is not specified, Background Check mode is used by default
     "aa_type": "uds",
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+}
+```
+
+```json
+"attest": {
+    // Using RESTful AA (api-server-rest)
+    "aa_type": "restful",
+    "aa_addr": "http://localhost:8006",
+    "tee": "tdx"
 }
 ```
 
@@ -844,8 +854,9 @@ The Passport model is suitable for scenarios with network isolation or high perf
 In the Passport model, the [Attest](#attest) configuration should include the following fields:
 
 - **`model`** (string): Set to "passport" to enable the Passport model
-- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
-- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
+- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin", "restful"
+- **`aa_addr`** (string, required for "uds" and "restful"): Attestation Agent address. For "uds", this is the unix socket path (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"). For "restful", this is the HTTP base URL of [api-server-rest](https://github.com/inclavare-containers/guest-components/tree/main/api-server-rest) (e.g., "http://localhost:8006").
+- **`tee`** (string, required for "restful"): TEE type (e.g., "tdx", "sgx", "sample"). Required when `aa_type` is "restful" because the REST API does not expose a TEE-type query endpoint.
 - **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
 - **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
 - **`as_addr`** (string): Address of the Attestation Service

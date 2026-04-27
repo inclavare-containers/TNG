@@ -1,9 +1,11 @@
 use anyhow::Result;
 #[cfg(unix)]
-use rats_cert::tee::coco::attester::CocoAttester;
+use rats_cert::tee::coco::attester::{CocoAttester, CocoRestfulAttester};
 use rats_cert::tee::coco::converter::grpc::CocoGrpcConverter;
 use rats_cert::tee::coco::converter::restful::CocoRestfulConverter;
 use rats_cert::tee::coco::converter::CocoConverter;
+#[cfg(unix)]
+use rats_cert::tee::coco::evidence::tee_from_str;
 use rats_cert::tee::coco::verifier::remote::CocoRemoteVerifier;
 use rats_cert::tee::coco::verifier::CocoVerifier;
 
@@ -24,6 +26,12 @@ pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
             CocoAttesterArgs::Uds { aa_addr } => Ok(TngAttester::Coco(CocoAttester::new(aa_addr)?)),
             CocoAttesterArgs::Builtin => {
                 anyhow::bail!("Builtin AA is not yet implemented")
+            }
+            CocoAttesterArgs::Restful { aa_addr, tee } => {
+                let tee_type = tee_from_str(tee)?;
+                Ok(TngAttester::Coco(CocoAttester::Restful(
+                    CocoRestfulAttester::new(aa_addr, tee_type)?,
+                )))
             }
         },
     }

@@ -89,6 +89,26 @@ pub enum Error {
     #[error("Failed to connect to Attestation Agent ttrpc endpoint")]
     ConnectAttestationAgentTtrpcFailed(#[source] ttrpc::Error),
 
+    // AA REST related errors
+    #[cfg(feature = "attester-coco")]
+    #[error("Failed to build HTTP client for Attestation Agent REST endpoint")]
+    ConnectAttestationAgentRestfulFailed(#[source] reqwest::Error),
+
+    #[cfg(feature = "attester-coco")]
+    #[error("Failed to send GET /aa/evidence HTTP request to Attestation Agent")]
+    GetEvidenceFromAARestfulFailed(#[source] reqwest::Error),
+
+    #[cfg(feature = "attester-coco")]
+    #[error("Failed to read GET /aa/evidence HTTP response body from Attestation Agent")]
+    GetEvidenceFromAARestfulResponseReadFailed(#[source] reqwest::Error),
+
+    #[cfg(feature = "attester-coco")]
+    #[error("GET /aa/evidence returned HTTP error {status_code}: {response_body}")]
+    GetEvidenceFromAARestfulHttpError {
+        status_code: u16,
+        response_body: String,
+    },
+
     #[error("Coco token verifier error")]
     CocoTokenVerifierError(#[source] crate::tee::coco::verifier::token::Error),
 

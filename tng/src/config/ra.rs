@@ -159,6 +159,8 @@ impl RaArgsUnchecked {
                         CocoAttesterArgs::Builtin => {
                             // TODO: Builtin AA not implemented yet
                         }
+                        // Restful AA connects over HTTP; no local socket file to check
+                        CocoAttesterArgs::Restful { .. } => {}
                     },
                 },
             };
@@ -294,13 +296,20 @@ pub enum AttesterArgs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "aa_type", rename_all = "snake_case")]
 pub enum CocoAttesterArgs {
-    /// Unix Domain Socket
+    /// Unix Domain Socket (ttrpc)
     Uds {
         /// Attestation agent address (unix socket path)
         aa_addr: String,
     },
     /// Builtin AA (embedded) - not implemented yet
     Builtin,
+    /// RESTful API (api-server-rest)
+    Restful {
+        /// HTTP base URL of api-server-rest, e.g. "http://localhost:8006"
+        aa_addr: String,
+        /// TEE type string, e.g. "tdx", "sgx", "sample"
+        tee: String,
+    },
 }
 
 /// Provider-tagged converter config. Serde reads "as_provider" from flat JSON.
