@@ -4,6 +4,7 @@ use rats_cert::tee::coco::attester::{CocoAttester, CocoRestfulAttester};
 use rats_cert::tee::coco::converter::grpc::CocoGrpcConverter;
 use rats_cert::tee::coco::converter::restful::CocoRestfulConverter;
 use rats_cert::tee::coco::converter::CocoConverter;
+#[cfg(unix)]
 use rats_cert::tee::coco::evidence::tee_from_str;
 use rats_cert::tee::coco::verifier::remote::CocoRemoteVerifier;
 use rats_cert::tee::coco::verifier::CocoVerifier;

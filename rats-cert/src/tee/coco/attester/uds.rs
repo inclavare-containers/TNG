@@ -82,10 +82,8 @@ impl GenericAttester for CocoUdsAttester {
             .map_err(Error::GetTeeTypeFromAAFailed)?;
         let tee_type = tee_from_str(&get_tee_type_res.tee)?;
 
-        // Attempt to get additional evidence from AA, but don't fail if not supported
-        // GetAdditionalEvidence returns GetAdditionalEvidenceResponse which has an 'additional_evidence' field (map)
-        // Attempt to get additional evidence from AA, but don't fail if not supported
-        // According to the proto file, GetAdditionalEvidence returns GetEvidenceResponse which has an 'Evidence' field
+        // Attempt to get additional evidence from AA, but don't fail if not supported.
+        // According to the proto file, GetAdditionalEvidence returns GetEvidenceResponse which has an 'Evidence' field.
         let additional_evidence_res = self.client.get_additional_evidence(
             ttrpc::context::with_timeout(self.timeout_nano),
             &GetAdditionalEvidenceRequest {
