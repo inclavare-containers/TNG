@@ -583,6 +583,7 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 - **`reference_values`** (array, optional for "builtin"): Reference value configurations for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
+- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token issued by Trustee AS. This binds the signer certificate to TEE evidence and a Rekor v2 transparency log entry, preventing certificate spoofing. Verification includes certificate DER SHA-256 matching, payload SHA-256 matching, and local Rekor v2 checkpoint signature verification. If the claim is missing or invalid when enabled, verification fails with a hard error.
 
 Example: Connecting to a Restful HTTP type AS service
 
@@ -950,6 +951,7 @@ In the Passport model, the [Verify](#verify) configuration should include the fo
 - **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
+- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token. See the description in the [Background Check Model](#verify-background-check-model) section above.
 
 Example:
 
