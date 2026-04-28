@@ -271,6 +271,7 @@ mod tests {
             policy_ids: vec!["default".to_string()],
             as_headers: HashMap::new(),
             trusted_certs_paths: Some(vec![TEST_AS_CERT_PATH.to_string()]),
+            verify_signer_transparency: false,
         })
     }
 
@@ -280,6 +281,7 @@ mod tests {
             policy_ids: vec!["default".to_string()],
             as_headers: HashMap::new(),
             trusted_certs_paths: Some(vec![TEST_AS_CERT_PATH.to_string()]),
+            verify_signer_transparency: false,
         })
     }
 

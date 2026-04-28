@@ -3,6 +3,7 @@ pub mod builtin;
 mod common;
 pub mod remote;
 pub mod token;
+pub mod transparency;
 
 use super::evidence::CocoAsToken;
 use crate::errors::Result;

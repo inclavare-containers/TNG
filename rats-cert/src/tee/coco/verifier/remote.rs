@@ -14,6 +14,7 @@ impl CocoRemoteVerifier {
         as_addr_config: &Option<AttestationServiceAddrArgs>,
         trusted_certs_paths: &Option<Vec<String>>,
         policy_ids: &Vec<String>,
+        verify_signer_transparency: bool,
     ) -> Result<Self> {
         if let Some(as_addr_config) = as_addr_config {
             if as_addr_config.as_is_grpc {
@@ -48,6 +49,7 @@ impl CocoRemoteVerifier {
             inner: CommonCocoVerifier {
                 token_verifier,
                 policy_ids: policy_ids.to_owned(),
+                verify_signer_transparency,
             },
         })
     }
@@ -85,7 +87,7 @@ mod tests {
 
         let report_data = ReportData::Claims(Claims::default());
 
-        let verifier = CocoRemoteVerifier::new(&None, &trusted_certs_paths, &policy_ids)
+        let verifier = CocoRemoteVerifier::new(&None, &trusted_certs_paths, &policy_ids, false)
             .await
             .expect("Failed to create CocoRemoteVerifier");
 
