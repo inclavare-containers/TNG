@@ -15,6 +15,8 @@ use p256::EncodedPoint;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use signature::Verifier;
+use time::format_description::well_known::Rfc2822;
+use time::OffsetDateTime;
 use x509_cert::der::Decode as _;
 
 /// Verify signer transparency in a COCO AS JWT token.
@@ -53,6 +55,29 @@ pub fn verify_signer_transparency(jwt_str: &str) -> anyhow::Result<()> {
             "Certificate DER SHA-256 mismatch: computed {} != claim {}",
             cert_hash,
             transparency.payload.signer_certificate.der_sha256
+        );
+    }
+
+    // Step 4b: Verify evidence report_data matches certificate hash
+    if transparency.payload.evidence_binding.report_data != cert_hash {
+        anyhow::bail!(
+            "Evidence report_data does not match certificate hash: report_data {} != cert_hash {}",
+            transparency.payload.evidence_binding.report_data,
+            cert_hash
+        );
+    }
+
+    // Step 4c: Verify certificate has not expired
+    let not_after_str = &transparency.payload.signer_certificate.not_after;
+    if let Ok(not_after) = OffsetDateTime::parse(not_after_str, &Rfc2822) {
+        let now = OffsetDateTime::now_utc();
+        if now > not_after {
+            anyhow::bail!("Signer certificate expired: not_after = {}", not_after_str);
+        }
+    } else {
+        tracing::warn!(
+            not_after = %not_after_str,
+            "Failed to parse certificate not_after timestamp, skipping expiry check"
         );
     }
 
@@ -121,30 +146,26 @@ fn extract_signer_cert_der(header: &JwtHeader) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Known Rekor v2 public keys (ECDSA P-256, uncompressed point format).
-fn get_rekor_public_key(url: &str) -> Option<VerifyingKey> {
-    match url {
+fn get_rekor_public_key(url: &str) -> anyhow::Result<VerifyingKey> {
+    let spki_b64 = match url {
         "https://log2025-1.rekor.sigstore.dev" => {
-            // Rekor 2025-1 public key (ECDSA P-256, base64-encoded SPKI DER)
-            let spki_der = BASE64_STANDARD.decode(
-                "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbfwR+CBMoVgd3QC6ke3ZR6qQwgEFM81PTMQzw7nB5vIs2ClB3TUOA84C9VY8n7O061MgTm4Btddzf4UhAA=="
-            ).ok()?;
-            let spki = x509_cert::spki::SubjectPublicKeyInfoRef::from_der(&spki_der).ok()?;
-            let encoded_point =
-                EncodedPoint::from_bytes(spki.subject_public_key.raw_bytes()).ok()?;
-            VerifyingKey::from_encoded_point(&encoded_point).ok()
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbfwR+CBMoVgd3QC6ke3ZR6qQwgEFM81PTMQzw7nB5vIs2ClB3TUOA84C9VY8n7O061MgTm4Btddzf4UhAA=="
         }
         "https://rekor.sigstore.dev" => {
-            // Rekor public key (ECDSA P-256, base64-encoded SPKI DER)
-            let spki_der = BASE64_STANDARD.decode(
-                "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a6fZBoIUg5x/0/U9qOQANUu2aZL8i+2rN5qAVTLrBs5kxLqGPOosHbBhB6JL8HkFw=="
-            ).ok()?;
-            let spki = x509_cert::spki::SubjectPublicKeyInfoRef::from_der(&spki_der).ok()?;
-            let encoded_point =
-                EncodedPoint::from_bytes(spki.subject_public_key.raw_bytes()).ok()?;
-            VerifyingKey::from_encoded_point(&encoded_point).ok()
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a6fZBoIUg5x/0/U9qOQANUu2aZL8i+2rN5qAVTLrBs5kxLqGPOosHbBhB6JL8HkFw=="
         }
-        _ => None,
-    }
+        _ => anyhow::bail!("No known public key for Rekor URL: {}", url),
+    };
+
+    let spki_der = BASE64_STANDARD
+        .decode(spki_b64)
+        .map_err(|e| anyhow::anyhow!("Failed to decode Rekor public key base64: {}", e))?;
+    let spki = x509_cert::spki::SubjectPublicKeyInfoRef::from_der(&spki_der)
+        .map_err(|e| anyhow::anyhow!("Failed to parse Rekor SPKI DER: {}", e))?;
+    let encoded_point = EncodedPoint::from_bytes(spki.subject_public_key.raw_bytes())
+        .map_err(|e| anyhow::anyhow!("Failed to decode Rekor public key point: {}", e))?;
+    VerifyingKey::from_encoded_point(&encoded_point)
+        .map_err(|e| anyhow::anyhow!("Failed to construct Rekor verifying key: {}", e))
 }
 
 /// Verify Rekor v2 checkpoint signature.
@@ -159,9 +180,17 @@ fn verify_rekor_checkpoint(rekor: &RekorClaim) -> anyhow::Result<()> {
 
     let checkpoint = parse_checkpoint(checkpoint_str)?;
 
+    // Validate checkpoint origin matches the Rekor URL
+    if checkpoint.origin != rekor.url {
+        anyhow::bail!(
+            "Checkpoint origin mismatch: expected {} but got {}",
+            rekor.url,
+            checkpoint.origin
+        );
+    }
+
     // Get the expected Rekor public key for this URL
-    let verifying_key = get_rekor_public_key(&rekor.url)
-        .ok_or_else(|| anyhow::anyhow!("No known public key for Rekor URL: {}", rekor.url))?;
+    let verifying_key = get_rekor_public_key(&rekor.url)?;
 
     // The signed checkpoint body is everything before the blank line and signature
     let signed_body = format!(
@@ -184,7 +213,7 @@ fn verify_rekor_checkpoint(rekor: &RekorClaim) -> anyhow::Result<()> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing leafHash in inclusionProof"))?;
 
-        let entry_hash = get_entry_leaf_hash(entry_v2)?;
+        let entry_hash = read_entry_leaf_hash(entry_v2)?;
         if proof_leaf_hash != entry_hash {
             anyhow::bail!(
                 "Inclusion proof leaf hash mismatch: proof {} != entry {}",
@@ -279,8 +308,8 @@ fn parse_checkpoint(checkpoint_str: &str) -> anyhow::Result<Checkpoint> {
     })
 }
 
-/// Compute the expected leaf hash for a Rekor v2 DSSE entry.
-fn get_entry_leaf_hash(entry_v2: &serde_json::Value) -> anyhow::Result<String> {
+/// Read the leaf hash from a Rekor v2 DSSE entry JSON value.
+fn read_entry_leaf_hash(entry_v2: &serde_json::Value) -> anyhow::Result<String> {
     if let Some(leaf_hash) = entry_v2.get("leafHash").and_then(|v| v.as_str()) {
         return Ok(leaf_hash.to_string());
     }
@@ -320,7 +349,7 @@ struct JwtPayload {
 }
 
 /// The signer_transparency claim structure matching trustee's format.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct SignerTransparency {
     pub schema_version: String,
     pub generated_at: String,

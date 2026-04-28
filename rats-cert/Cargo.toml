@@ -51,12 +51,12 @@ attestation-service = {workspace = true, default-features = false, optional = tr
 rcgen = {workspace = true, optional = true}
 reference-value-provider-service = {workspace = true, default-features = false, optional = true}
 tempfile = {workspace = true, optional = true}
-time = {workspace = true, features = ["std"]}
+time = {workspace = true, features = ["std", "parsing"]}
 tokio = {workspace = true, default-features = true, features = ["fs"]}
 tonic = {workspace = true, default-features = false, features = ["codegen", "channel"], optional = true}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
-time = {workspace = true, features = ["std", "wasm-bindgen"]}
+time = {workspace = true, features = ["std", "wasm-bindgen", "parsing"]}
 tokio = {workspace = true, default-features = false}
 tokio_with_wasm = {workspace = true}
 tonic = {workspace = true, default-features = false, features = ["codegen"], optional = true}

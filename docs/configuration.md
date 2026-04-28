@@ -616,8 +616,12 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 
   Verification includes:
   - Certificate DER SHA-256 matches the transparency claim
+  - Evidence report_data matches the certificate hash (binding certificate to TEE evidence)
   - Payload SHA-256 matches payload metadata digest
   - Rekor v2 checkpoint signature verified locally (ECDSA P-256)
+  - Certificate expiry check
+
+  For the full transparency specification, see the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md).
 
   If the claim is missing or invalid when enabled, verification fails with a hard error.
 

@@ -1,4 +1,5 @@
 use super::super::evidence::CocoAsToken;
+#[cfg(feature = "crypto-rustcrypto")]
 use super::transparency;
 use crate::tee::ReportData;
 use crate::{errors::*, tee::GenericVerifier};
@@ -179,6 +180,7 @@ impl CommonCocoVerifier {
         }
 
         // Verify signer transparency claim if enabled
+        #[cfg(feature = "crypto-rustcrypto")]
         if self.verify_signer_transparency {
             transparency::verify_signer_transparency(token).map_err(|e| {
                 Error::SignerTransparencyVerificationFailed {
@@ -186,6 +188,8 @@ impl CommonCocoVerifier {
                 }
             })?;
         }
+        #[cfg(not(feature = "crypto-rustcrypto"))]
+        let _ = self.verify_signer_transparency; // field exists but feature not enabled
 
         Ok(())
     }

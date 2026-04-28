@@ -3,6 +3,7 @@ pub mod builtin;
 mod common;
 pub mod remote;
 pub mod token;
+#[cfg(feature = "crypto-rustcrypto")]
 pub mod transparency;
 
 use super::evidence::CocoAsToken;
