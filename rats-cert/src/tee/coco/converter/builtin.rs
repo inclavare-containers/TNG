@@ -401,14 +401,7 @@ impl BuiltinCocoConverter {
     }
 
     pub async fn new_verifier(&self) -> Result<BuiltinCocoVerifier> {
-        BuiltinCocoVerifier::new(self.work_dir.clone(), false).await
-    }
-
-    pub async fn new_verifier_with_transparency(
-        &self,
-        verify_signer_transparency: bool,
-    ) -> Result<BuiltinCocoVerifier> {
-        BuiltinCocoVerifier::new(self.work_dir.clone(), verify_signer_transparency).await
+        BuiltinCocoVerifier::new(self.work_dir.clone()).await
     }
 }
 
