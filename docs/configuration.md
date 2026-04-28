@@ -586,7 +586,7 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 - **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token issued by Trustee AS.
 
   > [!NOTE]
-  > **Background**: When Trustee AS runs inside a TEE, the JWT signer certificate it generates may not be inherently trusted by verifiers — there is no built-in mechanism to prove the certificate's authenticity or binding to the TEE. The `signer_transparency` feature solves this by having Trustee AS publish a transparency claim that binds the signer certificate to TEE evidence (such as TDX quotes) and records it in a Rekor v2 transparency log. When the verifier enables this option, it validates that the certificate is genuinely produced by a TEE-protected AS and has been publicly logged, preventing certificate forgery or MITM attacks.
+  > **Background**: When Trustee runs inside a TEE hosted by an untrusted provider, the JWT signer certificate it generates may not be inherently trusted by verifiers — there is no built-in mechanism to prove the certificate's authenticity or binding to the TEE. The `signer_transparency` feature solves this by having Trustee AS publish a transparency claim that binds the signer certificate to TEE evidence (such as TDX quotes) and records it in a Rekor v2 transparency log. When the verifier enables this option, it validates that the certificate is genuinely produced by a TEE-protected AS and has been publicly logged, preventing certificate forgery or MITM attacks.
   >
   > This feature only applies to the **COCO provider** with external AS (Restful or gRPC). It is not available for the builtin AS mode.
 
