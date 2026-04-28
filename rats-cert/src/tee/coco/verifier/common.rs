@@ -1,4 +1,5 @@
 use super::super::evidence::CocoAsToken;
+use super::transparency;
 use crate::tee::ReportData;
 use crate::{errors::*, tee::GenericVerifier};
 
@@ -9,10 +10,12 @@ use std::collections::{HashMap, HashSet};
 use super::token::{AttestationTokenVerifierConfig, TokenVerifier};
 
 pub(super) struct CommonCocoVerifier {
-    /// The token verifier used for validating JWT.
+    /// The token verifier used to validate JWT.
     pub token_verifier: TokenVerifier,
-    /// The policy ids need to check
+    /// The policy ids to check.
     pub policy_ids: Vec<String>,
+    /// Whether to verify the signer transparency claim in JWT tokens.
+    pub verify_signer_transparency: bool,
 }
 
 impl CommonCocoVerifier {
@@ -173,6 +176,15 @@ impl CommonCocoVerifier {
                     policy_id: policy_id.to_string(),
                 });
             }
+        }
+
+        // Verify signer transparency claim if enabled
+        if self.verify_signer_transparency {
+            transparency::verify_signer_transparency(token).map_err(|e| {
+                Error::SignerTransparencyVerificationFailed {
+                    detail: e.to_string(),
+                }
+            })?;
         }
 
         Ok(())
