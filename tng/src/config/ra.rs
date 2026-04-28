@@ -493,6 +493,9 @@ pub enum CocoVerifierArgs {
         /// Trusted certificate paths list (optional)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trusted_certs_paths: Option<Vec<String>>,
+        /// Verify signer transparency claim in JWT token (optional, default: false)
+        #[serde(default)]
+        verify_signer_transparency: bool,
     },
     /// gRPC API
     Grpc {
@@ -507,6 +510,9 @@ pub enum CocoVerifierArgs {
         /// Trusted certificate paths list (optional)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trusted_certs_paths: Option<Vec<String>>,
+        /// Verify signer transparency claim in JWT token (optional, default: false)
+        #[serde(default)]
+        verify_signer_transparency: bool,
     },
     /// Builtin AS (embedded)
     #[cfg(feature = "__builtin-as")]

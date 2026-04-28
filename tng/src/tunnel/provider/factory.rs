@@ -68,6 +68,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 policy_ids,
                 as_headers,
                 trusted_certs_paths,
+                verify_signer_transparency,
             } => {
                 let as_addr_config = as_addr.as_ref().map(|addr| {
                     rats_cert::cert::verify::AttestationServiceAddrArgs {
@@ -77,8 +78,13 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                     }
                 });
                 Ok(TngVerifier::Coco(CocoVerifier::Remote(
-                    CocoRemoteVerifier::new(&as_addr_config, trusted_certs_paths, policy_ids)
-                        .await?,
+                    CocoRemoteVerifier::new(
+                        &as_addr_config,
+                        trusted_certs_paths,
+                        policy_ids,
+                        *verify_signer_transparency,
+                    )
+                    .await?,
                 )))
             }
             CocoVerifierArgs::Grpc {
@@ -86,6 +92,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 policy_ids,
                 as_headers,
                 trusted_certs_paths,
+                verify_signer_transparency,
             } => {
                 let as_addr_config = as_addr.as_ref().map(|addr| {
                     rats_cert::cert::verify::AttestationServiceAddrArgs {
@@ -95,8 +102,13 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                     }
                 });
                 Ok(TngVerifier::Coco(CocoVerifier::Remote(
-                    CocoRemoteVerifier::new(&as_addr_config, trusted_certs_paths, policy_ids)
-                        .await?,
+                    CocoRemoteVerifier::new(
+                        &as_addr_config,
+                        trusted_certs_paths,
+                        policy_ids,
+                        *verify_signer_transparency,
+                    )
+                    .await?,
                 )))
             }
             #[cfg(feature = "__builtin-as")]

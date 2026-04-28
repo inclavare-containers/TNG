@@ -92,6 +92,9 @@ pub enum Error {
     #[error("Coco token verifier error")]
     CocoTokenVerifierError(#[source] crate::tee::coco::verifier::token::Error),
 
+    #[error("Signer transparency verification failed: {detail}")]
+    SignerTransparencyVerificationFailed { detail: String },
+
     // Built-in AS related
     // Certificate generation related errors
     #[error("Failed to generate certificate validity period")]

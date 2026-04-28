@@ -102,6 +102,7 @@ pub mod tests {
                                 policy_ids: vec!["default".to_owned()],
                                 as_headers: Default::default(),
                                 trusted_certs_paths: Some(vec!["/tmp/as.pem".to_owned()]),
+                                verify_signer_transparency: false,
                             }),
                         })
                     },

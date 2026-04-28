@@ -32,6 +32,8 @@ impl BuiltinCocoVerifier {
             inner: CommonCocoVerifier {
                 token_verifier,
                 policy_ids: vec![DEFAULT_POLICY_ID.to_string()],
+                // Builtin AS does not support signer transparency verification
+                verify_signer_transparency: false,
             },
             work_dir,
         })
