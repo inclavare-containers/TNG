@@ -583,7 +583,19 @@ In the Background Check model, the [Verify](#verify) configuration should includ
 - **`reference_values`** (array, optional for "builtin"): Reference value configurations for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
 - **`policy_ids`** (array [string]): List of policy IDs
 - **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
-- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token issued by Trustee AS. This binds the signer certificate to TEE evidence and a Rekor v2 transparency log entry, preventing certificate spoofing. Verification includes certificate DER SHA-256 matching, payload SHA-256 matching, and local Rekor v2 checkpoint signature verification. If the claim is missing or invalid when enabled, verification fails with a hard error.
+- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token issued by Trustee AS.
+
+  > [!NOTE]
+  > **Background**: When Trustee AS runs inside a TEE, the JWT signer certificate it generates may not be inherently trusted by verifiers — there is no built-in mechanism to prove the certificate's authenticity or binding to the TEE. The `signer_transparency` feature solves this by having Trustee AS publish a transparency claim that binds the signer certificate to TEE evidence (such as TDX quotes) and records it in a Rekor v2 transparency log. When the verifier enables this option, it validates that the certificate is genuinely produced by a TEE-protected AS and has been publicly logged, preventing certificate forgery or MITM attacks.
+  >
+  > This feature only applies to the **COCO provider** with external AS (Restful or gRPC). It is not available for the builtin AS mode.
+
+  Verification includes:
+  - Certificate DER SHA-256 matches the transparency claim
+  - Payload SHA-256 matches payload metadata digest
+  - Rekor v2 checkpoint signature verified locally (ECDSA P-256)
+
+  If the claim is missing or invalid when enabled, verification fails with a hard error.
 
 Example: Connecting to a Restful HTTP type AS service
 

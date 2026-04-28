@@ -15,10 +15,7 @@ pub struct BuiltinCocoVerifier {
 }
 
 impl BuiltinCocoVerifier {
-    pub async fn new(
-        work_dir: Arc<AttestationServiceWorkDir>,
-        verify_signer_transparency: bool,
-    ) -> Result<Self> {
+    pub async fn new(work_dir: Arc<AttestationServiceWorkDir>) -> Result<Self> {
         let config = AttestationTokenVerifierConfig {
             trusted_certs_paths: vec![work_dir.cert_chain_path().to_string_lossy().to_string()],
             trusted_jwk_sets: Default::default(),
@@ -35,7 +32,8 @@ impl BuiltinCocoVerifier {
             inner: CommonCocoVerifier {
                 token_verifier,
                 policy_ids: vec![DEFAULT_POLICY_ID.to_string()],
-                verify_signer_transparency,
+                // Builtin AS does not support signer transparency verification
+                verify_signer_transparency: false,
             },
             work_dir,
         })
