@@ -90,7 +90,19 @@ run_tests() {
     local args=("$@")
     if $ENABLE_COVERAGE; then
         echo cargo llvm-cov "${args[@]}"
-        cargo llvm-cov "${args[@]}"
+        # Run tests first, capture output and exit code
+        cargo llvm-cov "${args[@]}" 2>&1 | tee /tmp/llvm-cov-output.log
+        local test_exit=${PIPESTATUS[0]}
+        # Filter out known spurious warnings that cause non-zero exit
+        if [ "$test_exit" -ne 0 ]; then
+            if grep -q "functions have mismatched data" /tmp/llvm-cov-output.log && \
+               ! grep -qiE "test.*FAILED|error\[|thread.*panicked" /tmp/llvm-cov-output.log; then
+                echo "Ignoring llvm-cov mismatched data warning (tests passed)"
+                return 0
+            fi
+            return "$test_exit"
+        fi
+        return 0
     else
         echo cargo test "${args[@]#--no-report}"
         cargo test "${args[@]#--no-report}"
