@@ -111,11 +111,32 @@ jobs:
           nohup make test-dep-as > /tmp/as.log 2>&1 &
           AS_PID=$!
 
-          # Wait for Attestation Agent socket (max 1 minute)
-          echo "Waiting for Attestation Agent (PID: $AA_PID)..."
+          # Wait for ASR TCP :8006 (max 5 minutes)
+          echo "Waiting for ASR (PID: $AA_PID)..."
           for i in $(seq 1 300); do
             if ! kill -0 $AA_PID 2>/dev/null; then
-              echo "Attestation Agent process exited unexpectedly"
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if (echo > /dev/tcp/127.0.0.1/8006) 2>/dev/null; then
+              echo "ASR is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for ASR"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for Attestation Agent socket (max 5 minutes)
+          echo "Waiting for Attestation Agent socket..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
               exit 1
             fi
             if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then
@@ -124,24 +145,27 @@ jobs:
             fi
             if [ $i -eq 300 ]; then
               echo "Timeout waiting for Attestation Agent"
+              cat /tmp/aa.log
               exit 1
             fi
             sleep 1
           done
 
-          # Wait for Attestation Service HTTP (max 1 minute)
+          # Wait for Attestation Service HTTP :8080 (max 5 minutes)
           echo "Waiting for Attestation Service (PID: $AS_PID)..."
           for i in $(seq 1 300); do
-            if ! kill -0 $AS_PID 2>/dev/null; then
-              echo "Attestation Service process exited unexpectedly"
-              exit 1
-            fi
             if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then
               echo "Attestation Service is ready"
               break
             fi
+            if [ $i -gt 60 ] && ! kill -0 $AS_PID 2>/dev/null; then
+              echo "Attestation Service process exited unexpectedly"
+              cat /tmp/as.log
+              exit 1
+            fi
             if [ $i -eq 300 ]; then
               echo "Timeout waiting for Attestation Service"
+              cat /tmp/as.log
               exit 1
             fi
             sleep 1

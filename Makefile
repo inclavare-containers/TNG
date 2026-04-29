@@ -302,16 +302,27 @@ mac-cross-build:
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
-# Test dependencies: Attestation Agent
+# Test dependencies: API Server Rest (ASR) + Attestation Agent (blocking)
 .PHONY: test-dep-aa
 test-dep-aa:
-	@echo "=== Starting Attestation Agent ==="
 	@if ! command -v attestation-agent > /dev/null; then \
 		yum install -y attestation-agent; \
-	fi
-	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock
+	fi; \
+	killall attestation-agent 2>/dev/null || true; \
+	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
+	if [ ! -d /tmp/guest-components ]; then \
+		git clone https://github.com/cohere-ai/guest-components.git --branch cohere /tmp/guest-components ; \
+	fi; \
+	if ! command -v gcc > /dev/null; then \
+		yum install -y gcc openssl-devel pkg-config; \
+	fi; \
+	killall api-server-rest 2>/dev/null || true; \
+	cargo run --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml -- --features attestation
 
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
+# All steps share a single shell block so the backgrounded `crane` process
+# stays alive until `restful-as` (the last foreground command) exits — see
+# commit 422c112.
 .PHONY: test-dep-as
 test-dep-as:
 	@set -e; \
@@ -320,7 +331,7 @@ test-dep-as:
 		curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz | tar -xzf - -C /usr/local/bin crane; \
 		chmod +x /usr/local/bin/crane; \
 	fi; \
-	pkill -x crane 2>/dev/null || true; \
+	killall crane 2>/dev/null || true; \
 	crane registry serve --address=:5000 & \
 	for i in $$(seq 1 10); do \
 		if curl -s http://127.0.0.1:5000/v2/ > /dev/null; then \
@@ -389,6 +400,7 @@ test-dep-as:
 		yum install -y trustee; \
 	fi; \
 	systemctl stop trustee || true; \
+	killall restful-as 2>/dev/null || true; \
 	if ! command -v jq > /dev/null; then yum install -y jq; fi; \
 	if ! command -v openssl > /dev/null; then yum install -y openssl; fi; \
 	openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key; \
