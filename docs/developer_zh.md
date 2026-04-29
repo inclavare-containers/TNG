@@ -5,7 +5,8 @@
 ## 项目结构概览
 
 - **tng/**：核心服务实现，包含命令行入口、配置解析、隧道（Ingress/Egress）、远程证明、观测性等主要逻辑。
-- **tng-testsuite/**：集成测试套件，提供可编排的“场景任务”，覆盖 HTTP 代理、透明代理、Socks5、单向/双向远程证明等典型用法。
+- **tng/src/tunnel/provider/**：可插拔的远程证明 Provider 层（证据、令牌、Attester、转换器及 Verifier 的绑定），支持多种 Provider 以对接 attestation-agent 和 attestation-service。当前实现并默认使用 CoCo Provider。
+- **tng-testsuite/**：集成测试套件，提供可编排的”场景任务”，覆盖 HTTP 代理、透明代理、Socks5、单向/双向远程证明等典型用法。
 - **tng-wasm/**：浏览器侧 JavaScript SDK，对外提供 `tng_fetch` 等接口，配合 OHTTP 和远程证明使用，具体用法见 `tng-wasm/README_zh.md`。
 - **docs/**：用户和开发文档，包括配置手册（`configuration_zh.md`）和本开发者指南。
 - **rpm/**：RPM 打包相关脚本与 Dockerfile，用于构建发行包。
@@ -178,6 +179,26 @@ RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-con
 ```
 
 这将运行一个attestation-agent实例，并在`/run/confidential-containers/attestation-agent/attestation-agent.sock`上创建ttrpc监听
+
+### 运行 API Server Rest (ASR)
+
+部分测试（例如 `rats-cert` 中的 `coco_asr` 和 `ita_asr` e2e 测试）需要运行一个 [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) 实例，用于将 HTTP 请求代理到 attestation-agent。ASR 必须在 `http://127.0.0.1:8006` 可达。
+
+> [!NOTE]
+> 在撰写本文时，上游 ASR 缺少 TNG 所需的两个接口特性：`/aa/evidence` 上的 `encoding` 参数（用于十六进制编码的运行时数据），以及用于获取附加证据（针对 GPU 等设备）的 `/aa/additional_evidence` 端点。这些已在 [Cohere fork](https://github.com/cohere-ai/guest-components/tree/cohere)（[PR](https://github.com/cohere-ai/guest-components/pull/2)）中实现。
+
+1. 从 Cohere fork 克隆并运行 ASR，启用 `attestation` 特性：
+
+```sh
+git clone https://github.com/cohere-ai/guest-components.git --branch cohere
+cd guest-components
+cargo run --release -p api-server-rest -- --features attestation
+```
+
+这将在默认情况下监听 `127.0.0.1:8006`，并连接到 attestation-agent 的默认 Unix socket 路径（`/run/confidential-containers/attestation-agent/attestation-agent.sock`）。确保在启动 ASR 之前 attestation-agent 已经在运行。
+
+> [!IMPORTANT]
+> ASR 会拒绝源 IP 不是回环地址（`127.0.0.1`）的任何请求，返回 `403 Forbidden`。因此测试和 ASR 必须运行在同一台主机上。
 
 ### 运行attestation-service
 
