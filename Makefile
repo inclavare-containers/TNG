@@ -305,17 +305,14 @@ clippy:
 # Test dependencies: API Server Rest (ASR) + Attestation Agent (blocking)
 .PHONY: test-dep-aa
 test-dep-aa:
-	@if ! command -v attestation-agent > /dev/null; then \
-		yum install -y attestation-agent; \
-	fi; \
-	killall attestation-agent 2>/dev/null || true; \
-	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
 	if [ ! -d /tmp/guest-components ]; then \
 		git clone https://github.com/cohere-ai/guest-components.git --branch cohere /tmp/guest-components ; \
 	fi; \
 	if ! command -v gcc > /dev/null; then \
 		yum install -y gcc openssl-devel pkg-config; \
 	fi; \
+	killall attestation-agent 2>/dev/null || true; \
+	RUST_LOG=debug cargo run --release -p attestation-agent --bin ttrpc-aa --features="bin ttrpc" --locked --manifest-path /tmp/guest-components/Cargo.toml -- --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
 	killall api-server-rest 2>/dev/null || true; \
 	cargo run --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml -- --features attestation
 
