@@ -1,4 +1,7 @@
+use anyhow::bail;
+use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
+use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
 use super::{ra::RaArgsUnchecked, Endpoint};
 
@@ -41,19 +44,67 @@ pub struct EgressMappingArgs {
     pub out: Endpoint,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressNetfilterArgs {
-    pub capture_dst: Endpoint,
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_dst: Vec<EgressNetfilterCaptureDstArgs>,
 
     #[serde(default = "bool::default")]
     pub capture_local_traffic: bool,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_cgroup: Vec<String>,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nocapture_cgroup: Vec<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listen_port: Option<u16>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub so_mark: Option<u32>,
+}
+
+/// Instead of using the EgressNetfilterCaptureDst directly, here we define a common struct for json parsing to get better deserialization error message.
+/// See https://github.com/serde-rs/serde/issues/2157
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressNetfilterCaptureDstArgs {
+    host: Option<Ipv4Cidr>,
+    ipset: Option<String>,
+    port: Option<u16>,
+}
+
+impl TryFrom<EgressNetfilterCaptureDstArgs> for EgressNetfilterCaptureDst {
+    type Error = anyhow::Error;
+
+    fn try_from(value: EgressNetfilterCaptureDstArgs) -> Result<Self, Self::Error> {
+        Ok(match (value.host, value.ipset, value.port) {
+            (None, None, None) => bail!("one of host, ipset, port must be specified"),
+            (None, None, Some(port)) => EgressNetfilterCaptureDst::PortOnly { port },
+            (None, Some(ipset), None) => EgressNetfilterCaptureDst::IpSetOnly { ipset },
+            (None, Some(ipset), Some(port)) => {
+                EgressNetfilterCaptureDst::IpSetAndPort { ipset, port }
+            }
+            (Some(host), None, None) => EgressNetfilterCaptureDst::HostOnly { host },
+            (Some(host), None, Some(port)) => EgressNetfilterCaptureDst::HostAndPort { host, port },
+            (Some(_), Some(_), _) => bail!("Only one of host or ipset can be specified"),
+        })
+    }
+}
+
+pub enum EgressNetfilterCaptureDst {
+    HostOnly { host: Ipv4Cidr },
+    IpSetOnly { ipset: String },
+    PortOnly { port: u16 },
+    HostAndPort { host: Ipv4Cidr, port: u16 },
+    IpSetAndPort { ipset: String, port: u16 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,5 +335,164 @@ impl From<AllowNonTngTrafficRegexes> for DirectForwardRules {
                 .map(|s| DirectForwardRule { http_path: s })
                 .collect(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use serde_json::json;
+
+    use crate::config::TngConfig;
+
+    use super::{EgressNetfilterCaptureDst, EgressNetfilterCaptureDstArgs};
+
+    fn test_deserialize_egress_netfilter_common(value: serde_json::Value) -> Result<()> {
+        let config: TngConfig = serde_json::from_value(value)?;
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_netfilter_array_format() -> Result<()> {
+        // New array format
+        test_deserialize_egress_netfilter_common(json!(
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": [
+                                { "port": 30001 },
+                                { "host": "127.0.0.1" },
+                                { "host": "127.0.0.1", "port": 30002 },
+                                { "host": "10.1.1.0/24", "port": 30002 },
+                            ],
+                            "listen_port": 50000
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_netfilter_backward_compat() -> Result<()> {
+        // Old single-object format (backward compatibility via OneOrMany)
+        test_deserialize_egress_netfilter_common(json!(
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 9991
+                            }
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_netfilter_cgroup() -> Result<()> {
+        // cgroup-based capture
+        test_deserialize_egress_netfilter_common(json!(
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_cgroup": ["/system.slice/vllm.service"],
+                            "nocapture_cgroup": ["/system.slice/ssh.service"]
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_netfilter_capture_all() -> Result<()> {
+        // Empty capture_dst = capture all TCP traffic
+        test_deserialize_egress_netfilter_common(json!(
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {},
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    fn test_deserialize_capture_dst_common(value: serde_json::Value) -> Result<()> {
+        EgressNetfilterCaptureDst::try_from(serde_json::from_value::<
+            EgressNetfilterCaptureDstArgs,
+        >(value)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_capture_dst_modes() -> Result<()> {
+        // HostOnly
+        test_deserialize_capture_dst_common(serde_json::json!({ "host": "10.1.1.0/24" }))?;
+
+        // IpSetOnly
+        test_deserialize_capture_dst_common(serde_json::json!({ "ipset": "vllm_ports" }))?;
+
+        // PortOnly
+        test_deserialize_capture_dst_common(serde_json::json!({ "port": 30002 }))?;
+
+        // HostAndPort
+        test_deserialize_capture_dst_common(serde_json::json!({
+            "host": "10.1.1.0/24",
+            "port": 30002
+        }))?;
+
+        // IpSetAndPort
+        test_deserialize_capture_dst_common(serde_json::json!({
+            "ipset": "vllm_ports",
+            "port": 30002
+        }))?;
+
+        // Invalid: both host and ipset
+        assert!(test_deserialize_capture_dst_common(serde_json::json!({
+            "host": "10.1.1.0/24",
+            "ipset": "vllm_ports",
+            "port": 30002
+        }))
+        .is_err());
+
+        // Invalid: both host and ipset, no port
+        assert!(test_deserialize_capture_dst_common(serde_json::json!({
+            "host": "10.1.1.0/24",
+            "ipset": "vllm_ports",
+        }))
+        .is_err());
+
+        // Invalid: empty
+        assert!(test_deserialize_capture_dst_common(serde_json::json!({})).is_err());
+
+        Ok(())
     }
 }

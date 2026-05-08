@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -7,7 +7,7 @@ use socket2::SockRef;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{egress::EgressNetfilterArgs, Endpoint},
+    config::egress::{EgressNetfilterArgs, EgressNetfilterCaptureDst},
     tunnel::{
         egress::flow::AcceptedStream,
         endpoint::TngEndpoint,
@@ -25,8 +25,10 @@ mod iptables;
 
 pub struct NetfilterEgress {
     id: usize,
-    capture_dst: Endpoint,
+    capture_dst: Vec<EgressNetfilterCaptureDst>,
     capture_local_traffic: bool,
+    capture_cgroup: Vec<String>,
+    nocapture_cgroup: Vec<String>,
     listen_port: u16,
     so_mark: u32,
 }
@@ -38,14 +40,27 @@ impl NetfilterEgress {
             None => portpicker::pick_unused_port().context("Failed to pick a free port")?,
         };
 
+        if netfilter_args.capture_dst.is_empty() && netfilter_args.capture_cgroup.is_empty() {
+            bail!("At least one of capture_dst, capture_cgroup must be set and not empty");
+        }
+
+        let capture_dst = netfilter_args
+            .capture_dst
+            .iter()
+            .map(Clone::clone)
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+
         let so_mark = netfilter_args
             .so_mark
             .unwrap_or(TCP_CONNECT_SO_MARK_DEFAULT);
 
         Ok(Self {
             id,
-            capture_dst: netfilter_args.capture_dst.clone(),
+            capture_dst,
             capture_local_traffic: netfilter_args.capture_local_traffic,
+            capture_cgroup: netfilter_args.capture_cgroup.clone(),
+            nocapture_cgroup: netfilter_args.nocapture_cgroup.clone(),
             listen_port,
             so_mark,
         })
@@ -72,8 +87,8 @@ impl EgressTrait for NetfilterEgress {
     }
 
     async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
-        // We have to listen on 0.0.0.0 to capture all traffic been redirected from any interface.
-        // See REDIRECT section on https://ipset.netfilter.org/iptables-extensions.man.html
+        // Listen on 0.0.0.0 to capture traffic redirected by the nat OUTPUT chain.
+        // REDIRECT sends packets to the listener's address; 0.0.0.0 captures all interfaces.
         let listen_addr = format!("0.0.0.0:{}", self.listen_port);
         tracing::debug!("Add TCP listener on {}", listen_addr);
 
@@ -82,6 +97,8 @@ impl EgressTrait for NetfilterEgress {
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
+
+        let listen_addr = listener.local_addr()?;
 
         Ok(Box::new(
             stream! {
@@ -93,13 +110,22 @@ impl EgressTrait for NetfilterEgress {
             .map(move |res| {
                 let (stream, peer_addr) = res?;
                 let socket_ref = SockRef::from(&stream);
+
+                // Use SO_ORIGINAL_DST to retrieve the original destination.
+                // For OUTPUT-redirected traffic (nat REDIRECT), SO_ORIGINAL_DST returns
+                // the pre-redirect destination. For PREROUTING-TPROXY traffic, it also
+                // returns the original destination since TPROXY doesn't modify it.
                 let orig_dst = socket_ref
                     .original_dst()
                     .context("failed to get original destination")?
                     .as_socket()
                     .context("should be a ip address")?;
 
-                // TODO: replace TngEndpoint with a enum type, so that no need to call sock_addr.ip().to_string()
+                // Check if the original destination is the same as the listener port to prevent from the recursion.
+                if listen_addr.port() == orig_dst.port() && orig_dst.ip().is_loopback() {
+                    Err(anyhow::anyhow!("The original destination is the same as the listener port, recursion is detected"))?
+                }
+
                 let dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
 
                 Ok(AcceptedStream {

@@ -420,5 +420,5 @@ test-dep-as:
 	echo 'default hardware := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
 	echo 'default configuration := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
 	echo 'default file_system := 2' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
-	cat /etc/trustee/as-config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalFs"}}' > /tmp/config_with_cert.json; \
+	cat /etc/trustee/as-config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalJson"}}' > /tmp/config_with_cert.json; \
 	RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json
