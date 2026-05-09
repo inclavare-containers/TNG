@@ -125,6 +125,14 @@ if $ENABLE_COVERAGE; then
     cargo llvm-cov clean --workspace
 fi
 
+# Pre-compile all test binaries before running tests (non-coverage only)
+if ! $ENABLE_COVERAGE; then
+    echo "============= Pre-compiling test binaries ============="
+    cargo build --workspace --exclude tng-wasm
+    cargo build --no-default-features --features on-source-code --package tng-testsuite
+    echo "============= Pre-compilation finished ============="
+fi
+
 # Run unit tests
 echo "============= Starting unit test ============="
 summary_lines+=("$(format_result "Unit tests" "")")

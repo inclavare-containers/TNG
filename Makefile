@@ -18,13 +18,15 @@ run-test-coverage: install-test-deps
 
 	./tng-testsuite/run-test.sh --coverage
 
-.PHONE: run-test-on-bin
+.PHONY: run-test-on-bin
 run-test-on-bin: install-test-deps
+	cargo build --no-default-features --features on-bin --package tng-testsuite --tests
 	cargo test --no-default-features --features on-bin --package tng-testsuite --tests -- --nocapture
 
 
-.PHONE: run-test-on-podman
+.PHONY: run-test-on-podman
 run-test-on-podman: install-test-deps
+	cargo build --no-default-features --features on-podman --package tng-testsuite --tests
 	cargo test --no-default-features --features on-podman --package tng-testsuite --tests -- --nocapture
 
 
