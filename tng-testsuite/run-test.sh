@@ -47,7 +47,14 @@ cd "$project_root"
 export RUST_BACKTRACE=1
 
 failed=0
-test_result_msgs=""
+declare -a summary_lines=()
+failed_tests=""
+
+format_result() {
+    local name="$1"
+    local status="$2"
+    printf "%-60s %s\n" "$name" "$status"
+}
 
 install_cargo_llvm_cov() {
     if command -v cargo-llvm-cov &>/dev/null; then
@@ -89,7 +96,7 @@ install_cargo_llvm_cov() {
 run_tests() {
     local args=("$@")
     if $ENABLE_COVERAGE; then
-        echo cargo llvm-cov "${args[@]}"
+        echo "cargo llvm-cov ${args[*]}"
         # Run tests first, capture output and exit code
         cargo llvm-cov "${args[@]}" 2>&1 | tee /tmp/llvm-cov-output.log
         local test_exit=${PIPESTATUS[0]}
@@ -104,7 +111,7 @@ run_tests() {
         fi
         return 0
     else
-        echo cargo test "${args[@]#--no-report}"
+        echo "cargo test ${args[*]#--no-report}"
         cargo test "${args[@]#--no-report}"
     fi
 }
@@ -120,7 +127,7 @@ fi
 
 # Run unit tests
 echo "============= Starting unit test ============="
-test_result_msgs="${test_result_msgs}\n============= Unit tests ============="
+summary_lines+=("$(format_result "Unit tests" "")")
 
 unit_args=(
     --no-report
@@ -132,24 +139,35 @@ unit_args=(
     --nocapture
 )
 
-if run_tests "${unit_args[@]}"; then
-    test_result_msgs="${test_result_msgs}\nunit test:\tPASS"
+unit_output=$(run_tests "${unit_args[@]}" 2>&1) || unit_failed=true || true
+echo "$unit_output"
+
+if [[ "${unit_failed:-false}" == "true" ]]; then
+    summary_lines+=("$(format_result "  unit test" "FAILED")")
+    # Extract failed test names from cargo test output
+    failed_unit_tests=$(echo "$unit_output" | grep -E '^test .* FAILED$' | sed 's/ --- FAILED$//' | sed 's/^test //')
+    if [[ -n "$failed_unit_tests" ]]; then
+        while IFS= read -r t; do
+            summary_lines+=("$(format_result "    -> $t" "FAILED")")
+            failed_tests="${failed_tests:+${failed_tests}, }unit:$t"
+        done <<< "$failed_unit_tests"
+    fi
 else
-    test_result_msgs="${test_result_msgs}\nunit test:\tFAILED"
-    failed=1
+    summary_lines+=("$(format_result "  unit test" "PASS")")
 fi
+echo "============= Finished unit test ============="
 
 # Run integration tests
 test_cases=$(ls tng-testsuite/tests/ | grep -E '.*\.rs$' | sed 's/\.rs$//')
 skipped_test_cases=""  # Add test names here to skip, space-separated
 
-test_result_msgs="${test_result_msgs}\n============= Integration tests ============="
+summary_lines+=("$(format_result "Integration tests" "")")
 
 for case_name in $test_cases; do
     echo "============= Starting integration test case: $case_name ============="
 
     if [[ " $skipped_test_cases " =~ " $case_name " ]]; then
-        test_result_msgs="${test_result_msgs}\n${case_name}:\tSKIP"
+        summary_lines+=("$(format_result "  $case_name" "SKIP")")
         continue
     fi
 
@@ -164,16 +182,26 @@ for case_name in $test_cases; do
     )
 
     if run_tests "${integ_args[@]}"; then
-        test_result_msgs="${test_result_msgs}\n${case_name}:\tPASS"
+        summary_lines+=("$(format_result "  $case_name" "PASS")")
     else
-        test_result_msgs="${test_result_msgs}\n${case_name}:\tFAILED"
+        summary_lines+=("$(format_result "  $case_name" "FAILED")")
         failed=1
+        failed_tests="${failed_tests:+${failed_tests}, }${case_name}"
     fi
 done
 
-test_result_msgs="${test_result_msgs}\n============= All tests finished ============="
+summary_lines+=("$(format_result "" "")")
+summary_lines+=("All tests finished")
+if [[ -n "$failed_tests" ]]; then
+    summary_lines+=("Failed: ${failed_tests}")
+fi
 
-echo -e "$test_result_msgs"
+echo ""
+echo "============= Test Summary ============="
+for line in "${summary_lines[@]}"; do
+    echo "$line"
+done
+echo "========================================"
 
 # Generate coverage reports if enabled and requested
 if $ENABLE_COVERAGE && $GENERATE_REPORT; then
