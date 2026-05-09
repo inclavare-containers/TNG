@@ -339,58 +339,47 @@ test-dep-as:
 		curl -sSL -o /usr/local/bin/rekor-cli https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64; \
 		chmod +x /usr/local/bin/rekor-cli; \
 	fi; \
-	if ! command -v slsa-generator > /dev/null; then \
-		curl -sSL -o /usr/local/bin/slsa-generator https://github.com/openanolis/trustee/raw/refs/heads/main/tools/slsa/slsa-generator; \
-		chmod +x /usr/local/bin/slsa-generator; \
+	if ! command -v rv-release-tool > /dev/null; then \
+		curl -sSL -o /usr/local/bin/rv-release-tool https://raw.githubusercontent.com/openanolis/trustee/28e0dd301ce1848ae539ee201260d5b85409a3f4/tools/slsa/rv-release-tool; \
+		chmod +x /usr/local/bin/rv-release-tool; \
 	fi; \
 	echo "=== Generating SLSA Provenance and Uploading to Rekor ==="; \
 	mkdir -p /tmp/slsa-test; \
-	echo "Working directory: /tmp/slsa-test"; \
-	cd /tmp/slsa-test && \
-		echo '#!/bin/bash' > demo-app.sh && \
-		echo 'echo "Hello, SLSA Provenance Test!"' >> demo-app.sh && \
-		echo 'echo "This is a test binary for reference value generation"' >> demo-app.sh && \
-		echo 'echo "Timestamp: $$(date)"' >> demo-app.sh && \
-		echo 'exit 0' >> demo-app.sh && \
-		chmod +x demo-app.sh && \
-		echo "Artifact SHA256: $$(sha256sum demo-app.sh | awk '{print $$1}')" && \
-		export COSIGN_PASSWORD="" && \
-		rm -f slsa-test.key slsa-test.pub && \
-		cosign generate-key-pair --output-key-prefix slsa-test && \
-		/usr/local/bin/slsa-generator \
-			--artifact-type binary \
-			--artifact ./demo-app.sh \
-			--artifact-id test-artifact \
-			--artifact-version 1.0.0 \
-			--sign-key ./slsa-test.key \
-			--rekor-url https://log2025-1.rekor.sigstore.dev \
-			--rekor-api-version 2 \
-			--provenance-store-protocol oci \
-			--provenance-store-uri oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0 \
-			--provenance-store-artifact bundle; \
-	echo "=== Verifying OCI Registry Upload ==="; \
-	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .; \
-	curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .; \
-	echo "=== Uploading RV Release Manifest Bundle to OCI Registry ==="; \
-	if [ ! -f /tmp/rv-release-tool ]; then curl -sS https://raw.githubusercontent.com/openanolis/trustee/28e0dd301ce1848ae539ee201260d5b85409a3f4/tools/slsa/rv-release-tool -o /tmp/rv-release-tool; fi; chmod +x /tmp/rv-release-tool; \
-	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/rv-release-sign.key; \
-	echo "#!/bin/bash" > /tmp/rv-release-dummy; \
-	echo "echo hello" >> /tmp/rv-release-dummy; \
-	chmod +x /tmp/rv-release-dummy; \
-	/tmp/rv-release-tool \
+	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/slsa-test.key; \
+	echo '#!/bin/bash' > /tmp/slsa-test/demo-app.sh; \
+	echo 'echo "Hello, SLSA Provenance Test!"' >> /tmp/slsa-test/demo-app.sh; \
+	chmod +x /tmp/slsa-test/demo-app.sh; \
+	cd /tmp/ && rv-release-tool \
 		--artifact-type binary \
-		--artifact /tmp/rv-release-dummy \
+		--artifact /tmp/slsa-test/demo-app.sh \
+		--artifact-id test-artifact \
+		--artifact-version 1.0.0 \
+		--sign-key /tmp/slsa-test.key \
+		--rekor-url https://log2025-1.rekor.sigstore.dev \
+		--rekor-api-version 2 \
+		--provenance-store-protocol oci \
+		--provenance-store-uri "oci://127.0.0.1:5000/trustee/provenance:test-artifact-1.0.0" \
+		--provenance-store-artifact bundle; \
+	cd - ; \
+	echo "=== Uploading RV Release Manifest Bundle to OCI Registry ==="; \
+	cd /tmp/ && rv-release-tool \
+		--artifact-type binary \
+		--artifact /tmp/slsa-test/demo-app.sh \
 		--artifact-id cvm_container_proxy \
 		--artifact-version 1.0.0 \
-		--sign-key /tmp/rv-release-sign.key \
+		--sign-key /tmp/slsa-test.key \
 		--rekor-url https://log2025-1.rekor.sigstore.dev \
 		--rekor-api-version 2 \
 		--provenance-store-protocol oci \
 		--provenance-store-uri "oci://127.0.0.1:5000/trustee/provenance:cvm_container_proxy-1.0.0" \
 		--provenance-store-artifact bundle; \
-	echo "Release manifest bundle uploaded"; \
-	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .;
+	cd - ; \
+	echo "=== Verifying OCI Registry Upload ==="; \
+	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .; \
+	curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .; \
+	curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+		http://127.0.0.1:5000/v2/trustee/provenance/manifests/cvm_container_proxy-1.0.0 | jq .;
 	echo "=== Starting Attestation Service ==="; \
 	if ! command -v restful-as > /dev/null; then \
 		systemctl mask trustee || true; \
