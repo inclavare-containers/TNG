@@ -934,6 +934,44 @@ mod tests {
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
+        async fn test_verify_context_builtin_with_release_manifest_reference() {
+            use rats_cert::cert::verify::{
+                ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
+                ReferenceValueProvenanceSource,
+            };
+
+            let rv_item = ReferenceValueListItem {
+                id: "cvm_uki".to_string(),
+                rv_name: Some("cvm_uki".to_string()),
+                version: "1.0.0".to_string(),
+                rv_type: "uki".to_string(),
+                provenance_info: ReferenceValueProvenanceInfo {
+                    provenance_type: "rv-release-manifest".to_string(),
+                    rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
+                    rekor_api_version: Some(2),
+                },
+                provenance_source: Some(ReferenceValueProvenanceSource {
+                    protocol: "oci".to_string(),
+                    uri: "oci://127.0.0.1:5000/trustee/provenance:cvm_uki-1.0.0".to_string(),
+                    artifact: Some("bundle".to_string()),
+                }),
+                operation_type: "refresh".to_string(),
+            };
+            let payload = ReferenceValueListPayload {
+                rv_list: vec![rv_item],
+            };
+
+            let verify_args = make_verify_builtin_args(
+                PolicyConfig::Default,
+                vec![ReferenceValueConfig::ReleaseManifest {
+                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+                }],
+            );
+            let _result = VerifyContext::from_verify_args(&verify_args).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
         async fn test_verify_context_builtin_with_multiple_references() {
             use rats_cert::cert::verify::Provenance;
             use std::collections::HashMap;

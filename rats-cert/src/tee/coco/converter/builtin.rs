@@ -205,6 +205,10 @@ pub enum ReferenceValueConfig {
     Slsa {
         payload: SlsaReferenceValuePayloadConfig,
     },
+    /// RV release manifest-based reference values
+    ReleaseManifest {
+        payload: SlsaReferenceValuePayloadConfig,
+    },
 }
 
 /// Builtin CoCo Converter
@@ -361,6 +365,32 @@ impl BuiltinCocoConverter {
                         .map_err(Error::RegisterSampleReferenceValueFailed)?;
                 }
                 ReferenceValueConfig::Slsa { payload } => {
+                    let payload_value = match payload {
+                        SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
+                        SlsaReferenceValuePayloadConfig::Path { path } => {
+                            let content_str =
+                                tokio::fs::read_to_string(path).await.map_err(|e| {
+                                    Error::ReadReferenceValueFileFailed {
+                                        path: path.clone(),
+                                        source: e,
+                                    }
+                                })?;
+                            serde_json::from_str::<ReferenceValueListPayload>(&content_str)
+                                .map_err(|e| Error::ParseReferenceValuePayloadFailed {
+                                    path: path.clone(),
+                                    source: e,
+                                })?
+                        }
+                    };
+
+                    let payload_str = serde_json::to_string(&payload_value)
+                        .map_err(Error::SerializeSlsaReferenceValueListFailed)?;
+                    attestation_service
+                        .set_reference_value_list(&payload_str)
+                        .await
+                        .map_err(Error::SetSlsaReferenceValueListFailed)?;
+                }
+                ReferenceValueConfig::ReleaseManifest { payload } => {
                     let payload_value = match payload {
                         SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
                         SlsaReferenceValuePayloadConfig::Path { path } => {
@@ -710,6 +740,82 @@ default file_system := 2"#;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
+    async fn test_converter_new_with_release_manifest_reference() {
+        let rv_item = ReferenceValueListItem {
+            id: "cvm_container_proxy".to_string(),
+            version: "1.0.0".to_string(),
+            rv_type: "container".to_string(),
+            provenance_info: ReferenceValueProvenanceInfo {
+                provenance_type: "rv-release-manifest".to_string(),
+                rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
+                rekor_api_version: Some(2),
+            },
+            provenance_source: Some(ReferenceValueProvenanceSource {
+                protocol: "oci".to_string(),
+                uri: "oci://127.0.0.1:5000/trustee/provenance:cvm_container_proxy-1.0.0"
+                    .to_string(),
+                artifact: Some("bundle".to_string()),
+            }),
+            operation_type: "refresh".to_string(),
+            rv_name: None,
+        };
+        let payload = ReferenceValueListPayload {
+            rv_list: vec![rv_item],
+        };
+
+        let reference = ReferenceValueConfig::ReleaseManifest {
+            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+        };
+        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+            .await
+            .expect("Failed to create converter with release manifest reference");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn test_converter_new_with_release_manifest_file_reference() {
+        let dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let bundle_path = dir.path().join("release-manifest.bundle.json");
+        let manifest = r#"{"measurements":{"cvm_uki":{"algorithm":"sha256","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"schemaVersion":1}"#;
+        tokio::fs::write(&bundle_path, format!(r#"{{"releasePayload":{manifest}}}"#))
+            .await
+            .expect("Failed to write bundle file");
+
+        let ref_path = dir.path().join("release_manifest.json");
+        let payload = serde_json::json!({
+            "rv_list": [{
+                "id": "cvm_uki",
+                "version": "1.0.0",
+                "type": "uki",
+                "provenance_info": {
+                    "type": "rv-release-manifest",
+                    "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                    "rekor_api_version": 2
+                },
+                "provenance_source": {
+                    "protocol": "file",
+                    "uri": bundle_path.to_string_lossy().to_string(),
+                    "artifact": "bundle"
+                },
+                "operation_type": "refresh"
+            }]
+        });
+        tokio::fs::write(&ref_path, payload.to_string())
+            .await
+            .expect("Failed to write ref file");
+
+        let reference = ReferenceValueConfig::ReleaseManifest {
+            payload: SlsaReferenceValuePayloadConfig::Path {
+                path: ref_path.to_string_lossy().to_string(),
+            },
+        };
+        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+            .await
+            .expect("Failed to create converter with release manifest path reference");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
     async fn test_converter_new_with_multiple_references() {
         let mut rvs1 = std::collections::HashMap::new();
         rvs1.insert("component-a".to_string(), vec![]);
@@ -877,6 +983,46 @@ default file_system := 2"#;
         assert!(json_str.contains("\"type\":\"slsa\""));
         assert!(json_str.contains("\"type\":\"path\""));
         assert!(json_str.contains("/path/to/slsa_payload.json"));
+
+        let deserialized: ReferenceValueConfig =
+            serde_json::from_str(&json_str).expect("Failed to deserialize");
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(deserialized)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_reference_value_config_release_manifest_inline_serde() -> Result<(), serde_json::Error>
+    {
+        let rv_item = ReferenceValueListItem {
+            id: "cvm_uki".to_string(),
+            version: "1.0.0".to_string(),
+            rv_type: "uki".to_string(),
+            provenance_info: ReferenceValueProvenanceInfo {
+                provenance_type: "rv-release-manifest".to_string(),
+                rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
+                rekor_api_version: Some(2),
+            },
+            provenance_source: Some(ReferenceValueProvenanceSource {
+                protocol: "oci".to_string(),
+                uri: "oci://127.0.0.1:5000/trustee/provenance:cvm_uki-1.0.0".to_string(),
+                artifact: Some("bundle".to_string()),
+            }),
+            operation_type: "refresh".to_string(),
+            rv_name: None,
+        };
+        let payload = ReferenceValueListPayload {
+            rv_list: vec![rv_item],
+        };
+
+        let config = ReferenceValueConfig::ReleaseManifest {
+            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+        };
+
+        let json_str = serde_json::to_string(&config).expect("Failed to serialize");
+        assert!(json_str.contains("\"type\":\"release_manifest\""));
 
         let deserialized: ReferenceValueConfig =
             serde_json::from_str(&json_str).expect("Failed to deserialize");

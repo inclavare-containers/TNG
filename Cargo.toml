@@ -24,7 +24,7 @@ as-any = "0.3.2"
 async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 async-stream = "0.3.6"
 async-trait = "0.1.88"
-attestation-service = {git = "https://github.com/openanolis/trustee/", rev = "45e63a747914b10381d33b5cd313d23268c2781a", default-features = false}
+attestation-service = {git = "https://github.com/openanolis/trustee/", rev = "fec2cf58104006012901690d5a38166fb7e06ef6", default-features = false}
 atty = "0.2.14"
 auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = {version = "0.8.4", default-features = false}
@@ -64,7 +64,7 @@ indexmap = {version = "2.9.0", features = ["serde"]}
 itertools = "0.14.0"
 js-sys = "0.3.77"
 jsonwebtoken = {version = "9", default-features = false}
-kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "5c029c9"}
+kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "8e36434"}
 netns-rs = "0.1.0"
 nix = "0.30.1"
 notify = "7.0.0"
@@ -87,7 +87,7 @@ rand = "0.9.1"
 rand_chacha = "0.9.0"
 rayon = "1.10.0"
 rcgen = "0.13.2"
-reference-value-provider-service = {git = "https://github.com/openanolis/trustee/", rev = "45e63a747914b10381d33b5cd313d23268c2781a", default-features = false}
+reference-value-provider-service = {git = "https://github.com/openanolis/trustee/", rev = "fec2cf58104006012901690d5a38166fb7e06ef6", default-features = false}
 regex = "1.11.1"
 reqwest = {version = "=0.12.9", default-features = false, features = ["json", "http2", "rustls-tls-webpki-roots", "brotli", "gzip", "zstd"]}# select 0.12.9 version since we have to align to the hyper-util=0.1.7 version used by hyper-util-wasm
 ring = "0.17.8"

@@ -567,7 +567,7 @@ checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
+source = "git+https://github.com/openanolis/trustee/?rev=fec2cf58104006012901690d5a38166fb7e06ef6#fec2cf58104006012901690d5a38166fb7e06ef6"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -596,6 +596,7 @@ dependencies = [
  "serde_variant",
  "sha2",
  "shadow-rs 0.19.0",
+ "sm3",
  "strum 0.25.0",
  "tempfile",
  "thiserror 2.0.17",
@@ -2159,7 +2160,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
+source = "git+https://github.com/openanolis/trustee/?rev=fec2cf58104006012901690d5a38166fb7e06ef6#fec2cf58104006012901690d5a38166fb7e06ef6"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -3766,7 +3767,7 @@ dependencies = [
 [[package]]
 name = "kbs-types"
 version = "0.12.0"
-source = "git+https://github.com/inclavare-containers/kbs-types.git?rev=5c029c9#5c029c904afb458ce7e331d27d734fab1d0faf06"
+source = "git+https://github.com/inclavare-containers/kbs-types.git?rev=8e36434#8e364347f4ceb362ae45f3a6b71953af1d060412"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5422,7 +5423,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -5442,7 +5443,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -5474,7 +5475,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -5487,7 +5488,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -5936,7 +5937,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
+source = "git+https://github.com/openanolis/trustee/?rev=fec2cf58104006012901690d5a38166fb7e06ef6#fec2cf58104006012901690d5a38166fb7e06ef6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8476,7 +8477,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=45e63a747914b10381d33b5cd313d23268c2781a#45e63a747914b10381d33b5cd313d23268c2781a"
+source = "git+https://github.com/openanolis/trustee/?rev=fec2cf58104006012901690d5a38166fb7e06ef6#fec2cf58104006012901690d5a38166fb7e06ef6"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -8498,6 +8499,7 @@ dependencies = [
  "kbs-types",
  "log",
  "openssl",
+ "openssl-sys",
  "quick-xml",
  "regex",
  "reqwest 0.12.9",
@@ -8508,6 +8510,7 @@ dependencies = [
  "sha1",
  "sha2",
  "shadow-rs 0.19.0",
+ "sm3",
  "strum 0.25.0",
  "thiserror 2.0.17",
  "tokio",

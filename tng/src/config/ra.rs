@@ -283,6 +283,7 @@ impl RaArgsUnchecked {
                         } => {
                             use rats_cert::cert::verify::{
                                 PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+                                SlsaReferenceValuePayloadConfig,
                             };
                             // Check policy path exists if using Path variant
                             if let PolicyConfig::Path { path } = policy {
@@ -296,16 +297,24 @@ impl RaArgsUnchecked {
 
                             // Check reference value payload paths
                             for rv in reference_values {
-                                if let ReferenceValueConfig::Sample {
-                                    payload: SampleProvenancePayloadConfig::Path { path },
-                                } = rv
-                                {
-                                    if !Path::new(path).exists() {
-                                        return Err(TngError::InvalidParameter(anyhow!(
-                                            "Reference value payload file path does not exist: {}",
-                                            path
-                                        )));
+                                match rv {
+                                    ReferenceValueConfig::Sample {
+                                        payload: SampleProvenancePayloadConfig::Path { path },
                                     }
+                                    | ReferenceValueConfig::Slsa {
+                                        payload: SlsaReferenceValuePayloadConfig::Path { path },
+                                    }
+                                    | ReferenceValueConfig::ReleaseManifest {
+                                        payload: SlsaReferenceValuePayloadConfig::Path { path },
+                                    } => {
+                                        if !Path::new(path).exists() {
+                                            return Err(TngError::InvalidParameter(anyhow!(
+                                                "Reference value payload file path does not exist: {}",
+                                                path
+                                            )));
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -1269,6 +1278,78 @@ mod tests {
                             }
                         }
                         _ => panic!("Expected Slsa reference value"),
+                    }
+                }
+                _ => panic!("Expected Coco/Builtin converter"),
+            },
+            _ => panic!("Expected BackgroundCheck variant"),
+        }
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[test]
+    fn test_builtin_verify_with_release_manifest_reference() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "background_check",
+                    "as_type": "builtin",
+                    "policy": {
+                        "type": "inline",
+                        "content": "cGFja2FnZQ=="
+                    },
+                    "reference_values": [
+                        {
+                            "type": "release_manifest",
+                            "payload": {
+                                "type": "inline",
+                                "content": {
+                                    "rv_list": [{
+                                        "id": "cvm_uki",
+                                        "version": "1.0.0",
+                                        "type": "uki",
+                                        "provenance_info": {
+                                            "type": "rv-release-manifest",
+                                            "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                                            "rekor_api_version": 2
+                                        },
+                                        "provenance_source": {
+                                            "protocol": "oci",
+                                            "uri": "oci://127.0.0.1:5000/trustee/provenance:cvm_uki-1.0.0",
+                                            "artifact": "bundle"
+                                        },
+                                        "operation_type": "refresh"
+                                    }]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
+                ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                    reference_values, ..
+                }) => {
+                    assert_eq!(reference_values.len(), 1);
+                    match &reference_values[0] {
+                        ReferenceValueConfig::ReleaseManifest { payload } => match payload {
+                            SlsaReferenceValuePayloadConfig::Inline { content } => {
+                                assert_eq!(content.rv_list.len(), 1);
+                                let rv = &content.rv_list[0];
+                                assert_eq!(rv.id, "cvm_uki");
+                                assert_eq!(
+                                    rv.provenance_info.provenance_type,
+                                    "rv-release-manifest"
+                                );
+                            }
+                            _ => panic!("Expected Inline payload"),
+                        },
+                        _ => panic!("Expected ReleaseManifest reference value"),
                     }
                 }
                 _ => panic!("Expected Coco/Builtin converter"),

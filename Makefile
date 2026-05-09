@@ -372,6 +372,25 @@ test-dep-as:
 	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .; \
 	curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
 		http://127.0.0.1:5000/v2/trustee/provenance/manifests/test-artifact-1.0.0 | jq .; \
+	echo "=== Uploading RV Release Manifest Bundle to OCI Registry ==="; \
+	if [ ! -f /tmp/rv-release-tool ]; then curl -sS https://raw.githubusercontent.com/openanolis/trustee/28e0dd301ce1848ae539ee201260d5b85409a3f4/tools/slsa/rv-release-tool -o /tmp/rv-release-tool; fi; chmod +x /tmp/rv-release-tool; \
+	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/rv-release-sign.key; \
+	echo "#!/bin/bash" > /tmp/rv-release-dummy; \
+	echo "echo hello" >> /tmp/rv-release-dummy; \
+	chmod +x /tmp/rv-release-dummy; \
+	/tmp/rv-release-tool \
+		--artifact-type binary \
+		--artifact /tmp/rv-release-dummy \
+		--artifact-id cvm_container_proxy \
+		--artifact-version 1.0.0 \
+		--sign-key /tmp/rv-release-sign.key \
+		--rekor-url https://log2025-1.rekor.sigstore.dev \
+		--rekor-api-version 2 \
+		--provenance-store-protocol oci \
+		--provenance-store-uri "oci://127.0.0.1:5000/trustee/provenance:cvm_container_proxy-1.0.0" \
+		--provenance-store-artifact bundle; \
+	echo "Release manifest bundle uploaded"; \
+	curl -s http://127.0.0.1:5000/v2/trustee/provenance/tags/list | jq .;
 	echo "=== Starting Attestation Service ==="; \
 	if ! command -v restful-as > /dev/null; then \
 		systemctl mask trustee || true; \
