@@ -343,6 +343,9 @@ test-dep-as:
 		curl -sSL -o /usr/local/bin/rv-release-tool https://raw.githubusercontent.com/openanolis/trustee/28e0dd301ce1848ae539ee201260d5b85409a3f4/tools/slsa/rv-release-tool; \
 		chmod +x /usr/local/bin/rv-release-tool; \
 	fi; \
+	if ! command -v python3 > /dev/null; then \
+		yum install -y python3; \
+	fi; \
 	echo "=== Generating SLSA Provenance and Uploading to Rekor ==="; \
 	mkdir -p /tmp/slsa-test; \
 	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/slsa-test.key; \

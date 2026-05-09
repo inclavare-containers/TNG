@@ -146,6 +146,7 @@ mod tests {
             &Some(make_as_addr_config()),
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
+            false,
         )
         .await
         .expect("Failed to create verifier");

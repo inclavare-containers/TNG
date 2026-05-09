@@ -709,12 +709,16 @@ default file_system := 2"#;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_converter_new_with_slsa_reference_and_provenance() {
+        // NOTE: Despite the legacy test name, make test-dep-as now uploads
+        // test-artifact as a release manifest bundle via rv-release-tool.
+        // This test validates the OCI provenance fetching flow with the
+        // rv-release-manifest provenance type.
         let rv_item = ReferenceValueListItem {
             id: "test-artifact".to_string(),
             version: "1.0.0".to_string(),
             rv_type: "binary".to_string(),
             provenance_info: ReferenceValueProvenanceInfo {
-                provenance_type: "slsa-intoto-statements".to_string(),
+                provenance_type: "rv-release-manifest".to_string(),
                 rekor_url: "https://log2025-1.rekor.sigstore.dev".to_string(),
                 rekor_api_version: Some(2),
             },
@@ -730,7 +734,7 @@ default file_system := 2"#;
             rv_list: vec![rv_item],
         };
 
-        let reference = ReferenceValueConfig::Slsa {
+        let reference = ReferenceValueConfig::ReleaseManifest {
             payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
         };
         BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])

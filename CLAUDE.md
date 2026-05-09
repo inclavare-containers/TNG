@@ -38,6 +38,19 @@ The following failures are pre-existing environment issues, not caused by code c
   apt-get install protobuf-compiler
   ```
 
+## Running Tests with Service Dependencies
+
+Several integration tests require external services to be running. Before running `cargo test`, start the following in the background and wait for them to be ready:
+
+```bash
+make test-dep-aa &   # Attestation Agent (Unix socket at /run/confidential-containers/attestation-agent/attestation-agent.sock)
+make test-dep-as &   # Attestation Service (HTTP on localhost:8080)
+```
+
+Wait until both services are ready before running tests. The e2E CoCo tests (`test_e2e_background_check_flow`, `test_e2e_passport_flow`, `test_e2e_builtin_flow`) and the SLSA/ReleaseManifest converter tests depend on these services.
+
+The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service Router) HTTP proxy listening on `127.0.0.1:8006`, which is NOT started by the `make test-dep-*` targets. If ASR is not available, this test will fail with "Connection refused".
+
 ## Pre-Push Checks
 
 Before pushing, verify that no commits in the push carry a gpgsig header or a Claude committer identity:
