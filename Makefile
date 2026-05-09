@@ -312,9 +312,12 @@ test-dep-aa:
 		yum install -y gcc openssl-devel pkg-config; \
 	fi; \
 	killall attestation-agent 2>/dev/null || true; \
-	RUST_LOG=debug cargo run --release -p attestation-agent --bin ttrpc-aa --features="bin ttrpc" --locked --manifest-path /tmp/guest-components/Cargo.toml -- --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
 	killall api-server-rest 2>/dev/null || true; \
-	cargo run --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml -- --features attestation
+	cargo build --release -p attestation-agent --bin ttrpc-aa --features="bin ttrpc" --locked --manifest-path /tmp/guest-components/Cargo.toml; \
+	cargo build --release -p api-server-rest --features attestation --locked --manifest-path /tmp/guest-components/Cargo.toml; \
+	RUST_LOG=debug /tmp/guest-components/target/release/ttrpc-aa --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
+	sleep 1; \
+	/tmp/guest-components/target/release/api-server-rest
 
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
 # All steps share a single shell block so the backgrounded `crane` process
