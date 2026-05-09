@@ -427,9 +427,9 @@ Example:
 
 ### netfilter: Port Hijacking Mode
 
-In this scenario, the user's server program is already listening on a certain port on the local machine, and due to business reasons, it is inconvenient to change the port number or add new open ports for the tng. To allow the tng to decrypt TCP traffic sent to the server program's port (`capture_dst.host`, `capture_dst.port`), it is necessary to use the capabilities provided by the kernel's netfilter to redirect the traffic to the `listen_port` on which the tng is listening. After decrypting the traffic, the tng sends the TCP traffic to the original target (`capture_dst.host`, `capture_dst.port`).
+In this scenario, tng intercepts TCP traffic **arriving from other nodes** and destined to this node's server program port. The server is already listening on a local port, and it is inconvenient to change the port number or add new open ports for the tng. Netfilter redirects the incoming traffic to the `listen_port` on which the tng is listening. After decrypting the traffic, the tng sends the TCP traffic to the original local server port.
 
-This mode captures traffic from other nodes destined to this node's ports (via PREROUTING chain), and can also capture locally-generated outbound traffic (via OUTPUT chain).
+This mode captures traffic arriving from other nodes that is destined to this node's ports.
 
 #### Field Descriptions
 
@@ -473,7 +473,7 @@ flowchart TD
 
 > **Note**：This mode can only capture TCP traffic and will not capture traffic destined for address owned by any interfaces on the local machine.
 
-Example: Capture all traffic destined for port 30001
+Example: Capture incoming traffic destined for port 30001
 
 ```json
 {
@@ -497,7 +497,7 @@ Example: Capture all traffic destined for port 30001
 }
 ```
 
-Example: Capture traffic destined for a specific IP and port
+Example: Capture incoming traffic destined for a specific IP and port
 
 ```json
 {
@@ -522,7 +522,7 @@ Example: Capture traffic destined for a specific IP and port
 }
 ```
 
-Example: Capture traffic from a specific cgroup destined for multiple ports
+Example: Capture incoming traffic from a specific cgroup destined for multiple ports
 
 ```json
 {
@@ -547,7 +547,7 @@ Example: Capture traffic from a specific cgroup destined for multiple ports
 }
 ```
 
-Example: Capture all TCP traffic (empty `capture_dst`)
+Example: Capture all incoming TCP traffic (empty `capture_dst`)
 
 ```json
 {
