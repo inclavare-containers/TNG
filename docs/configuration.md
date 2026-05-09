@@ -367,9 +367,9 @@ Example:
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": {
-                    "port": 30001
-                }
+                "capture_dst": [
+                    { "port": 30001 }
+                ]
             },
             "direct_forward": [
                 {
@@ -429,26 +429,132 @@ Example:
 
 In this scenario, the user's server program is already listening on a certain port on the local machine, and due to business reasons, it is inconvenient to change the port number or add new open ports for the tng. To allow the tng to decrypt TCP traffic sent to the server program's port (`capture_dst.host`, `capture_dst.port`), it is necessary to use the capabilities provided by the kernel's netfilter to redirect the traffic to the `listen_port` on which the tng is listening. After decrypting the traffic, the tng sends the TCP traffic to the original target (`capture_dst.host`, `capture_dst.port`).
 
+This mode captures traffic from other nodes destined to this node's ports (via PREROUTING chain), and can also capture locally-generated outbound traffic (via OUTPUT chain).
+
 #### Field Descriptions
 
-- **`capture_dst`** (Endpoint): Specifies the target endpoint that needs to be captured by the tng.
-    - **`host`** (string, optional, defaults to matching all local IP addresses on all ports): The target address. If not specified, it defaults to matching all local IP addresses on all ports on the machine (see the iptables option `-m addrtype --dst-type LOCAL`: [iptables-extensions.man.html](https://ipset.netfilter.org/iptables-extensions.man.html)).
+- **`capture_dst`** (array, optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured. If this field is not specified or is set to an empty array, all TCP traffic will be captured.
+
+  This field contains multiple objects in the form of an array, each representing a matching rule used to match the destination address and port information of TCP requests. The specific rule fields are as follows:
+
+  - **Destination IP Address**: Can be specified in one of the following two ways. If not specified, it indicates a match for all destination IP addresses:
+    - Specify a target IP address or CIDR block:
+      - **`host`** (string): The target IP address or CIDR block to match. CIDR notation is supported. Examples include: `192.168.1.1`, `192.168.1.1/32`, `192.168.1.0/24`.
+    - Specify an ipset group containing the target IPs:
+      - **`ipset`** (string): The name of the ipset group to match.
+
+  - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
     - **`port`** (integer): The target port number.
+- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng egress. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
+- **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng egress.
+
+> [!NOTE]
+> - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
+> - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
+
 - **`capture_local_traffic`** (boolean, optional, default is `false`): If set to `false`, requests with a source IP that is the local machine's IP will be ignored during capture and not redirected to `listen_port`. If set to `true`, requests with a source IP that is the local machine's IP will also be captured.
 - **`listen_port`** (integer, optional, default starts incrementing from port 40000): The port number on which the tng listens to receive traffic redirected by netfilter.
 - **`so_mark`** (integer, optional, default value is 565): The SO_MARK value of the socket corresponding to the TCP request carrying the plaintext traffic after decryption by the tng, used to prevent the decrypted traffic from being redirected to this egress again by netfilter.
 
-Example:
+Traffic capture follows the rules below:
+
+```mermaid
+flowchart TD
+    A[Start] --> G{capture_cgroup is empty?}
+    G --Yes--> D
+    G --No--> B{Does it match any capture_cgroup rule?}
+    B --No--> C[Ignore traffic]
+    B --Yes--> D{Does it match any nocapture_cgroup rule?}
+    D --Yes--> C
+    D --No--> E{Does it match any capture_dst rule?}
+    E --Yes--> F[Capture traffic]
+    E --No--> C
+```
+
+> **Note**：This mode can only capture TCP traffic and will not capture traffic destined for address owned by any interfaces on the local machine.
+
+Example: Capture all traffic destined for port 30001
 
 ```json
 {
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": {
-                    "host": "127.0.0.1",
-                    "port": 30001
-                },
+                "capture_dst": [
+                    {
+                        "port": 30001
+                    }
+                ],
+                "capture_local_traffic": true,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+Example: Capture traffic destined for a specific IP and port
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_local_traffic": false,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+Example: Capture traffic from a specific cgroup destined for multiple ports
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "port": 30001 },
+                    { "host": "192.168.1.1", "port": 30002 }
+                ],
+                "capture_cgroup": ["/vllm.slice"],
+                "nocapture_cgroup": ["/system.slice"],
+                "capture_local_traffic": true,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+Example: Capture all TCP traffic (empty `capture_dst`)
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": [],
                 "capture_local_traffic": false,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -1205,9 +1311,9 @@ Example configuration:
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                }
+                "capture_dst": [
+                    { "port": 8080 }
+                ]
             },
             "ohttp": {
                 "key": {
@@ -1276,9 +1382,9 @@ TNG uses operating system-level file change notification mechanisms (e.g., inoti
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                }
+                "capture_dst": [
+                    { "port": 8080 }
+                ]
             },
             "ohttp": {
                 "key": {
@@ -1343,9 +1449,9 @@ Example configuration:
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                }
+                "capture_dst": [
+                    { "port": 8080 }
+                ]
             },
             "ohttp": {
                 "key": {
