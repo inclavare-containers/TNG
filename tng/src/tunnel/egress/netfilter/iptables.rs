@@ -58,9 +58,7 @@ impl IptablesRuleGenerator for NetfilterEgress {
             }
 
             // Create a separate chain for cgroup-matched traffic
-            invoke_script += &format!(
-                "iptables -t nat -N TNG_EGRESS_{id}_CGROUP ; "
-            );
+            invoke_script += &format!("iptables -t nat -N TNG_EGRESS_{id}_CGROUP ; ");
 
             // Apply nocapture_cgroup rules (return to skip capture)
             for cgroup in &self.nocapture_cgroup {
