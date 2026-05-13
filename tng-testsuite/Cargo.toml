@@ -21,7 +21,7 @@ http = {workspace = true}
 hyper = {workspace = true}
 itertools = {workspace = true}
 netns-rs = {workspace = true}
-nix = {workspace = true, features = ["signal", "process"]}
+nix = {workspace = true, features = ["signal", "process", "mount"]}
 opentelemetry-stdout = {workspace = true}
 portpicker = {workspace = true}
 rand = {workspace = true}

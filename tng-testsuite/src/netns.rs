@@ -189,7 +189,79 @@ impl Drop for Bridge {
 }
 
 impl BridgeNetwork {
+    /// Cleans up any leftover network namespaces and link devices with the
+    /// `tngtest-` prefix. Call this once at the beginning of a test suite to
+    /// recover from tests that were interrupted (e.g. Ctrl-C, SIGKILL) before
+    /// their `Drop` impls could run.
+    pub async fn cleanup_stale_resources() -> Result<()> {
+        // 1. Remove stale netns by deleting files under /run/netns/ (or /var/run/netns/).
+        //    `ip netns list` reads from this directory; deleting the file is equivalent
+        //    to `ip netns delete`.
+        for netns_dir in ["/run/netns", "/var/run/netns"] {
+            let entries = match std::fs::read_dir(netns_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries {
+                let Ok(entry) = entry else { continue };
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("tngtest-ns") {
+                    let path = entry.path();
+                    if let Err(e) = nix::mount::umount2(&path, nix::mount::MntFlags::MNT_DETACH) {
+                        tracing::warn!(?path, ?e, "failed to umount stale netns file");
+                    }
+
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        tracing::warn!(?path, ?e, "failed to delete stale netns file");
+                    } else {
+                        tracing::info!(?path, "cleaned up stale netns");
+                    }
+                }
+            }
+        }
+
+        // 2. Remove stale links (bridges and veth pairs) with the tngtest- prefix.
+        let (connection, handle, _) =
+            rtnetlink::new_connection().context("failed to create rtnetlink connection")?;
+        tokio::spawn(connection);
+
+        let mut links = handle.link().get().execute();
+        while let Some(msg) = links.try_next().await? {
+            let ifname = msg
+                .attributes
+                .iter()
+                .find_map(|attr| match attr {
+                    rtnetlink::packet_route::link::LinkAttribute::IfName(n) => Some(n.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
+
+            if ifname.starts_with("tngtest-br") || ifname.starts_with("tngtest-veth") {
+                if let Err(e) = handle.link().del(msg.header.index).execute().await {
+                    tracing::warn!(
+                        link_idx = msg.header.index,
+                        name = ifname,
+                        ?e,
+                        "failed to delete stale link"
+                    );
+                } else {
+                    tracing::info!(
+                        link_idx = msg.header.index,
+                        name = ifname,
+                        "cleaned up stale link"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn new(bridge_ip: &str, prefix_len: u8) -> Result<Self> {
+        if let Err(error) = Self::cleanup_stale_resources().await {
+            tracing::warn!(?error, "failed to cleanup stale resources");
+        }
+
         let (connection, handle, _) = rtnetlink::new_connection()?;
         tokio::spawn(connection);
 
