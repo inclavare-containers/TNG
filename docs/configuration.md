@@ -1457,11 +1457,11 @@ TNG uses operating system-level file change notification mechanisms (e.g., inoti
 
 #### OHTTP Key Configuration: `peer_shared` Mode
 
-TNG supports a decentralized key management mode for sharing OHTTP private keys among multiple TNG instances. Building upon the [self_generated](#ohttp-key-configuration-self_generated-mode) mode, this approach adds the capability for multiple TNG instances to share OHTTP private keys. This capability relies on the serf distributed protocol (Gossip), where each TNG instance joins a serf cluster by specifying the IP or domain name of any peer in the cluster. Cluster members broadcast their private keys to each other. Therefore, even in stateless service scenarios with TNG, and even with an HTTP-based LoadBalancer in front, any node in the cluster can decrypt traffic.
+TNG supports a decentralized key management mode for sharing OHTTP private keys among multiple TNG instances. Building upon the [self_generated](#ohttp-key-configuration-self_generated-mode) mode, this approach adds the capability for multiple TNG instances to share OHTTP private keys. This capability relies on the serf distributed protocol (Gossip), where each TNG instance joins a serf cluster by specifying the IP or domain name of any peer in the cluster. Cluster members broadcast their private keys to each other over a QUIC transport layer with remote attestation-based encryption, ensuring that only attested nodes can participate in key exchange. Therefore, even in stateless service scenarios with TNG, and even with an HTTP-based LoadBalancer in front, any node in the cluster can decrypt traffic.
 
 In this mode, TNG will:
 - Each node independently generates its own key pair
-- Exchange keys with other nodes through the secure serf protocol based on remote attestation
+- Exchange keys with other nodes through QUIC-encrypted channels with remote attestation verification
 - Maintain a local "key ring" containing valid private keys from all nodes
 - Allow any node to decrypt requests encrypted with other nodes' public keys
 
@@ -1489,7 +1489,7 @@ If you wish to enable this mode, simply specify `key.source = "peer_shared"` in 
     - **`source`** (`string`): The source type of the key. Set to `"peer_shared"` to enable the decentralized key sharing mode.
     - **`rotation_interval`** (`integer`, optional, default `300`): Key rotation interval in seconds. Each node independently rotates its own key.
     - **`host`** (`string`, optional, default `0.0.0.0`): Local listening address for inter-node secure communication.
-    - **`port`** (`integer`, optional, default `8301`): Local listening port for inter-node secure communication.
+    - **`port`** (`integer`, optional, default `8301`): Local listening UDP port for inter-node secure communication (QUIC-based).
     - **`peers`** (`array of strings`): List of initial node addresses (IP or DNS name:port) to connect to. At least one node must be accessible to join the cluster. When a node address is specified as a domain name, TNG will attempt to resolve that domain name and try all returned IP addresses as peer nodes in sequence (rather than just trying the first IP), which improves connection success rate in complex network environments.
     - **`peers_file`** (`string`, optional): Path to a JSON file containing an array of peer addresses. This allows dynamic updates to the peer list without restarting the service. The file should contain a JSON array of strings representing peer addresses in IP:port or DNS name:port format. TNG will monitor this file for changes and automatically join new peers when the file is updated.
     - **`attest`** (object, optional): Defines how this node proves its identity when connecting to other nodes. See [Attest Configuration](#attest) section for detailed configuration.

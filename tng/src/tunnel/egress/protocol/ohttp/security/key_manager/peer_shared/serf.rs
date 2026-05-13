@@ -465,7 +465,7 @@ async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngErr
 
 /// Joins the Serf cluster via a list of peer addresses.
 async fn join_serf_cluster(serf: &Serf, peers: &[String]) -> Result<(), TngError> {
-    for (_i, peer) in peers.iter().enumerate() {
+    for peer in peers.iter() {
         tracing::info!(peer, "Attempting to join Serf cluster");
 
         let socket_addrs = resolve_peer_addresses(peer).await?;
