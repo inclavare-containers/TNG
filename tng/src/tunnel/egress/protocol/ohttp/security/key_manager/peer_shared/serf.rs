@@ -24,7 +24,7 @@ use serf::net::hostaddr::{Host, HostAddr};
 use serf::net::resolver::socket_addr::SocketAddrResolver;
 use serf::net::NodeId;
 use serf::quic::{QuicTransport, QuicTransportOptions};
-use serf::types::{MaybeResolvedAddress, Node};
+use serf::types::MaybeResolvedAddress;
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -465,7 +465,7 @@ async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngErr
 
 /// Joins the Serf cluster via a list of peer addresses.
 async fn join_serf_cluster(serf: &Serf, peers: &[String]) -> Result<(), TngError> {
-    for (i, peer) in peers.iter().enumerate() {
+    for (_i, peer) in peers.iter().enumerate() {
         tracing::info!(peer, "Attempting to join Serf cluster");
 
         let socket_addrs = resolve_peer_addresses(peer).await?;
@@ -481,13 +481,7 @@ async fn join_serf_cluster(serf: &Serf, peers: &[String]) -> Result<(), TngError
                 "Attempting to join serf cluster using resolved socket address"
             );
 
-            let node = Node::new(
-                #[allow(clippy::unwrap_used)]
-                NodeId::<255>::new(format!("unresolved_peer_{}", i)).unwrap(),
-                MaybeResolvedAddress::resolved(socket_addr),
-            );
-
-            match serf.join(node, false).await {
+            match serf.join(MaybeResolvedAddress::resolved(socket_addr), false).await {
                 Ok(_) => {
                     tracing::info!(
                         ?peer,
