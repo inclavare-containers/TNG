@@ -6,7 +6,7 @@ use crate::tunnel::{
     stream::CommonStreamTrait,
     utils::{
         runtime::TokioRuntime,
-        rustls::config::{Alpn, TlsConfigGenerator},
+        rustls::config::{alpn::Alpn, TlsConfigGenerator},
     },
 };
 use anyhow::Result;

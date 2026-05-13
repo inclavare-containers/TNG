@@ -83,6 +83,7 @@ serde_with = {workspace = true}
 serf = {workspace = true, optional = true}
 sha2 = {workspace = true}
 shadow-rs = {version = "=1.0.0", default-features = false}
+smol_str = {workspace = true}
 spin = {workspace = true}
 strum = {workspace = true}
 strum_macros = {workspace = true}
@@ -109,6 +110,7 @@ async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-run
 atty = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
 notify = {workspace = true}
+quinn = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "time", "process"]}

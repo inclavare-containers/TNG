@@ -47,69 +47,24 @@ impl LazyCertVerifier {
         }
     }
 
-    pub async fn verify_pending_cert(&self) -> Result<AttestationResult> {
-        tracing::debug!("Verifying rats-tls cert");
-
-        let pending_cert = self
-            .pending_cert
-            .lock()
-            .take()
-            .context("No rats-tls cert received")?;
-
-        // Step 1: Extract evidence from certificate
-        let pending_result = CertVerifier::new()
-            .verify_der(&pending_cert)
-            .await
-            .map_err(|e| anyhow!("Failed to extract evidence from certificate: {:?}", e))?;
-
-        // Step 2: Based on verify mode, convert evidence to token and verify
-        let token = match &*self.verify_ctx {
-            VerifyContext::Passport { verifier } => {
-                // Passport: extension must parse as an AS token (not raw evidence).
-                let token = parse_token_from_dice_cert(
-                    pending_result.cbor_tag,
-                    &pending_result.raw_evidence,
-                )?;
-
-                // Verify the token using pre-instantiated verifier
-                verifier
-                    .verify_evidence(&token, &pending_result.report_data)
-                    .await
-                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
-
-                token
-            }
-            VerifyContext::BackgroundCheck {
-                converter,
-                verifier,
-            } => {
-                // BackgroundCheck: extension must parse as raw evidence (then convert via AS).
-                let evidence = parse_evidence_from_dice_cert(
-                    pending_result.cbor_tag,
-                    &pending_result.raw_evidence,
-                )?;
-
-                // Convert evidence to token via remote AS
-                let token = converter
-                    .convert(&evidence)
-                    .await
-                    .map_err(|e| anyhow!("Failed to convert evidence to token: {:?}", e))?;
-
-                // Verify the token
-                verifier
-                    .verify_evidence(&token, &pending_result.report_data)
-                    .await
-                    .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
-
-                token
-            }
-        };
-
-        tracing::debug!("rats-rs cert verify finished successfully");
-
-        Ok(AttestationResult::from_token(token))
-    }
-
+    /// Stores the peer's certificate for later async RA verification.
+    ///
+    /// This method is called during the TLS handshake by rustls's
+    /// `verify_client_cert()` / `verify_server_cert()` callbacks, which are
+    /// **synchronous**. Since RA verification requires contacting a remote
+    /// Attestation Service (HTTP call with evidence conversion), it cannot be
+    /// done synchronously.
+    ///
+    /// Instead, we capture the raw certificate here and return `Ok(())` to let
+    /// the TLS handshake complete. After the handshake, the caller must invoke
+    /// [`Self::verity_pending_cert`] (async) to perform the actual RA
+    /// verification. If that step fails, the connection is rejected.
+    ///
+    /// Call chain:
+    ///   1. TLS handshake → rustls calls `verify_client_cert()` (sync)
+    ///      → this method stores the cert in `pending_cert`
+    ///   2. Handshake complete → caller awaits `verity_pending_cert()` (async)
+    ///      → extracts evidence, converts via AS, verifies token
     pub fn set_to_pending_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
@@ -118,4 +73,96 @@ impl LazyCertVerifier {
         self.pending_cert.lock().replace(end_entity.to_vec());
         Ok(())
     }
+
+    pub async fn verify_pending_cert(&self) -> Result<AttestationResult> {
+        let pending_cert = self
+            .pending_cert
+            .lock()
+            .take()
+            .context("No rats-tls cert received")?;
+
+        verify_cert(&self.verify_ctx, pending_cert).await
+    }
+}
+
+#[cfg(not(wasm))]
+#[derive(Debug)]
+pub struct BlockingCertVerifier {
+    verify_ctx: Arc<VerifyContext>,
+}
+
+#[cfg(not(wasm))]
+impl BlockingCertVerifier {
+    pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
+        Self { verify_ctx }
+    }
+
+    pub fn verify_cert_blocking(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+    ) -> Result<AttestationResult> {
+        let end_entity = end_entity.to_vec();
+        let verify_ctx = self.verify_ctx.clone();
+
+        // Note: other code running concurrently **in the same task** will be suspended
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(verify_cert(&verify_ctx, end_entity))
+        })
+        .context("Failed to get cert verify result")
+    }
+}
+
+async fn verify_cert(verify_ctx: &VerifyContext, end_entity: Vec<u8>) -> Result<AttestationResult> {
+    tracing::debug!("Verifying rats-tls cert");
+
+    // Step 1: Extract evidence from certificate
+    let pending_result = CertVerifier::new()
+        .verify_der(&end_entity)
+        .await
+        .map_err(|e| anyhow!("Failed to extract evidence from certificate: {:?}", e))?;
+
+    // Step 2: Based on verify mode, convert evidence to token and verify
+    let token = match verify_ctx {
+        VerifyContext::Passport { verifier } => {
+            // Passport: extension must parse as an AS token (not raw evidence).
+            let token =
+                parse_token_from_dice_cert(pending_result.cbor_tag, &pending_result.raw_evidence)?;
+
+            // Verify the token using pre-instantiated verifier
+            verifier
+                .verify_evidence(&token, &pending_result.report_data)
+                .await
+                .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
+
+            token
+        }
+        VerifyContext::BackgroundCheck {
+            converter,
+            verifier,
+        } => {
+            // BackgroundCheck: extension must parse as raw evidence (then convert via AS).
+            let evidence = parse_evidence_from_dice_cert(
+                pending_result.cbor_tag,
+                &pending_result.raw_evidence,
+            )?;
+
+            // Convert evidence to token via remote AS
+            let token = converter
+                .convert(&evidence)
+                .await
+                .map_err(|e| anyhow!("Failed to convert evidence to token: {:?}", e))?;
+
+            // Verify the token
+            verifier
+                .verify_evidence(&token, &pending_result.report_data)
+                .await
+                .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
+
+            token
+        }
+    };
+
+    tracing::debug!("rats-rs cert verify finished successfully");
+
+    Ok(AttestationResult::from_token(token))
 }

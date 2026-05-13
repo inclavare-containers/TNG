@@ -3,13 +3,13 @@ use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::callback_manager::{
     KeyChangeCallback, KeyChangeEvent,
 };
-use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_tls::RatsTls;
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_quic::RatsQuic;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::runtime::InstrumentedRuntime;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::self_generated::SelfGeneratedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
-use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
+use crate::tunnel::utils::runtime::TokioRuntime;
 use tokio::task::JoinHandle;
 
 use anyhow::{anyhow, Context, Result};
@@ -20,10 +20,11 @@ use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
 use serf::event::{Event, EventProducer, EventSubscriber, MemberEventType};
-use serf::net::hostaddr::Host;
+use serf::net::hostaddr::{Host, HostAddr};
 use serf::net::resolver::socket_addr::SocketAddrResolver;
-use serf::net::{HostAddr, NetTransport, NetTransportOptions, Node, NodeId};
-use serf::types::MaybeResolvedAddress;
+use serf::net::NodeId;
+use serf::quic::{QuicTransport, QuicTransportOptions};
+use serf::types::{MaybeResolvedAddress, Node};
 use serf::{MemberlistOptions, Options};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -51,10 +52,10 @@ pub struct PeerSharedKeyManager {
 
 type InstrumentedTokioRuntime = InstrumentedRuntime<serf::agnostic::tokio::TokioRuntime>;
 
-type SerfTransport = NetTransport<
+type SerfTransport = QuicTransport<
     NodeId,
     SocketAddrResolver<InstrumentedTokioRuntime>,
-    RatsTls<InstrumentedTokioRuntime>,
+    RatsQuic<InstrumentedTokioRuntime>,
     InstrumentedTokioRuntime,
 >;
 
@@ -151,10 +152,9 @@ impl PeerSharedKeyManager {
                 .map_err(TngError::InvalidParameter)?,
         );
         let net_opts =
-            NetTransportOptions::<_, SocketAddrResolver<InstrumentedTokioRuntime>, _>::with_stream_layer_options(
+            QuicTransportOptions::<_, SocketAddrResolver<InstrumentedTokioRuntime>, _>::with_stream_layer_options(
                 node_id,
-                (ra_context, runtime.clone()),
-            )
+                (ra_context, runtime.clone()),            )
             .with_bind_addresses(
                 [{
                     let addr = format!("{}:{}", peer_shared.host, peer_shared.port);
@@ -441,7 +441,7 @@ impl PeerSharedKeyManager {
 }
 
 async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngError> {
-    let host_addr = HostAddr::from_str(addr)
+    let host_addr: HostAddr<String> = HostAddr::from_str(addr)
         .with_context(|| format!("Invalid peer address: {addr}"))
         .map_err(TngError::InvalidParameter)?;
     let port = host_addr

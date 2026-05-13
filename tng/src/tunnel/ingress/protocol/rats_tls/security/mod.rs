@@ -28,7 +28,7 @@ use crate::{
         ra_context::RaContext,
         utils::{
             runtime::TokioRuntime,
-            rustls::config::{Alpn, TlsConfigGenerator},
+            rustls::config::{alpn::Alpn, TlsConfigGenerator},
             tokio::TokioIo,
         },
     },

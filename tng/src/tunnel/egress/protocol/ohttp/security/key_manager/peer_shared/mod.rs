@@ -1,6 +1,6 @@
 mod key_manager;
 mod key_update;
-mod memberlist_rats_tls;
+mod memberlist_rats_quic;
 mod runtime;
 mod serf;
 

@@ -15,7 +15,7 @@ use crate::{
         utils::{
             self,
             runtime::TokioRuntime,
-            rustls::config::{Alpn, TlsConfigGenerator},
+            rustls::config::{alpn::Alpn, TlsConfigGenerator},
         },
     },
     CommonStreamTrait,
