@@ -12,6 +12,15 @@ pub trait IptablesRuleGenerator {
     async fn gen_script(&self) -> Result<(String, String)>;
 }
 
+/// Format the --dport argument for iptables.
+/// Returns "port" for single port, or "port:port_end" for port range.
+pub fn format_dport(port: u16, port_end: Option<&u16>) -> String {
+    match port_end {
+        Some(end) => format!("{port}:{end}"),
+        None => format!("{port}"),
+    }
+}
+
 pub struct IptablesExecutor {}
 
 pub struct IptablesGuard {

@@ -225,6 +225,7 @@ Precise control over the traffic to be captured can be achieved by configuring o
 
   - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
     - **`port`** (integer): The target port number.
+    - **`port_end`** (integer, optional): When set together with `port`, matches a contiguous range `[port, port_end]` (translated to iptables `--dport port:port_end`). Requires `port` and must satisfy `port_end >= port`.
 - **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
 - **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
 
@@ -330,6 +331,27 @@ Example:
                 "policy_ids": [
                     "default"
                 ]
+            }
+        }
+    ]
+}
+```
+
+Example: Capture a contiguous port range with `port_end`
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "host": "192.168.1.1", "port": 30000, "port_end": 30031 }
+                ],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"]
             }
         }
     ]
@@ -445,6 +467,7 @@ This mode captures traffic arriving from other nodes that is destined to this no
 
   - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
     - **`port`** (integer): The target port number.
+    - **`port_end`** (integer, optional): When set together with `port`, matches a contiguous range `[port, port_end]` (translated to iptables `--dport port:port_end`). Requires `port` and must satisfy `port_end >= port`.
 - **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng egress. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
 - **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng egress.
 
@@ -536,6 +559,27 @@ Example: Capture incoming traffic from a specific cgroup destined for multiple p
                 "capture_cgroup": ["/vllm.slice"],
                 "nocapture_cgroup": ["/system.slice"],
                 "capture_local_traffic": true,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+Example: Capture a contiguous port range with `port_end`
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "port": 30000, "port_end": 30031 }
+                ],
                 "listen_port": 40000,
                 "so_mark": 565
             },

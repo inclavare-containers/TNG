@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    config::ingress::IngressNetfilterCaptureDst, tunnel::utils::iptables::IptablesRuleGenerator,
+    config::ingress::IngressNetfilterCaptureDst,
+    tunnel::utils::iptables::{format_dport, IptablesRuleGenerator},
 };
 
 use anyhow::{bail, Context, Result};
@@ -9,8 +10,8 @@ use async_trait::async_trait;
 
 use super::NetfilterIngress;
 
-const IPTABLES_FW_MARK_DEFAULT: u32 = 566;
-const IP_ROUTE_TABLE_NUM_DEFAULT: u32 = 239;
+const IPTABLES_FW_MARK_BASE: u32 = 566;
+const IP_ROUTE_TABLE_NUM_BASE: u32 = 239;
 
 fn is_cgroup_v2() -> bool {
     // https://rootlesscontaine.rs/getting-started/common/cgroup2/#checking-whether-cgroup-v2-is-already-enabled
@@ -26,8 +27,10 @@ impl IptablesRuleGenerator for NetfilterIngress {
         which::which("ip").context("The external tool \"ip\" is not found, please install it")?;
 
         let id = self.id;
-        let fw_mark = IPTABLES_FW_MARK_DEFAULT;
-        let route_table = IP_ROUTE_TABLE_NUM_DEFAULT;
+        // Use per-instance fw_mark and route_table to avoid conflicts
+        // when multiple ingress netfilter instances run concurrently.
+        let fw_mark = IPTABLES_FW_MARK_BASE + id as u32;
+        let route_table = IP_ROUTE_TABLE_NUM_BASE + id as u32;
         let listen_port = self.listen_port;
 
         if self.capture_dst.is_empty() {
@@ -152,20 +155,31 @@ impl IptablesRuleGenerator for NetfilterIngress {
                             "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp -m set --match-set {ipset} dst -j MARK --set-mark {fw_mark}/0xffffff ;"
                         );
                     }
-                    IngressNetfilterCaptureDst::PortOnly { port } => {
+                    IngressNetfilterCaptureDst::PortOnly { port, port_end } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         tproxy_invoke_script += &format!(
-                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;"
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {dport} -j MARK --set-mark {fw_mark}/0xffffff ;"
                         );
                     }
-                    IngressNetfilterCaptureDst::HostAndPort { host, port } => {
+                    IngressNetfilterCaptureDst::HostAndPort {
+                        host,
+                        port,
+                        port_end,
+                    } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         tproxy_invoke_script += &format!(
-                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dst {}/{} --dport {port} -j MARK --set-mark {fw_mark}/0xffffff ;",
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dst {}/{} --dport {dport} -j MARK --set-mark {fw_mark}/0xffffff ;",
                             host.first_address(), host.network_length()
                         );
                     }
-                    IngressNetfilterCaptureDst::IpSetAndPort { ipset, port } => {
+                    IngressNetfilterCaptureDst::IpSetAndPort {
+                        ipset,
+                        port,
+                        port_end,
+                    } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         tproxy_invoke_script += &format!(
-                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {port} -m set --match-set {ipset} dst -j MARK --set-mark {fw_mark}/0xffffff ;"
+                            "iptables -t mangle -A TNG_INGRESS_{id}_OUTPUT_STAGE_2 -p tcp --dport {dport} -m set --match-set {ipset} dst -j MARK --set-mark {fw_mark}/0xffffff ;"
                         );
                     }
                 }

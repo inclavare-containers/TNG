@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    config::egress::EgressNetfilterCaptureDst, tunnel::utils::iptables::IptablesRuleGenerator,
+    config::egress::EgressNetfilterCaptureDst,
+    tunnel::utils::iptables::{format_dport, IptablesRuleGenerator},
 };
 
 use anyhow::{bail, Context, Result};
@@ -150,20 +151,31 @@ impl NetfilterEgress {
                             "iptables -t nat -A {chain} -p tcp {src_check}-m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
-                    EgressNetfilterCaptureDst::PortOnly { port } => {
+                    EgressNetfilterCaptureDst::PortOnly { port, port_end } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {port} -j REDIRECT --to-ports {listen_port} ; "
+                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {dport} -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
-                    EgressNetfilterCaptureDst::HostAndPort { host, port } => {
+                    EgressNetfilterCaptureDst::HostAndPort {
+                        host,
+                        port,
+                        port_end,
+                    } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dst {}/{} --dport {port} -j REDIRECT --to-ports {listen_port} ; ",
+                            "iptables -t nat -A {chain} -p tcp {src_check}--dst {}/{} --dport {dport} -j REDIRECT --to-ports {listen_port} ; ",
                             host.first_address(), host.network_length()
                         );
                     }
-                    EgressNetfilterCaptureDst::IpSetAndPort { ipset, port } => {
+                    EgressNetfilterCaptureDst::IpSetAndPort {
+                        ipset,
+                        port,
+                        port_end,
+                    } => {
+                        let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {port} -m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
+                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {dport} -m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
                 }

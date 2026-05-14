@@ -79,32 +79,67 @@ pub struct EgressNetfilterCaptureDstArgs {
     host: Option<Ipv4Cidr>,
     ipset: Option<String>,
     port: Option<u16>,
+
+    /// Optional end port for port range matching.
+    /// When set together with `port`, iptables will use `--dport port:port_end` syntax
+    /// to match a contiguous range of destination ports [port, port_end].
+    port_end: Option<u16>,
 }
 
 impl TryFrom<EgressNetfilterCaptureDstArgs> for EgressNetfilterCaptureDst {
     type Error = anyhow::Error;
 
     fn try_from(value: EgressNetfilterCaptureDstArgs) -> Result<Self, Self::Error> {
+        let port_end = value.port_end;
+        if let Some(end) = port_end {
+            let Some(port) = value.port else {
+                bail!("`port_end` requires `port` to be specified");
+            };
+            if end < port {
+                bail!("`port_end` ({end}) must be >= `port` ({port})");
+            }
+        }
         Ok(match (value.host, value.ipset, value.port) {
             (None, None, None) => bail!("one of host, ipset, port must be specified"),
-            (None, None, Some(port)) => EgressNetfilterCaptureDst::PortOnly { port },
+            (None, None, Some(port)) => EgressNetfilterCaptureDst::PortOnly { port, port_end },
             (None, Some(ipset), None) => EgressNetfilterCaptureDst::IpSetOnly { ipset },
-            (None, Some(ipset), Some(port)) => {
-                EgressNetfilterCaptureDst::IpSetAndPort { ipset, port }
-            }
+            (None, Some(ipset), Some(port)) => EgressNetfilterCaptureDst::IpSetAndPort {
+                ipset,
+                port,
+                port_end,
+            },
             (Some(host), None, None) => EgressNetfilterCaptureDst::HostOnly { host },
-            (Some(host), None, Some(port)) => EgressNetfilterCaptureDst::HostAndPort { host, port },
+            (Some(host), None, Some(port)) => EgressNetfilterCaptureDst::HostAndPort {
+                host,
+                port,
+                port_end,
+            },
             (Some(_), Some(_), _) => bail!("Only one of host or ipset can be specified"),
         })
     }
 }
 
 pub enum EgressNetfilterCaptureDst {
-    HostOnly { host: Ipv4Cidr },
-    IpSetOnly { ipset: String },
-    PortOnly { port: u16 },
-    HostAndPort { host: Ipv4Cidr, port: u16 },
-    IpSetAndPort { ipset: String, port: u16 },
+    HostOnly {
+        host: Ipv4Cidr,
+    },
+    IpSetOnly {
+        ipset: String,
+    },
+    PortOnly {
+        port: u16,
+        port_end: Option<u16>,
+    },
+    HostAndPort {
+        host: Ipv4Cidr,
+        port: u16,
+        port_end: Option<u16>,
+    },
+    IpSetAndPort {
+        ipset: String,
+        port: u16,
+        port_end: Option<u16>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,6 +527,26 @@ mod tests {
 
         // Invalid: empty
         assert!(test_deserialize_capture_dst_common(serde_json::json!({})).is_err());
+
+        // PortOnly with port_end
+        test_deserialize_capture_dst_common(serde_json::json!({
+            "port": 30000,
+            "port_end": 30031
+        }))?;
+
+        // Invalid: port_end without port
+        assert!(test_deserialize_capture_dst_common(serde_json::json!({
+            "host": "10.1.1.0/24",
+            "port_end": 30031
+        }))
+        .is_err());
+
+        // Invalid: port_end < port
+        assert!(test_deserialize_capture_dst_common(serde_json::json!({
+            "port": 30031,
+            "port_end": 30000
+        }))
+        .is_err());
 
         Ok(())
     }

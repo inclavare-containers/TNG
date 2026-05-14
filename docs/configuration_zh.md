@@ -226,6 +226,7 @@
             - **`ipset`** (string)：需要匹配的ipset组名称。
     - 目标端口号：可选，如未指定，则表示匹配所有目标端口号
         - **`port`** (integer)：目标端口号。
+        - **`port_end`** (integer, 可选)：与 `port` 一起设置时，匹配连续的端口段 `[port, port_end]`（对应 iptables 的 `--dport port:port_end`）。必须与 `port` 配合使用，且需满足 `port_end >= port`。
 - **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng隧道捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将忽略capture_cgroup 规则。
 - **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng隧道捕获的流量的cgroup。
 
@@ -338,6 +339,27 @@ flowchart TD
 }
 ```
 
+示例：使用 `port_end` 捕获连续端口段
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "host": "192.168.1.1", "port": 30000, "port_end": 30031 }
+                ],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"]
+            }
+        }
+    ]
+}
+```
+
 
 ## Egress
 在`add_egress`数组中添加tng隧道的出口端点（egress），根据server侧用户场景，可以选择对应的流量出站方式。
@@ -440,6 +462,7 @@ flowchart TD
 
   - 目标端口号：可选，如未指定，则表示匹配所有目标端口号
     - **`port`** (integer)：目标端口号。
+    - **`port_end`** (integer, 可选)：与 `port` 一起设置时，匹配连续的端口段 `[port, port_end]`（对应 iptables 的 `--dport port:port_end`）。必须与 `port` 配合使用，且需满足 `port_end >= port`。
 - **`capture_cgroup`** (array [string], 可选，默认为空数组)：指定需要被tng egress捕获的流量的cgroup。如果未指定该字段或者指定为空数组，则将忽略capture_cgroup 规则。
 - **`nocapture_cgroup`** (array [string], 可选，默认为空数组)：指定不需要被tng egress捕获的流量的cgroup。
 
@@ -531,6 +554,27 @@ flowchart TD
                 "capture_cgroup": ["/vllm.slice"],
                 "nocapture_cgroup": ["/system.slice"],
                 "capture_local_traffic": true,
+                "listen_port": 40000,
+                "so_mark": 565
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+示例：使用 `port_end` 捕获连续端口段
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "port": 30000, "port_end": 30031 }
+                ],
                 "listen_port": 40000,
                 "so_mark": 565
             },
