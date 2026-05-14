@@ -205,7 +205,7 @@ impl IngressFlow {
                             tracing::error!(
                                 %dst,
                                 ?error,
-                                "Failed during forwarding to upstream"
+                                "Stream forwarding failed"
                             );
                         }
                         Ok(()) => {
