@@ -2,7 +2,7 @@ pub mod trusted;
 #[cfg(unix)]
 pub mod unprotected;
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, net::SocketAddr, pin::Pin};
 
 use crate::{
     tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint},
@@ -20,5 +20,6 @@ pub trait StreamManager {
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
+        /* upstream_local */ Option<SocketAddr>,
     )>;
 }

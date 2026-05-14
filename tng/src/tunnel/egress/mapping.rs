@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     config::egress::EgressMappingArgs,
+    tunnel::access_log::EgressMode,
     tunnel::{
         egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::runtime::TokioRuntime,
         utils::socket::SetListenerSockOpts,
@@ -75,6 +76,8 @@ impl EgressTrait for MappingEgress {
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
 
+        let listen_addr = listener.local_addr()?;
+
         Ok(Box::new(stream! {
             loop {
                 match listener.accept_with_common_sock_opts().await {
@@ -82,6 +85,8 @@ impl EgressTrait for MappingEgress {
                         stream: Box::new(stream),
                         src: peer_addr,
                         dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
+                        listener_addr: listen_addr,
+                        egress_mode: EgressMode::Mapping,
                     }),
                     Err(e) => yield Err(anyhow!(e)),
                 }

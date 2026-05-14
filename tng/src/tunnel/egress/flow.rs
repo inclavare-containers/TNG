@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
 
 use crate::config::egress::CommonArgs;
-use crate::tunnel::access_log::AccessLog;
+use crate::tunnel::access_log::{AccessLog, EgressMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
@@ -48,6 +48,8 @@ pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Sync>,
     pub src: SocketAddr,
     pub dst: TngEndpoint,
+    pub listener_addr: SocketAddr,
+    pub egress_mode: EgressMode,
 }
 
 impl EgressFlow {
@@ -126,7 +128,13 @@ impl EgressFlow {
         transport_so_mark: Option<u32>,
         runtime: TokioRuntime,
     ) {
-        let AcceptedStream { stream, src, dst } = accepted_stream;
+        let AcceptedStream {
+            stream,
+            src,
+            dst,
+            listener_addr,
+            egress_mode,
+        } = accepted_stream;
 
         let trusted_stream_manager = self.trusted_stream_manager.clone();
         let metrics = self.metrics.clone();
@@ -166,17 +174,9 @@ impl EgressFlow {
                         let fut = async {
                             let active_cx = metrics.new_cx();
 
-                            // Print access log
-                            let access_log = AccessLog::Egress {
-                                downstream: src,
-                                upstream: &dst,
-                                from_trusted_tunnel: next_stream.is_secured(),
-                                attestation_info: next_stream
-                                    .attestation_result()
-                                    .map(Cow::Borrowed),
-                            };
-                            tracing::info!(?access_log);
-
+                            let from_trusted_tunnel = next_stream.is_secured();
+                            let attestation_info =
+                                next_stream.attestation_result().cloned().map(Cow::Owned);
                             let downstream = next_stream.into_stream();
 
                             let upstream = tcp_connect(
@@ -190,6 +190,20 @@ impl EgressFlow {
                             )
                             .await
                             .context("Failed to connect to upstream")?;
+
+                            let egress_local = upstream.local_addr().ok();
+
+                            // Print access log
+                            let access_log = AccessLog::Egress {
+                                downstream_remote: src,
+                                upstream_remote: &dst,
+                                from_trusted_tunnel,
+                                attestation_info,
+                                downstream_local: listener_addr,
+                                egress_mode,
+                                upstream_local: egress_local,
+                            };
+                            tracing::info!(%access_log);
 
                             let downstream = metrics.new_wrapped_stream(downstream);
 

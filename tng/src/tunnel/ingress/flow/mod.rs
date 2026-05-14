@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
 
 use crate::config::ingress::CommonArgs;
-use crate::tunnel::access_log::AccessLog;
+use crate::tunnel::access_log::{AccessLog, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -52,6 +52,8 @@ pub(super) struct AcceptedStream {
     pub src: SocketAddr,
     pub dst: TngEndpoint,
     pub via_tunnel: bool,
+    pub listener_addr: SocketAddr,
+    pub ingress_mode: IngressMode,
 }
 
 impl IngressFlow {
@@ -137,6 +139,8 @@ impl IngressFlow {
             src,
             dst,
             via_tunnel,
+            listener_addr,
+            ingress_mode,
         } = accepted_stream;
 
         let trusted_stream_manager = self.trusted_stream_manager.clone();
@@ -156,9 +160,10 @@ impl IngressFlow {
                     let stream = metrics.new_wrapped_stream(stream);
 
                     let attestation_result;
+                    let upstream_local;
                     let forward_stream_task = if !via_tunnel {
                         // Forward via unprotected tcp
-                        let (forward_stream_task, att) = unprotected_stream_manager
+                        let (forward_stream_task, att, up_local) = unprotected_stream_manager
                             .forward_stream(&dst, Box::new(stream))
                             .await
                             .with_context(|| {
@@ -166,10 +171,11 @@ impl IngressFlow {
                             })?;
 
                         attestation_result = att;
+                        upstream_local = up_local;
                         forward_stream_task
                     } else {
                         // Forward via trusted tunnel
-                        let (forward_stream_task, att) = trusted_stream_manager
+                        let (forward_stream_task, att, up_local) = trusted_stream_manager
                             .forward_stream(&dst, Box::new(stream))
                             .await
                             .with_context(|| {
@@ -177,17 +183,21 @@ impl IngressFlow {
                             })?;
 
                         attestation_result = att;
+                        upstream_local = up_local;
                         forward_stream_task
                     };
 
                     // Print access log
                     let access_log = AccessLog::Ingress {
-                        downstream: src,
-                        upstream: &dst,
+                        downstream_remote: src,
+                        upstream_remote: &dst,
                         to_trusted_tunnel: via_tunnel,
                         attestation_result: attestation_result.map(Cow::Owned),
+                        downstream_local: listener_addr,
+                        ingress_mode,
+                        upstream_local,
                     };
-                    tracing::info!(?access_log);
+                    tracing::info!(%access_log);
 
                     // let forward_stream_task = pin!(forward_stream_task);
                     match forward_stream_task.await {

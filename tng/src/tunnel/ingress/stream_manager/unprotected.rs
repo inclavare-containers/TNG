@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, net::SocketAddr, pin::Pin};
 
 use anyhow::{Context as _, Result};
 
@@ -39,6 +39,7 @@ impl StreamManager for UnprotectedStreamManager {
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
+        /* upstream_local */ Option<SocketAddr>,
     )> {
         let upstream = tcp_connect(
             (endpoint.host(), endpoint.port()),
@@ -50,10 +51,13 @@ impl StreamManager for UnprotectedStreamManager {
             format!("Failed to establish TCP connection with upstream '{endpoint}'")
         })?;
 
+        let upstream_local = upstream.local_addr().ok();
+
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })
                 as Pin<Box<_>>,
             None,
+            upstream_local,
         ))
     }
 }

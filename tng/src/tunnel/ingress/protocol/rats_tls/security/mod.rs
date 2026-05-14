@@ -161,6 +161,7 @@ impl RatsTlsSecurityLayer {
         impl CommonStreamTrait + Sync,
         /* local_addr */ SocketAddr,
         Option<AttestationResult>,
+        /* session_id */ u64,
     )> {
         let pool_key = PoolKey::new(endpoint);
 

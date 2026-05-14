@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressMappingArgs;
+use crate::tunnel::access_log::IngressMode;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -79,6 +80,8 @@ impl IngressTrait for MappingIngress {
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
 
+        let listener_addr = listener.local_addr()?;
+
         Ok(Box::new(stream! {
             loop {
                 match listener.accept_with_common_sock_opts().await {
@@ -87,6 +90,8 @@ impl IngressTrait for MappingIngress {
                         src: peer_addr,
                         dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
                         via_tunnel: true,
+                        listener_addr,
+                        ingress_mode: IngressMode::Mapping,
                     }),
                     Err(e) => yield Err(anyhow!(e)),
                 };

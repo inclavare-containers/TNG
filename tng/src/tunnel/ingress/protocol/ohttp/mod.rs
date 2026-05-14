@@ -103,6 +103,7 @@ mod unix_specific_module {
                     }) as Pin<Box<_>>,
                     // TODO: ohttp always return None attestation result in stream level, which may cause misunderstanding when user is reading the logs.
                     None,
+                    None, // OHTTP does not have a separate upstream connection
                 ))
             }
             .instrument(tracing::info_span!("security"))

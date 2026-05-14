@@ -22,6 +22,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
 use crate::config::ingress::IngressHttpProxyArgs;
+use crate::tunnel::access_log::IngressMode;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
@@ -124,6 +125,7 @@ impl RequestHelper {
         runtime: TokioRuntime,
         peer_addr: SocketAddr,
         sender: UnboundedSender<AcceptedStream>,
+        listener_addr: SocketAddr,
     ) -> RouteResult {
         let dst = match self.get_dst() {
             Ok(dst) => dst,
@@ -152,6 +154,8 @@ impl RequestHelper {
                             src: peer_addr,
                             dst,
                             via_tunnel,
+                            listener_addr,
+                            ingress_mode: IngressMode::HttpProxy,
                         })
                         .map_err(|e| anyhow!("{e:?}"))?;
 
@@ -182,7 +186,7 @@ impl RequestHelper {
 
                 let send_accepted_stream = async {
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
-                    sender.send(AcceptedStream { stream: Box::new(s2), src: peer_addr, dst, via_tunnel })
+                    sender.send(AcceptedStream { stream: Box::new(s2), src: peer_addr, dst, via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
                 };
 
                 let send_task = async {
@@ -295,6 +299,9 @@ impl IngressTrait for HttpProxyIngress {
 
         let listener = TcpListener::bind(listen_addr).await?;
         listener.set_listener_common_sock_opts()?;
+
+        let listener_addr = listener.local_addr()?;
+
         Ok(Box::new(
             stream! {
                 loop {
@@ -313,7 +320,7 @@ impl IngressTrait for HttpProxyIngress {
                                 let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
                                 runtime.spawn_supervised_task_fn_current_span(move |runtime| async move {
-                                    serve_http_proxy_no_throw_error(stream, stream_router, runtime, peer_addr, sender)
+                                    serve_http_proxy_no_throw_error(stream, stream_router, runtime, peer_addr, sender, listener_addr)
                                         .await
                                 });
 
@@ -336,6 +343,7 @@ async fn serve_http_proxy_no_throw_error(
     runtime: TokioRuntime,
     peer_addr: SocketAddr,
     sender: UnboundedSender<AcceptedStream>,
+    listener_addr: SocketAddr,
 ) {
     let runtime_cloned = runtime.clone();
 
@@ -352,7 +360,7 @@ async fn serve_http_proxy_no_throw_error(
 
                 async move {
                     let route_result = RequestHelper::from_request(req)
-                        .handle(stream_router, runtime, peer_addr, sender)
+                        .handle(stream_router, runtime, peer_addr, sender, listener_addr)
                         .await;
 
                     let mut response: axum::response::Response = route_result.into();

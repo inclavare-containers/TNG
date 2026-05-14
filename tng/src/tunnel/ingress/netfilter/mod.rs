@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::ingress::IngressNetfilterCaptureDst;
+use crate::tunnel::access_log::IngressMode;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::iptables::IptablesExecutor;
@@ -125,6 +126,8 @@ impl IngressTrait for NetfilterIngress {
                     src: peer_addr,
                     dst: orig_dst,
                     via_tunnel: true,
+                    listener_addr: listen_addr,
+                    ingress_mode: IngressMode::Netfilter,
                 })
             })
         ))

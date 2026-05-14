@@ -65,7 +65,7 @@ impl<R: Runtime> StreamLayer for RatsTls<R> {
     }
 
     async fn connect(&self, addr: SocketAddr) -> io::Result<Self::Stream> {
-        let (stream, local_addr, _attestation_result) = self
+        let (stream, local_addr, _attestation_result, _session_id) = self
             .forwarder
             .connect(TngEndpoint::new(addr.ip().to_string(), addr.port()))
             .await

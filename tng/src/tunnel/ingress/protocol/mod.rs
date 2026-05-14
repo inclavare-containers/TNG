@@ -7,7 +7,7 @@ pub mod rats_tls;
 pub use unix_specific_module::*;
 #[cfg(unix)]
 mod unix_specific_module {
-    use std::{future::Future, pin::Pin};
+    use std::{future::Future, net::SocketAddr, pin::Pin};
 
     use anyhow::Result;
     use async_trait::async_trait;
@@ -16,7 +16,11 @@ mod unix_specific_module {
 
     pub type ForwardTask = Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>;
 
-    pub type ProtocolStreamForwarderOutput = (ForwardTask, Option<AttestationResult>);
+    pub type ProtocolStreamForwarderOutput = (
+        ForwardTask,
+        Option<AttestationResult>,
+        /* upstream_local */ Option<SocketAddr>,
+    );
 
     #[async_trait]
     pub trait ProtocolStreamForwarder {

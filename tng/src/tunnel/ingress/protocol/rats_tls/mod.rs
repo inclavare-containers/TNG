@@ -50,6 +50,7 @@ impl RatsTlsStreamForwarder {
         impl CommonStreamTrait + Sync,
         /* local_addr */ SocketAddr,
         Option<AttestationResult>,
+        /* session_id */ u64,
     )> {
         self.security_layer.allocate_secured_stream(endpoint).await
     }
@@ -62,10 +63,12 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
         endpoint: &'a TngEndpoint,
         downstream: Box<dyn CommonStreamTrait + 'static>,
     ) -> Result<ProtocolStreamForwarderOutput> {
-        let (upstream, _local_addr, attestation_result) = self.connect(endpoint.clone()).await?;
+        let (upstream, local_addr, attestation_result, _session_id) =
+            self.connect(endpoint.clone()).await?;
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await }),
             attestation_result,
+            Some(local_addr),
         ))
     }
 }

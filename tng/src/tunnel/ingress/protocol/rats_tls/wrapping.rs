@@ -23,6 +23,7 @@ impl RatsTlsWrappingLayer {
         impl CommonStreamTrait + Sync,
         /* local_addr */ SocketAddr,
         Option<AttestationResult>,
+        /* session_id */ u64,
     )> {
         let req = Request::connect("https://tng.internal/")
             .version(Version::HTTP_2)
@@ -67,6 +68,6 @@ impl RatsTlsWrappingLayer {
 
         tracing::debug!("Trusted tunnel established");
 
-        Ok((stream, local_addr, attestation_result))
+        Ok((stream, local_addr, attestation_result, client.id))
     }
 }

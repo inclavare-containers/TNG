@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -84,6 +85,7 @@ impl StreamManager for TrustedStreamManager {
     ) -> Result<(
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
+        /* upstream_local */ Option<SocketAddr>,
     )> {
         self.stream_forwarder
             .forward_stream(endpoint, downstream)
