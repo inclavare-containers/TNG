@@ -50,8 +50,8 @@ impl std::error::Error for ForwardError {
     }
 }
 
-// The default buffer size used in tokio::io::copy_bidirectional is 8 KB, here we increase it to 32 KB to improve the performance.
-const FORWARD_BUF_SIZE: usize = 32 * 1024;
+// The default buffer size used in tokio::io::copy_bidirectional is 8 KB, here we increase it to 256 KB to improve the performance.
+const FORWARD_BUF_SIZE: usize = 256 * 1024;
 
 /// Buffer used for copying data between streams.
 struct CopyBuffer {
