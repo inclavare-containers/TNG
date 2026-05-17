@@ -9,7 +9,7 @@ set -euo pipefail
 ###############################################################################
 TNG_BIN="${TNG_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/release/tng}"
 IPERF_DURATION="${IPERF_DURATION:-10}"
-IPERF_ROUNDS="${IPERF_ROUNDS:-1}"
+IPERF_ROUNDS="${IPERF_ROUNDS:-3}"
 
 CLIENT_NS="tng_bench_client"
 SERVER_NS="tng_bench_server"
@@ -45,25 +45,45 @@ kill_ns_bg() {
     sleep 0.5
 }
 
-# Run iperf3 and extract sender bandwidth in Gbps
-run_iperf() {
-    local host="$1" port="$2" ns="$3" label="$4"
-    local output
-    output=$(ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -J 2>/dev/null) || {
-        fail "iperf3 failed for $label" >&2
-        echo "$output" | tail -5 >&2
-        echo "0.00"
-        return 1
-    }
-    local gbps
-    gbps=$(echo "$output" | python3 -c "
+# Run one round of iperf3 and extract sender bandwidth in Gbps
+run_iperf_one() {
+    local host="$1" port="$2" ns="$3"
+    ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -J 2>/dev/null | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 bits = d['end']['sum_sent']['bits_per_second']
 print(f'{bits / 1e9:.2f}')
-" 2>/dev/null)
-    echo -e "\033[1;32m  ✓\033[0m $label: ${gbps} Gbps" >&2
-    echo "$gbps"
+" 2>/dev/null
+}
+
+# Run iperf3 multiple rounds and report median
+run_iperf() {
+    local host="$1" port="$2" ns="$3" label="$4"
+    local -a results=()
+    for i in $(seq 1 "$IPERF_ROUNDS"); do
+        local bw
+        bw=$(run_iperf_one "$host" "$port" "$ns") || {
+            fail "iperf3 round $i failed for $label"
+            echo "0.00"
+            return 1
+        }
+        results+=("$bw")
+        echo -e "\033[1;32m  ✓\033[0m $label round $i: ${bw} Gbps" >&2
+    done
+    # Take median
+    local median
+    median=$(printf '%s\n' "${results[@]}" | sort -g | python3 -c "
+import sys
+vals = [float(x.strip()) for x in sys.stdin if x.strip()]
+vals.sort()
+n = len(vals)
+if n % 2 == 1:
+    print(f'{vals[n//2]:.2f}')
+else:
+    print(f'{(vals[n//2-1]+vals[n//2])/2:.2f}')
+")
+    echo -e "\033[1;32m  ✓\033[0m $label median (${IPERF_ROUNDS} rounds): ${median} Gbps" >&2
+    echo "$median"
 }
 
 cleanup() {
