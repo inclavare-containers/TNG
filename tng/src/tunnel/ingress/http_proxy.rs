@@ -348,23 +348,23 @@ async fn serve_http_proxy_no_throw_error(
 
     let svc = {
         ServiceBuilder::new().service(tower::service_fn(move |req| {
-                let stream_router = stream_router.clone();
-                let runtime = runtime.clone();
-                let sender = sender.clone();
+            let stream_router = stream_router.clone();
+            let runtime = runtime.clone();
+            let sender = sender.clone();
 
-                async move {
-                    let route_result = RequestHelper::from_request(req)
-                        .handle(stream_router, runtime, peer_addr, sender, listener_addr)
-                        .await;
+            async move {
+                let route_result = RequestHelper::from_request(req)
+                    .handle(stream_router, runtime, peer_addr, sender, listener_addr)
+                    .await;
 
-                    let mut response: axum::response::Response = route_result.into();
-                    response.headers_mut().insert(
-                        "Server",
-                        HeaderValue::from_static(HTTP_RESPONSE_SERVER_HEADER),
-                    );
-                    Result::<_, String>::Ok(response)
-                }
-            }))
+                let mut response: axum::response::Response = route_result.into();
+                response.headers_mut().insert(
+                    "Server",
+                    HeaderValue::from_static(HTTP_RESPONSE_SERVER_HEADER),
+                );
+                Result::<_, String>::Ok(response)
+            }
+        }))
     };
     let svc = TowerToHyperService::new(svc);
 

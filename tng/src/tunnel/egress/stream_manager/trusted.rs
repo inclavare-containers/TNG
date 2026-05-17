@@ -17,6 +17,7 @@ use crate::{
         utils::runtime::TokioRuntime,
     },
 };
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use async_stream::stream;
@@ -47,6 +48,10 @@ pub struct TrustedStreamManager {
 
 impl TrustedStreamManager {
     pub async fn new(common_args: &CommonArgs, runtime: TokioRuntime) -> Result<Self> {
+        if common_args.ohttp.is_some() && common_args.rats_tls.is_some() {
+            bail!("Cannot specify both `ohttp` and `rats_tls` — they are mutually exclusive");
+        }
+
         let ra_args = common_args.ra_args.clone().into_checked()?;
         let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
 
@@ -57,7 +62,8 @@ impl TrustedStreamManager {
             )?,
             decoder: match &common_args.ohttp {
                 Some(ohttp_args) => Box::new(
-                    OHttpStreamDecoder::new(ra_context, ohttp_args.clone(), runtime.clone()).await?,
+                    OHttpStreamDecoder::new(ra_context, ohttp_args.clone(), runtime.clone())
+                        .await?,
                 ),
                 None => {
                     let multiplex = common_args

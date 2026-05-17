@@ -33,7 +33,10 @@ impl TransportLayer {
     ) -> Result<Self> {
         // For compatibility with older versions
         let direct_forward = if let Some(ohttp_args) = ohttp {
-            match (direct_forward, ohttp_args.allow_non_tng_traffic_regexes.clone()) {
+            match (
+                direct_forward,
+                ohttp_args.allow_non_tng_traffic_regexes.clone(),
+            ) {
                 (Some(_), Some(_)) => {
                     bail!("Cannot specify both `direct_forward` and `allow_non_tng_traffic_regexes`. The later is deprecated, please use `direct_forward` instead.");
                 }

@@ -16,6 +16,7 @@ pub struct AttributedCounter<C, T> {
 }
 
 impl<C, T> AttributedCounter<C, T> {
+    #[allow(dead_code)]
     fn gen_attributes_array(&self) -> Vec<KeyValue> {
         self.attributes
             .iter()

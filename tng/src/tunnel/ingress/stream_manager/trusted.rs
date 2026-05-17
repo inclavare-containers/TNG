@@ -36,6 +36,10 @@ impl TrustedStreamManager {
             bail!("The `web_page_inject` field is not supported")
         }
 
+        if common_args.ohttp.is_some() && common_args.rats_tls.is_some() {
+            bail!("Cannot specify both `ohttp` and `rats_tls` — they are mutually exclusive");
+        }
+
         let ra_args = common_args.ra_args.clone().into_checked()?;
         let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
 

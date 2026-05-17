@@ -92,10 +92,8 @@ impl RatsTlsWrappingLayer {
     )> {
         let parent_span = tracing::info_span!("wrapping", mode = "raw-tls");
 
-        let mut connector = transport_layer_creator.create(
-            &PoolKey::new(endpoint.clone()),
-            parent_span.clone(),
-        )?;
+        let mut connector =
+            transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
 
         let OnetimeTlsClientConfig(mut tls_client_config, _verifier) = tls_config_generator
             .get_one_time_rustls_client_config()

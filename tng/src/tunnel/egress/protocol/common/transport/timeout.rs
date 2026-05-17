@@ -62,9 +62,9 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> t
                 match sleep.poll(cx) {
                     std::task::Poll::Ready(()) => {
                         // Timeout expired.
-                        return std::task::Poll::Ready(Err(std::io::Error::other(
-                            anyhow!("first byte read timeout"),
-                        )));
+                        return std::task::Poll::Ready(Err(std::io::Error::other(anyhow!(
+                            "first byte read timeout"
+                        ))));
                     }
                     std::task::Poll::Pending => { /* The timeout is not expired, let's continue. */
                     }

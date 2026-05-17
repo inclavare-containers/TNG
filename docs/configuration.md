@@ -17,9 +17,14 @@ The `Ingress` object is used to configure the ingress endpoints of the tng tunne
 - **`ingress_mode`** (IngressMode): Specifies the method for inbound traffic, which can be `mapping`, `http_proxy`, or `netfilter`.
 - (Deprecated) **`encap_in_http`** (EncapInHttp, optional): HTTP encapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
 - **`ohttp`** (OHttp, optional): OHTTP configuration.
+- **`rats_tls`** (RatsTlsArgs, optional): rats-TLS transport configuration. When neither `ohttp` nor `rats_tls` is specified, rats-TLS mode is used by default.
+    - **`multiplex`** (boolean, optional, default is `true`): When true, uses HTTP/2 CONNECT tunneling to multiplex multiple TCP streams over a single rats-TLS connection, reducing handshake overhead. When false, each downstream connection creates an independent TLS session without HTTP/2 CONNECT or connection pooling, which can achieve higher per-stream throughput.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
+
+> [!WARNING]
+> `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same ingress or egress configuration will result in an error.
 
 ## IngressMode
 
@@ -368,9 +373,14 @@ Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on t
 - **`direct_forward`** (array [DirectForwardRule], optional): Specifies matching rules for traffic that needs to be forwarded directly (without decryption).
 - (Deprecated) **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
 - **`ohttp`** (OHttp, optional): OHTTP configuration.
+- **`rats_tls`** (RatsTlsArgs, optional): rats-TLS transport configuration. When neither `ohttp` nor `rats_tls` is specified, rats-TLS mode is used by default.
+    - **`multiplex`** (boolean, optional, default is `true`): When true, uses HTTP/2 CONNECT tunneling to multiplex multiple TCP streams over a single rats-TLS connection, reducing handshake overhead. When false, each downstream connection creates an independent TLS session without HTTP/2 CONNECT or connection pooling, which can achieve higher per-stream throughput.
 - **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
 - **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
 - **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
+
+> [!WARNING]
+> `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same ingress or egress configuration will result in an error.
 
 
 ### DirectForwardRule

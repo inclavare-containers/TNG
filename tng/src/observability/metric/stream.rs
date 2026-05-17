@@ -18,7 +18,10 @@ pub(crate) struct PendingCounter {
 
 impl PendingCounter {
     pub(crate) fn new(counter: AttributedCounter<Counter<u64>, u64>) -> Self {
-        Self { pending: 0, counter }
+        Self {
+            pending: 0,
+            counter,
+        }
     }
 
     fn add(&mut self, bytes: u64) {
