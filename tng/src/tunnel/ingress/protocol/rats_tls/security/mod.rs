@@ -147,7 +147,6 @@ impl RatsTlsSecurityLayer {
                         let mut client_builder = Client::builder(self.runtime.clone());
                         client_builder.http2_initial_connection_window_size(16 * 1024 * 1024);
                         client_builder.http2_initial_stream_window_size(16 * 1024 * 1024);
-                        client_builder.http2_adaptive_window(true);
                         let client = RatsTlsClient {
                             id,
                             hyper: client_builder.build(connector),

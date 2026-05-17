@@ -59,7 +59,7 @@ impl RatsTlsStreamForwarder {
             .allocate_secured_stream(endpoint)
             .await?;
         Ok((
-            ContextualStream::new(stream, "ingress-rats-tls"),
+            Box::new(ContextualStream::new(stream, "ingress-rats-tls")),
             local_addr,
             attestation_result,
             session_id,
