@@ -5,7 +5,7 @@ use opentelemetry::metrics::{Counter, MeterProvider, UpDownCounter};
 
 use crate::observability::metric::{
     counter::{AttributedCounter, WithAttributes},
-    stream::StreamWithCounter,
+    stream::{PendingCounter, StreamWithCounter},
 };
 
 pub struct ServiceMetricsCreator(Arc<dyn MeterProvider + Send + Sync>);
@@ -107,8 +107,8 @@ impl ServiceMetrics {
     ) -> StreamWithCounter<T> {
         StreamWithCounter {
             inner: stream,
-            tx_bytes_total: self.tx_bytes_total.clone(),
-            rx_bytes_total: self.rx_bytes_total.clone(),
+            tx: PendingCounter::new(self.tx_bytes_total.clone()),
+            rx: PendingCounter::new(self.rx_bytes_total.clone()),
         }
     }
 }
