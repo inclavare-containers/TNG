@@ -1,6 +1,6 @@
 mod cert_verifier;
 pub mod pool;
-mod rustls_config;
+pub(crate) mod rustls_config;
 
 use std::{
     collections::HashMap,
@@ -50,6 +50,7 @@ pub struct RatsTlsSecurityLayer {
     transport_layer_creator: RatsTlsTransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
     runtime: TokioRuntime,
+    raw_tls: bool,
 }
 
 impl RatsTlsSecurityLayer {
@@ -58,6 +59,7 @@ impl RatsTlsSecurityLayer {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
+        raw_tls: bool,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -72,6 +74,7 @@ impl RatsTlsSecurityLayer {
             transport_layer_creator,
             tls_config_generator,
             runtime,
+            raw_tls,
         })
     }
 
@@ -158,17 +161,30 @@ impl RatsTlsSecurityLayer {
         &self,
         endpoint: TngEndpoint,
     ) -> Result<(
-        impl CommonStreamTrait + Sync,
-        /* local_addr */ SocketAddr,
+        Box<dyn CommonStreamTrait + Sync>,
+        /* local_addr */ Option<SocketAddr>,
         Option<AttestationResult>,
         /* session_id */ u64,
     )> {
-        let pool_key = PoolKey::new(endpoint);
-
-        let client = self.get_client(&pool_key).await?;
-        RatsTlsWrappingLayer::create_stream_from_hyper(&client)
-            .instrument(tracing::info_span!("wrapping"))
-            .await
+        if self.raw_tls {
+            let (stream, local_addr, att, session_id) = RatsTlsWrappingLayer::create_stream_raw(
+                &self.transport_layer_creator,
+                &self.tls_config_generator,
+                &endpoint,
+                &self.runtime,
+            )
+            .instrument(tracing::info_span!("wrapping", mode = "raw-tls"))
+            .await?;
+            Ok((Box::new(stream), local_addr, att, session_id))
+        } else {
+            let pool_key = PoolKey::new(endpoint);
+            let client = self.get_client(&pool_key).await?;
+            let (stream, local_addr, att, session_id) =
+                RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+                    .instrument(tracing::info_span!("wrapping", mode = "h2"))
+                    .await?;
+            Ok((Box::new(stream), local_addr, att, session_id))
+        }
     }
 }
 

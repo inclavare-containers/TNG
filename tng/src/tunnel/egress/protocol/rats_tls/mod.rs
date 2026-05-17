@@ -39,27 +39,39 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
     ) -> Result<ProtocolStreamDecoderOutput> {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-
         let (tls_stream, attestation_result) = self.security_layer.handshake(input).await?;
 
-        // Should be spawned as background task
-        self.runtime
-            .spawn_supervised_task_fn_current_span(move |runtime| async move {
-                RatsTlsWrappingLayer::unwrap_stream(
-                    tls_stream,
-                    attestation_result,
-                    sender,
-                    runtime,
-                )
-                .await;
-            });
+        // Check negotiated ALPN protocol
+        let (_, tls_session) = tls_stream.get_ref();
+        let is_raw_tls = tls_session.alpn_protocol() == Some(b"raw-tls");
 
-        Ok(stream! {
-            while let Some(value) = receiver.recv().await {
-                yield Ok(value); // TODO: remove the spawn_supervised_task_fn_current_span above and pass error here
+        if is_raw_tls {
+            // Raw-TLS mode: return TLS stream directly, no HTTP/2 server
+            Ok(stream! {
+                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_result));
             }
+            .boxed())
+        } else {
+            // H2 mode: spawn HTTP/2 server and yield streams from it
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let _runtime = self.runtime.clone();
+            self.runtime
+                .spawn_supervised_task_fn_current_span(move |runtime| async move {
+                    RatsTlsWrappingLayer::unwrap_stream(
+                        tls_stream,
+                        attestation_result,
+                        sender,
+                        runtime,
+                    )
+                    .await;
+                });
+
+            Ok(stream! {
+                while let Some(value) = receiver.recv().await {
+                    yield Ok(value);
+                }
+            }
+            .boxed())
         }
-        .boxed())
     }
 }

@@ -32,12 +32,14 @@ impl RatsTlsStreamForwarder {
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        let raw_tls = ra_context.is_no_ra();
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
                 ra_context,
                 runtime,
+                raw_tls,
             )
             .await?,
         })
@@ -47,8 +49,8 @@ impl RatsTlsStreamForwarder {
         &self,
         endpoint: TngEndpoint,
     ) -> Result<(
-        impl CommonStreamTrait + Sync,
-        /* local_addr */ SocketAddr,
+        Box<dyn CommonStreamTrait + Sync>,
+        /* local_addr */ Option<SocketAddr>,
         Option<AttestationResult>,
         /* session_id */ u64,
     )> {
@@ -68,7 +70,7 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await }),
             attestation_result,
-            Some(local_addr),
+            local_addr,
         ))
     }
 }

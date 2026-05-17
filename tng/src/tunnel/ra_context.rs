@@ -51,6 +51,11 @@ pub enum RaContext {
 }
 
 impl RaContext {
+    /// Returns true if this is a NoRa (no remote attestation) context.
+    pub fn is_no_ra(&self) -> bool {
+        matches!(self, Self::NoRa)
+    }
+
     /// Create pre-instantiated RA context from RaArgs configuration
     pub async fn from_ra_args(ra_args: &RaArgs) -> Result<Self> {
         match ra_args {

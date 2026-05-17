@@ -76,7 +76,7 @@ impl<R: Runtime> StreamLayer for RatsTls<R> {
         let (reader, writer) = tokio::io::split(stream);
 
         Ok(RatsTlsStream {
-            local_addr,
+            local_addr: local_addr.unwrap_or(addr),
             peer_addr: addr,
             reader: AsyncPeekable::new(reader.compat()),
             writer: writer.compat_write(),
