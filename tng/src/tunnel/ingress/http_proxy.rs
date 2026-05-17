@@ -18,7 +18,6 @@ use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
 use tower::ServiceBuilder;
-use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
 use crate::config::ingress::IngressHttpProxyArgs;
@@ -348,12 +347,7 @@ async fn serve_http_proxy_no_throw_error(
     let runtime_cloned = runtime.clone();
 
     let svc = {
-        ServiceBuilder::new()
-            .layer(SetResponseHeaderLayer::overriding(
-                http::header::SERVER,
-                HeaderValue::from_static("tng"),
-            ))
-            .service(tower::service_fn(move |req| {
+        ServiceBuilder::new().service(tower::service_fn(move |req| {
                 let stream_router = stream_router.clone();
                 let runtime = runtime.clone();
                 let sender = sender.clone();
