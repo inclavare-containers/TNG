@@ -132,7 +132,8 @@ where
             .await
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to connect to {addr:?}"));
-        if result.is_ok() {
+        if let Ok(ref stream) = result {
+            stream.set_nodelay(true)?;
             last_result = Some(result);
             break;
         }
