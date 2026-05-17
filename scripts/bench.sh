@@ -10,6 +10,7 @@ set -euo pipefail
 TNG_BIN="${TNG_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/release/tng}"
 IPERF_DURATION="${IPERF_DURATION:-10}"
 IPERF_ROUNDS="${IPERF_ROUNDS:-3}"
+IPERF_STREAMS="${IPERF_STREAMS:-1,8}"
 
 CLIENT_NS="tng_bench_client"
 SERVER_NS="tng_bench_server"
@@ -47,8 +48,8 @@ kill_ns_bg() {
 
 # Run one round of iperf3 and extract sender bandwidth in Gbps
 run_iperf_one() {
-    local host="$1" port="$2" ns="$3"
-    ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -J 2>/dev/null | python3 -c "
+    local host="$1" port="$2" ns="$3" streams="${4:-1}"
+    ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -P "$streams" -J 2>/dev/null | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 bits = d['end']['sum_sent']['bits_per_second']
@@ -58,11 +59,11 @@ print(f'{bits / 1e9:.2f}')
 
 # Run iperf3 multiple rounds and report median
 run_iperf() {
-    local host="$1" port="$2" ns="$3" label="$4"
+    local host="$1" port="$2" ns="$3" label="$4" streams="${5:-1}"
     local -a results=()
     for i in $(seq 1 "$IPERF_ROUNDS"); do
         local bw
-        bw=$(run_iperf_one "$host" "$port" "$ns") || {
+        bw=$(run_iperf_one "$host" "$port" "$ns" "$streams") || {
             fail "iperf3 round $i failed for $label"
             echo "0.00"
             return 1
@@ -152,21 +153,8 @@ c_ns "$CLIENT_NS" cp "${BENCH_TMP}/stunnel.pem" /tmp/tng-bench-stunnel.pem 2>/de
 }
 
 ###############################################################################
-# Benchmark 1: Raw TCP
+# Generate configs (used inside the benchmark loop)
 ###############################################################################
-log ""
-log "=== Benchmark 1: Raw TCP ==="
-c_ns "$SERVER_NS" iperf3 -s -D
-sleep 0.5
-RAW_BW=$(run_iperf "$IP_S" "$IPERF_PORT" "$CLIENT_NS" "Raw TCP")
-kill_ns_bg "$SERVER_NS"
-c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
-
-###############################################################################
-# Benchmark 2: stunnel
-###############################################################################
-log ""
-log "=== Benchmark 2: stunnel ==="
 
 # Server: stunnel accept :5601 → connect 127.0.0.1:5201
 cat > "${BENCH_TMP}/stunnel-server.conf" << 'EOF'
@@ -179,7 +167,6 @@ connect = 127.0.0.1:5201
 cert = /tmp/tng-bench-stunnel.pem
 verifyPeer = no
 EOF
-c_ns "$SERVER_NS" cp "${BENCH_TMP}/stunnel-server.conf" /tmp/tng-bench-stunnel-server.conf
 
 # Client: stunnel accept :9001 → connect server:5601
 cat > "${BENCH_TMP}/stunnel-client.conf" << 'EOF'
@@ -192,100 +179,133 @@ connect = 10.200.1.2:5601
 client = yes
 verifyPeer = no
 EOF
-c_ns "$CLIENT_NS" cp "${BENCH_TMP}/stunnel-client.conf" /tmp/tng-bench-stunnel-client.conf
 
-# Start services
-c_ns "$SERVER_NS" iperf3 -s -D
-sleep 0.5
-# Ensure clean ports
-c_ns "$SERVER_NS" pkill -f stunnel 2>/dev/null || true
-c_ns "$CLIENT_NS" pkill -f stunnel 2>/dev/null || true
-sleep 0.5
-
-c_ns "$SERVER_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-server.conf &
-c_ns "$CLIENT_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-client.conf &
-sleep 1
-
-STUNNEL_BW=$(run_iperf "$IP_C" "$STUNNEL_CLIENT_PORT" "$CLIENT_NS" "stunnel")
-kill_ns_bg "$SERVER_NS"
-kill_ns_bg "$CLIENT_NS"
-c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
-
-###############################################################################
-# Benchmark 3: TNG (no_ra)
-###############################################################################
-log ""
-log "=== Benchmark 3: TNG (rats-TLS, no_ra) ==="
-
-# Egress config (server side)
-cat > "${BENCH_TMP}/egress.json" << EGRESS_EOF
+# TNG egress config (server side)
+cat > "${BENCH_TMP}/egress.json" << 'EGRESS_EOF'
 {
     "add_egress": [
         {
             "netfilter": {
                 "capture_dst": [
-                    {"port": ${IPERF_PORT}}
+                    {"port": 5201}
                 ],
                 "capture_local_traffic": true,
-                "listen_port": ${TNG_EGRESS_LISTEN}
+                "listen_port": 40000
             },
             "no_ra": true
         }
     ]
 }
 EGRESS_EOF
-c_ns "$SERVER_NS" mkdir -p /tmp/tng-bench
-c_ns "$SERVER_NS" cp "${BENCH_TMP}/egress.json" /tmp/tng-bench/egress.json
 
-# Ingress config (client side)
-cat > "${BENCH_TMP}/ingress.json" << INGRESS_EOF
+# TNG ingress config (client side)
+cat > "${BENCH_TMP}/ingress.json" << 'INGRESS_EOF'
 {
     "add_ingress": [
         {
             "netfilter": {
                 "capture_dst": [
-                    {"host": "${IP_S}", "port": ${IPERF_PORT}}
+                    {"host": "10.200.1.2", "port": 5201}
                 ],
-                "listen_port": ${TNG_INGRESS_LISTEN}
+                "listen_port": 50000
             },
             "no_ra": true
         }
     ]
 }
 INGRESS_EOF
+
+c_ns "$SERVER_NS" mkdir -p /tmp/tng-bench
 c_ns "$CLIENT_NS" mkdir -p /tmp/tng-bench
-c_ns "$CLIENT_NS" cp "${BENCH_TMP}/ingress.json" /tmp/tng-bench/ingress.json
 
-# Start iperf3
-c_ns "$SERVER_NS" iperf3 -s -D
-sleep 0.5
+###############################################################################
+# Benchmark loop: run for each stream count
+###############################################################################
+IFS=',' read -ra STREAM_COUNTS <<< "$IPERF_STREAMS"
 
-# Start TNG egress
-log "Starting TNG egress..."
-c_ns "$SERVER_NS" "$TNG_BIN" launch --config-file /tmp/tng-bench/egress.json > /tmp/tng-bench/egress.log 2>&1 &
-sleep 2
-if ! c_ns "$SERVER_NS" ss -tlnp | grep -q "${TNG_EGRESS_LISTEN}"; then
-    fail "TNG egress not listening on ${TNG_EGRESS_LISTEN}"
-    c_ns "$SERVER_NS" cat /tmp/tng-bench/egress.log | tail -10
-    exit 1
-fi
-ok "TNG egress on port ${TNG_EGRESS_LISTEN}"
+declare -A RAW_RESULTS STUNNEL_RESULTS TNG_RESULTS
 
-# Start TNG ingress
-log "Starting TNG ingress..."
-c_ns "$CLIENT_NS" "$TNG_BIN" launch --config-file /tmp/tng-bench/ingress.json > /tmp/tng-bench/ingress.log 2>&1 &
-sleep 2
-if ! c_ns "$CLIENT_NS" ss -tlnp | grep -q "${TNG_INGRESS_LISTEN}"; then
-    fail "TNG ingress not listening on ${TNG_INGRESS_LISTEN}"
-    c_ns "$CLIENT_NS" cat /tmp/tng-bench/ingress.log | tail -10
-    exit 1
-fi
-ok "TNG ingress on port ${TNG_INGRESS_LISTEN}"
+for streams in "${STREAM_COUNTS[@]}"; do
+    log ""
+    log "=== Stream count: $streams ==="
 
-TNG_BW=$(run_iperf "$IP_S" "$IPERF_PORT" "$CLIENT_NS" "TNG")
-kill_ns_bg "$SERVER_NS"
-kill_ns_bg "$CLIENT_NS"
-c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
+    ###########################################################################
+    # Benchmark 1: Raw TCP
+    ###########################################################################
+    log "=== Benchmark 1: Raw TCP ==="
+    c_ns "$SERVER_NS" iperf3 -s -D
+    sleep 0.5
+    RAW_RESULTS[$streams]=$(run_iperf "$IP_S" "$IPERF_PORT" "$CLIENT_NS" "Raw TCP ($streams streams)" "$streams")
+    kill_ns_bg "$SERVER_NS"
+    c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
+
+    ###########################################################################
+    # Benchmark 2: stunnel
+    ###########################################################################
+    log "=== Benchmark 2: stunnel ==="
+
+    c_ns "$SERVER_NS" cp "${BENCH_TMP}/stunnel-server.conf" /tmp/tng-bench-stunnel-server.conf
+    c_ns "$CLIENT_NS" cp "${BENCH_TMP}/stunnel-client.conf" /tmp/tng-bench-stunnel-client.conf
+
+    # Start services
+    c_ns "$SERVER_NS" iperf3 -s -D
+    sleep 0.5
+    # Ensure clean ports
+    c_ns "$SERVER_NS" pkill -f stunnel 2>/dev/null || true
+    c_ns "$CLIENT_NS" pkill -f stunnel 2>/dev/null || true
+    sleep 0.5
+
+    c_ns "$SERVER_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-server.conf &
+    c_ns "$CLIENT_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-client.conf &
+    sleep 1
+
+    STUNNEL_RESULTS[$streams]=$(run_iperf "$IP_C" "$STUNNEL_CLIENT_PORT" "$CLIENT_NS" "stunnel ($streams streams)" "$streams")
+    kill_ns_bg "$SERVER_NS"
+    kill_ns_bg "$CLIENT_NS"
+    c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
+
+    ###########################################################################
+    # Benchmark 3: TNG (no_ra)
+    ###########################################################################
+    log "=== Benchmark 3: TNG (rats-TLS, no_ra) ==="
+
+    # Egress config (server side)
+    c_ns "$SERVER_NS" cp "${BENCH_TMP}/egress.json" /tmp/tng-bench/egress.json
+
+    # Ingress config (client side)
+    c_ns "$CLIENT_NS" cp "${BENCH_TMP}/ingress.json" /tmp/tng-bench/ingress.json
+
+    # Start iperf3
+    c_ns "$SERVER_NS" iperf3 -s -D
+    sleep 0.5
+
+    # Start TNG egress
+    log "Starting TNG egress..."
+    c_ns "$SERVER_NS" "$TNG_BIN" launch --config-file /tmp/tng-bench/egress.json > /tmp/tng-bench/egress.log 2>&1 &
+    sleep 2
+    if ! c_ns "$SERVER_NS" ss -tlnp | grep -q "${TNG_EGRESS_LISTEN}"; then
+        fail "TNG egress not listening on ${TNG_EGRESS_LISTEN}"
+        c_ns "$SERVER_NS" cat /tmp/tng-bench/egress.log | tail -10
+        exit 1
+    fi
+    ok "TNG egress on port ${TNG_EGRESS_LISTEN}"
+
+    # Start TNG ingress
+    log "Starting TNG ingress..."
+    c_ns "$CLIENT_NS" "$TNG_BIN" launch --config-file /tmp/tng-bench/ingress.json > /tmp/tng-bench/ingress.log 2>&1 &
+    sleep 2
+    if ! c_ns "$CLIENT_NS" ss -tlnp | grep -q "${TNG_INGRESS_LISTEN}"; then
+        fail "TNG ingress not listening on ${TNG_INGRESS_LISTEN}"
+        c_ns "$CLIENT_NS" cat /tmp/tng-bench/ingress.log | tail -10
+        exit 1
+    fi
+    ok "TNG ingress on port ${TNG_INGRESS_LISTEN}"
+
+    TNG_RESULTS[$streams]=$(run_iperf "$IP_S" "$IPERF_PORT" "$CLIENT_NS" "TNG ($streams streams)" "$streams")
+    kill_ns_bg "$SERVER_NS"
+    kill_ns_bg "$CLIENT_NS"
+    c_ns "$SERVER_NS" pkill iperf3 2>/dev/null || true
+done
 
 ###############################################################################
 # Results
@@ -296,10 +316,16 @@ log "  Benchmark Results"
 log "=========================================="
 log ""
 
-python3 << PYEOF
-raw = ${RAW_BW:-0}
-stunnel = ${STUNNEL_BW:-0}
-tng = ${TNG_BW:-0}
+for streams in "${STREAM_COUNTS[@]}"; do
+    raw="${RAW_RESULTS[$streams]}"
+    stunnel="${STUNNEL_RESULTS[$streams]}"
+    tng="${TNG_RESULTS[$streams]}"
+
+    log "--- $streams stream(s) ---"
+    python3 << PYEOF
+raw = float("${raw}")
+stunnel = float("${stunnel}")
+tng = float("${tng}")
 
 w = 20
 print(f"  {'Method':<{w}} {'Bandwidth':<{w}} {'vs Raw':<{w}} {'vs stunnel':<{w}}")
@@ -320,14 +346,15 @@ else:
 print(f"  {'TNG (rats-TLS)':<{w}} {f'{tng} Gbps':<{w}} {tng_raw:<{w}} {tng_st}")
 print()
 
-# Gap analysis
 if stunnel > 0 and tng > 0:
     gap = stunnel - tng
     pct_gap = (gap / stunnel) * 100
     if tng < stunnel:
         print(f"  TNG is {pct_gap:.0f}% slower than stunnel (gap: {gap:.1f} Gbps)")
     else:
-        print(f"  TNG exceeds stunnel by {pct_gap:.0f}%")
+        print(f"  TNG exceeds stunnel by {abs(pct_gap):.0f}%")
     if raw > 0:
         print(f"  TNG achieves {tng/raw*100:.0f}% of raw TCP throughput")
 PYEOF
+    log ""
+done
