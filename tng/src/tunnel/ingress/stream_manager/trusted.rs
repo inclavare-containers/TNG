@@ -57,19 +57,27 @@ impl TrustedStreamManager {
                         .await?,
                     ),
 
-                    None => Box::new(
-                        RatsTlsStreamForwarder::new(
-                            #[cfg(any(
-                                target_os = "android",
-                                target_os = "fuchsia",
-                                target_os = "linux"
-                            ))]
-                            transport_so_mark,
-                            ra_context,
-                            runtime.clone(),
+                    None => {
+                        let multiplex = common_args
+                            .rats_tls
+                            .as_ref()
+                            .map(|a| a.multiplex)
+                            .unwrap_or(true);
+                        Box::new(
+                            RatsTlsStreamForwarder::new(
+                                #[cfg(any(
+                                    target_os = "android",
+                                    target_os = "fuchsia",
+                                    target_os = "linux"
+                                ))]
+                                transport_so_mark,
+                                ra_context,
+                                runtime.clone(),
+                                !multiplex,
+                            )
+                            .await?,
                         )
-                        .await?,
-                    ),
+                    }
                 }
             },
             runtime,

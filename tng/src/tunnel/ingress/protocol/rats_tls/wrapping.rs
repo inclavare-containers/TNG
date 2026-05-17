@@ -97,9 +97,12 @@ impl RatsTlsWrappingLayer {
             parent_span.clone(),
         )?;
 
-        let OnetimeTlsClientConfig(tls_client_config, _verifier) = tls_config_generator
+        let OnetimeTlsClientConfig(mut tls_client_config, _verifier) = tls_config_generator
             .get_one_time_rustls_client_config()
             .await?;
+
+        // Override ALPN to prefer raw-tls
+        tls_client_config.alpn_protocols = vec![b"raw-tls".to_vec(), b"h2".to_vec()];
 
         let tcp_stream: tokio::net::TcpStream = connector
             .call(http::Request::new(()))

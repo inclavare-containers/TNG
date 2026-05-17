@@ -88,6 +88,7 @@ pub mod tests {
                             substitution: "/foo/bar/\\1".to_owned(),
                         }],
                     }),
+                    rats_tls: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
                         attest: None,
@@ -126,6 +127,7 @@ pub mod tests {
                         cors: None,
                         key: Default::default(),
                     }),
+                    rats_tls: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: false,
                         attest: Some(AttestArgs::BackgroundCheck {

@@ -16,14 +16,20 @@ use tracing::Instrument;
 
 pub(super) struct RatsTlsSecurityLayer {
     tls_config_generator: TlsConfigGenerator,
+    raw_tls: bool,
 }
 
 impl RatsTlsSecurityLayer {
-    pub async fn new(ra_context: Arc<RaContext>, runtime: TokioRuntime) -> Result<Self> {
+    pub async fn new(
+        ra_context: Arc<RaContext>,
+        runtime: TokioRuntime,
+        raw_tls: bool,
+    ) -> Result<Self> {
         let tls_config_generator = TlsConfigGenerator::new(ra_context, runtime).await?;
 
         Ok(Self {
             tls_config_generator,
+            raw_tls,
         })
     }
 
@@ -36,10 +42,18 @@ impl RatsTlsSecurityLayer {
     )> {
         async {
             // Prepare TLS config
-            let OnetimeTlsServerConfig(tls_server_config, verifier) = self
+            let OnetimeTlsServerConfig(mut tls_server_config, verifier) = self
                 .tls_config_generator
                 .get_one_time_rustls_server_config()
                 .await?;
+
+            // Set ALPN based on raw_tls config
+            if self.raw_tls {
+                tls_server_config.alpn_protocols =
+                    vec![b"raw-tls".to_vec(), b"h2".to_vec()];
+            } else {
+                tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
+            }
 
             let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
             tracing::debug!("Start to estabilish rats-tls connection");

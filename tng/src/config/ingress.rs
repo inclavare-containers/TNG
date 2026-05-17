@@ -24,8 +24,27 @@ pub struct CommonArgs {
     #[serde(default = "bool::default")]
     pub web_page_inject: bool,
 
+    #[serde(default = "Option::default")]
+    pub rats_tls: Option<RatsTlsArgs>,
+
     #[serde(flatten)]
     pub ra_args: RaArgsUnchecked,
+}
+
+/// Configuration for rats-TLS transport.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RatsTlsArgs {
+    /// When true (default), uses HTTP/2 CONNECT tunneling to multiplex multiple
+    /// TCP streams over a single rats-TLS connection, reducing handshake overhead.
+    /// When false, each downstream connection creates an independent TLS session
+    /// without HTTP/2 CONNECT or connection pooling, beneficial in high-throughput scenarios.
+    #[serde(default = "default_multiplex")]
+    pub multiplex: bool,
+}
+
+fn default_multiplex() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

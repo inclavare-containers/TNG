@@ -31,8 +31,8 @@ impl RatsTlsStreamForwarder {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
+        raw_tls: bool,
     ) -> Result<Self> {
-        let raw_tls = ra_context.is_no_ra();
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]

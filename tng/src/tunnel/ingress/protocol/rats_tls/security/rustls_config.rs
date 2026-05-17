@@ -77,12 +77,7 @@ impl TlsConfigGenerator {
                 }
             };
 
-        config.0.alpn_protocols = match self {
-            TlsConfigGenerator::NoRa => {
-                vec![b"raw-tls".to_vec(), b"h2".to_vec()]
-            }
-            _ => vec![b"h2".to_vec()],
-        };
+        config.0.alpn_protocols = vec![b"h2".to_vec()];
 
         Ok(config)
     }

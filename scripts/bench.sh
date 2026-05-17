@@ -192,6 +192,9 @@ cat > "${BENCH_TMP}/egress.json" << 'EGRESS_EOF'
                 "capture_local_traffic": true,
                 "listen_port": 40000
             },
+            "rats_tls": {
+                "multiplex": false
+            },
             "no_ra": true
         }
     ]
@@ -208,6 +211,9 @@ cat > "${BENCH_TMP}/ingress.json" << 'INGRESS_EOF'
                     {"host": "10.200.1.2", "port": 5201}
                 ],
                 "listen_port": 50000
+            },
+            "rats_tls": {
+                "multiplex": false
             },
             "no_ra": true
         }

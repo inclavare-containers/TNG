@@ -53,14 +53,22 @@ impl TrustedStreamManager {
         Ok(Self {
             transport_layer: TransportLayer::new(
                 common_args.direct_forward.clone(),
-                common_args.ohttp.clone(),
+                &common_args.ohttp,
             )?,
             decoder: match &common_args.ohttp {
-                // Note that ohttp.allow_non_tng_traffic_regexes is handled by TransportLayer so we don't need to handle it here.
-                Some(ohttp) => Box::new(
-                    OHttpStreamDecoder::new(ra_context, ohttp.clone(), runtime.clone()).await?,
+                Some(ohttp_args) => Box::new(
+                    OHttpStreamDecoder::new(ra_context, ohttp_args.clone(), runtime.clone()).await?,
                 ),
-                None => Box::new(RatsTlsStreamDecoder::new(ra_context, runtime.clone()).await?),
+                None => {
+                    let multiplex = common_args
+                        .rats_tls
+                        .as_ref()
+                        .map(|a| a.multiplex)
+                        .unwrap_or(true);
+                    Box::new(
+                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), !multiplex).await?,
+                    )
+                }
             },
             runtime,
         })
