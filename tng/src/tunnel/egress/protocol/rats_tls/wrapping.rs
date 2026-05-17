@@ -1,13 +1,9 @@
 use anyhow::Result;
-use axum::{
-    body::Body,
-    response::{IntoResponse as _, Response},
-};
-use http::{HeaderValue, Method, Request, StatusCode};
+use axum::{body::Body, response::IntoResponse as _};
+use http::{Method, Request, Response, StatusCode};
 use hyper::body::Incoming;
 use hyper_util::service::TowerToHyperService;
 use tower::ServiceBuilder;
-use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use tracing::Instrument;
 
 use crate::tunnel::{
@@ -16,7 +12,7 @@ use crate::tunnel::{
 };
 use crate::CommonStreamTrait;
 
-fn error_response(code: StatusCode, msg: String) -> Response {
+fn error_response(code: StatusCode, msg: String) -> Response<Body> {
     tracing::error!(?code, ?msg, "responding errors to downstream");
     (code, msg).into_response()
 }
@@ -38,23 +34,17 @@ impl RatsTlsWrappingLayer {
         let span = tracing::info_span!("wrapping");
         let svc = {
             let span = span.clone();
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(SetResponseHeaderLayer::overriding(
-                    http::header::SERVER,
-                    HeaderValue::from_static("tng"),
-                ))
-                .service(tower::service_fn(move |req| {
-                    let channel = channel.clone();
-                    let runtime = runtime.clone();
-                    let attestation_result = attestation_result.clone();
-                    let span = span.clone();
-                    async move {
-                        Self::terminate_http_connect_svc(req, attestation_result, channel, runtime)
-                            .instrument(span)
-                            .await
-                    }
-                }))
+            ServiceBuilder::new().service(tower::service_fn(move |req| {
+                let channel = channel.clone();
+                let runtime = runtime.clone();
+                let attestation_result = attestation_result.clone();
+                let span = span.clone();
+                async move {
+                    Self::terminate_http_connect_svc(req, attestation_result, channel, runtime)
+                        .instrument(span)
+                        .await
+                }
+            }))
         };
 
         let svc = TowerToHyperService::new(svc);
@@ -79,7 +69,7 @@ impl RatsTlsWrappingLayer {
             Option<AttestationResult>,
         )>,
         runtime: TokioRuntime,
-    ) -> Result<Response> {
+    ) -> Result<Response<Body>> {
         tracing::trace!("Handling new wrapping stream");
 
         let req = req.map(Body::new);
