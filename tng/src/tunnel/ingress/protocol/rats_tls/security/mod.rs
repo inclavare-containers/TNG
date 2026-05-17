@@ -173,7 +173,7 @@ impl RatsTlsSecurityLayer {
                 &endpoint,
                 &self.runtime,
             )
-            .instrument(tracing::info_span!("wrapping", mode = "raw-tls"))
+            .instrument(tracing::info_span!("wrapping", mode = "rats-tls"))
             .await?;
             Ok((Box::new(stream), local_addr, att, session_id))
         } else {

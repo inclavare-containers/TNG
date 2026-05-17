@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+## Code Refactoring Rules
+
+When refactoring or modifying code:
+
+- **Always preserve existing comments** if the code is kept and the comment is still accurate. This is especially important for comments containing URLs, as they are often critical for debugging and tracing issues back to their source (e.g., GitHub issue links, documentation references, bug reports).
+- Only remove or update a comment if the described behavior no longer exists or is incorrect.
+- When moving code, carry its comments along.
+
 ## Git Commit Requirements
 
 When creating or amending commits:

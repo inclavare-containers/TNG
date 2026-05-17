@@ -27,6 +27,7 @@ STUNNEL_CLIENT_PORT=9001
 TNG_EGRESS_LISTEN=40000
 TNG_INGRESS_LISTEN=50000
 
+TNG_MULTIPLEX="${TNG_MULTIPLEX:-false}"  # "false" = raw-TLS (no H2), "true" = H2 CONNECT multiplex
 BENCH_TMP=""
 
 ###############################################################################
@@ -49,12 +50,17 @@ kill_ns_bg() {
 # Run one round of iperf3 and extract sender bandwidth in Gbps
 run_iperf_one() {
     local host="$1" port="$2" ns="$3" streams="${4:-1}"
-    ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -P "$streams" -J 2>/dev/null | python3 -c "
+    local json_output
+    json_output=$(ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -P "$streams" -J 2>/dev/null) || return 1
+    echo "$json_output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
-bits = d['end']['sum_sent']['bits_per_second']
-print(f'{bits / 1e9:.2f}')
-" 2>/dev/null
+try:
+    d = json.load(sys.stdin)
+    bits = d['end']['sum_sent']['bits_per_second']
+    print(f'{bits / 1e9:.2f}')
+except (KeyError, json.JSONDecodeError):
+    sys.exit(1)
+" 2>/dev/null || return 1
 }
 
 # Run iperf3 multiple rounds and report median
@@ -181,7 +187,7 @@ verifyPeer = no
 EOF
 
 # TNG egress config (server side)
-cat > "${BENCH_TMP}/egress.json" << 'EGRESS_EOF'
+cat > "${BENCH_TMP}/egress.json" << EGRESS_EOF
 {
     "add_egress": [
         {
@@ -193,7 +199,7 @@ cat > "${BENCH_TMP}/egress.json" << 'EGRESS_EOF'
                 "listen_port": 40000
             },
             "rats_tls": {
-                "multiplex": false
+                "multiplex": ${TNG_MULTIPLEX}
             },
             "no_ra": true
         }
@@ -202,7 +208,7 @@ cat > "${BENCH_TMP}/egress.json" << 'EGRESS_EOF'
 EGRESS_EOF
 
 # TNG ingress config (client side)
-cat > "${BENCH_TMP}/ingress.json" << 'INGRESS_EOF'
+cat > "${BENCH_TMP}/ingress.json" << INGRESS_EOF
 {
     "add_ingress": [
         {
@@ -213,7 +219,7 @@ cat > "${BENCH_TMP}/ingress.json" << 'INGRESS_EOF'
                 "listen_port": 50000
             },
             "rats_tls": {
-                "multiplex": false
+                "multiplex": ${TNG_MULTIPLEX}
             },
             "no_ra": true
         }
@@ -273,7 +279,7 @@ for streams in "${STREAM_COUNTS[@]}"; do
     ###########################################################################
     # Benchmark 3: TNG (no_ra)
     ###########################################################################
-    log "=== Benchmark 3: TNG (rats-TLS, no_ra) ==="
+    log "=== Benchmark 3: TNG (rats-TLS, multiplex=${TNG_MULTIPLEX}) ==="
 
     # Egress config (server side)
     c_ns "$SERVER_NS" cp "${BENCH_TMP}/egress.json" /tmp/tng-bench/egress.json
@@ -349,7 +355,8 @@ if stunnel > 0:
     tng_st = f'{tng/stunnel*100:.0f}%'
 else:
     tng_st = 'N/A'
-print(f"  {'TNG (rats-TLS)':<{w}} {f'{tng} Gbps':<{w}} {tng_raw:<{w}} {tng_st}")
+tng_label="TNG (multiplex=${TNG_MULTIPLEX})"
+print(f"  {tng_label:<{w}} {f'{tng} Gbps':<{w}} {tng_raw:<{w}} {tng_st}")
 print()
 
 if stunnel > 0 and tng > 0:

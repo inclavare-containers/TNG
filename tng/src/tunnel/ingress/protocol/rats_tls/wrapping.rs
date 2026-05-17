@@ -90,7 +90,7 @@ impl RatsTlsWrappingLayer {
         Option<AttestationResult>,
         /* session_id */ u64,
     )> {
-        let parent_span = tracing::info_span!("wrapping", mode = "raw-tls");
+        let parent_span = tracing::info_span!("wrapping", mode = "rats-tls");
 
         let mut connector =
             transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
@@ -100,7 +100,7 @@ impl RatsTlsWrappingLayer {
             .await?;
 
         // Override ALPN to prefer raw-tls
-        tls_client_config.alpn_protocols = vec![b"raw-tls".to_vec(), b"h2".to_vec()];
+        tls_client_config.alpn_protocols = vec![b"rats-tls".to_vec(), b"h2".to_vec()];
 
         let tcp_stream: tokio::net::TcpStream = connector
             .call(http::Request::new(()))

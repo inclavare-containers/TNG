@@ -49,7 +49,7 @@ impl RatsTlsSecurityLayer {
 
             // Set ALPN based on raw_tls config
             if self.raw_tls {
-                tls_server_config.alpn_protocols = vec![b"raw-tls".to_vec(), b"h2".to_vec()];
+                tls_server_config.alpn_protocols = vec![b"rats-tls".to_vec(), b"h2".to_vec()];
             } else {
                 tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
             }

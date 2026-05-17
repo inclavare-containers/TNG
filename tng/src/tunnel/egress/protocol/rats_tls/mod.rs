@@ -47,7 +47,7 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
 
         // Check negotiated ALPN protocol
         let (_, tls_session) = tls_stream.get_ref();
-        let is_raw_tls = tls_session.alpn_protocol() == Some(b"raw-tls");
+        let is_raw_tls = tls_session.alpn_protocol() == Some(b"rats-tls");
 
         if is_raw_tls {
             // Raw-TLS mode: return TLS stream directly, no HTTP/2 server

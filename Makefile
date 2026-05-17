@@ -428,12 +428,20 @@ test-dep-as:
 
 # Benchmark: raw TCP vs stunnel vs TNG in isolated ip netns
 # Usage: make bench [TNG_BIN=./target/release/tng]
+#        make bench-multiplex [TNG_BIN=./target/release/tng]  # tests multiplex=true mode
 TNG_BIN ?= ./target/release/tng
 
-.PHONY: bench
+.PHONY: bench bench-multiplex
 bench:
 	@if [ ! -f "$(TNG_BIN)" ]; then \
 		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
 		$(MAKE) bin-build; \
 	fi
 	bash ./scripts/bench.sh
+
+bench-multiplex:
+	@if [ ! -f "$(TNG_BIN)" ]; then \
+		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
+		$(MAKE) bin-build; \
+	fi
+	TNG_MULTIPLEX=true bash ./scripts/bench.sh
