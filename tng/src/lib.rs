@@ -27,7 +27,7 @@ pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
 
 pub use crate::tunnel::attestation_result::AttestationResult;
 pub use crate::tunnel::ra_context::RaContext;
-pub use crate::tunnel::stream::CommonStreamTrait;
+pub use crate::tunnel::stream::{CommonStreamTrait, ContextualStream};
 pub use crate::tunnel::utils::runtime::TokioRuntime;
 pub use crate::tunnel::utils::tokio::TokioIo;
 

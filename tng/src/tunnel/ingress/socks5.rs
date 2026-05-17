@@ -162,7 +162,7 @@ impl IngressTrait for Socks5Ingress {
                     let via_tunnel = self.stream_router.should_forward_via_tunnel(&dst);
 
                     Ok(AcceptedStream {
-                        stream: Box::new(stream),
+                        stream: Box::new(crate::ContextualStream::new(stream, "ingress-socks5")),
                         src: peer_addr,
                         dst,
                         via_tunnel,

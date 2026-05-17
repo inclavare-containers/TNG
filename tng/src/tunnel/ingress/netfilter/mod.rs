@@ -122,7 +122,7 @@ impl IngressTrait for NetfilterIngress {
                 let orig_dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
 
                 Ok::<_, anyhow::Error>(AcceptedStream{
-                    stream: Box::new(stream),
+                    stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
                     src: peer_addr,
                     dst: orig_dst,
                     via_tunnel: true,

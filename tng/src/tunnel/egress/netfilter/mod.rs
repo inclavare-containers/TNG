@@ -130,7 +130,7 @@ impl EgressTrait for NetfilterEgress {
                 let dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
 
                 Ok(AcceptedStream {
-                    stream: Box::new(stream),
+                    stream: Box::new(crate::ContextualStream::new(stream, "egress-netfilter")),
                     src: peer_addr,
                     dst,
                     listener_addr: listen_addr,

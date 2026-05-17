@@ -11,7 +11,7 @@ use crate::{
         ra_context::RaContext,
         utils,
     },
-    AttestationResult, CommonStreamTrait, TokioRuntime,
+    AttestationResult, CommonStreamTrait, ContextualStream, TokioRuntime,
 };
 
 use anyhow::Result;
@@ -54,7 +54,16 @@ impl RatsTlsStreamForwarder {
         Option<AttestationResult>,
         /* session_id */ u64,
     )> {
-        self.security_layer.allocate_secured_stream(endpoint).await
+        let (stream, local_addr, attestation_result, session_id) = self
+            .security_layer
+            .allocate_secured_stream(endpoint)
+            .await?;
+        Ok((
+            ContextualStream::new(stream, "ingress-rats-tls"),
+            local_addr,
+            attestation_result,
+            session_id,
+        ))
     }
 }
 

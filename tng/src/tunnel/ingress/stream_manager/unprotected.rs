@@ -8,7 +8,7 @@ use crate::{
         endpoint::TngEndpoint,
         utils::{self, socket::tcp_connect},
     },
-    CommonStreamTrait,
+    CommonStreamTrait, ContextualStream,
 };
 
 use super::StreamManager;
@@ -50,8 +50,8 @@ impl StreamManager for UnprotectedStreamManager {
         .with_context(|| {
             format!("Failed to establish TCP connection with upstream '{endpoint}'")
         })?;
-
         let upstream_local = upstream.local_addr().ok();
+        let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })

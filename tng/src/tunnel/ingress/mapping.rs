@@ -86,7 +86,7 @@ impl IngressTrait for MappingIngress {
             loop {
                 match listener.accept_with_common_sock_opts().await {
                     Ok((stream, peer_addr)) => yield Ok(AcceptedStream{
-                        stream: Box::new(stream),
+                        stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
                         src: peer_addr,
                         dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
                         via_tunnel: true,

@@ -149,7 +149,10 @@ impl RequestHelper {
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
                     sender
                         .send(AcceptedStream {
-                            stream: Box::new(TokioIo::new(upgraded)),
+                            stream: Box::new(crate::ContextualStream::new(
+                                TokioIo::new(upgraded),
+                                "ingress-http-connect",
+                            )),
                             src: peer_addr,
                             dst,
                             via_tunnel,
@@ -185,7 +188,7 @@ impl RequestHelper {
 
                 let send_accepted_stream = async {
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
-                    sender.send(AcceptedStream { stream: Box::new(s2), src: peer_addr, dst, via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
+                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst, via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
                 };
 
                 let send_task = async {

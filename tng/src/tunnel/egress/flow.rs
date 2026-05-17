@@ -16,7 +16,7 @@ use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
 use crate::tunnel::utils::socket::tcp_connect;
-use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
+use crate::{service::RegistedService, CommonStreamTrait, ContextualStream};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 use crate::tunnel::endpoint::TngEndpoint;
@@ -190,8 +190,8 @@ impl EgressFlow {
                             )
                             .await
                             .context("Failed to connect to upstream")?;
-
                             let egress_local = upstream.local_addr().ok();
+                            let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
 
                             // Print access log
                             let access_log = AccessLog::Egress {
