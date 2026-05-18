@@ -36,13 +36,15 @@ impl RatsTlsWrappingLayer {
             .version(Version::HTTP_2)
             .body(BoxBody::new(http_body_util::Empty::new()))?;
 
-        tracing::debug!("Establishing the wrapping layer");
+        tracing::debug!(session_id = client.id, "Establishing the wrapping layer (H2 CONNECT)");
 
         let mut resp = client
             .hyper
             .request(req)
             .await
             .context("Failed to send HTTP/2 CONNECT request")?;
+
+        tracing::debug!(session_id = client.id, "H2 CONNECT response received");
 
         let attestation_result = resp
             .extensions()
@@ -72,7 +74,7 @@ impl RatsTlsWrappingLayer {
             bail!("failed to downcast to inner stream");
         };
 
-        tracing::debug!("Trusted tunnel established");
+        tracing::debug!(session_id = client.id, "Trusted tunnel established (H2 upgrade OK)");
 
         Ok((stream, Some(local_addr), attestation_result, client.id))
     }

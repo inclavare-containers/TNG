@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 use axum::{body::Body, response::IntoResponse as _};
 use http::{Method, Request, Response, StatusCode};
@@ -11,6 +13,8 @@ use crate::tunnel::{
     utils::{self, runtime::TokioRuntime, tokio::TokioIo},
 };
 use crate::CommonStreamTrait;
+
+static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
 fn error_response(code: StatusCode, msg: String) -> Response<Body> {
     tracing::error!(?code, ?msg, "responding errors to downstream");
@@ -31,6 +35,8 @@ impl RatsTlsWrappingLayer {
     ) {
         let runtime_cloned = runtime.clone();
 
+        tracing::info!("H2 server starting on TLS stream");
+
         let span = tracing::info_span!("wrapping");
         let svc = {
             let span = span.clone();
@@ -39,8 +45,10 @@ impl RatsTlsWrappingLayer {
                 let runtime = runtime.clone();
                 let attestation_result = attestation_result.clone();
                 let span = span.clone();
+                let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
                 async move {
-                    Self::terminate_http_connect_svc(req, attestation_result, channel, runtime)
+                    tracing::info!(stream_id, "H2 server received CONNECT request");
+                    Self::terminate_http_connect_svc(req, stream_id, attestation_result, channel, runtime)
                         .instrument(span)
                         .await
                 }
@@ -55,19 +63,23 @@ impl RatsTlsWrappingLayer {
         if let Err(error) = hyper::server::conn::http2::Builder::new(runtime_cloned)
             .initial_connection_window_size(16 * 1024 * 1024)
             .initial_stream_window_size(16 * 1024 * 1024)
+            .keep_alive_interval(None)
             .serve_connection(TokioIo::new(tls_stream), svc)
             .instrument(span)
             .await
         {
             tracing::error!(
                 ?error,
-                "Failed to serve HTTP/2 connection on RATS-TLS wrapping layer"
+                "H2 server on RATS-TLS wrapping layer terminated with error"
             );
+        } else {
+            tracing::info!("H2 server on RATS-TLS wrapping layer exited cleanly");
         }
     }
 
     async fn terminate_http_connect_svc(
         req: Request<Incoming>,
+        stream_id: u64,
         attestation_result: Option<AttestationResult>,
         channel: tokio::sync::mpsc::UnboundedSender<(
             Box<dyn CommonStreamTrait + Sync>,
@@ -80,25 +92,27 @@ impl RatsTlsWrappingLayer {
         let req = req.map(Body::new);
 
         if req.method() == Method::CONNECT {
-            runtime.spawn_supervised_task_current_span(async move {
+            runtime.spawn_supervised_task_current_span({
+                let attestation_result = attestation_result.clone();
+                async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
-                        tracing::debug!("Trusted tunnel established");
+                        tracing::info!(stream_id, "Trusted tunnel established (upgrade OK)");
 
                         let Ok(io) = utils::hyper::downcast_h2upgraded(upgraded) else {
-                            tracing::error!("failed to downcast to inner stream");
+                            tracing::error!(stream_id, "failed to downcast to inner stream");
                             return;
                         };
 
                         if let Err(e) = channel.send((Box::new(io), attestation_result)) {
-                            tracing::error!("Failed to send stream via channel: {e:#}");
+                            tracing::error!(stream_id, "Failed to send stream via channel: {e:#}");
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed during http connect upgrade: {e:#}");
+                        tracing::error!(stream_id, "Failed during http connect upgrade: {e:#}");
                     }
                 };
-            });
+            }});
             Ok(Response::new(Body::empty()).into_response())
         } else {
             Ok(error_response(
