@@ -14,6 +14,20 @@ use jsonwebtoken::{decode, decode_header, jwk, Algorithm, DecodingKey, Header, V
 use reqwest::Url;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
+#[cfg(not(all(
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown",
+)))]
+use rustls_webpki::aws_lc_rs::{
+    ECDSA_P256_SHA256, ECDSA_P256_SHA384, ECDSA_P384_SHA256, ECDSA_P384_SHA384,
+    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+};
+#[cfg(all(
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown",
+))]
 use rustls_webpki::ring::{
     ECDSA_P256_SHA256, ECDSA_P256_SHA384, ECDSA_P384_SHA256, ECDSA_P384_SHA384,
     RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
@@ -317,7 +331,7 @@ impl JwkAttestationTokenVerifier {
             intermediates.push(CertificateDer::from(der));
         }
 
-        // Use ring signature algorithms
+        // Use target-specific signature algorithms for certificate chain verification
         let supported_algs = &[
             ECDSA_P256_SHA256,
             ECDSA_P256_SHA384,
