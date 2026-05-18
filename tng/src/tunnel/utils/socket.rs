@@ -10,9 +10,6 @@ pub const TCP_KEEPALIVE_IDLE_SECS: u32 = 10;
 pub const TCP_KEEPALIVE_INTERVAL_SECS: u32 = 10;
 #[allow(dead_code)]
 pub const TCP_KEEPALIVE_PROBE_COUNT: u32 = 3;
-// Note accroding to [this blog](https://blog.cloudflare.com/when-tcp-sockets-refuse-to-die/), the TCP_USER_TIMEOUT shoud be less than TCP_KEEPIDLE + TCP_KEEPINTVL * TCP_KEEPCNT
-#[allow(dead_code)]
-pub const TCP_USER_TIMEOUT_SECS: u32 = 30;
 #[allow(dead_code)]
 pub const TCP_CONNECT_SO_MARK_DEFAULT: u32 = 0x235; // 565
 
@@ -82,15 +79,12 @@ pub fn set_tcp_common_sock_opts(as_fs: impl AsFd) -> Result<()> {
         tracing::warn!(?error, "set TCP_KEEPCNT failed")
     };
 
-    // Enable TCP_USER_TIMEOUT
-    #[cfg(any(target_os = "fuchsia", target_os = "linux"))]
-    if let Err(error) = setsockopt(
-        &fd,
-        nix::sys::socket::sockopt::TcpUserTimeout,
-        &TCP_USER_TIMEOUT_SECS,
-    ) {
-        tracing::warn!(?error, "set TCP_USER_TIMEOUT failed")
-    };
+    // Note: TCP_USER_TIMEOUT is intentionally NOT set here.
+    // Per https://blog.cloudflare.com/when-tcp-sockets-refuse-to-die/, this socket option
+    // forces connection teardown when unacked data exceeds the timeout threshold.
+    // For a transparent proxy, availability takes priority — a prematurely torn-down
+    // connection is far worse than a temporarily stalled one. Let the kernel's keepalive
+    // mechanism handle dead connection detection instead.
 
     Ok(())
 }

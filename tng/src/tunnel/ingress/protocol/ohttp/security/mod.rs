@@ -58,8 +58,6 @@ impl OHttpSecurityLayer {
                     TCP_KEEPALIVE_INTERVAL_SECS as u64,
                 ));
                 builder = builder.tcp_keepalive_retries(TCP_KEEPALIVE_PROBE_COUNT);
-                // TODO: update reqwest and hyper-util version to support tcp_user_timeout()
-                // builder = builder.tcp_user_timeout(Duration::from_secs(TCP_USER_TIMEOUT_SECS as u64));
             }
 
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
