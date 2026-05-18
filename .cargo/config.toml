@@ -1,0 +1,4 @@
+# Force clang for aws-lc-sys builds (GCC 10.2.1 triggers a false-positive
+# memcmp bug detection: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189)
+[env]
+CC = "clang"

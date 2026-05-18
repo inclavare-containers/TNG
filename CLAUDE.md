@@ -42,6 +42,10 @@ Fix any errors or warnings reported before proceeding with the commit.
 
 The following failures are pre-existing environment issues, not caused by code changes:
 
+- **`cargo build` fails with "COMPILER BUG DETECTED" from aws-lc-sys**: The system GCC 10.2.1
+  triggers a false-positive bug detection in `aws-lc-sys` (GCC bug 95189).
+  `.cargo/config.toml` sets `CC=clang` to work around this — do not remove it.
+
 - **`clippy`/`rustfmt` not installed for active toolchain**: The active toolchain (e.g. `1.89.0-x86_64-unknown-linux-gnu`) may be missing components. Install them before running checks:
   ```bash
   rustup component add clippy
