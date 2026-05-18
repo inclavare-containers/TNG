@@ -21,6 +21,11 @@ async fn main() {
 
     // Initialize rustls crypto provider
     #[allow(clippy::expect_used)]
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        target_vendor = "unknown",
+        target_os = "unknown"
+    )))]
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");

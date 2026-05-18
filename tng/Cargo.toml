@@ -72,7 +72,8 @@ rand = {workspace = true}
 rand_chacha = {workspace = true}
 regex = {workspace = true}
 reqwest = {workspace = true, features = ["stream"]}
-rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs", "brotli"]}
+# rustls crypto provider: aws-lc-rs for native, ring for wasm (aws-lc-sys can't compile wasm)
+rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "brotli"]}
 rustls-pemfile = {workspace = true}
 scopeguard = {workspace = true}
 serde = {workspace = true, features = ["rc"]}
@@ -89,7 +90,8 @@ tempfile = {workspace = true}
 thiserror = {workspace = true}
 time = {workspace = true}
 tokio-graceful = {workspace = true}
-tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}
+# rustls crypto provider: aws-lc-rs for native, ring for wasm
+tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12"]}
 tokio-util = {workspace = true, features = ["compat"]}
 tonic = {workspace = true, optional = true}
 tower = {workspace = true, features = ["util"]}
@@ -110,6 +112,9 @@ notify = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "time", "process"]}
+# Enable aws-lc-rs for native targets (AVX512/VAES optimization)
+rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs", "brotli"]}
+tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}
 tower-http = {workspace = true, features = ["trace", "set-header", "cors", "compression-br", "compression-gzip", "compression-zstd"]}
 ws_stream_tungstenite = {workspace = true}
 
@@ -117,6 +122,9 @@ ws_stream_tungstenite = {workspace = true}
 axum = {workspace = true, default-features = false, features = ["json"]}# to disable mio
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "verifier-coco", "verifier-ita"]}
 ring = {workspace = true, features = ["wasm32_unknown_unknown_js"]}
+# Enable ring for wasm targets (aws-lc-sys can't compile wasm)
+rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "ring"]}
+tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "ring"]}
 rustls-pki-types = {version = "*", features = ["web"]}
 serde-wasm-bindgen = {workspace = true}
 tokio = {workspace = true, default-features = false}
