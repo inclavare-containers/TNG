@@ -65,17 +65,8 @@ impl EgressFlow {
         let metric_attributes = egress.metric_attributes();
         let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
 
-        let trusted_stream_manager = Arc::new(
-            TrustedStreamManager::new(common_args, {
-                // A standalone tokio runtime to run tasks related to the protocol module
-                #[cfg(unix)]
-                let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
-                #[cfg(wasm)]
-                let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
-                rt
-            })
-            .await?,
-        );
+        let trusted_stream_manager =
+            Arc::new(TrustedStreamManager::new(common_args, runtime.clone()).await?);
 
         Ok(Self {
             egress,

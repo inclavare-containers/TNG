@@ -30,7 +30,7 @@ impl TrustedStreamManager {
         common_args: &CommonArgs,
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
-        runtime: TokioRuntime,
+        parent_runtime: TokioRuntime,
     ) -> Result<Self> {
         if common_args.web_page_inject {
             bail!("The `web_page_inject` field is not supported")
@@ -39,6 +39,35 @@ impl TrustedStreamManager {
         if common_args.ohttp.is_some() && common_args.rats_tls.is_some() {
             bail!("Cannot specify both `ohttp` and `rats_tls` — they are mutually exclusive");
         }
+
+        // Use a standalone runtime for ohttp and H2 multiplex scenarios to avoid
+        // contention with the traffic capture module. For raw-tls (multiplex=false),
+        // share the parent runtime since there is no H2 task scheduling overhead.
+        let is_h2_or_ohttp = common_args.ohttp.is_some()
+            || common_args
+                .rats_tls
+                .as_ref()
+                .map(|a| a.multiplex)
+                .unwrap_or(true);
+        let runtime = if is_h2_or_ohttp {
+            #[cfg(unix)]
+            {
+                TokioRuntime::new_multi_thread(parent_runtime.shutdown_guard().clone())?
+            }
+            #[cfg(wasm)]
+            {
+                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+            }
+        } else {
+            #[cfg(unix)]
+            {
+                TokioRuntime::current(parent_runtime.shutdown_guard().clone())?
+            }
+            #[cfg(wasm)]
+            {
+                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+            }
+        };
 
         let ra_args = common_args.ra_args.clone().into_checked()?;
         let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);

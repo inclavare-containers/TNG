@@ -77,14 +77,7 @@ impl IngressFlow {
                 common_args,
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
-                {
-                    // A standalone tokio runtime to run tasks related to the protocol module
-                    #[cfg(unix)]
-                    let rt = TokioRuntime::new_multi_thread(runtime.shutdown_guard().clone())?;
-                    #[cfg(wasm)]
-                    let rt = TokioRuntime::wasm_main_thread(runtime.shutdown_guard().clone())?;
-                    rt
-                },
+                runtime.clone(),
             )
             .await?,
         );
