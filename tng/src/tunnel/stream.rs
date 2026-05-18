@@ -4,6 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use anyhow::Context as _;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 pub trait CommonStreamTrait: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
@@ -41,7 +42,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for ContextualStream<S> {
     ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner)
             .poll_read(cx, buf)
-            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+            .map_err(|e| io::Error::other(anyhow::Error::from(e).context(self.source)))
     }
 }
 
@@ -53,19 +54,19 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ContextualStream<S> {
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut self.inner)
             .poll_write(cx, buf)
-            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+            .map_err(|e| io::Error::other(anyhow::Error::from(e).context(self.source)))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner)
             .poll_flush(cx)
-            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+            .map_err(|e| io::Error::other(anyhow::Error::from(e).context(self.source)))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner)
             .poll_shutdown(cx)
-            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+            .map_err(|e| io::Error::other(anyhow::Error::from(e).context(self.source)))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -79,6 +80,6 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ContextualStream<S> {
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut self.inner)
             .poll_write_vectored(cx, bufs)
-            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+            .map_err(|e| io::Error::other(anyhow::Error::from(e).context(self.source)))
     }
 }
