@@ -72,7 +72,7 @@ rand = {workspace = true}
 rand_chacha = {workspace = true}
 regex = {workspace = true}
 reqwest = {workspace = true, features = ["stream"]}
-rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
+rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs", "brotli"]}
 rustls-pemfile = {workspace = true}
 scopeguard = {workspace = true}
 serde = {workspace = true, features = ["rc"]}
@@ -89,7 +89,7 @@ tempfile = {workspace = true}
 thiserror = {workspace = true}
 time = {workspace = true}
 tokio-graceful = {workspace = true}
-tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "ring"]}
+tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}
 tokio-util = {workspace = true, features = ["compat"]}
 tonic = {workspace = true, optional = true}
 tower = {workspace = true, features = ["util"]}

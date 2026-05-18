@@ -94,10 +94,10 @@ ring = "0.17.8"
 rsa = {version = "0.9.7", features = ["sha2"]}
 rstest = "0.25.0"
 rtnetlink = "0.17.0"
-rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "ring"]}
+rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs"]}
 rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.10.1"
-rustls-webpki = {package = "rustls-webpki", version = "0.103.3", default-features = false, features = ["alloc", "ring"]}
+rustls-webpki = {package = "rustls-webpki", version = "0.103.3", default-features = false, features = ["alloc", "aws-lc-rs"]}
 scopeguard = "1.2.0"
 serde = {version = "1.0", features = ["derive"]}
 serde-wasm-bindgen = "0.6.5"
@@ -120,7 +120,7 @@ thiserror = "2.0.17"
 time = "0.3.41"
 tokio = {version = "1.47.1", default-features = false, features = ["sync"]}
 tokio-graceful = {version = "0.2.2", default-features = false}
-tokio-rustls = {version = "0.26.2", default-features = false, features = ["logging", "tls12", "ring"]}
+tokio-rustls = {version = "0.26.2", default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}
 tokio-util = "0.7.15"
 tokio_with_wasm = {version = "=0.8.6", features = ["rt", "macros", "time"]}
 tokio_with_wasm_proc = "=0.8.6"
