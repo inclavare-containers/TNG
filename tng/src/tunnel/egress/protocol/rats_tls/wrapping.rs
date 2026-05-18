@@ -35,7 +35,7 @@ impl RatsTlsWrappingLayer {
     ) {
         let runtime_cloned = runtime.clone();
 
-        tracing::info!("H2 server starting on TLS stream");
+        tracing::debug!("H2 server starting on TLS stream");
 
         let span = tracing::info_span!("wrapping");
         let svc = {
@@ -47,7 +47,7 @@ impl RatsTlsWrappingLayer {
                 let span = span.clone();
                 let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
                 async move {
-                    tracing::info!(stream_id, "H2 server received CONNECT request");
+                    tracing::debug!(stream_id, "H2 server received CONNECT request");
                     Self::terminate_http_connect_svc(req, stream_id, attestation_result, channel, runtime)
                         .instrument(span)
                         .await
@@ -73,7 +73,7 @@ impl RatsTlsWrappingLayer {
                 "H2 server on RATS-TLS wrapping layer terminated with error"
             );
         } else {
-            tracing::info!("H2 server on RATS-TLS wrapping layer exited cleanly");
+            tracing::debug!("H2 server on RATS-TLS wrapping layer exited cleanly");
         }
     }
 
@@ -97,7 +97,7 @@ impl RatsTlsWrappingLayer {
                 async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
-                        tracing::info!(stream_id, "Trusted tunnel established (upgrade OK)");
+                        tracing::debug!(stream_id, "Trusted tunnel established (upgrade OK)");
 
                         let Ok(io) = utils::hyper::downcast_h2upgraded(upgraded) else {
                             tracing::error!(stream_id, "failed to downcast to inner stream");
