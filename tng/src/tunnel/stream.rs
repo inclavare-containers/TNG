@@ -67,4 +67,18 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ContextualStream<S> {
             .poll_shutdown(cx)
             .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
     }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner)
+            .poll_write_vectored(cx, bufs)
+            .map_err(|e| io::Error::other(anyhow::anyhow!("[{}] {}", self.source, e)))
+    }
 }

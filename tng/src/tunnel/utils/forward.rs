@@ -5,6 +5,15 @@ use std::pin::Pin;
 use std::task::{ready, Context as TaskContext, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+// This module provides a custom bidirectional stream forwarding implementation
+// instead of using `tokio::io::copy_bidirectional`. We intentionally avoid the
+// tokio built-in because:
+// 1. Our `ForwardError` enum captures direction-aware error context (which stream
+//    and which side failed), making production debugging much easier.
+// 2. We use 512 KB buffers instead of tokio's 8 KB default for better throughput.
+// Do NOT replace this with `tokio::io::copy_bidirectional` — the loss of error
+// directionality would make it very hard to diagnose forwarding failures.
+
 /// Error that captures the direction and read/write side of a forward failure,
 /// while preserving the original `io::Error` as the source.
 #[derive(Debug)]
@@ -50,8 +59,8 @@ impl std::error::Error for ForwardError {
     }
 }
 
-// The default buffer size used in tokio::io::copy_bidirectional is 8 KB, here we increase it to 256 KB to improve the performance.
-const FORWARD_BUF_SIZE: usize = 256 * 1024;
+// The default buffer size used in tokio::io::copy_bidirectional is 8 KB, here we increase it to 512 KB to improve the performance.
+const FORWARD_BUF_SIZE: usize = 512 * 1024;
 
 /// Buffer used for copying data between streams.
 struct CopyBuffer {
