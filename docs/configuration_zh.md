@@ -18,7 +18,7 @@
 - （已废弃）**`encap_in_http`** (EncapInHttp, 可选)：HTTP封装配置。该配置已在2.2.5中废弃，请改用`ohttp`字段代替。
 - **`ohttp`** (OHttp, 可选)：OHTTP配置。
 - **`rats_tls`** (RatsTlsArgs, 可选)：rats-TLS传输配置。当既未指定`ohttp`也未指定`rats_tls`时，默认使用rats-TLS模式。
-    - **`multiplex`** (boolean, 可选，默认为`true`)：当为true时，使用HTTP/2 CONNECT隧道在单个rats-TLS连接上复用多个TCP流，减少握手开销。当为false时，每个下游连接创建独立的TLS会话，不使用HTTP/2 CONNECT或连接池，可在高吞吐场景下获得更高的单流吞吐量。
+    - **`multiplex`** (boolean, 可选，默认为`false`)：当为`true`时，使用HTTP/2 CONNECT隧道在单个rats-TLS连接上复用多个TCP流，减少握手开销——适合大量短连接、每连接数据传输量小的场景。当为`false`（默认）时，每个下游连接创建独立的TLS会话，不使用HTTP/2 CONNECT或连接池，可获得更高的单流吞吐量——推荐用于高带宽场景。注意：开启`multiplex`时，所有流共享同一条TLS连接，其带宽受限于单核CPU的TLS加密能力。
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。
@@ -375,7 +375,7 @@ flowchart TD
 - （已废弃）**`decap_from_http`** (DecapFromHttp, 可选)：HTTP解封装配置。该配置已在2.2.5中废弃，请改用`ohttp`字段代替。
 - **`ohttp`** (OHttp, 可选)：OHTTP配置。
 - **`rats_tls`** (RatsTlsArgs, 可选)：rats-TLS传输配置。当既未指定`ohttp`也未指定`rats_tls`时，默认使用rats-TLS模式。
-    - **`multiplex`** (boolean, 可选，默认为`true`)：当为true时，使用HTTP/2 CONNECT隧道在单个rats-TLS连接上复用多个TCP流，减少握手开销。当为false时，每个下游连接创建独立的TLS会话，不使用HTTP/2 CONNECT或连接池，可在高吞吐场景下获得更高的单流吞吐量。
+    - **`multiplex`** (boolean, 可选，默认为`false`)：当为`true`时，使用HTTP/2 CONNECT隧道在单个rats-TLS连接上复用多个TCP流，减少握手开销——适合大量短连接、每连接数据传输量小的场景。当为`false`（默认）时，每个下游连接创建独立的TLS会话，不使用HTTP/2 CONNECT或连接池，可获得更高的单流吞吐量——推荐用于高带宽场景。注意：开启`multiplex`时，所有流共享同一条TLS连接，其带宽受限于单核CPU的TLS加密能力。
 - **`no_ra`** (boolean, 可选，默认为`false`)：是否禁用远程证明。将该选项设置为`true`表示在该隧道端点上，tng用普通的X.509证书进行通信，而不触发远程证明流程。请注意该证书为tng代码中内嵌的一个固定的P256 X509自签名证书，不具有机密性，因此**该选项仅作调试用途，不应被用于生产环境**。该选项不能与`attest`或`verify`同时存在。
 - **`attest`** (Attest, 可选)：若指定该字段，表示在该隧道端点上tng扮演Attester角色。
 - **`verify`** (Verify, 可选)：若指定该字段，表示在该隧道端点上tng扮演Verifier角色。

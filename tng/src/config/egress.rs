@@ -34,16 +34,16 @@ pub struct CommonArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RatsTlsArgs {
-    /// When true (default), uses HTTP/2 CONNECT tunneling to multiplex multiple
+    /// When `true`, uses HTTP/2 CONNECT tunneling to multiplex multiple
     /// TCP streams over a single rats-TLS connection, reducing handshake overhead.
-    /// When false, each downstream connection creates an independent TLS session
-    /// without HTTP/2 CONNECT or connection pooling, beneficial in high-throughput scenarios.
-    #[serde(default = "default_multiplex")]
+    /// Suitable for many short-lived connections with small data transfers.
+    /// When `false` (default), each downstream connection creates an independent TLS
+    /// session without HTTP/2 CONNECT or connection pooling, achieving higher
+    /// per-stream throughput — recommended for high-bandwidth scenarios.
+    /// Note: with `multiplex: true`, all streams share a single TLS connection
+    /// whose bandwidth is limited by the TLS encryption capacity of one CPU core.
+    #[serde(default)]
     pub multiplex: bool,
-}
-
-fn default_multiplex() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
