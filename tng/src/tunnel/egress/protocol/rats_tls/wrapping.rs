@@ -57,12 +57,7 @@ impl RatsTlsWrappingLayer {
 
         let svc = TowerToHyperService::new(svc);
 
-        // Increase H2 flow control windows from default 64KB to 16MB for high-throughput scenarios.
-        // With 8+ concurrent streams sharing a single H2 connection, the default window
-        // causes severe backpressure and throughput degradation.
         if let Err(error) = hyper::server::conn::http2::Builder::new(runtime_cloned)
-            .initial_connection_window_size(16 * 1024 * 1024)
-            .initial_stream_window_size(16 * 1024 * 1024)
             .keep_alive_interval(None)
             .serve_connection(TokioIo::new(tls_stream), svc)
             .instrument(span)

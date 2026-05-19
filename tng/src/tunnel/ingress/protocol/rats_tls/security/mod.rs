@@ -143,13 +143,9 @@ impl RatsTlsSecurityLayer {
                             .await?;
 
                         // Build the hyper client from the security connector.
-                        // Increase H2 flow control windows from default 64KB to 16MB for high-throughput.
-                        let mut client_builder = Client::builder(self.runtime.clone());
-                        client_builder.http2_initial_connection_window_size(16 * 1024 * 1024);
-                        client_builder.http2_initial_stream_window_size(16 * 1024 * 1024);
                         let client = RatsTlsClient {
                             id,
-                            hyper: client_builder.build(connector),
+                            hyper: Client::builder(self.runtime.clone()).build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
                         client
