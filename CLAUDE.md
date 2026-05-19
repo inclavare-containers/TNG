@@ -38,6 +38,12 @@ cargo build        # Compilation
 
 Fix any errors or warnings reported before proceeding with the commit.
 
+**When renaming a boolean variable or changing its meaning**, verify that all
+if/else branches have been swapped accordingly. A common mistake is flipping
+the condition (`is_raw_tls` → `is_h2`) without swapping the bodies of the
+branches, which inverts the intended behavior. Always audit all callers of the
+renamed function to confirm the passed boolean value matches the new semantics.
+
 ### Known Environment Limitations
 
 The following failures are pre-existing environment issues, not caused by code changes:
@@ -74,23 +80,34 @@ The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service R
 
 ## Pre-Push Checks
 
-Before pushing, verify that no commits in the push carry a gpgsig header or a Claude committer identity:
+Before pushing, verify the following:
+
+### 1. No forbidden commit trailers
 
 ```bash
 for sha in $(git log --format="%H" origin/$(git rev-parse --abbrev-ref HEAD)..HEAD 2>/dev/null); do
     git cat-file -p "$sha" | grep -q "^gpgsig" && echo "ERROR: commit $sha has gpgsig — rewrite with filter-branch before pushing" && exit 1
+    git cat-file -p "$sha" | grep -q "Co-Authored-By:" && echo "ERROR: commit $sha has Co-Authored-By trailer — rewrite with filter-branch before pushing" && exit 1
     git log -1 --format="%ce" "$sha" | grep -qi "anthropic" && echo "ERROR: commit $sha has Claude committer — rewrite with filter-branch before pushing" && exit 1
 done
 echo "Pre-push checks passed"
 ```
 
-If any commit fails, rewrite the committer with:
+If any commit has a `Co-Authored-By` or gpgsig trailer, strip them with:
 
 ```bash
-git filter-branch -f --env-filter '
+git filter-branch -f --msg-filter 'sed "/Co-Authored-By:/d"' --env-filter '
   if [ "$GIT_COMMITTER_EMAIL" = "noreply@anthropic.com" ]; then
     export GIT_COMMITTER_NAME="$(git config user.name)"
     export GIT_COMMITTER_EMAIL="$(git config user.email)"
   fi
 ' <base-commit>..HEAD
 ```
+
+### 2. CI failure notes
+
+The following CI failures are known to be flaky in the GitHub Actions environment and are **not** caused by code changes:
+
+- **`test` / `test (alinux3)` job fails with integration test timeout**: The wasm integration tests and CoCo attestation tests can time out due to slow VM provisioning in GitHub Actions. These are infrastructure timing issues, not code bugs.
+- **`build-and-release` job fails at "Run wasm integration test"**: Same root cause — the wasm test step times out in the container environment.
+- **`codecov/patch` failure**: Coverage drops slightly on refactor commits. Not actionable.
