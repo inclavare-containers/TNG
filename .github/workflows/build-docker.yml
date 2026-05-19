@@ -80,7 +80,7 @@ jobs:
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
 
-          yum install -y git make tar jq
+          yum install -y git make tar jq clang
 
       - name: Install Podman
         run: |

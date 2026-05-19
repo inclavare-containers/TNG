@@ -48,7 +48,7 @@ jobs:
               yum install anolis-epao-release -y
           fi
 
-          yum install -y git make tar jq
+          yum install -y git make tar jq clang
 
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
