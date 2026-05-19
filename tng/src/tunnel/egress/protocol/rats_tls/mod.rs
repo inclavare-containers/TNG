@@ -31,7 +31,8 @@ impl RatsTlsStreamDecoder {
         multiplex: bool,
     ) -> Result<Self> {
         Ok(Self {
-            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), multiplex).await?,
+            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), multiplex)
+                .await?,
             runtime,
         })
     }
