@@ -47,16 +47,11 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
 
         // Check negotiated ALPN protocol
         let (_, tls_session) = tls_stream.get_ref();
-        let is_h2 = tls_session.alpn_protocol() == Some(b"h2");
+        let negotiated_alpn = tls_session.alpn_protocol();
+        tracing::debug!(?negotiated_alpn, "ALPN negotiated on egress TLS handshake");
 
-        if is_h2 {
+        if negotiated_alpn == Some(b"h2") {
             // H2 mode (multiplex=true): spawn HTTP/2 server and yield streams from it
-            Ok(stream! {
-                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_result));
-            }
-            .boxed())
-        } else {
-            // H2 mode: spawn HTTP/2 server and yield streams from it
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             let _runtime = self.runtime.clone();
             self.runtime
@@ -74,6 +69,12 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
                 while let Some(value) = receiver.recv().await {
                     yield Ok(value);
                 }
+            }
+            .boxed())
+        } else {
+            // Direct TLS mode (multiplex=false): return TLS stream directly
+            Ok(stream! {
+                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_result));
             }
             .boxed())
         }
