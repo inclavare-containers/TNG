@@ -31,7 +31,7 @@ impl RatsTlsStreamForwarder {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        raw_tls: bool,
+        multiplex: bool,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
@@ -39,7 +39,7 @@ impl RatsTlsStreamForwarder {
                 transport_so_mark,
                 ra_context,
                 runtime,
-                raw_tls,
+                multiplex,
             )
             .await?,
         })

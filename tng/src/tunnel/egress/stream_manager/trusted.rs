@@ -56,8 +56,8 @@ impl TrustedStreamManager {
         let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
 
         // Use a standalone runtime for ohttp and H2 multiplex scenarios to avoid
-        // contention with the traffic capture module. For raw-tls (multiplex=false),
-        // share the parent runtime since there is no H2 task scheduling overhead.
+        // contention with the traffic capture module. For multiplex=false (single TLS
+        // per stream), share the parent runtime since there is no H2 task scheduling overhead.
         let is_h2_or_ohttp = common_args.ohttp.is_some()
             || common_args
                 .rats_tls
@@ -101,7 +101,7 @@ impl TrustedStreamManager {
                         .map(|a| a.multiplex)
                         .unwrap_or(true);
                     Box::new(
-                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), !multiplex).await?,
+                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), multiplex).await?,
                     )
                 }
             },

@@ -28,10 +28,10 @@ impl RatsTlsStreamDecoder {
     pub async fn new(
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        raw_tls: bool,
+        multiplex: bool,
     ) -> Result<Self> {
         Ok(Self {
-            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), raw_tls).await?,
+            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), multiplex).await?,
             runtime,
         })
     }
@@ -47,10 +47,10 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
 
         // Check negotiated ALPN protocol
         let (_, tls_session) = tls_stream.get_ref();
-        let is_raw_tls = tls_session.alpn_protocol() == Some(b"rats-tls");
+        let is_h2 = tls_session.alpn_protocol() == Some(b"h2");
 
-        if is_raw_tls {
-            // Raw-TLS mode: return TLS stream directly, no HTTP/2 server
+        if is_h2 {
+            // H2 mode (multiplex=true): spawn HTTP/2 server and yield streams from it
             Ok(stream! {
                 yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_result));
             }

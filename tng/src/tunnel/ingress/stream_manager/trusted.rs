@@ -41,8 +41,8 @@ impl TrustedStreamManager {
         }
 
         // Use a standalone runtime for ohttp and H2 multiplex scenarios to avoid
-        // contention with the traffic capture module. For raw-tls (multiplex=false),
-        // share the parent runtime since there is no H2 task scheduling overhead.
+        // contention with the traffic capture module. For multiplex=false (single TLS
+        // per stream), share the parent runtime since there is no H2 task scheduling overhead.
         let is_h2_or_ohttp = common_args.ohttp.is_some()
             || common_args
                 .rats_tls
@@ -106,7 +106,7 @@ impl TrustedStreamManager {
                                 transport_so_mark,
                                 ra_context,
                                 runtime.clone(),
-                                !multiplex,
+                                multiplex,
                             )
                             .await?,
                         )

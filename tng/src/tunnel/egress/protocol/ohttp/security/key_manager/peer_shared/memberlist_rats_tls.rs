@@ -49,14 +49,14 @@ impl<R: Runtime> StreamLayer for RatsTls<R> {
                     None,
                     ra_context.clone(),
                     runtime.clone(),
-                    false,
+                    true,
                 )
                 .await
                 .context("Failed to create rats-tls stream forwarder")
                 .map_err(io::Error::other)?,
             ),
             decoder: Arc::new(
-                RatsTlsStreamDecoder::new(ra_context, runtime, false)
+                RatsTlsStreamDecoder::new(ra_context, runtime, true)
                     .await
                     .context("Failed to create rats-tls stream decoder")
                     .map_err(io::Error::other)?,

@@ -86,7 +86,7 @@ impl RatsTlsWrappingLayer {
     }
 
     /// Create a direct TLS stream without HTTP/2 CONNECT tunneling.
-    /// Used when `raw-tls` ALPN is negotiated (no_ra mode).
+    /// Used when `multiplex=false` is configured.
     pub async fn create_stream_raw(
         transport_layer_creator: &RatsTlsTransportLayerCreator,
         tls_config_generator: &TlsConfigGenerator,
@@ -107,13 +107,13 @@ impl RatsTlsWrappingLayer {
             .get_one_time_rustls_client_config()
             .await?;
 
-        // Override ALPN to prefer raw-tls
-        tls_client_config.alpn_protocols = vec![b"rats-tls".to_vec(), b"h2".to_vec()];
+        // Set ALPN for rats-tls mode
+        tls_client_config.alpn_protocols = vec![b"rats-tls".to_vec()];
 
         let tcp_stream: tokio::net::TcpStream = connector
             .call(http::Request::new(()))
             .await
-            .context("Failed to establish TCP connection for raw-tls")?
+            .context("Failed to establish TCP connection for rats-tls")?
             .into_inner();
 
         let local_addr = tcp_stream.local_addr().ok();
@@ -121,14 +121,14 @@ impl RatsTlsWrappingLayer {
         let tls_stream = TlsConnector::from(std::sync::Arc::new(tls_client_config))
             .connect(
                 ServerName::try_from(endpoint.host())
-                    .context("Invalid host for raw-tls")?
+                    .context("Invalid host for rats-tls")?
                     .to_owned(),
                 tcp_stream,
             )
             .await
-            .context("Failed to establish raw-tls connection")?;
+            .context("Failed to establish rats-tls connection")?;
 
-        tracing::debug!("Raw-TLS tunnel established");
+        tracing::debug!("Rats-TLS tunnel established");
 
         Ok((tls_stream, local_addr, None, 0))
     }

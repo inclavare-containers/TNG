@@ -50,7 +50,7 @@ pub struct RatsTlsSecurityLayer {
     transport_layer_creator: RatsTlsTransportLayerCreator,
     tls_config_generator: Arc<TlsConfigGenerator>,
     runtime: TokioRuntime,
-    raw_tls: bool,
+    multiplex: bool,
 }
 
 impl RatsTlsSecurityLayer {
@@ -59,7 +59,7 @@ impl RatsTlsSecurityLayer {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        raw_tls: bool,
+        multiplex: bool,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -74,7 +74,7 @@ impl RatsTlsSecurityLayer {
             transport_layer_creator,
             tls_config_generator,
             runtime,
-            raw_tls,
+            multiplex,
         })
     }
 
@@ -166,7 +166,7 @@ impl RatsTlsSecurityLayer {
         Option<AttestationResult>,
         /* session_id */ u64,
     )> {
-        if self.raw_tls {
+        if !self.multiplex {
             let (stream, local_addr, att, session_id) = RatsTlsWrappingLayer::create_stream_raw(
                 &self.transport_layer_creator,
                 &self.tls_config_generator,
