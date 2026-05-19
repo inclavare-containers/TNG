@@ -48,9 +48,15 @@ impl RatsTlsWrappingLayer {
                 let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
                 async move {
                     tracing::debug!(stream_id, "H2 server received CONNECT request");
-                    Self::terminate_http_connect_svc(req, stream_id, attestation_result, channel, runtime)
-                        .instrument(span)
-                        .await
+                    Self::terminate_http_connect_svc(
+                        req,
+                        stream_id,
+                        attestation_result,
+                        channel,
+                        runtime,
+                    )
+                    .instrument(span)
+                    .await
                 }
             }))
         };
@@ -90,24 +96,28 @@ impl RatsTlsWrappingLayer {
             runtime.spawn_supervised_task_current_span({
                 let attestation_result = attestation_result.clone();
                 async move {
-                match hyper::upgrade::on(req).await {
-                    Ok(upgraded) => {
-                        tracing::debug!(stream_id, "Trusted tunnel established (upgrade OK)");
+                    match hyper::upgrade::on(req).await {
+                        Ok(upgraded) => {
+                            tracing::debug!(stream_id, "Trusted tunnel established (upgrade OK)");
 
-                        let Ok(io) = utils::hyper::downcast_h2upgraded(upgraded) else {
-                            tracing::error!(stream_id, "failed to downcast to inner stream");
-                            return;
-                        };
+                            let Ok(io) = utils::hyper::downcast_h2upgraded(upgraded) else {
+                                tracing::error!(stream_id, "failed to downcast to inner stream");
+                                return;
+                            };
 
-                        if let Err(e) = channel.send((Box::new(io), attestation_result)) {
-                            tracing::error!(stream_id, "Failed to send stream via channel: {e:#}");
+                            if let Err(e) = channel.send((Box::new(io), attestation_result)) {
+                                tracing::error!(
+                                    stream_id,
+                                    "Failed to send stream via channel: {e:#}"
+                                );
+                            }
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!(stream_id, "Failed during http connect upgrade: {e:#}");
-                    }
-                };
-            }});
+                        Err(e) => {
+                            tracing::error!(stream_id, "Failed during http connect upgrade: {e:#}");
+                        }
+                    };
+                }
+            });
             Ok(Response::new(Body::empty()).into_response())
         } else {
             Ok(error_response(

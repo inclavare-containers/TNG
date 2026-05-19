@@ -4,7 +4,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::Context as _;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 pub trait CommonStreamTrait: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
