@@ -3,10 +3,13 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use rustls::RootCertStore;
 
-use crate::tunnel::utils::rustls::{
-    config::{alpn::Alpn, TlsConfigGenerator},
-    dummy::verifier::DummyServerCertVerifier,
-    ra::server_cert_verifier::LazyServerCertVerifier,
+use crate::tunnel::utils::{
+    cert_manager::DynamicCertResolver,
+    rustls::{
+        config::{alpn::Alpn, TlsConfigGenerator},
+        dummy::verifier::DummyServerCertVerifier,
+        ra::server_cert_verifier::LazyServerCertVerifier,
+    },
 };
 
 impl TlsConfigGenerator {
@@ -53,8 +56,8 @@ impl TlsConfigGenerator {
                             &rustls::version::TLS13,
                         ])
                         .with_root_certificates(RootCertStore::empty())
-                        .with_client_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                     tls_client_config
                         .dangerous()
@@ -69,8 +72,8 @@ impl TlsConfigGenerator {
                             &rustls::version::TLS13,
                         ])
                         .with_root_certificates(RootCertStore::empty())
-                        .with_client_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
 
                     let verifier: Arc<LazyServerCertVerifier> =
@@ -177,8 +180,8 @@ impl TlsConfigGenerator {
                             &rustls::version::TLS13,
                         ])
                         .with_root_certificates(RootCertStore::empty())
-                        .with_client_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                     tls_client_config
                         .dangerous()
@@ -193,8 +196,8 @@ impl TlsConfigGenerator {
                             &rustls::version::TLS13,
                         ])
                         .with_root_certificates(RootCertStore::empty())
-                        .with_client_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
 
                     let verifier: Arc<BlockingServerCertVerifier> =

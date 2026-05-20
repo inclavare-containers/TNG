@@ -3,10 +3,13 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use rustls::ServerConfig;
 
-use crate::tunnel::utils::rustls::{
-    config::{alpn::Alpn, TlsConfigGenerator},
-    dummy::RustlsDummyCert,
-    ra::client_cert_verifier::LazyClientCertVerifier,
+use crate::tunnel::utils::{
+    cert_manager::DynamicCertResolver,
+    rustls::{
+        config::{alpn::Alpn, TlsConfigGenerator},
+        dummy::RustlsDummyCert,
+        ra::client_cert_verifier::LazyClientCertVerifier,
+    },
 };
 
 impl TlsConfigGenerator {
@@ -34,8 +37,8 @@ impl TlsConfigGenerator {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
-                        .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                 LazyOnetimeTlsServerConfig(tls_server_config, None)
             }
@@ -44,8 +47,8 @@ impl TlsConfigGenerator {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
-                        .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                 LazyOnetimeTlsServerConfig(tls_server_config, Some(verifier))
             }
@@ -121,8 +124,8 @@ impl TlsConfigGenerator {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
-                        .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
@@ -131,8 +134,8 @@ impl TlsConfigGenerator {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier)
-                        .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                            cert_manager.get_latest_cert().await?.as_ref().clone(),
+                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
                         )));
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }

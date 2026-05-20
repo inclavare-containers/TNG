@@ -19,6 +19,62 @@ pub struct CertManager {
     cert: MaybeCached<rustls::sign::CertifiedKey, anyhow::Error>,
 }
 
+impl std::fmt::Debug for CertManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CertManager").finish_non_exhaustive()
+    }
+}
+
+/// A dynamic certificate resolver that always returns the latest certificate
+/// from the [`CertManager`]. Unlike `SingleCertAndKey` which captures a snapshot
+/// at creation time, this resolver queries the `CertManager` on every handshake,
+/// ensuring attestation freshness.
+#[derive(Debug)]
+pub struct DynamicCertResolver {
+    cert_manager: Arc<CertManager>,
+}
+
+impl DynamicCertResolver {
+    pub fn new(cert_manager: Arc<CertManager>) -> Self {
+        Self { cert_manager }
+    }
+}
+
+impl rustls::server::ResolvesServerCert for DynamicCertResolver {
+    fn resolve(
+        &self,
+        _client_hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        match self.cert_manager.get_latest_cert_blocking() {
+            Ok(v) => Some(v),
+            Err(error) => {
+                tracing::error!(?error, "DynamicCertResolver: failed to get server cert");
+                None
+            }
+        }
+    }
+}
+
+impl rustls::client::ResolvesClientCert for DynamicCertResolver {
+    fn resolve(
+        &self,
+        _root_hint_subjects: &[&[u8]],
+        _sigschemes: &[rustls::SignatureScheme],
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        match self.cert_manager.get_latest_cert_blocking() {
+            Ok(v) => Some(v),
+            Err(error) => {
+                tracing::error!(?error, "DynamicCertResolver: failed to get client cert");
+                None
+            }
+        }
+    }
+
+    fn has_certs(&self) -> bool {
+        true
+    }
+}
+
 impl CertManager {
     pub async fn new(attest_ctx: Arc<AttestContext>, runtime: TokioRuntime) -> Result<Self> {
         let refresh_strategy = attest_ctx.refresh_strategy();
@@ -119,6 +175,28 @@ impl CertManager {
 
     pub async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
         self.cert.get_latest().await
+    }
+
+    /// Blocking call to get the latest cached certificate.
+    ///
+    /// Note this will spawn a temporary async task to fetch a fresh
+    /// certificate on-demand. The calling thread is blocked via `block_in_place` until
+    /// the certificate is obtained.
+
+    /// For `UpdatePeriodically` strategy, this is a cheap `watch::Receiver::borrow().clone()`
+    /// that returns the most recently refreshed certificate without blocking.
+    ///
+    /// For `NoCache` strategy, other code running concurrently **in the same task** will be suspended
+    ///
+    /// # Note
+    /// This method is called from within rustls's `ResolvesServerCert` / `ResolvesClientCert`
+    /// trait implementations, which are synchronous and invoked during the TLS handshake.
+    /// `block_in_place` tells the tokio runtime to move other tasks off the current worker
+    /// thread before blocking, preventing the thread from being starved.
+    pub fn get_latest_cert_blocking(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.cert.get_latest())
+        })
     }
 }
 
