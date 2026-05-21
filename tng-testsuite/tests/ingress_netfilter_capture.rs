@@ -119,8 +119,31 @@ async fn test_host_and_port() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_port_range() -> Result<()> {
+    // Server egress must also capture the target port for the tunnel to work.
+    // We use a wide port range on both sides to validate port_end.
     run_test(vec![
-        TNG_SERVER_INSTANCE.clone().boxed(),
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": [
+                                {
+                                    "port": 30000,
+                                    "port_end": 30031
+                                }
+                            ]
+                        },
+                        "attest": {
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                        }
+                    }
+                ]
+            }
+            "#,
+        )
+        .boxed(),
         TngInstance::TngClient(
             r#"
                 {
