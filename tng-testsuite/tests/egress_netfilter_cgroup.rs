@@ -16,6 +16,7 @@ const TCP_PAYLOAD: &str = "Hello World TCP!";
 /// 4. Traffic is captured by TNG (cgroup match) and forwarded via tunnel to TcpServer
 /// 5. TcpServer echoes, ShellTask verifies response matches
 #[serial_test::serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_cgroup_capture() -> Result<()> {
     run_test(vec![
@@ -101,6 +102,7 @@ async fn test_egress_netfilter_cgroup_capture() -> Result<()> {
 /// - Capture path: client in capture_cgroup → TNG tunnel → socat on 30002 (success)
 /// - Nocapture path: client in nocapture_cgroup → direct connection to socat on 30001 (success)
 #[serial_test::serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_cgroup_nocapture() -> Result<()> {
     run_test(vec![
@@ -200,6 +202,7 @@ async fn test_egress_netfilter_cgroup_nocapture() -> Result<()> {
 /// 3. ShellTask moves into cgroup, connects to 192.168.1.1:30002
 /// 4. TNG captures (cgroup + port match) → forwards to TcpServer → success
 #[serial_test::serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_cgroup_and_capture_dst() -> Result<()> {
     run_test(vec![
@@ -284,6 +287,7 @@ async fn test_egress_netfilter_cgroup_and_capture_dst() -> Result<()> {
 /// 3. ShellTask moves into cgroup, connects to 192.168.1.1:30099 (non-standard port)
 /// 4. TNG captures all TCP from cgroup → forwards to TcpServer → success
 #[serial_test::serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_cgroup_only_all_tcp() -> Result<()> {
     run_test(vec![

@@ -15,6 +15,7 @@ use tng_testsuite::{
 /// 5. Egress netfilter on server side captures and delivers to TcpServer
 /// 6. TcpServer echoes, ShellTask verifies the response
 #[serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
     run_test(vec![
@@ -94,6 +95,7 @@ async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
 /// - TngClient with ingress netfilter capture_cgroup + nocapture_cgroup
 /// - Two cgroups created on client node
 #[serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
     run_test(vec![
@@ -191,6 +193,7 @@ async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
 /// 3. ShellTask creates cgroup, moves into it, connects to 192.168.1.1:30001
 /// 4. Both cgroup and destination match → intercepted → tunnel → success
 #[serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
     run_test(vec![
@@ -268,6 +271,7 @@ async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
 /// 3. ShellTask creates cgroup, moves into it, connects to 192.168.1.1:30001
 /// 4. All TCP from cgroup is captured regardless of destination → tunnel → success
 #[serial]
+#[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_only_all_tcp() -> Result<()> {
     run_test(vec![
