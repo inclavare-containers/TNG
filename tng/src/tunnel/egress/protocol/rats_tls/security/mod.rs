@@ -1,15 +1,15 @@
-mod cert_verifier;
-mod rustls_config;
-
 use std::sync::Arc;
 
 use crate::tunnel::{
     attestation_result::AttestationResult,
     ra_context::RaContext,
     stream::CommonStreamTrait,
-    utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
+    utils::{
+        runtime::TokioRuntime,
+        rustls::config::{Alpn, TlsConfigGenerator},
+    },
 };
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use tracing::Instrument;
 
 pub(super) struct RatsTlsSecurityLayer {
@@ -40,24 +40,20 @@ impl RatsTlsSecurityLayer {
     )> {
         async {
             // Prepare TLS config
-            let mut tls_server_config = self
-                .tls_config_generator
-                .get_one_time_rustls_server_config()
-                .await?;
-
-            // Set ALPN: H2-only when multiplex=true, rats-tls-only when multiplex=false
-            if self.multiplex {
-                tls_server_config.0.alpn_protocols = vec![b"h2".to_vec()];
+            let alpn = if self.multiplex {
+                Alpn::Http2
             } else {
-                tls_server_config.0.alpn_protocols = vec![b"rats-tls".to_vec()];
-            }
+                Alpn::RatsTls
+            };
+            let tls_server_config = self
+                .tls_config_generator
+                .get_lazy_one_time_rustls_server_config(alpn)
+                .await?;
 
             tracing::debug!("Start to estabilish rats-tls connection");
 
-            let (security_layer_stream, attestation_result) = tls_server_config
-                .handshake_with_stream(stream)
-                .await
-                .context("Failed to accept rats-tls connection from downstream")?;
+            let (security_layer_stream, attestation_result) =
+                tls_server_config.handshake_with_stream(stream).await?;
 
             tracing::debug!("New rats-tls connection established");
             Ok((security_layer_stream, attestation_result))

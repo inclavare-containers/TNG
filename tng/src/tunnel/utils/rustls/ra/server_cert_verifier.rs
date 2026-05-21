@@ -1,6 +1,3 @@
-//! Rustls server certificate verifier that validates the peer using remote attestation
-//! ([`TngCommonCertVerifier`]) when the client is configured to verify the server.
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,17 +5,18 @@ use rustls::client::{danger::ServerCertVerified, WebPkiServerVerifier};
 use tokio_rustls::rustls::RootCertStore;
 
 use crate::tunnel::{
-    attestation_result::AttestationResult, cert_verifier::TngCommonCertVerifier,
-    ra_context::VerifyContext, utils::certs::TNG_DUMMY_CERT,
+    attestation_result::AttestationResult,
+    ra_context::VerifyContext,
+    utils::rustls::{dummy::TNG_DUMMY_CERT, ra::common::LazyCertVerifier},
 };
 
 #[derive(Debug)]
-pub struct TngServerCertVerifier {
+pub struct LazyServerCertVerifier {
     inner: Arc<WebPkiServerVerifier>,
-    common: TngCommonCertVerifier,
+    common: LazyCertVerifier,
 }
 
-impl TngServerCertVerifier {
+impl LazyServerCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
         let mut cert = TNG_DUMMY_CERT.as_bytes();
         let certs = rustls_pemfile::certs(&mut cert).collect::<Result<Vec<_>, _>>()?;
@@ -28,16 +26,16 @@ impl TngServerCertVerifier {
 
         Ok(Self {
             inner: verifier,
-            common: TngCommonCertVerifier::new(verify_ctx),
+            common: LazyCertVerifier::new(verify_ctx),
         })
     }
 
     pub async fn verity_pending_cert(&self) -> Result<AttestationResult> {
-        self.common.verity_pending_cert().await
+        self.common.verify_pending_cert().await
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for TngServerCertVerifier {
+impl rustls::client::danger::ServerCertVerifier for LazyServerCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
@@ -47,7 +45,7 @@ impl rustls::client::danger::ServerCertVerifier for TngServerCertVerifier {
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         self.common
-            .verify_cert(end_entity)
+            .set_to_pending_cert(end_entity)
             .map(|_| ServerCertVerified::assertion())
     }
 

@@ -1,6 +1,4 @@
-mod cert_verifier;
 pub mod pool;
-pub(crate) mod rustls_config;
 
 use std::{
     collections::HashMap,
@@ -28,7 +26,11 @@ use crate::{
         endpoint::TngEndpoint,
         ingress::protocol::rats_tls::wrapping::RatsTlsWrappingLayer,
         ra_context::RaContext,
-        utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator, tokio::TokioIo},
+        utils::{
+            runtime::TokioRuntime,
+            rustls::config::{Alpn, TlsConfigGenerator},
+            tokio::TokioIo,
+        },
     },
     CommonStreamTrait,
 };
@@ -215,7 +217,7 @@ impl tower::Service<Uri> for SecurityConnector {
         Box::pin(
             async move {
                 let tls_client_config = tls_config_generator
-                    .get_one_time_rustls_client_config()
+                    .get_lazy_one_time_rustls_client_config(Alpn::Http2)
                     .await?;
 
                 let transport_layer_stream = transport_layer_connector.call(uri.clone()).await?;

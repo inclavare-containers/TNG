@@ -1,6 +1,5 @@
 #[cfg(unix)]
 pub mod cert_manager;
-pub mod certs;
 #[cfg(unix)]
 pub mod endpoint_matcher;
 #[cfg(unix)]
@@ -14,7 +13,7 @@ pub mod iptables;
 pub mod maybe_cached;
 pub mod runtime;
 #[cfg(unix)]
-pub mod rustls_config;
+pub mod rustls;
 #[cfg(unix)]
 pub mod socket;
 pub mod tokio;

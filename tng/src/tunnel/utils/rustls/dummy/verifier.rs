@@ -4,7 +4,7 @@ use anyhow::Result;
 use rustls::client::WebPkiServerVerifier;
 use tokio_rustls::rustls::RootCertStore;
 
-use crate::tunnel::utils::certs::TNG_DUMMY_CERT;
+use super::TNG_DUMMY_CERT;
 
 #[derive(Debug)]
 pub struct DummyServerCertVerifier {

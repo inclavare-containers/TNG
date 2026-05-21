@@ -12,7 +12,11 @@ use crate::{
         attestation_result::AttestationResult,
         endpoint::TngEndpoint,
         ingress::protocol::rats_tls::security::pool::PoolKey,
-        utils::{self, runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
+        utils::{
+            self,
+            runtime::TokioRuntime,
+            rustls::config::{Alpn, TlsConfigGenerator},
+        },
     },
     CommonStreamTrait,
 };
@@ -99,12 +103,9 @@ impl RatsTlsWrappingLayer {
         let mut connector =
             transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
 
-        let mut tls_client_config = tls_config_generator
-            .get_one_time_rustls_client_config()
+        let tls_client_config = tls_config_generator
+            .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
             .await?;
-
-        // Set ALPN for rats-tls mode
-        tls_client_config.0.alpn_protocols = vec![b"rats-tls".to_vec()];
 
         let tcp_stream: tokio::net::TcpStream = connector
             .call(http::Request::new(()))

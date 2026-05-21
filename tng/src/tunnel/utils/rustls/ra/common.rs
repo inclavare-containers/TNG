@@ -34,12 +34,12 @@ fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<T
 }
 
 #[derive(Debug)]
-pub struct TngCommonCertVerifier {
+pub struct LazyCertVerifier {
     verify_ctx: Arc<VerifyContext>,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
-impl TngCommonCertVerifier {
+impl LazyCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
         Self {
             verify_ctx,
@@ -47,7 +47,7 @@ impl TngCommonCertVerifier {
         }
     }
 
-    pub async fn verity_pending_cert(&self) -> Result<AttestationResult> {
+    pub async fn verify_pending_cert(&self) -> Result<AttestationResult> {
         tracing::debug!("Verifying rats-tls cert");
 
         let pending_cert = self
@@ -110,7 +110,7 @@ impl TngCommonCertVerifier {
         Ok(AttestationResult::from_token(token))
     }
 
-    pub fn verify_cert(
+    pub fn set_to_pending_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
     ) -> std::result::Result<(), rustls::Error> {
