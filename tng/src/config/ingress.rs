@@ -419,4 +419,68 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_deserialize_ingress_netfilter_backward_compat() -> Result<()> {
+        // Old single-object format (backward compatibility via OneOrMany)
+        test_deserialize_netfilter_common(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 9991
+                            }
+                        },
+                        "verify": {
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": ["default"]
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_netfilter_cgroup() -> Result<()> {
+        // cgroup-based capture
+        test_deserialize_netfilter_common(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {
+                            "capture_cgroup": ["/system.slice/vllm.service"],
+                            "nocapture_cgroup": ["/system.slice/ssh.service"]
+                        },
+                        "verify": {
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": ["default"]
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_netfilter_capture_all() -> Result<()> {
+        // Empty capture_dst = capture all TCP traffic
+        test_deserialize_netfilter_common(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter": {},
+                        "verify": {
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": ["default"]
+                        }
+                    }
+                ]
+            }
+        ))?;
+        Ok(())
+    }
 }

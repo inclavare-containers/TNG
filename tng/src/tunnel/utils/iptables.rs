@@ -100,6 +100,24 @@ impl IptablesExecutor {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::format_dport;
+
+    #[test]
+    fn test_format_dport_single_port() {
+        assert_eq!(format_dport(80, None), "80");
+        assert_eq!(format_dport(30001, None), "30001");
+    }
+
+    #[test]
+    fn test_format_dport_port_range() {
+        assert_eq!(format_dport(30000, Some(&30031)), "30000:30031");
+        assert_eq!(format_dport(80, Some(&80)), "80:80");
+        assert_eq!(format_dport(1, Some(&65535)), "1:65535");
+    }
+}
+
 impl Drop for IptablesGuard {
     fn drop(&mut self) {
         tokio::task::block_in_place(|| {
