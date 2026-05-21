@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
-use crate::tunnel::utils::rustls_config::TlsConfigGenerator;
-use anyhow::Result;
+use crate::tunnel::{
+    attestation_result::AttestationResult, utils::rustls_config::TlsConfigGenerator,
+};
+use anyhow::{Context as _, Result};
+use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
+use tokio_rustls::TlsConnector;
 
 use super::cert_verifier::{dummy::DummyServerCertVerifier, ra::TngServerCertVerifier};
 
@@ -83,7 +87,51 @@ impl TlsConfigGenerator {
     }
 }
 
-pub struct OnetimeTlsClientConfig(
-    pub rustls::ClientConfig,
-    pub Option<Arc<TngServerCertVerifier>>,
-);
+/// Bundled TLS client config with post-handshake verifier.
+///
+/// The verifier field is private — callers must use [`Self::handshake_with_stream`]
+/// to perform the TLS handshake followed by `verity_pending_cert`, ensuring the
+/// attestation check cannot be accidentally skipped.
+pub struct OnetimeTlsClientConfig(pub rustls::ClientConfig, Option<Arc<TngServerCertVerifier>>);
+
+impl OnetimeTlsClientConfig {
+    /// Perform TLS handshake on an already-connected TCP stream, then verify
+    /// the peer certificate if a verifier was configured.
+    ///
+    /// This bundles the two steps that must always occur together:
+    /// 1. TLS handshake (which stores the peer cert in the verifier)
+    /// 2. `verity_pending_cert` (which validates the stored cert)
+    pub async fn handshake_with_stream<S>(
+        self,
+        server_name: &str,
+        stream: S,
+    ) -> Result<(
+        tokio_rustls::client::TlsStream<S>,
+        Option<AttestationResult>,
+    )>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let tls_stream = TlsConnector::from(std::sync::Arc::new(self.0))
+            .connect(
+                ServerName::try_from(server_name)
+                    .context("Invalid server name for TLS handshake")?
+                    .to_owned(),
+                stream,
+            )
+            .await
+            .context("Failed to establish TLS connection")?;
+
+        let attestation_result = match self.1 {
+            Some(verifier) => Some(
+                verifier
+                    .verity_pending_cert()
+                    .await
+                    .context("Failed to verify pending certificate")?,
+            ),
+            None => None,
+        };
+
+        Ok((tls_stream, attestation_result))
+    }
+}

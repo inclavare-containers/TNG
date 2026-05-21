@@ -19,10 +19,7 @@ use http::Uri;
 use hyper_util::client::legacy::Client;
 use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
-use rustls::pki_types::ServerName;
-use rustls_config::OnetimeTlsClientConfig;
 use tokio::sync::RwLock;
-use tokio_rustls::TlsConnector;
 use tracing::{Instrument, Span};
 
 use crate::{
@@ -217,7 +214,7 @@ impl tower::Service<Uri> for SecurityConnector {
         let mut transport_layer_connector = self.transport_layer_connector.clone();
         Box::pin(
             async move {
-                let OnetimeTlsClientConfig(tls_client_config, verifier) = tls_config_generator
+                let tls_client_config = tls_config_generator
                     .get_one_time_rustls_client_config()
                     .await?;
 
@@ -225,30 +222,15 @@ impl tower::Service<Uri> for SecurityConnector {
 
                 tracing::debug!("Creating rats-tls connection");
                 async {
-                    let security_layer_stream = TokioIo::new(
-                        TlsConnector::from(Arc::new(tls_client_config))
-                            .connect(
-                                ServerName::try_from(uri.host().context("Host is empty")?)?
-                                    .to_owned(),
-                                transport_layer_stream.into_inner(),
-                            )
-                            .await?,
-                    );
-
-                    let attestation_result = match verifier {
-                        Some(verifier) => Some(
-                            verifier
-                                .verity_pending_cert()
-                                .await
-                                .context("No attestation result found")?,
-                        ),
-                        None => None,
-                    };
+                    let host = uri.host().context("Host is empty")?.to_owned();
+                    let (security_layer_stream, attestation_result) = tls_client_config
+                        .handshake_with_stream(&host, transport_layer_stream.into_inner())
+                        .await?;
 
                     tracing::debug!("New rats-tls connection established");
                     Ok::<_, anyhow::Error>(
                         StreamWithAttestationResult::wrap_with_attestation_result(
-                            security_layer_stream,
+                            TokioIo::new(security_layer_stream),
                             attestation_result,
                         ),
                     )

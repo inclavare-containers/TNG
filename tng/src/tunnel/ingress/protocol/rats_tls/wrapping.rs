@@ -3,10 +3,10 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context as _, Result};
 use http::{Request, StatusCode, Version};
 use http_body_util::combinators::BoxBody;
-use rustls::pki_types::ServerName;
-use tokio_rustls::TlsConnector;
 use tower::Service;
 
+use super::security::RatsTlsClient;
+use super::transport::RatsTlsTransportLayerCreator;
 use crate::{
     tunnel::{
         attestation_result::AttestationResult,
@@ -16,10 +16,6 @@ use crate::{
     },
     CommonStreamTrait,
 };
-
-use super::security::rustls_config::OnetimeTlsClientConfig;
-use super::security::RatsTlsClient;
-use super::transport::RatsTlsTransportLayerCreator;
 
 pub struct RatsTlsWrappingLayer {}
 
@@ -103,12 +99,12 @@ impl RatsTlsWrappingLayer {
         let mut connector =
             transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
 
-        let OnetimeTlsClientConfig(mut tls_client_config, _verifier) = tls_config_generator
+        let mut tls_client_config = tls_config_generator
             .get_one_time_rustls_client_config()
             .await?;
 
         // Set ALPN for rats-tls mode
-        tls_client_config.alpn_protocols = vec![b"rats-tls".to_vec()];
+        tls_client_config.0.alpn_protocols = vec![b"rats-tls".to_vec()];
 
         let tcp_stream: tokio::net::TcpStream = connector
             .call(http::Request::new(()))
@@ -118,18 +114,12 @@ impl RatsTlsWrappingLayer {
 
         let local_addr = tcp_stream.local_addr().ok();
 
-        let tls_stream = TlsConnector::from(std::sync::Arc::new(tls_client_config))
-            .connect(
-                ServerName::try_from(endpoint.host())
-                    .context("Invalid host for rats-tls")?
-                    .to_owned(),
-                tcp_stream,
-            )
-            .await
-            .context("Failed to establish rats-tls connection")?;
+        let (tls_stream, attestation_result) = tls_client_config
+            .handshake_with_stream(endpoint.host(), tcp_stream)
+            .await?;
 
         tracing::debug!("Rats-TLS tunnel established");
 
-        Ok((tls_stream, local_addr, None, 0))
+        Ok((tls_stream, local_addr, attestation_result, 0))
     }
 }

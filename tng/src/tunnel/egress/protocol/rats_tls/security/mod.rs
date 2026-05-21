@@ -10,8 +10,6 @@ use crate::tunnel::{
     utils::{runtime::TokioRuntime, rustls_config::TlsConfigGenerator},
 };
 use anyhow::{Context as _, Result};
-use rustls_config::OnetimeTlsServerConfig;
-use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 
 pub(super) struct RatsTlsSecurityLayer {
@@ -42,39 +40,27 @@ impl RatsTlsSecurityLayer {
     )> {
         async {
             // Prepare TLS config
-            let OnetimeTlsServerConfig(mut tls_server_config, verifier) = self
+            let mut tls_server_config = self
                 .tls_config_generator
                 .get_one_time_rustls_server_config()
                 .await?;
 
             // Set ALPN: H2-only when multiplex=true, rats-tls-only when multiplex=false
             if self.multiplex {
-                tls_server_config.alpn_protocols = vec![b"h2".to_vec()];
+                tls_server_config.0.alpn_protocols = vec![b"h2".to_vec()];
             } else {
-                tls_server_config.alpn_protocols = vec![b"rats-tls".to_vec()];
+                tls_server_config.0.alpn_protocols = vec![b"rats-tls".to_vec()];
             }
 
-            let tls_acceptor = TlsAcceptor::from(Arc::new(tls_server_config));
             tracing::debug!("Start to estabilish rats-tls connection");
 
-            async {
-                let security_layer_stream = tls_acceptor.accept(stream).await?;
+            let (security_layer_stream, attestation_result) = tls_server_config
+                .handshake_with_stream(stream)
+                .await
+                .context("Failed to accept rats-tls connection from downstream")?;
 
-                let attestation_result = match verifier {
-                    Some(verifier) => Some(
-                        verifier
-                            .verity_pending_cert()
-                            .await
-                            .context("No attestation result found")?,
-                    ),
-                    None => None,
-                };
-
-                tracing::debug!("New rats-tls connection established");
-                Ok::<_, anyhow::Error>((security_layer_stream, attestation_result))
-            }
-            .await
-            .context("Failed to accept rats-tls connection from downstream")
+            tracing::debug!("New rats-tls connection established");
+            Ok((security_layer_stream, attestation_result))
         }
         .instrument(tracing::info_span!("security"))
         .await
