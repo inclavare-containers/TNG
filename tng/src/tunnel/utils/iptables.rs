@@ -100,6 +100,23 @@ impl IptablesExecutor {
     }
 }
 
+impl Drop for IptablesGuard {
+    fn drop(&mut self) {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                async {
+                    if let Err(e) =
+                        IptablesExecutor::execute_script(&self.iptables_revoke_script).await
+                    {
+                        tracing::error!("Failed to clean up iptables rules: {e:#}");
+                    }
+                }
+                .instrument(self.span.clone()),
+            );
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::format_dport;
@@ -115,22 +132,5 @@ mod tests {
         assert_eq!(format_dport(30000, Some(&30031)), "30000:30031");
         assert_eq!(format_dport(80, Some(&80)), "80:80");
         assert_eq!(format_dport(1, Some(&65535)), "1:65535");
-    }
-}
-
-impl Drop for IptablesGuard {
-    fn drop(&mut self) {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                async {
-                    if let Err(e) =
-                        IptablesExecutor::execute_script(&self.iptables_revoke_script).await
-                    {
-                        tracing::error!("Failed to clean up iptables rules: {e:#}");
-                    }
-                }
-                .instrument(self.span.clone()),
-            );
-        })
     }
 }
