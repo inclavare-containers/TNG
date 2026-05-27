@@ -3256,7 +3256,7 @@ dependencies = [
 [[package]]
 name = "hyper"
 version = "1.8.1"
-source = "git+https://github.com/inclavare-containers/hyper.git?rev=59b43a6315a8f48ebfa4d12bbcd80cc0b1969a26#59b43a6315a8f48ebfa4d12bbcd80cc0b1969a26"
+source = "git+https://github.com/inclavare-containers/hyper.git?rev=6fde2c7c2e00b4fc1b9e31b827654230f488630f#6fde2c7c2e00b4fc1b9e31b827654230f488630f"
 dependencies = [
  "atomic-waker",
  "bytes",
