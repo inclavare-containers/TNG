@@ -173,6 +173,7 @@ impl CertManager {
         Ok((certified_key, expired))
     }
 
+    #[cfg(test)]
     pub async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
         self.cert.get_latest().await
     }
@@ -182,7 +183,7 @@ impl CertManager {
     /// Note this will spawn a temporary async task to fetch a fresh
     /// certificate on-demand. The calling thread is blocked via `block_in_place` until
     /// the certificate is obtained.
-
+    ///
     /// For `UpdatePeriodically` strategy, this is a cheap `watch::Receiver::borrow().clone()`
     /// that returns the most recently refreshed certificate without blocking.
     ///

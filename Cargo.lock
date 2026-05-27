@@ -4139,8 +4139,7 @@ dependencies = [
 [[package]]
 name = "memberlist"
 version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "247bcf8d37fc7ccae77f71814cc8d47254362271bd2487d3d2c7b229a0898a29"
+source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
 dependencies = [
  "agnostic",
  "agnostic-lite",
@@ -4155,8 +4154,7 @@ dependencies = [
 [[package]]
 name = "memberlist-core"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d28dccfe566570b2480fb1c86d3bf8e4c2e0b3515b452d9cf89753bc4cf0ba43"
+source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4201,8 +4199,7 @@ dependencies = [
 [[package]]
 name = "memberlist-net"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "169f40794699fd41ca5af41d8009ee2e4a7cc4c51df0db6890496f122360a74a"
+source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
 dependencies = [
  "agnostic",
  "async-channel",
@@ -4231,8 +4228,7 @@ dependencies = [
 [[package]]
 name = "memberlist-proto"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1158f90beda279fc14d5444154ccb26c3be590653a8babae12ed3b91915ef6d3"
+source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4267,8 +4263,7 @@ dependencies = [
 [[package]]
 name = "memberlist-quic"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cd337051cb05dbac903bbd88d76ac08e3eded9aabd9a1bdeec4b3b5c44698e9"
+source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
 dependencies = [
  "agnostic",
  "agnostic-lite",
