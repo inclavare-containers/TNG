@@ -32,7 +32,7 @@ pub use crate::tunnel::utils::runtime::TokioRuntime;
 pub use crate::tunnel::utils::tokio::TokioIo;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
     use std::future::Future;
 
