@@ -143,7 +143,7 @@ mod tests {
                             .to_owned(),
                 }),
                 refresh_interval: Some(3),
-            })?;
+            }).await?;
             let mut cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 
             let old_cert = cert_manager.get_latest_cert().await?;
@@ -196,7 +196,7 @@ mod tests {
                             .to_owned(),
                 }),
                 refresh_interval: Some(0),
-            })?;
+            }).await?;
             let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
 
             let old_cert = cert_manager.get_latest_cert().await?;

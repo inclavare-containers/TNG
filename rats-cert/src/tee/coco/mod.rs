@@ -130,20 +130,16 @@ mod tests {
     /// Flow: CocoAsrAttester::get_evidence -> CocoConverter::convert -> CocoVerifier::verify_evidence
     /// Same as the AA-based e2e but collects evidence via the ASR HTTP proxy.
     ///
-    /// Note: This test is currently ignored.
-    /// Reason: The ASR used in `make test-dep-aa` is the cohere version, which is temporarily
-    /// unable to connect properly with the inclavare-containers version of attestation-agent.
-    /// However, if the cohere version of attestation-agent is used instead, it will cause
-    /// the trustee side to fail to verify correctly. Since this issue currently only appears
-    /// in this test scenario, we are disabling this test until cohere's PR is merged into
-    /// the upstream coco community or the inclavare-containers community.
+    /// Requires ASR version with [PR #91](https://github.com/inclavare-containers/guest-components/pull/91)
+    /// merged (`/info`, `encoding` parameter, `/additional-evidence` endpoint).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore]
     async fn test_e2e_asr_flow() {
         use crate::tee::coco::asr_attester::CocoAsrAttester;
 
-        // Create attester (connects to running ASR)
-        let attester = CocoAsrAttester::new(TEST_ASR_ADDR).expect("Failed to create ASR attester");
+        // Create attester (connects to running ASR, fetches TEE type from /info)
+        let attester = CocoAsrAttester::new(TEST_ASR_ADDR)
+            .await
+            .expect("Failed to create ASR attester");
 
         // Create converter (sends evidence to remote AS for verification)
         let converter =

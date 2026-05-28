@@ -1,4 +1,4 @@
-use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use reqwest::Client;
 
@@ -17,31 +17,66 @@ struct AsrInfoResponse {
 /// to the AA Unix socket) to collect attestation evidence through the ASR proxy.
 ///
 /// Conforms to the ASR interface defined in
-/// <https://github.com/cohere-ai/guest-components/pull/2>.
+/// <https://github.com/inclavare-containers/guest-components/pull/91>.
 pub(crate) struct AsrClient {
     http: Client,
     base_url: String,
+    /// TEE type obtained from `/info` at construction time.
+    cached_tee_type: String,
 }
 
 impl AsrClient {
-    pub fn new(asr_addr: &str) -> Result<Self> {
+    /// Create a new AsrClient.
+    ///
+    /// Fetches the TEE type from `GET /info`. Returns an error if the
+    /// endpoint is unavailable or does not return a TEE type.
+    pub async fn new(asr_addr: &str) -> Result<Self> {
+        let base_url = asr_addr.trim_end_matches('/').to_string();
+        let http = Client::new();
+
+        let resp = http
+            .get(format!("{}/info", base_url))
+            .send()
+            .await
+            .map_err(|e| Error::AsrHttpRequestFailed {
+                endpoint: format!("{}/info", base_url),
+                source: e,
+            })?;
+        if !resp.status().is_success() {
+            return Err(Error::AsrHttpResponseError {
+                endpoint: format!("{}/info", base_url),
+                status_code: resp.status().as_u16(),
+                response_body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let info: AsrInfoResponse = resp.json().await.map_err(|e| Error::AsrHttpRequestFailed {
+            endpoint: format!("{}/info", base_url),
+            source: e,
+        })?;
+
+        tracing::info!(tee = %info.tee, "ASR reported TEE type via /info");
+
         Ok(Self {
-            http: Client::new(),
-            base_url: asr_addr.trim_end_matches('/').to_string(),
+            http,
+            base_url,
+            cached_tee_type: info.tee,
         })
     }
 
     /// Request a TEE evidence quote from the ASR with the given runtime_data_hash bytes.
+    ///
+    /// Uses URL-safe base64-no-pad encoding (`encoding=base64`), matching the
+    /// inclavare-containers community ASR.
     pub async fn get_evidence(&self, runtime_data_hash_value: Vec<u8>) -> Result<Vec<u8>> {
-        let runtime_data_b64 = BASE64.encode(&runtime_data_hash_value);
         let url = format!("{}/aa/evidence", self.base_url);
+        let runtime_data_b64 = URL_SAFE_NO_PAD.encode(&runtime_data_hash_value);
 
         let resp = self
             .http
             .get(&url)
             .query(&[
-                ("runtime_data", &runtime_data_b64),
-                ("encoding", &"base64".to_string()),
+                ("runtime_data", runtime_data_b64.as_str()),
+                ("encoding", "base64"),
             ])
             .send()
             .await
@@ -70,54 +105,27 @@ impl AsrClient {
             .to_vec())
     }
 
-    /// Query the TEE type string from the ASR via `GET /info` (e.g. "tdx", "snp").
-    pub async fn get_tee_type(&self) -> Result<String> {
-        let url = format!("{}/info", self.base_url);
-
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::AsrHttpRequestFailed {
-                endpoint: url.clone(),
-                source: e,
-            })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(Error::AsrHttpResponseError {
-                endpoint: url,
-                status_code: status,
-                response_body: body,
-            });
-        }
-
-        let info: AsrInfoResponse = resp.json().await.map_err(|e| Error::AsrHttpRequestFailed {
-            endpoint: url,
-            source: e,
-        })?;
-        Ok(info.tee)
+    /// Query the TEE type string from the ASR (fetched at construction time).
+    pub fn get_tee_type(&self) -> &str {
+        &self.cached_tee_type
     }
 
     /// Request additional device evidence (e.g. GPU attestation) from the ASR.
     ///
-    /// Returns `Ok(None)` when the ASR does not support additional evidence,
-    /// the endpoint returns non-success, or the response is empty.
+    /// Returns `Ok(None)` when the endpoint returns non-success or the response is empty.
     pub async fn get_additional_evidence(
         &self,
         runtime_data_hash_value: Vec<u8>,
     ) -> Option<Vec<u8>> {
-        let runtime_data_b64 = BASE64.encode(&runtime_data_hash_value);
-        let url = format!("{}/aa/additional_evidence", self.base_url);
+        let runtime_data_b64 = URL_SAFE_NO_PAD.encode(&runtime_data_hash_value);
+        let url = format!("{}/aa/additional-evidence", self.base_url);
 
         let resp = match self
             .http
             .get(&url)
             .query(&[
-                ("runtime_data", &runtime_data_b64),
-                ("encoding", &"base64".to_string()),
+                ("runtime_data", runtime_data_b64.as_str()),
+                ("encoding", "base64"),
             ])
             .send()
             .await
@@ -166,13 +174,21 @@ mod tests {
         let expected_evidence = b"fake-tdx-quote-bytes";
 
         Mock::given(method("GET"))
+            .and(path("/info"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": "tdx"})),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
             .and(path("/aa/evidence"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(expected_evidence.to_vec()))
             .expect(1)
             .mount(&server)
             .await;
 
-        let client = AsrClient::new(&server.uri()).unwrap();
+        let client = AsrClient::new(&server.uri()).await.unwrap();
         let evidence = client.get_evidence(b"test-hash".to_vec()).await.unwrap();
         assert_eq!(evidence, expected_evidence);
     }
@@ -182,13 +198,21 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
+            .and(path("/info"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": "tdx"})),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
             .and(path("/aa/evidence"))
             .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
             .expect(1)
             .mount(&server)
             .await;
 
-        let client = AsrClient::new(&server.uri()).unwrap();
+        let client = AsrClient::new(&server.uri()).await.unwrap();
         let err = client
             .get_evidence(b"test-hash".to_vec())
             .await
@@ -203,7 +227,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_tee_type_parses_info_response() {
+    async fn new_parses_info_response() {
         let server = MockServer::start().await;
         let tee_type = "tdx";
 
@@ -212,12 +236,25 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": tee_type})),
             )
-            .expect(1)
+            .expect(1..)
             .mount(&server)
             .await;
 
-        let client = AsrClient::new(&server.uri()).unwrap();
-        assert_eq!(client.get_tee_type().await.unwrap(), tee_type);
+        let client = AsrClient::new(&server.uri()).await.unwrap();
+        assert_eq!(client.get_tee_type(), "tdx");
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_info_unavailable() {
+        let server = MockServer::start().await;
+
+        match AsrClient::new(&server.uri()).await {
+            Ok(_) => panic!("expected error"),
+            Err(Error::AsrHttpResponseError { status_code, .. }) => {
+                assert_eq!(status_code, 404);
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
     }
 
     #[tokio::test]
@@ -225,13 +262,21 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/aa/additional_evidence"))
+            .and(path("/info"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": "tdx"})),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/aa/additional-evidence"))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&server)
             .await;
 
-        let client = AsrClient::new(&server.uri()).unwrap();
+        let client = AsrClient::new(&server.uri()).await.unwrap();
         assert!(client.get_additional_evidence(vec![]).await.is_none());
     }
 
@@ -241,13 +286,21 @@ mod tests {
         let expected = b"gpu-evidence-blob";
 
         Mock::given(method("GET"))
-            .and(path("/aa/additional_evidence"))
+            .and(path("/info"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"tee": "tdx"})),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/aa/additional-evidence"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(expected.to_vec()))
             .expect(1)
             .mount(&server)
             .await;
 
-        let client = AsrClient::new(&server.uri()).unwrap();
+        let client = AsrClient::new(&server.uri()).await.unwrap();
         let result = client.get_additional_evidence(vec![]).await;
         assert_eq!(result.unwrap(), expected);
     }

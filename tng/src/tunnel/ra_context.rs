@@ -65,11 +65,11 @@ impl RaContext {
             ))),
             #[cfg(unix)]
             RaArgs::AttestOnly(attest_args) => Ok(Self::AttestOnly(Arc::new(
-                AttestContext::from_attest_args(attest_args)?,
+                AttestContext::from_attest_args(attest_args).await?,
             ))),
             #[cfg(unix)]
             RaArgs::AttestAndVerify(attest_args, verify_args) => Ok(Self::AttestAndVerify {
-                attest: Arc::new(AttestContext::from_attest_args(attest_args)?),
+                attest: Arc::new(AttestContext::from_attest_args(attest_args).await?),
                 verify: Arc::new(VerifyContext::from_verify_args(verify_args).await?),
             }),
         }
@@ -119,14 +119,14 @@ pub enum AttestContext {
 #[cfg(unix)]
 impl AttestContext {
     /// Create attestation context from AttestArgs configuration
-    pub fn from_attest_args(attest_args: &AttestArgs) -> Result<Self> {
+    pub async fn from_attest_args(attest_args: &AttestArgs) -> Result<Self> {
         match attest_args {
             AttestArgs::Passport {
                 attester: attester_args,
                 converter: converter_args,
                 ..
             } => {
-                let attester = create_attester(attester_args)?;
+                let attester = create_attester(attester_args).await?;
                 let converter = create_converter(converter_args)?;
                 Ok(Self::Passport {
                     attester,
@@ -139,7 +139,7 @@ impl AttestContext {
                 refresh_interval,
                 ..
             } => {
-                let attester = create_attester(attester_args)?;
+                let attester = create_attester(attester_args).await?;
 
                 if refresh_interval.is_some() {
                     tracing::warn!(
@@ -442,7 +442,7 @@ mod tests {
                 attester: make_attester_args(),
                 refresh_interval: Some(600),
             };
-            let result = AttestContext::from_attest_args(&attest_args);
+            let result = AttestContext::from_attest_args(&attest_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
             assert!(
@@ -460,7 +460,7 @@ mod tests {
                 attester: make_attester_args(),
                 refresh_interval: Some(0),
             };
-            let result = AttestContext::from_attest_args(&attest_args);
+            let result = AttestContext::from_attest_args(&attest_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
             assert!(

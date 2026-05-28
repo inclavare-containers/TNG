@@ -18,7 +18,7 @@ use super::verifier::TngVerifier;
 
 /// Instantiate a `TngAttester` from config. Dispatches on provider, then sub-type.
 #[cfg(unix)]
-pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
+pub async fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
     match config {
         AttesterArgs::Coco(coco) => match coco {
             CocoAttesterArgs::Uds { aa_addr } => Ok(TngAttester::Coco(CocoAttester::new(aa_addr)?)),
@@ -27,8 +27,8 @@ pub fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
             }
         },
         AttesterArgs::Ita(args) => Ok(TngAttester::Ita(args.to_attester()?)),
-        AttesterArgs::CocoAsr(args) => Ok(TngAttester::CocoAsr(args.to_attester()?)),
-        AttesterArgs::ItaAsr(args) => Ok(TngAttester::ItaAsr(args.to_attester()?)),
+        AttesterArgs::CocoAsr(args) => Ok(TngAttester::CocoAsr(args.to_attester().await?)),
+        AttesterArgs::ItaAsr(args) => Ok(TngAttester::ItaAsr(args.to_attester().await?)),
     }
 }
 

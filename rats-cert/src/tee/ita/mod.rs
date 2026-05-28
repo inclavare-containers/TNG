@@ -144,7 +144,9 @@ mod tests {
         let api_key = std::env::var("ITA_API_KEY").unwrap();
 
         // Create attester (connects to running ASR)
-        let attester = ItaAsrAttester::new(TEST_ASR_ADDR).expect("Failed to create ASR attester");
+        let attester = ItaAsrAttester::new(TEST_ASR_ADDR)
+            .await
+            .expect("Failed to create ASR attester");
 
         // Create converter (sends evidence to ITA for appraisal)
         let converter =

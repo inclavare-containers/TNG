@@ -305,21 +305,35 @@ clippy:
 	cargo clippy --all-targets -- -D warnings
 
 # Test dependencies: API Server Rest (ASR) + Attestation Agent (blocking)
+# Clones the inclavare-containers community version (main branch) which includes
+# PR #91 features: /info, encoding parameter, /additional-evidence.
+# Both AA and ASR are built from source to ensure compatibility.
 .PHONY: test-dep-aa
 test-dep-aa:
-	@if ! command -v attestation-agent > /dev/null; then \
-		yum install -y attestation-agent; \
+	@if [ -d /tmp/guest-components ] && [ ! -d /tmp/guest-components/.git ]; then \
+		rm -rf /tmp/guest-components; \
+		git clone https://github.com/inclavare-containers/guest-components.git --branch main /tmp/guest-components; \
+	elif [ ! -d /tmp/guest-components ]; then \
+		git clone https://github.com/inclavare-containers/guest-components.git --branch main /tmp/guest-components; \
+	else \
+		cd /tmp/guest-components && git fetch origin main && git checkout main && git pull; \
 	fi; \
-	killall attestation-agent 2>/dev/null || true; \
-	RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
-	if [ ! -d /tmp/guest-components ]; then \
-		git clone https://github.com/cohere-ai/guest-components.git --branch cohere /tmp/guest-components ; \
-	fi; \
-	if ! command -v gcc > /dev/null; then \
-		yum install -y gcc openssl-devel pkg-config; \
-	fi; \
-	killall api-server-rest 2>/dev/null || true; \
-	cargo run --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml -- --features attestation
+	killall ttrpc-aa api-server-rest 2>/dev/null || true; \
+	echo "=== Building Attestation Agent ==="; \
+	cargo build --release -p attestation-agent --locked --manifest-path /tmp/guest-components/Cargo.toml --bin ttrpc-aa --features "bin ttrpc"; \
+	echo "=== Starting Attestation Agent ==="; \
+	RUST_LOG=debug /tmp/guest-components/target/release/ttrpc-aa --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock & \
+	for i in $$(seq 1 120); do \
+		if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then \
+			echo "Attestation Agent socket ready"; \
+			break; \
+		fi; \
+		echo "Waiting for Attestation Agent..."; \
+		sleep 1; \
+	done; \
+	echo "=== Building API Server Rest ==="; \
+	cargo build --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml; \
+	RUST_LOG=debug /tmp/guest-components/target/release/api-server-rest
 
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
 # All steps share a single shell block so the backgrounded `crane` process

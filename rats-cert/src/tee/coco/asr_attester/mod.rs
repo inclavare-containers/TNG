@@ -19,9 +19,9 @@ pub struct CocoAsrAttester {
 }
 
 impl CocoAsrAttester {
-    pub fn new(asr_addr: &str) -> Result<Self> {
+    pub async fn new(asr_addr: &str) -> Result<Self> {
         Ok(Self {
-            asr: AsrClient::new(asr_addr)?,
+            asr: AsrClient::new(asr_addr).await?,
         })
     }
 }
@@ -40,8 +40,7 @@ impl GenericAttester for CocoAsrAttester {
 
         let evidence = self.asr.get_evidence(aa_runtime_data_hash_value).await?;
 
-        let tee_type_str = self.asr.get_tee_type().await?;
-        let tee_type = tee_from_str(&tee_type_str)?;
+        let tee_type = tee_from_str(self.asr.get_tee_type())?;
 
         let additional_evidence = self.asr.get_additional_evidence(Vec::new()).await;
 

@@ -184,18 +184,7 @@ RUST_LOG=debug attestation-agent --attestation_sock unix:///run/confidential-con
 
 部分测试（例如 `rats-cert` 中的 `coco_asr` 和 `ita_asr` e2e 测试）需要运行一个 [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) 实例，用于将 HTTP 请求代理到 attestation-agent。ASR 必须在 `http://127.0.0.1:8006` 可达。
 
-> [!NOTE]
-> 在撰写本文时，上游 ASR 缺少 TNG 所需的两个接口特性：`/aa/evidence` 上的 `encoding` 参数（用于十六进制编码的运行时数据），以及用于获取附加证据（针对 GPU 等设备）的 `/aa/additional_evidence` 端点。这些已在 [Cohere fork](https://github.com/cohere-ai/guest-components/tree/cohere)（[PR](https://github.com/cohere-ai/guest-components/pull/2)）中实现。
-
-1. 从 Cohere fork 克隆并运行 ASR，启用 `attestation` 特性：
-
-```sh
-git clone https://github.com/cohere-ai/guest-components.git --branch cohere
-cd guest-components
-cargo run --release -p api-server-rest -- --features attestation
-```
-
-这将在默认情况下监听 `127.0.0.1:8006`，并连接到 attestation-agent 的默认 Unix socket 路径（`/run/confidential-containers/attestation-agent/attestation-agent.sock`）。确保在启动 ASR 之前 attestation-agent 已经在运行。
+运行 `make test-dep-aa` 即可自动克隆 inclavare-containers 社区版本（main 分支，已包含 [PR #91](https://github.com/inclavare-containers/guest-components/pull/91) 的特性）并编译运行 ASR。
 
 > [!IMPORTANT]
 > ASR 会拒绝源 IP 不是回环地址（`127.0.0.1`）的任何请求，返回 `403 Forbidden`。因此测试和 ASR 必须运行在同一台主机上。

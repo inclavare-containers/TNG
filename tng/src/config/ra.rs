@@ -374,10 +374,12 @@ pub struct CocoAsrAttesterArgs {
 
 #[cfg(unix)]
 impl CocoAsrAttesterArgs {
-    pub fn to_attester(
+    pub async fn to_attester(
         &self,
     ) -> anyhow::Result<rats_cert::tee::coco::asr_attester::CocoAsrAttester> {
-        rats_cert::tee::coco::asr_attester::CocoAsrAttester::new(&self.asr_addr).map_err(Into::into)
+        rats_cert::tee::coco::asr_attester::CocoAsrAttester::new(&self.asr_addr)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -389,8 +391,10 @@ pub struct ItaAsrAttesterArgs {
 
 #[cfg(unix)]
 impl ItaAsrAttesterArgs {
-    pub fn to_attester(&self) -> anyhow::Result<rats_cert::tee::ita::ItaAsrAttester> {
-        rats_cert::tee::ita::ItaAsrAttester::new(&self.asr_addr).map_err(Into::into)
+    pub async fn to_attester(&self) -> anyhow::Result<rats_cert::tee::ita::ItaAsrAttester> {
+        rats_cert::tee::ita::ItaAsrAttester::new(&self.asr_addr)
+            .await
+            .map_err(Into::into)
     }
 }
 

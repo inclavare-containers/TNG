@@ -25,9 +25,9 @@ pub struct ItaAsrAttester {
 }
 
 impl ItaAsrAttester {
-    pub fn new(asr_addr: &str) -> Result<Self> {
+    pub async fn new(asr_addr: &str) -> Result<Self> {
         Ok(Self {
-            asr: AsrClient::new(asr_addr)?,
+            asr: AsrClient::new(asr_addr).await?,
         })
     }
 }

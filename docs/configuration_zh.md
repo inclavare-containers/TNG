@@ -627,7 +627,7 @@ flowchart TD
 > **Provider 选择**：Attestation Agent 栈和 Attestation Service 栈分别通过 **`aa_provider`** 和 **`as_provider`** 进行选择。如果省略 `aa_provider` 或 `as_provider`，则默认为 **`"coco"`**（Confidential Containers）。当前支持的 Provider 包括：
 > - **`"coco"`** — [Confidential Containers](https://github.com/confidential-containers)（默认）。与 CoCo Attestation Agent (AA) 和 CoCo Attestation Service 对接。
 > - **`"ita"`** — [Intel Trust Authority](https://www.intel.com/content/www/us/en/security/trust-authority.html)。与 CoCo Attestation Agent (AA) 对接以收集证据，与 Intel Trust Authority 云服务对接以进行证明和 Token 验证。
-> - **`"coco_asr"`**（仅 `aa_provider`）— 与 `"coco"` 相同，但通过 CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP 代理收集证据，而不是直接连接到 AA。适用于 TNG 运行在无法直接访问 AA Unix socket 的容器中。
+> - **`"coco_asr"`**（仅 `aa_provider`）— 与 `"coco"` 相同，但通过 CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP 代理收集证据，而不是直接连接到 AA。适用于 TNG 运行在无法直接访问 AA Unix socket 的容器中。需要 ASR 版本包含 [PR #91](https://github.com/inclavare-containers/guest-components/pull/91) 的特性。
 > - **`"ita_asr"`**（仅 `aa_provider`）— 与 `"ita"` 相同，但通过 CoCo API Server Rest (ASR) HTTP 代理收集证据，而不是直接连接到 AA。
 
 
