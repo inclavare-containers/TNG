@@ -1375,7 +1375,7 @@ mod tests {
 
     // T16: Test that get_client_visible_keys only returns keys from inner_key_manager, not from keys_from_peers
     #[tokio::test]
-    async fn test_get_client_visible_keys_ONLY_returns_own_keys() -> Result<()> {
+    async fn test_get_client_visible_keys_only_returns_own_keys() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
             // Start node A standalone
             let port_a = portpicker::pick_unused_port().expect("No free port");
