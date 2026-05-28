@@ -24,6 +24,11 @@ use crate::tunnel::ra_context::RaContext;
 use crate::tunnel::utils::maybe_cached::MaybeCached;
 use crate::TokioRuntime;
 
+#[cfg(unix)]
+type PassportCacheValue = (PublicKeyData, KeyConfigResponse);
+#[cfg(unix)]
+type PassportCache = MaybeCached<PassportCacheValue, TngError>;
+
 /// OHTTP API handler for processing TNG server interfaces
 ///
 /// This struct implements the server-side APIs required for TNG OHTTP functionality,
@@ -44,7 +49,7 @@ pub struct OhttpServerApi {
     /// The cache automatically refreshes based on configured refresh strategy.
     /// When keys change, the cache is invalidated and regenerated.
     #[cfg(unix)]
-    passport_cache: Arc<RwLock<Option<MaybeCached<(PublicKeyData, KeyConfigResponse), TngError>>>>,
+    passport_cache: Arc<RwLock<Option<PassportCache>>>,
 }
 
 impl OhttpServerApi {

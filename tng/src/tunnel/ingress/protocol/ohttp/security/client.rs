@@ -317,7 +317,7 @@ impl OHttpClientInner {
                     Expire::from_timestamp(
                         token
                             .exp()
-                            .map_err(|e| TngError::ClientRequestKeyConfigFailed(e.into()))?,
+                            .map_err(TngError::ClientRequestKeyConfigFailed)?,
                     )?,
                 );
                 Some(AttestationResult::from_token(token))

@@ -64,8 +64,7 @@ impl ClusterKeySet {
             .iter()
             .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
             .sorted_by_cached_key(|&(public_key, key_info)| (key_info.expire_at, public_key))
-            .rev()
-            .next()
+            .next_back()
             .map(|(_, key_info)| key_info)
             .ok_or(TngError::NoActiveKey)
     }
@@ -276,8 +275,8 @@ impl ClusterKeySet {
 
         for (public_key, key_info) in other.keys {
             // If not exist, we insert it
-            if !self.keys.contains_key(&public_key) {
-                self.keys.insert(public_key, key_info);
+            if let std::collections::hash_map::Entry::Vacant(e) = self.keys.entry(public_key) {
+                e.insert(key_info);
                 merged = true;
             }
         }

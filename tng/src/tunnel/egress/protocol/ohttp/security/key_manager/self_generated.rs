@@ -161,8 +161,7 @@ impl KeyManager for SelfGeneratedKeyManager {
         keys.iter()
             .filter(|(_, key_info)| matches!(key_info.status, KeyStatus::Active))
             .sorted_by_cached_key(|&(public_key, key_info)| (key_info.expire_at, public_key))
-            .rev()
-            .next()
+            .next_back()
             .map(|(_, key_info)| key_info.clone())
             .ok_or(TngError::NoActiveKey)
     }
