@@ -333,7 +333,12 @@ test-dep-aa:
 	done; \
 	echo "=== Building API Server Rest ==="; \
 	cargo build --release -p api-server-rest --locked --manifest-path /tmp/guest-components/Cargo.toml; \
-	RUST_LOG=debug /tmp/guest-components/target/release/api-server-rest
+	mkdir -p /tmp/tng-asr; \
+	echo 'bind = "127.0.0.1:8006"' > /tmp/tng-asr/config.toml; \
+	echo 'enable_cdh = false' >> /tmp/tng-asr/config.toml; \
+	echo 'enable_aa = true' >> /tmp/tng-asr/config.toml; \
+	echo 'aa_socket = "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"' >> /tmp/tng-asr/config.toml; \
+	RUST_LOG=debug /tmp/guest-components/target/release/api-server-rest --config /tmp/tng-asr/config.toml
 
 # Test dependencies: Attestation Service (with SLSA provenance and Rekor)
 # All steps share a single shell block so the backgrounded `crane` process
