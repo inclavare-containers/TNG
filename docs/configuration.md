@@ -1457,6 +1457,8 @@ TNG uses operating system-level file change notification mechanisms (e.g., inoti
 
 #### OHTTP Key Configuration: `peer_shared` Mode
 
+> For a detailed design document covering the protocol, key rotation mechanism, and failure handling, see [Peer Shared Key Sharing Protocol](./peer_shared.md).
+
 TNG supports a decentralized key management mode for sharing OHTTP private keys among multiple TNG instances. Building upon the [self_generated](#ohttp-key-configuration-self_generated-mode) mode, this approach adds the capability for multiple TNG instances to share OHTTP private keys. This capability relies on the serf distributed protocol (Gossip), where each TNG instance joins a serf cluster by specifying the IP or domain name of any peer in the cluster. Cluster members broadcast their private keys to each other over a QUIC transport layer with remote attestation-based encryption, ensuring that only attested nodes can participate in key exchange. Therefore, even in stateless service scenarios with TNG, and even with an HTTP-based LoadBalancer in front, any node in the cluster can decrypt traffic.
 
 In this mode, TNG will:
