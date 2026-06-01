@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
 use futures::FutureExt as _;
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::{pin::Pin, sync::Arc, time::Duration};
@@ -32,6 +31,23 @@ use crate::error::TngError;
 use crate::tunnel::utils::runtime::{
     future::TokioRuntimeSupportedFuture, supervised_task::SupervisedTaskResult, TokioRuntime,
 };
+
+/// Format a `SystemTime` as a human-readable string.
+///
+/// On unix we can use `chrono::DateTime<Utc>::from()`, but on wasm the
+/// `SystemTime` is `web_time::SystemTime` which chrono doesn't know about,
+/// so we fall back to printing the unix timestamp.
+#[cfg(not(wasm))]
+fn format_system_time(t: SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(t).to_string()
+}
+#[cfg(wasm)]
+fn format_system_time(t: SystemTime) -> String {
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
+        Err(_) => "before-epoch".to_string(),
+    }
+}
 
 /// Represents an optional expiration time.
 /// - `NoExpire`: Never expires (treated as infinite future).
@@ -76,9 +92,12 @@ impl Expire {
         let now = SystemTime::now();
         if input_system_time < now.checked_sub(Duration::from_secs(120)).unwrap_or(now) {
             // Just log there instead of throw an error
+            // Use duration_since_unix_epoch to work on both unix (std::time::SystemTime)
+            // and wasm (web_time::SystemTime), since chrono::DateTime<Utc> only
+            // implements From<std::time::SystemTime>.
             tracing::warn!(
-                expire = DateTime::<Utc>::from(input_system_time).to_string(),
-                now = DateTime::<Utc>::from(now).to_string(),
+                expire = format_system_time(input_system_time),
+                now = format_system_time(now),
                 "the expire timestamp is too earlier than current time"
             )
         }

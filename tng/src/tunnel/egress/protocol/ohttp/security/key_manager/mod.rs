@@ -9,7 +9,6 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 
 pub mod file;
 pub mod peer_shared;
@@ -147,10 +146,27 @@ impl std::fmt::Debug for KeyInfo {
             }
         }
         st.field("status", &self.status)
-            .field("actived_at", &DateTime::<Utc>::from(self.actived_at))
-            .field("stale_at", &DateTime::<Utc>::from(self.stale_at))
-            .field("expire_at", &DateTime::<Utc>::from(self.expire_at))
+            .field("actived_at", &format_system_time(self.actived_at))
+            .field("stale_at", &format_system_time(self.stale_at))
+            .field("expire_at", &format_system_time(self.expire_at))
             .finish()
+    }
+}
+
+/// Format a `SystemTime` for debug output.
+///
+/// On unix we use `chrono` for a human-readable string, but on wasm the
+/// `SystemTime` may be `web_time::SystemTime` which chrono doesn't know
+/// about, so we fall back to printing the unix timestamp.
+#[cfg(not(wasm))]
+fn format_system_time(t: SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(t).to_string()
+}
+#[cfg(wasm)]
+fn format_system_time(t: SystemTime) -> String {
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
+        Err(_) => "before-epoch".to_string(),
     }
 }
 
