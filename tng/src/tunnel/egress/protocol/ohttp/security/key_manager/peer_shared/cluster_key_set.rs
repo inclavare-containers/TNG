@@ -53,6 +53,21 @@ impl ClusterKeySet {
         self.keys.get(public_key)
     }
 
+    /// Check if the key set is empty.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Count the number of active keys.
+    #[cfg(test)]
+    pub fn active_key_count(&self) -> usize {
+        self.keys
+            .values()
+            .filter(|k| k.status == KeyStatus::Active)
+            .count()
+    }
+
     /// Get the key that should be returned to clients.
     ///
     /// - If only one active key exists, return it
@@ -268,13 +283,13 @@ impl ClusterKeySet {
 
     /// Merge another ClusterKeySet into this one.
     ///
-    /// For each key in the other set, if it's newer or doesn't exist here, insert it.
-    /// Keys are compared by public_key and actived_at.
+    /// For each key in the other set, insert it if it doesn't already exist locally.
+    /// Existing keys are preserved (local wins on conflict).
     pub fn merge(&mut self, other: ClusterKeySet) {
         let mut merged = false;
 
         for (public_key, key_info) in other.keys {
-            // If not exist, we insert it
+            // Insert only if the key is not present locally
             if let std::collections::hash_map::Entry::Vacant(e) = self.keys.entry(public_key) {
                 e.insert(key_info);
                 merged = true;
@@ -429,5 +444,593 @@ mod tests {
         assert_eq!(cks.keys.len(), 1);
         // Active key still exists (not removed to maintain invariant)
         assert!(cks.get_client_visible_key().unwrap().status == KeyStatus::Active);
+    }
+
+    #[test]
+    fn test_get_client_visible_key_no_active_returns_error() {
+        let key = create_test_key(1, KeyStatus::Active, 1000);
+        let public_key = key.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+
+        // Transition the only active key to stale
+        if let Some(k) = cks.keys.get_mut(&public_key) {
+            k.status = KeyStatus::Stale;
+        }
+
+        // Should return NoActiveKey error
+        assert!(matches!(
+            cks.get_client_visible_key(),
+            Err(TngError::NoActiveKey)
+        ));
+    }
+
+    #[test]
+    fn test_get_client_visible_key_multiple_active_tiebreaker() {
+        // Create two active keys with different expire_at
+        let now = SystemTime::now();
+
+        let key1 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(100),
+        };
+
+        let key2 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(500),
+            stale_at: now + std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(200),
+        };
+
+        let pk1 = key1.key_config.public_key().unwrap();
+        let pk2 = key2.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        cks.keys.insert(pk2.clone(), key2);
+
+        // Should return key2 (later expire_at)
+        let visible = cks.get_client_visible_key().unwrap();
+        assert_eq!(visible.key_config.public_key().unwrap(), pk2);
+    }
+
+    #[test]
+    fn test_get_client_visible_key_ignores_pending_and_stale() {
+        let now = SystemTime::now();
+
+        let active_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now + std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(1000),
+        };
+
+        let pending_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Pending,
+            actived_at: now + std::time::Duration::from_secs(100),
+            stale_at: now + std::time::Duration::from_secs(400),
+            expire_at: now + std::time::Duration::from_secs(700),
+        };
+
+        let stale_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                3,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Stale,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(500),
+        };
+
+        let active_pk = active_key.key_config.public_key().unwrap();
+        let mut cks = ClusterKeySet::new(active_pk.clone(), active_key, 300);
+        cks.keys
+            .insert(pending_key.key_config.public_key().unwrap(), pending_key);
+        cks.keys
+            .insert(stale_key.key_config.public_key().unwrap(), stale_key);
+
+        // Should return the active key, not pending or stale
+        let visible = cks.get_client_visible_key().unwrap();
+        assert_eq!(visible.key_config.public_key().unwrap(), active_pk);
+        assert_eq!(visible.status, KeyStatus::Active);
+    }
+
+    #[test]
+    fn test_merge_disjoint_keys() {
+        let key1 = create_test_key(1, KeyStatus::Active, 1000);
+        let pk1 = key1.key_config.public_key().unwrap();
+        let mut cks_a = ClusterKeySet::new(pk1.clone(), key1, 300);
+
+        let key2 = create_test_key(2, KeyStatus::Active, 2000);
+        let pk2 = key2.key_config.public_key().unwrap();
+        let cks_b = ClusterKeySet::new(pk2, key2, 300);
+
+        cks_a.merge(cks_b);
+
+        // Both keys should be present
+        assert_eq!(cks_a.keys.len(), 2);
+        assert!(cks_a.get_key_by_public_key(&pk1).is_some());
+        assert_eq!(
+            cks_a.get_key_by_public_key(&pk1).unwrap().status,
+            KeyStatus::Active
+        );
+    }
+
+    #[test]
+    fn test_merge_overlapping_keys_local_wins() {
+        let now = SystemTime::now();
+
+        // Create two keys with same public key (same underlying key pair) but different metadata
+        let key1_old = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Stale,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(100),
+        };
+
+        let key1_new = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(500),
+            stale_at: now + std::time::Duration::from_secs(500),
+            expire_at: now + std::time::Duration::from_secs(1000),
+        };
+
+        let pk1 = key1_old.key_config.public_key().unwrap();
+
+        // Local has stale version, remote has active version
+        let mut cks_local = ClusterKeySet::new(pk1.clone(), key1_old, 300);
+        let mut cks_remote = ClusterKeySet::new(pk1.clone(), key1_new, 300);
+
+        // Add a second key to remote to verify it still gets merged
+        let key2 = create_test_key(2, KeyStatus::Active, 2000);
+        let pk2 = key2.key_config.public_key().unwrap();
+        cks_remote.keys.insert(pk2.clone(), key2);
+
+        cks_local.merge(cks_remote);
+
+        // Local's stale version should be preserved (local wins on overlap)
+        assert_eq!(
+            cks_local.get_key_by_public_key(&pk1).unwrap().status,
+            KeyStatus::Stale
+        );
+        // But the disjoint key2 from remote should be inserted
+        assert!(cks_local.get_key_by_public_key(&pk2).is_some());
+    }
+
+    #[test]
+    fn test_merge_empty_into_empty() {
+        // Create an empty ClusterKeySet via deserialization simulation
+        let mut cks_a = ClusterKeySet {
+            keys: HashMap::new(),
+            rotation_interval: 300,
+            notify: None,
+        };
+        let cks_b = ClusterKeySet {
+            keys: HashMap::new(),
+            rotation_interval: 300,
+            notify: None,
+        };
+
+        cks_a.merge(cks_b);
+        assert!(cks_a.is_empty());
+    }
+
+    #[test]
+    fn test_next_deadline_empty() {
+        let cks = ClusterKeySet {
+            keys: HashMap::new(),
+            rotation_interval: 300,
+            notify: None,
+        };
+
+        assert!(cks.next_deadline().is_none());
+    }
+
+    #[test]
+    fn test_next_deadline_mixed_statuses() {
+        let now = SystemTime::now();
+
+        let pending_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Pending,
+            actived_at: now + std::time::Duration::from_secs(100),
+            stale_at: now + std::time::Duration::from_secs(400),
+            expire_at: now + std::time::Duration::from_secs(700),
+        };
+
+        let active_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now + std::time::Duration::from_secs(200),
+            expire_at: now + std::time::Duration::from_secs(500),
+        };
+
+        let stale_key_info = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                3,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Stale,
+            actived_at: now - std::time::Duration::from_secs(2000),
+            stale_at: now - std::time::Duration::from_secs(1000),
+            expire_at: now + std::time::Duration::from_secs(50),
+        };
+
+        let pending_pk = pending_key.key_config.public_key().unwrap();
+        let active_pk = active_key.key_config.public_key().unwrap();
+        let stale_pk = stale_key_info.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(pending_pk, pending_key, 300);
+        cks.keys.insert(active_pk, active_key);
+        cks.keys.insert(stale_pk, stale_key_info);
+
+        // next_deadline should return the earliest of:
+        // - pending: actived_at (now + 100s)
+        // - active: stale_at (now + 200s)
+        // - stale: expire_at (now + 50s)
+        let deadline = cks.next_deadline().unwrap();
+        assert_eq!(deadline.duration_since(now).unwrap().as_secs(), 50);
+    }
+
+    #[test]
+    fn test_generate_pending_key_if_none_already_exists() {
+        let key = create_test_key(1, KeyStatus::Active, 1000);
+        let public_key = key.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+
+        // First call should generate a pending key
+        let result = cks.generate_pending_key_if_none();
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+        assert_eq!(cks.keys.len(), 2);
+
+        // Second call should return None (no new key generated)
+        let result = cks.generate_pending_key_if_none();
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+        assert_eq!(cks.keys.len(), 2);
+    }
+
+    #[test]
+    fn test_generate_pending_key_no_active_keys() {
+        // Create an empty ClusterKeySet
+        let mut cks = ClusterKeySet {
+            keys: HashMap::new(),
+            rotation_interval: 300,
+            notify: None,
+        };
+
+        // Should still generate a pending key (actived_at defaults to SystemTime::now)
+        let result = cks.generate_pending_key_if_none();
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+        assert_eq!(cks.keys.len(), 1);
+
+        // The generated key should be Pending
+        let generated = cks.keys.values().next().unwrap();
+        assert_eq!(generated.status, KeyStatus::Pending);
+    }
+
+    #[test]
+    fn test_transition_active_to_stale_preserves_last_active() {
+        let now = SystemTime::now();
+
+        // Create a single active key whose stale_at is in the past
+        let active_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(1),
+            expire_at: now + std::time::Duration::from_secs(1000),
+        };
+
+        let pk = active_key.key_config.public_key().unwrap();
+        let mut cks = ClusterKeySet::new(pk.clone(), active_key, 300);
+
+        // Should NOT transition the only active key to stale
+        let transitioned = cks.transition_active_to_stale(now);
+        assert_eq!(transitioned, 0);
+        assert!(cks.get_key_by_public_key(&pk).unwrap().status == KeyStatus::Active);
+        assert_eq!(cks.active_key_count(), 1);
+    }
+
+    #[test]
+    fn test_transition_active_to_stale_with_multiple_active() {
+        let now = SystemTime::now();
+
+        let key1 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(2000),
+            stale_at: now - std::time::Duration::from_secs(100),
+            expire_at: now + std::time::Duration::from_secs(1000),
+        };
+
+        let key2 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(50),
+            expire_at: now + std::time::Duration::from_secs(1000),
+        };
+
+        let key3 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                3,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now,
+            stale_at: now + std::time::Duration::from_secs(300),
+            expire_at: now + std::time::Duration::from_secs(600),
+        };
+
+        let pk1 = key1.key_config.public_key().unwrap();
+        let pk2 = key2.key_config.public_key().unwrap();
+        let pk3 = key3.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        cks.keys.insert(pk2.clone(), key2);
+        cks.keys.insert(pk3.clone(), key3);
+
+        // key1 and key2 should transition to stale, key3 should remain active
+        let transitioned = cks.transition_active_to_stale(now);
+        assert_eq!(transitioned, 2);
+        assert!(cks.get_key_by_public_key(&pk1).unwrap().status == KeyStatus::Stale);
+        assert!(cks.get_key_by_public_key(&pk2).unwrap().status == KeyStatus::Stale);
+        assert!(cks.get_key_by_public_key(&pk3).unwrap().status == KeyStatus::Active);
+        assert_eq!(cks.active_key_count(), 1);
+    }
+
+    #[test]
+    fn test_transition_pending_to_active_boundary() {
+        let now = SystemTime::now();
+
+        let pending_key_at_boundary = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Pending,
+            actived_at: now,
+            stale_at: now + std::time::Duration::from_secs(300),
+            expire_at: now + std::time::Duration::from_secs(600),
+        };
+
+        let pending_key_future = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Pending,
+            actived_at: now + std::time::Duration::from_secs(100),
+            stale_at: now + std::time::Duration::from_secs(400),
+            expire_at: now + std::time::Duration::from_secs(700),
+        };
+
+        let active_key = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                3,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now + std::time::Duration::from_secs(1000),
+            expire_at: now + std::time::Duration::from_secs(2000),
+        };
+
+        let pending_pk1 = pending_key_at_boundary.key_config.public_key().unwrap();
+        let pending_pk2 = pending_key_future.key_config.public_key().unwrap();
+        let active_pk = active_key.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(pending_pk1.clone(), pending_key_at_boundary, 300);
+        cks.keys.insert(pending_pk2.clone(), pending_key_future);
+        cks.keys.insert(active_pk.clone(), active_key);
+
+        // Only the boundary pending key should activate
+        let activated = cks.transition_pending_to_active(now);
+        assert_eq!(activated, 1);
+        assert!(cks.get_key_by_public_key(&pending_pk1).unwrap().status == KeyStatus::Active);
+        assert!(cks.get_key_by_public_key(&pending_pk2).unwrap().status == KeyStatus::Pending);
+        assert!(cks.get_key_by_public_key(&active_pk).unwrap().status == KeyStatus::Active);
+    }
+
+    #[test]
+    fn test_remove_expired_keys_all_active_expired_preserves_latest_stale() {
+        let now = SystemTime::now();
+
+        let key1 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                1,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(2000),
+            stale_at: now - std::time::Duration::from_secs(1000),
+            expire_at: now - std::time::Duration::from_secs(1),
+        };
+
+        let key2 = KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                2,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .unwrap(),
+            status: KeyStatus::Active,
+            actived_at: now - std::time::Duration::from_secs(1000),
+            stale_at: now - std::time::Duration::from_secs(500),
+            expire_at: now - std::time::Duration::from_secs(1),
+        };
+
+        let pk1 = key1.key_config.public_key().unwrap();
+        let pk2 = key2.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        cks.keys.insert(pk2.clone(), key2);
+
+        // All active keys are expired. Should preserve the one with latest stale_at (key2)
+        let removed = cks.remove_expired_keys(now);
+        assert_eq!(removed, 1);
+        assert_eq!(cks.keys.len(), 1);
+        // key2 should be preserved (later stale_at)
+        assert!(cks.get_key_by_public_key(&pk2).is_some());
+        assert!(cks.get_key_by_public_key(&pk1).is_none());
+    }
+
+    #[test]
+    fn test_insert_key_from_peer() {
+        let key = create_test_key(1, KeyStatus::Active, 1000);
+        let public_key = key.key_config.public_key().unwrap();
+
+        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+
+        // Insert a new key
+        let new_key = create_test_key(2, KeyStatus::Active, 2000);
+        let new_pk = new_key.key_config.public_key().unwrap();
+        let inserted = cks.insert_key_from_peer(new_pk.clone(), new_key.clone());
+        assert!(inserted);
+        assert_eq!(cks.keys.len(), 2);
+
+        // Insert duplicate should return false
+        let inserted = cks.insert_key_from_peer(new_pk, new_key);
+        assert!(!inserted);
+        assert_eq!(cks.keys.len(), 2);
     }
 }

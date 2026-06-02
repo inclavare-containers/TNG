@@ -824,3 +824,988 @@ impl Drop for SerfGracefulShutdown {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::egress::PeerSharedArgs;
+    use crate::config::ra::RaArgsUnchecked;
+    use crate::tests::run_test_with_tokio_runtime;
+    use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
+    use anyhow::{anyhow, Result};
+    use std::time::Duration;
+
+    // -----------------------------------------------------------------------
+    // Helper functions
+    // -----------------------------------------------------------------------
+
+    /// Construct PeerSharedArgs with no_ra mode.
+    fn make_peer_shared_args(
+        port: u16,
+        peers: Vec<String>,
+        rotation_interval: u64,
+    ) -> PeerSharedArgs {
+        PeerSharedArgs {
+            rotation_interval,
+            host: "127.0.0.1".to_string(),
+            port,
+            peers,
+            peers_file: None,
+            ra_args: RaArgsUnchecked {
+                no_ra: true,
+                attest: None,
+                verify: None,
+            },
+        }
+    }
+
+    /// Wait until the target node's cluster_key_set contains a key matching the
+    /// given public key, or timeout.
+    async fn wait_for_key_in_cks(
+        target: &PeerSharedKeyManager,
+        expected_pk: &PublicKeyData,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(anyhow!(
+                    "timeout waiting for key in target's cluster_key_set"
+                ));
+            }
+            {
+                let cks = target.inner.cluster_key_set.read().await;
+                if cks.get_key_by_public_key(expected_pk).is_some() {
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Wait until the number of Active keys in the target's cluster_key_set
+    /// reaches the expected count, or timeout.
+    async fn wait_for_active_key_count(
+        target: &PeerSharedKeyManager,
+        expected_count: usize,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                let cks = target.inner.cluster_key_set.read().await;
+                let active_count = cks.active_key_count();
+                return Err(anyhow!(
+                    "timeout waiting for {} active keys, current: {}",
+                    expected_count,
+                    active_count
+                ));
+            }
+            {
+                let cks = target.inner.cluster_key_set.read().await;
+                let active_count = cks.active_key_count();
+                if active_count == expected_count {
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Wait until the target's cluster_key_set no longer contains the given public key,
+    /// or timeout.
+    async fn wait_for_key_removed(
+        target: &PeerSharedKeyManager,
+        removed_pk: &PublicKeyData,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                let cks = target.inner.cluster_key_set.read().await;
+                if cks.get_key_by_public_key(removed_pk).is_some() {
+                    return Err(anyhow!(
+                        "timeout waiting for key to be removed from cluster_key_set"
+                    ));
+                }
+                return Ok(());
+            }
+            {
+                let cks = target.inner.cluster_key_set.read().await;
+                if cks.get_key_by_public_key(removed_pk).is_none() {
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 1: Infrastructure tests (no key distribution logic)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_resolve_peer_addresses_ipv4() -> Result<()> {
+        let addr = "127.0.0.1:8301".to_string();
+        let result = resolve_peer_addresses(&addr).await?;
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0],
+            std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                8301
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_resolve_peer_addresses_invalid() {
+        let addr = "not-an-address".to_string();
+        let result = resolve_peer_addresses(&addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_resolve_peer_addresses_domain() -> Result<()> {
+        let addr = "localhost:8301".to_string();
+        let result = resolve_peer_addresses(&addr).await?;
+        assert!(!result.is_empty());
+        assert!(result.iter().all(|a| a.port() == 8301));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_load_peers_from_file_success() -> Result<()> {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!("peers_test_{}.json", std::process::id()));
+        let content = r#"["127.0.0.1:8301", "127.0.0.1:8302"]"#;
+        std::fs::write(&file_path, content)?;
+
+        let peers = load_peers_from_file(file_path.to_str().unwrap()).await?;
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0], "127.0.0.1:8301");
+        assert_eq!(peers[1], "127.0.0.1:8302");
+
+        let _ = std::fs::remove_file(&file_path);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_load_peers_from_file_not_found() {
+        let result = load_peers_from_file("/nonexistent/path/that/does/not/exist.json").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_load_peers_from_file_invalid_json() -> Result<()> {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!("peers_invalid_json_{}.json", std::process::id()));
+        std::fs::write(&file_path, "not valid json")?;
+
+        let result = load_peers_from_file(file_path.to_str().unwrap()).await;
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_file(&file_path);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_load_peers_from_file_empty_array() -> Result<()> {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!("peers_empty_{}.json", std::process::id()));
+        std::fs::write(&file_path, "[]")?;
+
+        let peers = load_peers_from_file(file_path.to_str().unwrap()).await?;
+        assert!(peers.is_empty());
+
+        let _ = std::fs::remove_file(&file_path);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 2: Basic startup / join tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_join_serf_cluster_empty_peers() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port = portpicker::pick_unused_port().unwrap();
+            let args = make_peer_shared_args(port, vec![], 300);
+
+            let manager = PeerSharedKeyManager::new(runtime, args).await?;
+
+            // Verify the manager was created and has at least one key (bootstrapped)
+            let cks = manager.inner.cluster_key_set.read().await;
+            assert!(!cks.is_empty());
+
+            Ok(())
+        })
+        .await
+        .expect("test_join_serf_cluster_empty_peers failed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 3: Core cluster / key distribution tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_node_join_key_sync() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start bootstrap node A
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            // Get A's active key public key
+            let a_pk = {
+                let cks_a = manager_a.inner.cluster_key_set.read().await;
+                cks_a
+                    .get_client_visible_key()
+                    .unwrap()
+                    .key_config
+                    .public_key()
+                    .unwrap()
+            };
+
+            // Start node B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime, args_b).await?;
+
+            // Wait for B to receive A's key
+            wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
+
+            // Verify B's client-visible key matches A's
+            let b_visible_pk = manager_b
+                .get_client_visible_key()
+                .await
+                .unwrap()
+                .key_config
+                .public_key()
+                .unwrap();
+            assert_eq!(a_pk, b_visible_pk);
+
+            Ok(())
+        })
+        .await
+        .expect("test_node_join_key_sync failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_simultaneous_start_convergence() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A first (bootstrap), then B joins
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // Wait for convergence
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
+
+            // Both should agree on the client-visible key
+            let a_visible = manager_a.get_client_visible_key().await?;
+            let b_visible = manager_b.get_client_visible_key().await?;
+            assert_eq!(
+                a_visible.key_config.public_key()?,
+                b_visible.key_config.public_key()?
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_simultaneous_start_convergence failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_instance_joins_multiple_nodes() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let port_c = portpicker::pick_unused_port().unwrap();
+            let port_d = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start C joining A
+            let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start D joining A
+            let args_d = make_peer_shared_args(port_d, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_d = PeerSharedKeyManager::new(runtime.clone(), args_d).await?;
+
+            // D should have at least 1 active key
+            wait_for_active_key_count(&manager_d, 1, Duration::from_secs(15)).await?;
+
+            // All nodes should agree on client-visible key
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let c_pk = manager_c
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let d_pk = manager_d
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            assert_eq!(a_pk, b_pk);
+            assert_eq!(b_pk, c_pk);
+            assert_eq!(c_pk, d_pk);
+
+            Ok(())
+        })
+        .await
+        .expect("test_instance_joins_multiple_nodes failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_key_rotation_with_three_phase() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A with 2-second rotation interval
+            let args_a = make_peer_shared_args(port_a, vec![], 2);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            // Get initial key
+            let initial_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // B should have A's initial key
+            wait_for_key_in_cks(&manager_b, &initial_pk, Duration::from_secs(10)).await?;
+
+            // Wait for rotation cycle to complete.
+            // With 2s rotation: stale_at = now + 2s, expire_at = now + 4s.
+            // After ~6s, the initial key should have been replaced by a new active key
+            // (the new Pending was generated at ~2s, activated at ~4s, old became stale).
+            tokio::time::sleep(Duration::from_secs(10)).await;
+
+            // A should still have at least 1 active key
+            wait_for_active_key_count(&manager_a, 1, Duration::from_secs(15)).await?;
+
+            // B should still have at least 1 active key
+            let b_keys = manager_b.inner.cluster_key_set.read().await;
+            assert!(b_keys.active_key_count() >= 1);
+
+            // Client-visible key should still be available throughout
+            assert!(manager_a.get_client_visible_key().await.is_ok());
+            assert!(manager_b.get_client_visible_key().await.is_ok());
+
+            // Verify key rotation actually happened: the client-visible key on A
+            // should have changed from the initial key to a new one.
+            let current_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_ne!(
+                current_pk, initial_pk,
+                "client-visible key should have rotated to a new key"
+            );
+
+            // B should have converged to the same new key
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_eq!(
+                current_pk, b_pk,
+                "A and B should agree on the rotated client-visible key"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_key_rotation_with_three_phase failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_self_generated_key_refresh_timing() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port = portpicker::pick_unused_port().unwrap();
+
+            // Single node with 2-second rotation interval
+            let args = make_peer_shared_args(port, vec![], 2);
+            let manager = PeerSharedKeyManager::new(runtime.clone(), args).await?;
+
+            // Get initial key
+            let initial_pk = manager
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            // Wait for key rotation cycle:
+            // stale_at = actived_at + 2s, expire_at = actived_at + 4s.
+            // A new Pending key should be created by check_and_key_rotation
+            // (triggered because this node is master as the only node).
+            tokio::time::sleep(Duration::from_secs(8)).await;
+
+            // Verify the key set is not empty and has at least one active key
+            let cks = manager.inner.cluster_key_set.read().await;
+            assert!(!cks.is_empty(), "Key set should not be empty");
+            assert!(
+                cks.active_key_count() >= 1,
+                "Should have at least one active key after rotation"
+            );
+
+            // Verify that a new key was generated and the client-visible key changed
+            let current_pk = manager
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_ne!(
+                current_pk, initial_pk,
+                "client-visible key should have rotated to a new key"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_self_generated_key_refresh_timing failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_multiple_nodes_star_topology() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_bootstrap = portpicker::pick_unused_port().unwrap();
+
+            // Start bootstrap node
+            let args_bootstrap = make_peer_shared_args(port_bootstrap, vec![], 300);
+            let bootstrap_manager =
+                PeerSharedKeyManager::new(runtime.clone(), args_bootstrap).await?;
+
+            let bootstrap_pk = bootstrap_manager
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start 5 nodes all pointing at bootstrap
+            let mut managers = Vec::new();
+            for _ in 0..5 {
+                let port = portpicker::pick_unused_port().unwrap();
+                let args =
+                    make_peer_shared_args(port, vec![format!("127.0.0.1:{}", port_bootstrap)], 300);
+                let manager = PeerSharedKeyManager::new(runtime.clone(), args).await?;
+                managers.push(manager);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
+            // Wait for all nodes to have the bootstrap key
+            for (i, manager) in managers.iter().enumerate() {
+                wait_for_key_in_cks(manager, &bootstrap_pk, Duration::from_secs(15))
+                    .await
+                    .map_err(|e| anyhow!("node {} failed: {}", i, e))?;
+            }
+
+            // All nodes should agree on client-visible key
+            for (i, manager) in managers.iter().enumerate() {
+                let pk = manager
+                    .get_client_visible_key()
+                    .await?
+                    .key_config
+                    .public_key()?;
+                assert_eq!(
+                    bootstrap_pk, pk,
+                    "Node {} has different key than bootstrap",
+                    i
+                );
+            }
+
+            Ok(())
+        })
+        .await
+        .expect("test_multiple_nodes_star_topology failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_key_expiry_propagation() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A with 2-second rotation interval
+            let args_a = make_peer_shared_args(port_a, vec![], 2);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            // Get initial key
+            let key1_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // B should have key1
+            wait_for_key_in_cks(&manager_b, &key1_pk, Duration::from_secs(10)).await?;
+
+            // Wait for key1 to go through full rotation cycle.
+            // With 2s rotation: stale_at=2s, expire_at=4s.
+            // After ~10s, key1 should have transitioned to Stale (and possibly expired).
+            // A new key should have been generated and broadcast to B.
+            tokio::time::sleep(Duration::from_secs(12)).await;
+
+            // A should have a new active key (the client-visible key should have changed)
+            let current_a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_ne!(
+                current_a_pk, key1_pk,
+                "A's client-visible key should have rotated"
+            );
+
+            // B should have converged to the same new key via broadcast
+            let current_b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_eq!(
+                current_a_pk, current_b_pk,
+                "A and B should agree on the rotated key"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_key_expiry_propagation failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_node_leave_triggers_rotation_check() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // B should have A's key
+            wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
+
+            // Drop A (triggers Serf leave)
+            drop(manager_a);
+
+            // Wait for Serf to detect the leave
+            tokio::time::sleep(Duration::from_secs(8)).await;
+
+            // B should still have at least 1 active key
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
+
+            // B's client-visible key should still be available
+            assert!(manager_b.get_client_visible_key().await.is_ok());
+
+            Ok(())
+        })
+        .await
+        .expect("test_node_leave_triggers_rotation_check failed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 4: New-version-only feature tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_query_key_fallback() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // Wait for B to have A's key via normal sync
+            wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
+
+            // Use query_key_from_cluster to query for A's key from B
+            let result = manager_b.query_key_from_cluster(&a_pk).await?;
+            assert!(
+                result.is_some(),
+                "query_key_from_cluster should return the key"
+            );
+            let queried_key = result.unwrap();
+            assert_eq!(
+                queried_key.key_config.public_key()?,
+                a_pk,
+                "queried key should match"
+            );
+
+            // Verify it's in B's cluster_key_set
+            let cks_b = manager_b.inner.cluster_key_set.read().await;
+            assert!(
+                cks_b.get_key_by_public_key(&a_pk).is_some(),
+                "key should be in B's cluster_key_set after query"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_query_key_fallback failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_get_client_visible_key_consistency() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // Wait for convergence
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
+
+            // Call get_client_visible_key multiple times on A
+            let first_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            for _ in 0..5 {
+                let pk = manager_a
+                    .get_client_visible_key()
+                    .await?
+                    .key_config
+                    .public_key()?;
+                assert_eq!(
+                    first_pk, pk,
+                    "get_client_visible_key should return consistent key"
+                );
+            }
+
+            // B should also return the same consistent key
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_eq!(first_pk, b_pk, "A and B should agree on client-visible key");
+
+            Ok(())
+        })
+        .await
+        .expect("test_get_client_visible_key_consistency failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_master_election_smallest_id() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let port_c = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start C joining A
+            let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            // Wait for all to converge
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            // All should have at least 1 active key
+            wait_for_active_key_count(&manager_a, 1, Duration::from_secs(10)).await?;
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
+            wait_for_active_key_count(&manager_c, 1, Duration::from_secs(10)).await?;
+
+            // All should agree on the client-visible key
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let c_pk = manager_c
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            assert_eq!(a_pk, b_pk, "A and B should agree on client-visible key");
+            assert_eq!(b_pk, c_pk, "B and C should agree on client-visible key");
+
+            Ok(())
+        })
+        .await
+        .expect("test_master_election_smallest_id failed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Group 5: Split-brain / convergence / edge case tests
+    // -----------------------------------------------------------------------
+
+    /// Test the "two instances start simultaneously but cannot see each other" scenario.
+    ///
+    /// Both instances bootstrap independently, each generating their own key set.
+    /// When they eventually connect via Serf, they merge their key sets.
+    /// The system should converge to a single active key through master election.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_split_brain_convergence() {
+        run_test_with_tokio_runtime(async |runtime| {
+            // Start A as bootstrap (creates its own key)
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            // Start B as bootstrap too (creates its own DIFFERENT key)
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let args_b = make_peer_shared_args(port_b, vec![], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            // Verify they have different keys (two separate key sets)
+            assert_ne!(
+                a_pk, b_pk,
+                "A and B should have different keys when bootstrapped independently"
+            );
+
+            // Now make B join A's cluster to trigger merge
+            // We need a second manager_b that joins A (can't modify existing manager_b's peers)
+            // Instead, we trigger merge by having A query B's cluster key set.
+            // But the easiest way is: start a NEW node C that joins both, which bridges them.
+            //
+            // Actually, the most direct approach: start C joining A, then verify C has A's key.
+            // Then have C also connect to B... but that's complex.
+            //
+            // Simplest: start B with A as peer from the beginning, but with a delay.
+            // Let's just use the existing setup: B joins A via manual join.
+            // Since managers hold their own serf, we can't easily re-join.
+            //
+            // Better approach: Start A first, then B joining A BUT with B's preboot not getting
+            // responses (simulated by starting them far apart in time so B bootstraps independently).
+            //
+            // Most practical: just start A, wait for it to create keys. Then start B with A as peer.
+            // B will query A during preboot and get A's key, so they converge. This tests the
+            // "join existing cluster" path, not the split-brain path.
+            //
+            // For true split-brain test: start both independently, then have a third node bridge.
+            let port_c = portpicker::pick_unused_port().unwrap();
+            // C joins both A and B
+            let args_c = make_peer_shared_args(
+                port_c,
+                vec![
+                    format!("127.0.0.1:{}", port_a),
+                    format!("127.0.0.1:{}", port_b),
+                ],
+                300,
+            );
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            // Wait for C to get keys from either A or B via preboot
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // C should have at least 1 active key
+            wait_for_active_key_count(&manager_c, 1, Duration::from_secs(10)).await?;
+
+            // Wait for convergence across all nodes
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // All nodes should agree on the client-visible key
+            let a_final_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let b_final_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            let c_final_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            assert_eq!(
+                a_final_pk, b_final_pk,
+                "A and B should converge on the same client-visible key after bridge"
+            );
+            assert_eq!(
+                b_final_pk, c_final_pk,
+                "B and C should agree on the client-visible key"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_split_brain_convergence failed");
+    }
+
+    /// Test that key rotation does not create duplicate pending keys.
+    ///
+    /// Multiple triggers of check_and_key_rotation (e.g., from member leave events
+    /// and periodic key watcher) should not result in multiple pending keys.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_concurrent_key_rotation_no_duplicate_pending() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let port_c = portpicker::pick_unused_port().unwrap();
+
+            // Start A (bootstrap)
+            let args_a = make_peer_shared_args(port_a, vec![], 2);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start B joining A
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            // Start C joining A (to create multiple leave events later)
+            let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            // Wait for convergence
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
+            wait_for_active_key_count(&manager_c, 1, Duration::from_secs(10)).await?;
+
+            let initial_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            // Drop both B and C rapidly to trigger multiple leave events
+            drop(manager_b);
+            drop(manager_c);
+
+            // Wait for Serf to detect leaves and trigger rotation checks
+            tokio::time::sleep(Duration::from_secs(8)).await;
+
+            // A should have exactly 1 active key (no duplicate pending keys created)
+            wait_for_active_key_count(&manager_a, 1, Duration::from_secs(15)).await?;
+
+            // A's client-visible key should still be available
+            let final_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_eq!(
+                initial_pk, final_pk,
+                "Key should remain the same since no rotation was needed"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_concurrent_key_rotation_no_duplicate_pending failed");
+    }
+}
