@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 
 use anyhow::{bail, Result};
-use axum::{body::Body, extract::Request, routing::any, Router};
+use axum::{body::Body, extract::Request, middleware::Next, routing::any, Router};
 use axum_extra::extract::Host;
 use http::StatusCode;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::task::app::HTTP_RESPONSE_BODY;
 
@@ -18,51 +19,61 @@ pub async fn launch_http_server(
     let expected_host_header = expected_host_header.to_owned();
     let expected_path_and_query = expected_path_and_query.to_owned();
 
-    use tracing::Instrument;
-
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("Listening on 0.0.0.0:{port} and waiting for connection from client");
 
+    // Capture the parent span and create a middleware so that axum's internally
+    // spawned request handlers still carry the task tag in their logs.
     let parent_span = tracing::Span::current();
+    let enter_span_layer = {
+        let span = parent_span.clone();
+        axum::middleware::from_fn(move |request: Request<Body>, next: Next| {
+            let span = span.clone();
+            async move { next.run(request).await }.instrument(span)
+        })
+    };
+
     Ok(tokio::task::spawn(
         async move {
-            let app = Router::new().route(
-            "/{*path}",
-            any(|Host(hostname): Host, request: Request<Body>| async move {
-                (|| -> Result<_> {
-                    if hostname != expected_host_header {
-                        bail!("Got hostname `{hostname}`, but `{expected_host_header}` is expected");
-                    }
+            let app = Router::new()
+                .route(
+                    "/{*path}",
+                    any(|Host(hostname): Host, request: Request<Body>| async move {
+                        (|| -> Result<_> {
+                            if hostname != expected_host_header {
+                                bail!("Got hostname `{hostname}`, but `{expected_host_header}` is expected");
+                            }
 
-                    let path_and_query = request.uri().path_and_query();
-                    if path_and_query.map(|t| t.as_str()) != Some(&expected_path_and_query) {
-                        bail!("Got path and query `{path_and_query:?}`, but `{expected_path_and_query}` is expected");
-                    }
+                            let path_and_query = request.uri().path_and_query();
+                            if path_and_query.map(|t| t.as_str()) != Some(&expected_path_and_query) {
+                                bail!("Got path and query `{path_and_query:?}`, but `{expected_path_and_query}` is expected");
+                            }
 
-                    tracing::info!("Got request from client, now sending response to client");
-                    Ok((StatusCode::OK, HTTP_RESPONSE_BODY.to_owned()))
-                })()
-                .unwrap_or_else(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Something went wrong: {e}"),
-                    )
-                })
-            }),
-        );
-        let server = axum::serve(listener, app);
+                            tracing::info!("Got request from client, now sending response to client");
+                            Ok((StatusCode::OK, HTTP_RESPONSE_BODY.to_owned()))
+                        })()
+                        .unwrap_or_else(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Something went wrong: {e}"),
+                            )
+                        })
+                    }),
+                )
+                .layer(enter_span_layer);
+            let server = axum::serve(listener, app);
 
-        tokio::select! {
-            _ = token.cancelled() => {}
-            res = server => {
-                res?;
+            tokio::select! {
+                _ = token.cancelled() => {}
+                res = server => {
+                    res?;
+                }
             }
-        }
 
-        tracing::info!("The HTTP server task normally exited");
-        Ok(())
-    }
-    .instrument(parent_span),
+            tracing::info!("The HTTP server task normally exited");
+            Ok(())
+        }
+        .instrument(parent_span),
     ))
 }

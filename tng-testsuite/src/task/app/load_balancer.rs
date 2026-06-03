@@ -2,6 +2,7 @@ use anyhow::{bail, Context as _, Result};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
+    middleware::Next,
     response::{IntoResponse as _, Response},
     Router,
 };
@@ -101,9 +102,20 @@ pub async fn launch_load_balancer(
         })
         .layer(axum::middleware::from_fn(add_server_header));
 
+    // Capture the parent span and create a middleware so that axum's internally
+    // spawned request handlers still carry the task tag in their logs.
+    let parent_span = tracing::Span::current();
+    let enter_span_layer = {
+        let span = parent_span.clone();
+        axum::middleware::from_fn(move |request: Request<Body>, next: Next| {
+            let span = span.clone();
+            async move { next.run(request).await }.instrument(span)
+        })
+    };
+    let app = app.layer(enter_span_layer);
+
     let server = axum::serve(listener, app);
 
-    let parent_span = tracing::Span::current();
     let handle = tokio::task::spawn(
         async move {
             tokio::select! {

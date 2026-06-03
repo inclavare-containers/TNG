@@ -61,20 +61,27 @@ impl TngRuntime {
 
         let canceller = CancellationToken::new();
 
+        // Capture the current tracing span so that shutdown log messages
+        // carry the task tag when spawned by tokio_graceful internally.
+        let task_span = tracing::Span::current();
+
         // Prepare for graceful shutdown
         let shutdown = {
             let canceller = canceller.clone();
             tokio_graceful::Shutdown::builder()
-                .with_signal(async move {
-                    tokio::select! {
-                        _ = canceller.cancelled() => {
-                            tracing::info!("Instance cancelled by caller")
-                        }
-                        _ = tokio_graceful::default_signal() => {
-                            tracing::info!("Instance cancelled by SIGTERM or Ctrl+C")
+                .with_signal(
+                    async move {
+                        tokio::select! {
+                            _ = canceller.cancelled() => {
+                                tracing::info!("Instance cancelled by caller")
+                            }
+                            _ = tokio_graceful::default_signal() => {
+                                tracing::info!("Instance cancelled by SIGTERM or Ctrl+C")
+                            }
                         }
                     }
-                })
+                    .instrument(task_span),
+                )
                 .with_overwrite_fn(tokio::signal::ctrl_c)
                 .build()
         };
