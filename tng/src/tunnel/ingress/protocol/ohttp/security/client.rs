@@ -22,6 +22,8 @@ use rats_cert::tee::AttesterPipeline;
 use rats_cert::tee::GenericAttester as _;
 use rats_cert::tee::ReportData;
 use rats_cert::tee::{GenericConverter, GenericVerifier as _};
+#[cfg(wasm)]
+use tracing::Instrument;
 
 use crate::tunnel::provider::{ProviderType, TngEvidence, TngToken};
 #[cfg(not(wasm))]
@@ -669,10 +671,14 @@ impl OHttpClientInner {
             use futures::SinkExt;
 
             let (mut sender, receiver) = futures::channel::mpsc::unbounded();
-            tokio_with_wasm::task::spawn(async move {
-                let stream = response_body;
-                sender.send_all(&mut stream.map(|item| Ok(item))).await
-            });
+            let parent_span = tracing::Span::current();
+            tokio_with_wasm::task::spawn(
+                async move {
+                    let stream = response_body;
+                    sender.send_all(&mut stream.map(|item| Ok(item))).await
+                }
+                .instrument(parent_span),
+            );
             receiver
         };
 

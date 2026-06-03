@@ -6,6 +6,7 @@ use anyhow::Result;
 use tokio_graceful::ShutdownGuard;
 #[cfg(wasm)]
 use tokio_with_wasm::alias as tokio;
+use tracing::Instrument;
 
 use crate::tunnel::utils::runtime::future::TokioRuntimeSupportedFuture;
 
@@ -103,6 +104,10 @@ impl TokioRuntime {
         O: Send + 'static,
     {
         let this = self.clone();
+        // Capture the current tracing span so that it propagates into the spawned
+        // task. Without this, tokio::task::spawn does not inherit the parent span
+        // unless tokio_unstable is enabled.
+        let parent_span = tracing::Span::current();
         let handle = match self.inner.as_ref() {
             #[cfg(not(wasm))]
             TokioRuntimeInner::Owned { rt: _, rt_handle }
@@ -118,7 +123,8 @@ impl TokioRuntime {
                             let output = task.await;
                             drop(this);
                             output
-                        },
+                        }
+                        .instrument(parent_span),
                         rt_handle,
                     )
                     .expect("Bug detected");
@@ -127,11 +133,14 @@ impl TokioRuntime {
                 let handle = {
                     let _ = name;
                     #[allow(clippy::disallowed_methods)]
-                    rt_handle.spawn(async move {
-                        let output = task.await;
-                        drop(this);
-                        output
-                    })
+                    rt_handle.spawn(
+                        async move {
+                            let output = task.await;
+                            drop(this);
+                            output
+                        }
+                        .instrument(parent_span),
+                    )
                 };
 
                 handle
@@ -140,11 +149,14 @@ impl TokioRuntime {
             TokioRuntimeInner::WasmMainThread => {
                 let _ = name;
                 #[allow(clippy::disallowed_methods)]
-                tokio::spawn(async move {
-                    let output = task.await;
-                    drop(this);
-                    output
-                })
+                tokio::spawn(
+                    async move {
+                        let output = task.await;
+                        drop(this);
+                        output
+                    }
+                    .instrument(parent_span),
+                )
             }
         };
 
