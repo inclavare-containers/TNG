@@ -72,11 +72,7 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
 
             // Log test start with task topology
             let task_refs: Vec<&dyn Task> = tasks.iter().map(|t| t.as_ref()).collect();
-            let mut name_counts = HashMap::<String, usize>::new();
-            for task in &task_refs {
-                *name_counts.entry(task.name()).or_insert(0) += 1;
-            }
-            test_context::log_test_start(name, &task_refs, &name_counts);
+            test_context::log_test_start(name, &task_refs);
 
             // Create a virtual network with two nodes connected to a bridge
             let network = BridgeNetwork::new("192.168.1.254", 24).await?;
@@ -98,7 +94,7 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
             // Launch all tasks in order and get the join handles
             let mut sub_tasks = futures::stream::FuturesUnordered::new();
             for (task, node) in tasks_with_nodes {
-                let display_name = test_context::display_name_for_task(task.as_ref(), &name_counts);
+                let display_name = test_context::display_name_for_task(task.as_ref());
                 sub_tasks.push({
                     let task_name = display_name.clone();
 

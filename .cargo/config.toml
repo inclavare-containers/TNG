@@ -2,3 +2,10 @@
 # memcmp bug detection: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189)
 [env]
 CC = "clang"
+
+# Enable tokio_unstable so that tokio::task::spawn captures and propagates
+# the current tracing span to spawned tasks. This is required for the
+# integration tests to see task{task=...} tags on logs emitted by code
+# inside tng's internal spawned tasks (flow handlers, OHTTP security, etc.).
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
