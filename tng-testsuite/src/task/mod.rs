@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 pub mod app;
 pub mod function;
 pub mod shell;
+pub mod tagged_spawn;
 pub mod tng;
 
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +29,17 @@ impl NodeType {
                 format!("192.168.1.{host_num}")
             }
             NodeType::Middleware => "192.168.1.252".into(),
+        }
+    }
+}
+
+impl std::fmt::Display for NodeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeType::Client => write!(f, "Client"),
+            NodeType::Server => write!(f, "Server"),
+            NodeType::Middleware => write!(f, "Middleware"),
+            NodeType::Customized { host_num } => write!(f, "Host({host_num})"),
         }
     }
 }

@@ -11,6 +11,7 @@ impl TngInstance {
     pub(super) async fn launch_inner(
         &self,
         token: CancellationToken,
+        _tag: &str,
     ) -> Result<JoinHandle<Result<()>>> {
         let config_json = match self {
             TngInstance::TngClient(config_json) | TngInstance::TngServer(config_json) => {

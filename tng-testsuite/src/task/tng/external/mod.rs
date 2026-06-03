@@ -2,10 +2,11 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use serde_json::json;
-use std::process::Stdio;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use crate::task::tagged_spawn::spawn_with_tagged_output;
 
 use super::TngInstance;
 
@@ -41,6 +42,7 @@ impl TngInstance {
     pub(super) async fn launch_inner(
         &self,
         token: CancellationToken,
+        tag: &str,
     ) -> Result<JoinHandle<Result<()>>> {
         let config_json = match self {
             TngInstance::TngClient(config_json) | TngInstance::TngServer(config_json) => {
@@ -55,12 +57,15 @@ impl TngInstance {
 
         tracing::info!("Run tng with {config_json}");
 
-        let mut process = self
-            .get_tokio_command(&config_json)
-            .await
-            .context("Failed to get command line for creating tng process")?
-            .stdin(Stdio::null())
-            .spawn()?;
+        let mut process = {
+            let mut cmd = self
+                .get_tokio_command(&config_json)
+                .await
+                .context("Failed to get command line for creating tng process")?;
+            spawn_with_tagged_output(&mut cmd, tag)
+                .await
+                .context("Failed to spawn tagged tng process")?
+        };
 
         // Wait for the tng process to be ready by polling the ready signal from 127.0.0.1:50000/readyz.
         loop {

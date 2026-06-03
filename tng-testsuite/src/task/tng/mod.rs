@@ -37,6 +37,7 @@ impl Task for TngInstance {
     }
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
-        self.launch_inner(token).await
+        let tag = format!("{}@{}", self.name(), self.node_type().ip());
+        self.launch_inner(token, &tag).await
     }
 }
