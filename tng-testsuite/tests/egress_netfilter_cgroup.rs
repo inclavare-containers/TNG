@@ -1,7 +1,12 @@
 use anyhow::Result;
 use tng_testsuite::{
     run_test,
-    task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        app::AppType,
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 const TCP_PAYLOAD: &str = "Hello World TCP!";
@@ -84,8 +89,8 @@ async fn test_egress_netfilter_cgroup_capture() -> Result<()> {
                 echo "cgroup capture test passed"
             "#
             ),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -182,8 +187,8 @@ async fn test_egress_netfilter_cgroup_nocapture() -> Result<()> {
                 sleep 30
             "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -268,8 +273,8 @@ async fn test_egress_netfilter_cgroup_and_capture_dst() -> Result<()> {
                 echo "cgroup + capture_dst combo test passed"
             "#
             ),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -353,8 +358,8 @@ async fn test_egress_netfilter_cgroup_only_all_tcp() -> Result<()> {
                 echo "cgroup-only all-TCP test passed"
             "#
             ),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])

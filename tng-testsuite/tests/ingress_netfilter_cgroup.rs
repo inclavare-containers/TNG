@@ -2,7 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use tng_testsuite::{
     run_test,
-    task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        app::AppType,
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 /// Test ingress netfilter with capture_cgroup.
@@ -74,8 +79,8 @@ async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
                 echo "ingress cgroup capture test passed"
             "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -172,8 +177,8 @@ async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
                 echo "ingress nocapture test passed"
             "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -252,8 +257,8 @@ async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
                 echo "ingress cgroup + capture_dst combo test passed"
             "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])
@@ -329,8 +334,8 @@ async fn test_ingress_netfilter_cgroup_only_all_tcp() -> Result<()> {
                 echo "ingress cgroup-only all-TCP test passed"
             "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
     ])

@@ -193,13 +193,6 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
 #[macro_export]
 macro_rules! run_test {
     ($tasks:expr) => {
-        $crate::run_test(
-            concat!(
-                file!(),
-                ":",
-                line!()
-            ),
-            $tasks
-        )
+        $crate::run_test(concat!(file!(), ":", line!()), $tasks)
     };
 }

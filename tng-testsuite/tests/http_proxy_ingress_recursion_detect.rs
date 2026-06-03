@@ -1,7 +1,11 @@
 use anyhow::Result;
 use tng_testsuite::{
     run_test,
-    task::{shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
@@ -48,8 +52,7 @@ async fn test() -> Result<()> {
                 fi
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
         }
         .boxed(),
     ])

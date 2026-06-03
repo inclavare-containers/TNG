@@ -2,7 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use tng_testsuite::{
     run_test,
-    task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        app::AppType,
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 #[serial]
@@ -66,8 +71,8 @@ async fn test() -> Result<()> {
                 curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -116,8 +121,8 @@ async fn test() -> Result<()> {
                 curl --socks5 user:ppppppwd@127.0.0.1:1080 --socks5-basic -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -172,8 +177,8 @@ async fn test() -> Result<()> {
                 curl --socks5 user:ppppppwd@127.0.0.1:1080 --socks5-basic -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
 
         }
         .boxed(),
@@ -232,8 +237,8 @@ async fn test() -> Result<()> {
                 curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:40001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])

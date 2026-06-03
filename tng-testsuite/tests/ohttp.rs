@@ -2,7 +2,12 @@ use anyhow::{Context, Result};
 use serial_test::serial;
 use tng_testsuite::{
     run_test,
-    task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        app::AppType,
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 #[serial]
@@ -686,8 +691,8 @@ async fn test_server_attest_passport_cache() -> Result<()> {
                 echo "SUCCESS: All tests passed"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -762,8 +767,8 @@ async fn test_server_attest_passport_rotation_interval() -> Result<()> {
                 echo "SUCCESS: All tests passed"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -834,8 +839,8 @@ async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
                 echo "SUCCESS: All tests passed"
             "#
             .to_owned(),
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -1051,8 +1056,8 @@ EOF
                     "#
                 )
             },
-            stop_test_on_finish: true,
-            run_in_foreground: false,
+            mode: ShellMode::Blocking,
+
         }
         .boxed(),
     ])
@@ -1276,16 +1281,16 @@ async fn test_egress_key_from_peer_shared_with_peers_file() -> Result<()> {
                 format!(
                     r#"
                     set -euo pipefail
-                    
+
                     echo "Waiting 5 seconds for TNG cluster to establish and file watcher to start..."
                     sleep 3
-                    
+
                     echo "Initial cluster setup complete"
                     "#
                 )
             },
-            stop_test_on_finish: false,
-            run_in_foreground: true,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
         ShellTask {
@@ -1295,9 +1300,9 @@ async fn test_egress_key_from_peer_shared_with_peers_file() -> Result<()> {
                 format!(
                     r#"
                     set -euo pipefail
-                    
+
                     PEERS_FILE="{}"
-                    
+
                     echo "Updating peers file to add new peer..."
                     cat > "$PEERS_FILE" << 'EOF'
 [
@@ -1305,17 +1310,17 @@ async fn test_egress_key_from_peer_shared_with_peers_file() -> Result<()> {
   "192.168.1.3.nip.io:8301"
 ]
 EOF
-                    
+
                     echo "Waiting 3 seconds for file watcher to detect changes and join new peer..."
                     sleep 3
-                    
+
                     echo "Peers file updated successfully"
                     "#,
                     peers_file_path
                 )
             },
-            stop_test_on_finish: false,
-            run_in_foreground: true,
+            mode: ShellMode::FireAndForget,
+
         }
         .boxed(),
         AppType::LoadBalancer {

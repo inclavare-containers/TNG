@@ -2,7 +2,12 @@ use anyhow::Result;
 use serial_test::serial;
 use tng_testsuite::{
     run_test,
-    task::{app::AppType, shell::ShellTask, tng::TngInstance, NodeType, Task as _},
+    task::{
+        app::AppType,
+        shell::{ShellMode, ShellTask},
+        tng::TngInstance,
+        NodeType, Task as _,
+    },
 };
 
 const TNG_SERVER_INSTANCE: TngInstance = TngInstance::TngServer(
@@ -263,8 +268,7 @@ async fn test_ipset_and_port() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -321,8 +325,7 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -381,8 +384,7 @@ async fn test_ipset_only() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            stop_test_on_finish: false,
-            run_in_foreground: false,
+            mode: ShellMode::FireAndForget,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
