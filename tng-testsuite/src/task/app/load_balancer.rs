@@ -11,7 +11,7 @@ use reqwest::Client;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tracing;
+use tracing::Instrument;
 
 use std::sync::{Arc, Mutex};
 
@@ -103,19 +103,23 @@ pub async fn launch_load_balancer(
 
     let server = axum::serve(listener, app);
 
-    let handle = tokio::task::spawn(async move {
-        tokio::select! {
-            _ = token.cancelled() => {
-                tracing::info!("Shutdown signal received, stopping load balancer...");
+    let parent_span = tracing::Span::current();
+    let handle = tokio::task::spawn(
+        async move {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    tracing::info!("Shutdown signal received, stopping load balancer...");
+                }
+                result = server => match result {
+                    Ok(_) => tracing::info!("Server exited normally"),
+                    Err(e) => tracing::error!(error = %e, "Server error"),
+                }
             }
-            result = server => match result {
-                Ok(_) => tracing::info!("Server exited normally"),
-                Err(e) => tracing::error!(error = %e, "Server error"),
-            }
-        }
 
-        Ok(())
-    });
+            Ok(())
+        }
+        .instrument(parent_span),
+    );
 
     Ok(handle)
 }

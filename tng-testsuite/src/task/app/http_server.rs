@@ -18,12 +18,16 @@ pub async fn launch_http_server(
     let expected_host_header = expected_host_header.to_owned();
     let expected_path_and_query = expected_path_and_query.to_owned();
 
+    use tracing::Instrument;
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("Listening on 0.0.0.0:{port} and waiting for connection from client");
 
-    Ok(tokio::task::spawn(async move {
-        let app = Router::new().route(
+    let parent_span = tracing::Span::current();
+    Ok(tokio::task::spawn(
+        async move {
+            let app = Router::new().route(
             "/{*path}",
             any(|Host(hostname): Host, request: Request<Body>| async move {
                 (|| -> Result<_> {
@@ -58,5 +62,7 @@ pub async fn launch_http_server(
 
         tracing::info!("The HTTP server task normally exited");
         Ok(())
-    }))
+    }
+    .instrument(parent_span),
+    ))
 }

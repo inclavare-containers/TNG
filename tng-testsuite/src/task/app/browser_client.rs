@@ -22,8 +22,12 @@ pub async fn launch_browser_client(
     token: CancellationToken,
     js: String,
 ) -> Result<JoinHandle<Result<()>>> {
-    Ok(tokio::task::spawn(async move {
-        let _drop_guard = token.drop_guard();
+    use tracing::Instrument;
+
+    let parent_span = tracing::Span::current();
+    Ok(tokio::task::spawn(
+        async move {
+            let _drop_guard = token.drop_guard();
 
         let js_sdk_file_path = locate_tng_js_sdk_file()?;
         let listen_port = portpicker::pick_unused_port()
@@ -175,7 +179,9 @@ pub async fn launch_browser_client(
 
         tracing::info!("The browser client task normally exit now");
         Ok(())
-    }))
+    }
+    .instrument(parent_span),
+    ))
 }
 
 fn locate_tng_js_sdk_file() -> Result<PathBuf> {

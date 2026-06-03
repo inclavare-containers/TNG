@@ -6,6 +6,7 @@ use http::StatusCode;
 use reqwest::header::HOST;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::task::app::HTTP_RESPONSE_BODY;
 
@@ -33,8 +34,10 @@ pub async fn launch_http_client_common(
     assert!(path_and_query.starts_with('/'));
     let path_and_query = path_and_query.to_owned();
 
-    Ok(tokio::task::spawn(async move {
-        let _drop_guard = token.drop_guard();
+    let parent_span = tracing::Span::current();
+    Ok(tokio::task::spawn(
+        async move {
+            let _drop_guard = token.drop_guard();
 
         for i in 1..6 {
             // repeat 5 times
@@ -102,5 +105,7 @@ pub async fn launch_http_client_common(
 
         tracing::info!("The HTTP client task normally exited");
         Ok(())
-    }))
+    }
+    .instrument(parent_span),
+    ))
 }

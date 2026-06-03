@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use async_trait::async_trait;
 use tokio::{process::Command, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 /// Controls how a shell script is executed within a test.
 #[derive(Clone, Copy)]
@@ -105,15 +106,19 @@ impl Task for ShellTask {
             Ok(())
         };
 
+        let parent_span = tracing::Span::current();
+
         match mode {
             ShellMode::Blocking => {
                 let _handle = shell_task.await?;
                 // The task completed synchronously, return a no-op spawned task.
-                Ok(tokio::task::spawn(async move { Ok(()) }))
+                Ok(tokio::task::spawn(
+                    async move { Ok(()) }.instrument(parent_span),
+                ))
             }
             ShellMode::FireAndForget | ShellMode::Barrier => {
                 // Spawn the shell task in the background and return immediately.
-                Ok(tokio::task::spawn(shell_task))
+                Ok(tokio::task::spawn(shell_task.instrument(parent_span)))
             }
         }
     }
