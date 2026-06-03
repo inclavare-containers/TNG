@@ -48,3 +48,117 @@ js-sdk = ["dep:chromedriver-manager", "dep:thirtyfour"]
 on-bin = []
 on-podman = []
 on-source-code = ["dep:tng"]
+
+# Integration tests organized by functional domain
+[[test]]
+name = "admin_interface"
+path = "tests/basic/admin_interface.rs"
+
+[[test]]
+name = "allow_non_tng_traffic"
+path = "tests/ohttp/allow_non_tng_traffic.rs"
+
+[[test]]
+name = "client_http_proxy_server_netfilter_same_node"
+path = "tests/http/client_http_proxy_server_netfilter_same_node.rs"
+
+[[test]]
+name = "client_netfilter_server_netfilter"
+path = "tests/netfilter/client_netfilter_server_netfilter.rs"
+
+[[test]]
+name = "client_socks5_server_netfilter"
+path = "tests/netfilter/client_socks5_server_netfilter.rs"
+
+[[test]]
+name = "direct_forward"
+path = "tests/basic/direct_forward.rs"
+
+[[test]]
+name = "egress_netfilter_capture"
+path = "tests/netfilter/egress_netfilter_capture.rs"
+
+[[test]]
+name = "egress_netfilter_cgroup"
+path = "tests/netfilter/egress_netfilter_cgroup.rs"
+
+[[test]]
+name = "egress_netfilter_port_range"
+path = "tests/netfilter/egress_netfilter_port_range.rs"
+
+[[test]]
+name = "http_encapulation_with_egress_mapping"
+path = "tests/http/http_encapulation_with_egress_mapping.rs"
+
+[[test]]
+name = "http_encapulation_with_egress_netfilter"
+path = "tests/http/http_encapulation_with_egress_netfilter.rs"
+
+[[test]]
+name = "http_encapulation_with_ingress_httpproxy"
+path = "tests/http/http_encapulation_with_ingress_httpproxy.rs"
+
+[[test]]
+name = "http_proxy_ingress_recursion_detect"
+path = "tests/http/http_proxy_ingress_recursion_detect.rs"
+
+[[test]]
+name = "ingress_netfilter_capture"
+path = "tests/netfilter/ingress_netfilter_capture.rs"
+
+[[test]]
+name = "ingress_netfilter_cgroup"
+path = "tests/netfilter/ingress_netfilter_cgroup.rs"
+
+[[test]]
+name = "js_sdk_http"
+path = "tests/js_sdk_http.rs"
+required-features = ["js-sdk"]
+
+[[test]]
+name = "netfilter_ingress_recursion_detect"
+path = "tests/netfilter/netfilter_ingress_recursion_detect.rs"
+
+[[test]]
+name = "no_ra"
+path = "tests/basic/no_ra.rs"
+
+[[test]]
+name = "no_ra_http_encapulation_with_egress_mapping"
+path = "tests/http/no_ra_http_encapulation_with_egress_mapping.rs"
+
+[[test]]
+name = "no_ra_ingress_httpproxy"
+path = "tests/http/no_ra_ingress_httpproxy.rs"
+
+[[test]]
+name = "ohttp"
+path = "tests/ohttp/ohttp.rs"
+
+[[test]]
+name = "server_netfilter"
+path = "tests/netfilter/server_netfilter.rs"
+
+[[test]]
+name = "server_netfilter_timeout"
+path = "tests/netfilter/server_netfilter_timeout.rs"
+
+[[test]]
+name = "tcp_one_way_ra"
+path = "tests/basic/tcp_one_way_ra.rs"
+
+[[test]]
+name = "tcp_one_way_ra_with_as_cert"
+path = "tests/basic/tcp_one_way_ra_with_as_cert.rs"
+
+[[test]]
+name = "tcp_one_way_reverse_ra"
+path = "tests/basic/tcp_one_way_reverse_ra.rs"
+
+[[test]]
+name = "tcp_two_way_ra"
+path = "tests/basic/tcp_two_way_ra.rs"
+
+[[test]]
+name = "tcp_two_way_ra_ingress_httpproxy_egress_netfilter"
+path = "tests/basic/tcp_two_way_ra_ingress_httpproxy_egress_netfilter.rs"

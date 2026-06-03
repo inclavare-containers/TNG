@@ -165,8 +165,9 @@ else
 fi
 echo "============= Finished unit test ============="
 
-# Run integration tests
-test_cases=$(ls tng-testsuite/tests/ | grep -E '.*\.rs$' | sed 's/\.rs$//')
+# Run integration tests (find .rs files recursively in tests/ subdirectories)
+# Test names are derived from the file name (without path or extension) to match [[test]] sections
+test_cases=$(find tng-testsuite/tests/ -name '*.rs' -exec basename {} \; | sed 's/\.rs$//')
 skipped_test_cases=""  # Add test names here to skip, space-separated
 
 summary_lines+=("$(format_result "Integration tests" "")")
