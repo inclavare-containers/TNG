@@ -12,7 +12,7 @@ use tng_testsuite::{
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_conflict_config_field() -> Result<()> {
-    assert!(run_test(vec![
+    assert!(run_test!(vec![
         TngInstance::TngServer(r#"
         {
             "add_egress": [
@@ -90,7 +90,7 @@ async fn test_direct_forward_without_ohttp() -> Result<()> {
         }
         "#;
 
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         TngInstance::TngClient(tng_client_config).boxed(),
         AppType::HttpServer {
@@ -112,7 +112,7 @@ async fn test_direct_forward_without_ohttp() -> Result<()> {
     .await?;
 
     // Test access from client without through tng client
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         AppType::HttpServer {
             port: 30001,
@@ -188,7 +188,7 @@ async fn test_direct_forward_with_ohttp() -> Result<()> {
         }
         "#;
 
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         TngInstance::TngClient(tng_client_config).boxed(),
         AppType::LoadBalancer {
@@ -217,7 +217,7 @@ async fn test_direct_forward_with_ohttp() -> Result<()> {
     .await?;
 
     // Test access from client without through tng client
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         AppType::HttpServer {
             port: 30001,

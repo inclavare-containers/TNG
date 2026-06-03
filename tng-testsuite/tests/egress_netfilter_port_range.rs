@@ -13,7 +13,7 @@ use tng_testsuite::{
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_port_range() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {

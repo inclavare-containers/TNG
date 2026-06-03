@@ -28,7 +28,7 @@ async fn test() -> Result<()> {
     );
 
     // Test socks5 with no auth requirement
-    run_test(vec![
+    run_test!(vec![
         tng_server.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -74,7 +74,7 @@ async fn test() -> Result<()> {
     .await?;
 
     // Test socks5 with password auth
-    run_test(vec![
+    run_test!(vec![
         tng_server.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -124,7 +124,7 @@ async fn test() -> Result<()> {
     .await?;
 
     // Test socks5 with wrong password
-    run_test(vec![
+    run_test!(vec![
         tng_server.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -181,7 +181,7 @@ async fn test() -> Result<()> {
     .await?;
 
     // Test socks5 with dst_filters
-    run_test(vec![
+    run_test!(vec![
         tng_server.clone().boxed(),
         TngInstance::TngClient(
             r#"

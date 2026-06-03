@@ -18,7 +18,7 @@ use tng_testsuite::{
 #[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -98,7 +98,7 @@ async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
 #[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -196,7 +196,7 @@ async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
 #[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -274,7 +274,7 @@ async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
 #[ignore = "requires cgroup v2 with xt_cgroup iptables module, not available in CI containers"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_cgroup_only_all_tcp() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {

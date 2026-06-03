@@ -7,7 +7,7 @@ use tng_testsuite::{
 /// both tng client and tng server are in non-tee env
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
         {

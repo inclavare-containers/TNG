@@ -8,7 +8,7 @@ use tng_testsuite::{
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_mapping() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -95,7 +95,7 @@ async fn test_ingress_mapping() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -163,7 +163,7 @@ async fn test_ingress_netfilter() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_server_attest_client_no_ra() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -221,7 +221,7 @@ async fn test_ingress_netfilter_server_attest_client_no_ra() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -304,7 +304,7 @@ async fn test_ingress_netfilter_with_load_balancer() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ra_model_matrix_server_attest_with_passport() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -387,7 +387,7 @@ async fn test_ra_model_matrix_server_attest_with_passport() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ra_model_matrix_server_attest_with_background_check() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -465,7 +465,7 @@ async fn test_ra_model_matrix_server_attest_with_background_check() -> Result<()
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -548,7 +548,7 @@ async fn test_ra_model_matrix_client_attest_with_passport() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ra_model_matrix_client_attest_with_background_check() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -627,7 +627,7 @@ async fn test_ra_model_matrix_client_attest_with_background_check() -> Result<()
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_server_attest_passport_cache() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -699,7 +699,7 @@ async fn test_server_attest_passport_cache() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_server_attest_passport_rotation_interval() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -775,7 +775,7 @@ async fn test_server_attest_passport_rotation_interval() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -863,7 +863,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
         .await
         .context("Failed to write initial key to /tmp/tng-test/ohttp-key.pem")?;
 
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -1083,7 +1083,7 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
         .await
         .context("Failed to write initial key to /tmp/tng-test/ohttp-key.pem")?;
 
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -1363,7 +1363,7 @@ EOF
         .boxed(),
     ]);
 
-    run_test(tasks).await?;
+    run_test!(tasks).await?;
 
     // Clean up peers file
     let _ = tokio::fs::remove_file(peers_file_path).await;
@@ -1478,7 +1478,7 @@ async fn test_egress_key_from_peer_shared() -> Result<()> {
         .boxed(),
     ]);
 
-    run_test(tasks).await?;
+    run_test!(tasks).await?;
 
     Ok(())
 }

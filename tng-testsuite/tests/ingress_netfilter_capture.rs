@@ -29,7 +29,7 @@ const TNG_SERVER_INSTANCE: TngInstance = TngInstance::TngServer(
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_port_only() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -73,7 +73,7 @@ async fn test_port_only() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_host_and_port() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -121,7 +121,7 @@ async fn test_host_and_port() -> Result<()> {
 async fn test_port_range() -> Result<()> {
     // Server egress must also capture the target port for the tunnel to work.
     // We use a wide port range on both sides to validate port_end.
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -187,7 +187,7 @@ async fn test_port_range() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ipset_and_port() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         ShellTask {
             name: "prepare_ipset".to_owned(),
             node_type: NodeType::Client,

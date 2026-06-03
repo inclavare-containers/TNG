@@ -9,7 +9,7 @@ use tng_testsuite::{
 #[serial_test::serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_array_format() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -71,7 +71,7 @@ async fn test_egress_netfilter_array_format() -> Result<()> {
 #[serial_test::serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_egress_netfilter_multiple_entries() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {

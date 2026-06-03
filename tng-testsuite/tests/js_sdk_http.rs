@@ -9,7 +9,7 @@ use tng_testsuite::{
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn server_background_check() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {
@@ -82,7 +82,7 @@ async fn server_background_check() -> Result<()> {
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn server_passport() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
             {

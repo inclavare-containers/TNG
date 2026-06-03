@@ -26,7 +26,7 @@ use tng_testsuite::{
 /// You will see a POST request with `/foo/bar` as path and `tng` as one of the headers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(
             r#"
                 {

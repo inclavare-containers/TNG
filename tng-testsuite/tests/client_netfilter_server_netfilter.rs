@@ -28,7 +28,7 @@ const TNG_SERVER_INSTANCE: TngInstance = TngInstance::TngServer(
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_port_only() -> Result<()> {
     // Port only
-    run_test(vec![
+    run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -72,7 +72,7 @@ async fn test_port_only() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_host_and_port() -> Result<()> {
     // Host and Port
-    run_test(vec![
+    run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -117,7 +117,7 @@ async fn test_host_and_port() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_host_and_port_bad_case() -> Result<()> {
     // Host and Port (Bad case)
-    assert!(run_test(vec![
+    assert!(run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -163,7 +163,7 @@ async fn test_host_and_port_bad_case() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_host_cidr_only() -> Result<()> {
     // Host(CIDR) only
-    run_test(vec![
+    run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -207,7 +207,7 @@ async fn test_host_cidr_only() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_host_cidr_only_bad_case() -> Result<()> {
     // Host(CIDR) only (Bad case)
-    assert!(run_test(vec![
+    assert!(run_test!(vec![
         TNG_SERVER_INSTANCE.clone().boxed(),
         TngInstance::TngClient(
             r#"
@@ -252,7 +252,7 @@ async fn test_host_cidr_only_bad_case() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ipset_and_port() -> Result<()> {
     // IpSet and Port
-    run_test(vec![
+    run_test!(vec![
         // Prepare ipset in client node
         ShellTask {
             name: "prepare_ipset".to_owned(),
@@ -311,7 +311,7 @@ async fn test_ipset_and_port() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ipset_and_port_bad_case() -> Result<()> {
     // IpSet and Port (Bad case)
-    assert!(run_test(vec![
+    assert!(run_test!(vec![
         ShellTask {
             name: "prepare_ipset".to_owned(),
             node_type: NodeType::Client,
@@ -370,7 +370,7 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ipset_only() -> Result<()> {
     // IpSet only
-    run_test(vec![
+    run_test!(vec![
         // Prepare ipset in client node
         ShellTask {
             name: "prepare_ipset".to_owned(),

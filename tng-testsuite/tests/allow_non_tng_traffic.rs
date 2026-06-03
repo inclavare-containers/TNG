@@ -92,7 +92,7 @@ async fn test_access_via_tng() -> Result<()> {
         }
         "#;
 
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         TngInstance::TngClient(tng_client_config).boxed(),
         AppType::LoadBalancer {
@@ -121,7 +121,7 @@ async fn test_access_via_tng() -> Result<()> {
     .await?;
 
     // Test access from client without through tng client
-    run_test(vec![
+    run_test!(vec![
         TngInstance::TngServer(tng_server_config).boxed(),
         AppType::HttpServer {
             port: 30001,
