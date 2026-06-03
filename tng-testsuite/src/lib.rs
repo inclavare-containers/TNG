@@ -10,6 +10,7 @@ use netns::BridgeNetwork;
 use task::Task;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<
@@ -104,17 +105,21 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
                     let task_result = {
                         let task_name_inner = task_name.clone();
                         let token = token.clone();
-                        node.run(async move {
-                            // Timeout is 1 minute.
-                            let timeout = tokio::time::sleep(Duration::from_secs(60));
+                        let task_span = tracing::info_span!("task", task = %display_name);
+                        node.run(
+                            async move {
+                                // Timeout is 1 minute.
+                                let timeout = tokio::time::sleep(Duration::from_secs(60));
 
-                            tokio::select! {
-                                _ = timeout => {
-                                    bail!("Timeout waiting for task {task_name_inner} to be ready");
-                                },
-                                res = task.launch(token) => res
+                                tokio::select! {
+                                    _ = timeout => {
+                                        bail!("Timeout waiting for task {task_name_inner} to be ready");
+                                    },
+                                    res = task.launch(token) => res
+                                }
                             }
-                        })
+                            .instrument(task_span),
+                        )
                         .await
                         .and_then(|r| r)?
                     };

@@ -2,6 +2,7 @@ use anyhow::Result;
 use tng::runtime::TngRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::task::Task;
 
@@ -23,31 +24,39 @@ impl TngInstance {
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
 
-        let join_handle = tokio::task::spawn(async move {
-            let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
+        // Capture the current span (set by the test harness via .instrument()) so that
+        // the spawned tokio task inherits it. Without this, tokio::task::spawn does not
+        // propagate the parent span unless `tokio_unstable` is enabled.
+        let parent_span = tracing::Span::current();
 
-            let tng_runtime = TngRuntime::from_config_with_reload_handle(
-                config,
-                crate::BIN_TEST_LOG_RELOAD_HANDLE
-                    .get()
-                    .expect("log reload handle not initialized"),
-            )
-            .await?;
+        let join_handle = tokio::task::spawn(
+            async move {
+                let config: tng::config::TngConfig = serde_json::from_str(&config_json)?;
 
-            let canceller = tng_runtime.canceller();
+                let tng_runtime = TngRuntime::from_config_with_reload_handle(
+                    config,
+                    crate::BIN_TEST_LOG_RELOAD_HANDLE
+                        .get()
+                        .expect("log reload handle not initialized"),
+                )
+                .await?;
 
-            {
-                tokio::task::spawn(async move {
-                    token.cancelled().await;
-                    canceller.cancel();
-                });
-            };
+                let canceller = tng_runtime.canceller();
 
-            tng_runtime.serve_with_ready(sender).await?;
+                {
+                    tokio::task::spawn(async move {
+                        token.cancelled().await;
+                        canceller.cancel();
+                    });
+                };
 
-            tracing::info!(name, "The TNG task normally exited");
-            Ok::<_, anyhow::Error>(())
-        });
+                tng_runtime.serve_with_ready(sender).await?;
+
+                tracing::info!(name, "The TNG task normally exited");
+                Ok::<_, anyhow::Error>(())
+            }
+            .instrument(parent_span),
+        );
 
         // Wait for the tng runtime to be ready
         if let Err(e) = receiver.await {
