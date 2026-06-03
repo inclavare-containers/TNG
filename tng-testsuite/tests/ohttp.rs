@@ -10,6 +10,49 @@ use tng_testsuite::{
     },
 };
 
+/// Returns a shell function definition for calling the key-config API.
+/// The `$1` placeholder should be replaced with the actual request payload.
+fn call_api_fn() -> &'static str {
+    r#"call_api() {
+        curl -s -X POST http://192.168.1.1:30001 \
+            -H "x-tng-ohttp-api: /tng/key-config" \
+            -H "Content-Type: application/json" \
+            -H "Accept: */*" \
+            -H "User-Agent: tng/2.2.6" \
+            -d "$1"
+    }
+"#
+}
+
+/// Generate a key rotation check script that calls the API 3 times with 5s wait,
+/// verifying that responses 1 and 2 match but response 3 differs.
+fn check_rotation_script(payload: &str) -> String {
+    format!(
+        r#"
+{}
+
+echo "Request 1..."
+r1=$(call_api '{payload}') || {{ echo "Error: Request 1 failed"; exit 1; }}
+
+echo "Request 2..."
+r2=$(call_api '{payload}') || {{ echo "Error: Request 2 failed"; exit 1; }}
+
+[ "$r1" = "$r2" ] && echo "PASS: First two responses match" || {{ echo "FAIL: First two differ"; exit 1; }}
+
+echo "Waiting 5s..."
+sleep 5
+
+echo "Request 3..."
+r3=$(call_api '{payload}') || {{ echo "Error: Request 3 failed"; exit 1; }}
+
+[ "$r3" != "$r1" ] && echo "PASS: Third response differs" || {{ echo "FAIL: Third response is same"; exit 1; }}
+
+echo "SUCCESS: All tests passed"
+"#,
+        call_api_fn()
+    )
+}
+
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_ingress_mapping() -> Result<()> {
@@ -661,36 +704,9 @@ async fn test_server_attest_passport_cache() -> Result<()> {
         ShellTask {
             name: "check_server_keyconfig_cached".to_owned(),
             node_type: NodeType::Client,
-            script: r#"
-                # Reusable curl command
-                call_api() {
-                    curl -s -X POST http://192.168.1.1:30001 \
-                        -H "x-tng-ohttp-api: /tng/key-config" \
-                        -H "Content-Type: application/json" \
-                        -H "Accept: */*" \
-                        -H "User-Agent: tng/2.2.6" \
-                        -d '{"attestation_request":{"model":"passport"}}'
-                }
-
-                echo "Request 1..."
-                r1=$(call_api) || { echo "Error: Request 1 failed"; exit 1; }
-
-                echo "Request 2..."
-                r2=$(call_api) || { echo "Error: Request 2 failed"; exit 1; }
-
-                [ "$r1" = "$r2" ] && echo "PASS: First two responses match" || { echo "FAIL: First two differ"; exit 1; }
-
-                echo "Waiting 5s..."
-                sleep 5
-
-                echo "Request 3..."
-                r3=$(call_api) || { echo "Error: Request 3 failed"; exit 1; }
-
-                [ "$r3" != "$r1" ] && echo "PASS: Third response differs" || { echo "FAIL: Third response is same"; exit 1; }
-
-                echo "SUCCESS: All tests passed"
-            "#
-            .to_owned(),
+            script: check_rotation_script(
+                r#"{"attestation_request":{"model":"passport"}}"#
+            ),
             mode: ShellMode::Blocking,
 
         }
@@ -737,36 +753,9 @@ async fn test_server_attest_passport_rotation_interval() -> Result<()> {
         ShellTask {
             name: "check_key_rotation".to_owned(),
             node_type: NodeType::Client,
-            script: r#"
-                # Reusable curl command
-                call_api() {
-                    curl -s -X POST http://192.168.1.1:30001 \
-                        -H "x-tng-ohttp-api: /tng/key-config" \
-                        -H "Content-Type: application/json" \
-                        -H "Accept: */*" \
-                        -H "User-Agent: tng/2.2.6" \
-                        -d '{"attestation_request":{"model":"passport"}}'
-                }
-
-                echo "Request 1..."
-                r1=$(call_api) || { echo "Error: Request 1 failed"; exit 1; }
-
-                echo "Request 2..."
-                r2=$(call_api) || { echo "Error: Request 2 failed"; exit 1; }
-
-                [ "$r1" = "$r2" ] && echo "PASS: First two responses match" || { echo "FAIL: First two differ"; exit 1; }
-
-                echo "Waiting 5s..."
-                sleep 5
-
-                echo "Request 3..."
-                r3=$(call_api) || { echo "Error: Request 3 failed"; exit 1; }
-
-                [ "$r3" != "$r1" ] && echo "PASS: Third response differs" || { echo "FAIL: Third response is same"; exit 1; }
-
-                echo "SUCCESS: All tests passed"
-            "#
-            .to_owned(),
+            script: check_rotation_script(
+                r#"{"attestation_request":{"model":"passport"}}"#
+            ),
             mode: ShellMode::Blocking,
 
         }
@@ -809,36 +798,33 @@ async fn test_server_attest_background_check_rotation_interval() -> Result<()> {
         ShellTask {
             name: "check_key_rotation".to_owned(),
             node_type: NodeType::Client,
-            script: r#"
-                # Reusable curl command
-                call_api() {
-                    curl -s -X POST http://192.168.1.1:30001 \
-                        -H "x-tng-ohttp-api: /tng/key-config" \
-                        -H "Content-Type: application/json" \
-                        -H "Accept: */*" \
-                        -H "User-Agent: tng/2.2.6" \
-                        -d '{"attestation_request":{"model":"background_check","challenge_token":"dummy token"}}' | jq '.hpke_key_config.encoded_key_config_list'
-                }
+            script: {
+                let payload = r#"{"attestation_request":{"model":"background_check","challenge_token":"dummy token"}}"#;
+                format!(
+                    r#"
+{}
 
-                echo "Request 1..."
-                r1=$(call_api) || { echo "Error: Request 1 failed"; exit 1; }
+echo "Request 1..."
+r1=$(call_api '{payload}' | jq '.hpke_key_config.encoded_key_config_list') || {{ echo "Error: Request 1 failed"; exit 1; }}
 
-                echo "Request 2..."
-                r2=$(call_api) || { echo "Error: Request 2 failed"; exit 1; }
+echo "Request 2..."
+r2=$(call_api '{payload}' | jq '.hpke_key_config.encoded_key_config_list') || {{ echo "Error: Request 2 failed"; exit 1; }}
 
-                [ "$r1" = "$r2" ] && echo "PASS: First two responses match" || { echo "FAIL: First two differ"; exit 1; }
+[ "$r1" = "$r2" ] && echo "PASS: First two responses match" || {{ echo "FAIL: First two differ"; exit 1; }}
 
-                echo "Waiting 5s..."
-                sleep 5
+echo "Waiting 5s..."
+sleep 5
 
-                echo "Request 3..."
-                r3=$(call_api) || { echo "Error: Request 3 failed"; exit 1; }
+echo "Request 3..."
+r3=$(call_api '{payload}' | jq '.hpke_key_config.encoded_key_config_list') || {{ echo "Error: Request 3 failed"; exit 1; }}
 
-                [ "$r3" != "$r1" ] && echo "PASS: Third response differs" || { echo "FAIL: Third response is same"; exit 1; }
+[ "$r3" != "$r1" ] && echo "PASS: Third response differs" || {{ echo "FAIL: Third response is same"; exit 1; }}
 
-                echo "SUCCESS: All tests passed"
-            "#
-            .to_owned(),
+echo "SUCCESS: All tests passed"
+"#,
+                    call_api_fn()
+                )
+            },
             mode: ShellMode::Blocking,
 
         }
