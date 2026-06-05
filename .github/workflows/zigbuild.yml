@@ -44,7 +44,12 @@ jobs:
           ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/ --cfg tokio_unstable"' || 'RUSTFLAGS="--cfg tokio_unstable"'  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
       - name: Get binary path
         if: ${{ runner.os != 'Windows' }}
-        run: echo "executable=$(find . -maxdepth 4 -type f -exec file {} \; | grep 'executable' | grep 'target' | grep -o '^[^:]*')" >> "$GITHUB_ENV"
+        run: |
+          if [[ "${{ inputs.target }}" == *"windows"* ]]; then
+            echo "executable=./target/${{ inputs.target }}/release/${{ env.exe_name }}" >> "$GITHUB_ENV"
+          else
+            echo "executable=./target/${{ inputs.target }}/release/${{ env.exe_name }}" >> "$GITHUB_ENV"
+          fi
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
