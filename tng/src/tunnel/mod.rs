@@ -9,7 +9,7 @@ pub mod ingress;
 pub(crate) mod ohttp;
 pub(crate) mod provider;
 pub(crate) mod ra_context;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub(crate) mod service_metrics;
 pub(crate) mod stream;
 pub(crate) mod utils;

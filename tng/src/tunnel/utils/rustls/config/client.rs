@@ -1,17 +1,21 @@
+#[cfg(not(wasm))]
 use std::sync::Arc;
 
+#[cfg(not(wasm))]
 use anyhow::{Context as _, Result};
+#[cfg(not(wasm))]
 use rustls::RootCertStore;
 
-use crate::tunnel::utils::{
-    cert_manager::DynamicCertResolver,
-    rustls::{
-        config::{alpn::Alpn, TlsConfigGenerator},
-        dummy::verifier::DummyServerCertVerifier,
-        ra::server_cert_verifier::LazyServerCertVerifier,
-    },
+#[cfg(unix)]
+use crate::tunnel::utils::cert_manager::DynamicCertResolver;
+#[cfg(not(wasm))]
+use crate::tunnel::utils::rustls::{
+    config::{alpn::Alpn, TlsConfigGenerator},
+    dummy::verifier::DummyServerCertVerifier,
+    ra::server_cert_verifier::LazyServerCertVerifier,
 };
 
+#[cfg(not(wasm))]
 impl TlsConfigGenerator {
     pub async fn get_lazy_one_time_rustls_client_config(
         &self,
@@ -91,8 +95,10 @@ impl TlsConfigGenerator {
     }
 }
 
+#[cfg(not(wasm))]
 pub struct LazyOnetimeTlsClientConfig(rustls::ClientConfig, Option<Arc<LazyServerCertVerifier>>);
 
+#[cfg(not(wasm))]
 impl LazyOnetimeTlsClientConfig {
     /// Perform TLS handshake then verify the peer certificate if a verifier was configured.
     pub async fn handshake_with_stream<S>(

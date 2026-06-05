@@ -10,6 +10,7 @@ use super::attestation_result::AttestationResult;
 #[derive(Debug, Clone, Copy)]
 pub enum IngressMode {
     Mapping,
+    #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
     Netfilter,
     Socks5,
     HttpProxy,
@@ -19,6 +20,7 @@ impl Display for IngressMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IngressMode::Mapping => write!(f, "mapping"),
+            #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
             IngressMode::Netfilter => write!(f, "netfilter"),
             IngressMode::Socks5 => write!(f, "socks5"),
             IngressMode::HttpProxy => write!(f, "http_proxy"),
@@ -30,6 +32,7 @@ impl Display for IngressMode {
 #[derive(Debug, Clone, Copy)]
 pub enum EgressMode {
     Mapping,
+    #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
     Netfilter,
 }
 
@@ -37,6 +40,7 @@ impl Display for EgressMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EgressMode::Mapping => write!(f, "mapping"),
+            #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
             EgressMode::Netfilter => write!(f, "netfilter"),
         }
     }

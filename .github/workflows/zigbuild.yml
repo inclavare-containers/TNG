@@ -16,10 +16,11 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ contains( inputs.target, 'linux' ) && 'ubuntu-latest' || ( contains( inputs.target, 'apple' ) && 'macos-latest' || ( contains( inputs.target, 'windows' ) && 'windows-latest' || 'ubuntu-latest' ) ) }}
+    runs-on: ${{ contains( inputs.target, 'linux' ) && 'ubuntu-latest' || ( contains( inputs.target, 'apple' ) && 'macos-latest' || ( contains( inputs.target, 'windows-msvc' ) && 'windows-latest' || 'ubuntu-latest' ) ) }}
     env:
       build-tool: ${{ contains( inputs.target, 'windows-msvc' ) && 'build' || 'zigbuild' }}
       executable: ./target/${{inputs.target}}/release/*.exe
+      exe_name: ${{ contains( inputs.target, 'windows' ) && 'tng.exe' || 'tng' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,5 +47,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.target }}
-          path: target/${{ inputs.target }}/release/tng
+          path: target/${{ inputs.target }}/release/${{ env.exe_name }}
           if-no-files-found: error

@@ -296,11 +296,43 @@ wasm-integration-test: wasm-build-debug install-test-deps
 www-demo:
 	cd tng-wasm/www && npm run start
 
-.PHONE: mac-cross-build
+.PHONY: mac-cross-build
 mac-cross-build:
 	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin
 
-.PHONE: clippy
+.PHONY: install-windows-build-deps
+install-windows-build-deps:
+	@if ! command -v zig >/dev/null 2>&1; then \
+		echo "=== Installing Zig ==="; \
+		ARCH=$$(uname -m); \
+		if [ "$$ARCH" = "aarch64" ]; then ZIG_ARCH="aarch64"; else ZIG_ARCH="x86_64"; fi; \
+		ZIG_VERSION=0.16.0; \
+		ZIG_DIR=/tmp/zig-$${ZIG_ARCH}-linux-$${ZIG_VERSION}; \
+		curl -L "https://zigmirror.com/zig-$${ZIG_ARCH}-linux-$${ZIG_VERSION}.tar.xz" -o /tmp/zig-cross.tar.xz; \
+		tar -xJf /tmp/zig-cross.tar.xz -C /tmp/; \
+		cp "$$ZIG_DIR/zig" /usr/local/bin/zig; \
+		cp -rf "$$ZIG_DIR/lib" /usr/local/lib/; \
+		cp -rf "$$ZIG_DIR/doc" /usr/local/doc/ 2>/dev/null || true; \
+		cp -f "$$ZIG_DIR/LICENSE" /usr/local/ 2>/dev/null || true; \
+		rm -f /tmp/zig-cross.tar.xz; \
+		rm -rf "$$ZIG_DIR"; \
+	fi
+	@if ! command -v x86_64-w64-mingw32-dlltool >/dev/null 2>&1; then \
+		echo "=== Installing MinGW-w64 toolchain ==="; \
+		yum install -y mingw64-gcc; \
+	fi
+	@if ! cargo --list 2>/dev/null | grep -q zigbuild; then \
+		echo "=== Installing cargo-zigbuild ==="; \
+		rustup toolchain add nightly >/dev/null 2>&1; \
+		cargo +nightly install cargo-zigbuild --version 0.19.8; \
+	fi
+	@rustup target list | grep -q "x86_64-pc-windows-gnu (installed)" || rustup target add x86_64-pc-windows-gnu
+
+.PHONY: windows-cross-build
+windows-cross-build: install-windows-build-deps
+	RUSTFLAGS="--cfg tokio_unstable" cargo zigbuild --target x86_64-pc-windows-gnu --release
+
+.PHONY: clippy
 clippy:
 	cargo clippy --all-targets -- -D warnings
 

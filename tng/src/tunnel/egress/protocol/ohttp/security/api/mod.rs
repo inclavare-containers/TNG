@@ -5,6 +5,7 @@ pub mod tunnel;
 use std::sync::Arc;
 
 use anyhow::Result;
+#[cfg(unix)]
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::config::egress::KeyArgs;
@@ -14,8 +15,10 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     self_generated::SelfGeneratedKeyManager, KeyManager,
 };
+#[cfg(unix)]
 use crate::tunnel::ohttp::protocol::KeyConfigResponse;
 use crate::tunnel::ra_context::RaContext;
+#[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::MaybeCached;
 use crate::TokioRuntime;
 
@@ -37,6 +40,7 @@ pub struct OhttpServerApi {
     /// In passport mode, the server generates an attestation (passport) that is cached
     /// and reused for subsequent client requests to avoid expensive re-attestation.
     /// The cache automatically refreshes based on configured refresh strategy.
+    #[cfg(unix)]
     passport_cache: Arc<RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>>,
 }
 
@@ -62,10 +66,13 @@ impl OhttpServerApi {
             }
         };
 
-        let passport_cache: Arc<RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>> =
-            Default::default();
+        #[cfg(unix)]
+        let passport_cache: Arc<
+            RwLock<OnceCell<MaybeCached<KeyConfigResponse, TngError>>>,
+        > = Default::default();
 
         // Register a callback to reset the passport cache when key changes
+        #[cfg(unix)]
         {
             let passport_cache_cloned = passport_cache.clone();
             key_manager
@@ -82,6 +89,7 @@ impl OhttpServerApi {
         Ok(OhttpServerApi {
             ra_context,
             key_manager,
+            #[cfg(unix)]
             passport_cache,
         })
     }

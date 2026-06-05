@@ -1,5 +1,4 @@
 pub mod trusted;
-#[cfg(unix)]
 pub mod unprotected;
 
 use std::{future::Future, net::SocketAddr, pin::Pin};

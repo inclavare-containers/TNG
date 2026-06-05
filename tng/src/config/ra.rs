@@ -90,6 +90,7 @@ impl<'de> Deserialize<'de> for RaArgsUnchecked {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RaArgs {
     #[cfg(unix)]
     AttestOnly(AttestArgs),
@@ -128,7 +129,7 @@ impl RaArgsUnchecked {
                 (Some(attest), None) => RaArgs::AttestOnly(attest),
                 #[cfg(unix)]
                 (Some(attest), Some(verify)) => RaArgs::AttestAndVerify(attest, verify),
-                #[cfg(wasm)]
+                #[cfg(not(unix))]
                 (Some(..), _) => {
                     return Err(TngError::InvalidParameter(anyhow!("`attest` option is not supported since attestation is not supported on this platform.")));
                 }

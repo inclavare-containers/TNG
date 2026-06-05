@@ -37,19 +37,19 @@ pub struct TokioRuntime {
 
 #[derive(Debug)]
 enum TokioRuntimeInner {
-    #[cfg(unix)]
+    #[cfg(not(wasm))]
     Owned {
         rt: Option<tokio::runtime::Runtime>,
         rt_handle: tokio::runtime::Handle,
     },
-    #[cfg(unix)]
+    #[cfg(not(wasm))]
     Reference { rt_handle: tokio::runtime::Handle },
     #[cfg(wasm)]
     WasmMainThread,
 }
 
 impl TokioRuntime {
-    #[cfg(unix)]
+    #[cfg(not(wasm))]
     #[allow(dead_code)]
     pub fn new_multi_thread(shutdown_guard: ShutdownGuard) -> Result<Self> {
         use anyhow::Context;
@@ -68,7 +68,7 @@ impl TokioRuntime {
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(not(wasm))]
     #[allow(dead_code)]
     pub fn current(shutdown_guard: ShutdownGuard) -> Result<Self> {
         let rt_handle = tokio::runtime::Handle::try_current()?;
@@ -104,12 +104,13 @@ impl TokioRuntime {
     {
         let this = self.clone();
         let handle = match self.inner.as_ref() {
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             TokioRuntimeInner::Owned { rt: _, rt_handle }
             | TokioRuntimeInner::Reference { rt_handle } => {
                 // Spawn a task with a name is a unstable feature
                 #[cfg(tokio_unstable)]
                 #[allow(clippy::disallowed_methods)]
+                #[allow(clippy::expect_used)]
                 let handle = tokio::task::Builder::new()
                     .name(name)
                     .spawn_on(
@@ -187,7 +188,7 @@ impl Drop for TokioRuntimeInner {
     /// Note: Only the `Owned` variant holds a `Runtime`; other variants require no special handling.
     fn drop(&mut self) {
         match self {
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             TokioRuntimeInner::Owned { rt, rt_handle: _ } => {
                 if let Some(rt_to_drop) = rt.take() {
                     match tokio::runtime::Handle::try_current() {

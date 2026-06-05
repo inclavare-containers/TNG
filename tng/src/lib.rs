@@ -4,15 +4,16 @@
 use shadow_rs::shadow;
 
 pub mod config;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 mod control_interface;
 pub mod error;
+#[cfg(not(wasm))]
 mod observability;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod runtime;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 mod service;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 mod state;
 pub mod tunnel;
 
@@ -21,7 +22,7 @@ shadow!(build);
 pub(crate) const HTTP_REQUEST_USER_AGENT_HEADER: &str =
     const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
     const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 

@@ -1,24 +1,32 @@
-use std::pin::Pin;
-use std::sync::Arc;
-
-use anyhow::{bail, Result};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::Result;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use itertools::Itertools;
 use ohttp::KeyConfig;
+#[cfg(unix)]
 use rats_cert::tee::{AttesterPipeline, GenericAttester as _, GenericConverter as _, ReportData};
+#[cfg(unix)]
+use std::pin::Pin;
+#[cfg(unix)]
+use std::sync::Arc;
 
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
+#[cfg(unix)]
 use crate::tunnel::ohttp::protocol::userdata::ServerUserData;
-use crate::tunnel::ohttp::protocol::{
-    AttestationRequest, HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
-};
-use crate::tunnel::ra_context::{AttestContext, RaContext};
+#[cfg(unix)]
+use crate::tunnel::ohttp::protocol::{AttestationRequest, ServerAttestationInfo};
+use crate::tunnel::ohttp::protocol::{HpkeKeyConfig, KeyConfigRequest, KeyConfigResponse};
+#[cfg(unix)]
+use crate::tunnel::ra_context::AttestContext;
+use crate::tunnel::ra_context::RaContext;
+#[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::{Expire, MaybeCached};
 
 impl OhttpServerApi {
@@ -33,13 +41,15 @@ impl OhttpServerApi {
     ///
     /// This endpoint only needs to be accessed once. Before hpke_key_config.expire_timestamp or
     /// attestation_result expiration, the configuration needs to be refreshed in the background.
+    #[allow(unused_variables)]
     pub async fn get_hpke_configuration(
         &self,
         payload: Option<Json<KeyConfigRequest>>,
         context: TngStreamContext,
     ) -> Result<Response, TngError> {
         // Check if hit the cache
-        match (self.ra_context.attest_context(), &payload) {
+        #[cfg(unix)]
+        let response = match (self.ra_context.attest_context(), &payload) {
             // If the server is set to be a attester with passport mode, and the client is requesting a passport response, we cache it and return the cached response
             (
                 Some(attest_ctx @ AttestContext::Passport { .. }),
@@ -93,9 +103,21 @@ impl OhttpServerApi {
             )
             .await
             .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response))),
-        }
+        };
+
+        #[cfg(not(unix))]
+        let response = Self::get_hpke_configuration_internal(
+            &self.ra_context,
+            self.key_manager.as_ref(),
+            payload,
+        )
+        .await
+        .map(|response: KeyConfigResponse| IntoResponse::into_response(Json(response)));
+
+        response
     }
 
+    #[allow(unused_variables)]
     async fn get_hpke_configuration_internal(
         ra_context: &RaContext,
         key_manager: &dyn KeyManager,
@@ -132,79 +154,91 @@ impl OhttpServerApi {
         let attestation_request = payload.and_then(|Json(payload)| payload.attestation_request);
 
         let response = async {
-            Ok(match ra_context.attest_context() {
-                Some(attest_ctx) => match (attestation_request, attest_ctx) {
-                    (Some(AttestationRequest::Passport), AttestContext::Passport { attester, converter, .. }) => {
-                        // fetch a challenge token from attestation service
-                        let challenge_token = converter.get_nonce().await?;
+            #[cfg(unix)]
+            {
+                Ok(match ra_context.attest_context() {
+                    Some(attest_ctx) => match (attestation_request, attest_ctx) {
+                        (Some(AttestationRequest::Passport), AttestContext::Passport { attester, converter, .. }) => {
+                            // fetch a challenge token from attestation service
+                            let challenge_token = converter.get_nonce().await?;
 
-                        let attester_pipeline = AttesterPipeline::new(attester, converter);
+                            let attester_pipeline = AttesterPipeline::new(attester, converter);
 
-                        let userdata = ServerUserData {
-                            challenge_token: Some(challenge_token),
-                            hpke_key_config: hpke_key_config.clone(),
+                            let userdata = ServerUserData {
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: hpke_key_config.clone(),
+                            }
+                            .to_claims()?;
+
+                            let token = attester_pipeline
+                                .get_evidence(&ReportData::Claims(userdata))
+                                .await?;
+                            let as_provider = token.provider_type();
+                            KeyConfigResponse {
+                                hpke_key_config,
+                                attestation_info: Some(ServerAttestationInfo::Passport {
+                                    attestation_result: token.into_str(),
+                                    as_provider: Some(as_provider),
+                                }),
+                            }
                         }
-                        .to_claims()?;
+                        (
+                            Some(AttestationRequest::BackgroundCheck { challenge_token }),
+                            AttestContext::BackgroundCheck { attester, .. },
+                        ) => {
+                            let userdata = ServerUserData {
+                                challenge_token: Some(challenge_token),
+                                hpke_key_config: hpke_key_config.clone(),
+                            }
+                            .to_claims()?;
 
-                        let token = attester_pipeline
-                            .get_evidence(&ReportData::Claims(userdata))
-                            .await?;
-                        let as_provider = token.provider_type();
-                        KeyConfigResponse {
-                            hpke_key_config,
-                            attestation_info: Some(ServerAttestationInfo::Passport {
-                                attestation_result: token.into_str(),
-                                as_provider: Some(as_provider),
-                            }),
+                            let tng_evidence = attester
+                                .get_evidence(&ReportData::Claims(userdata))
+                                .await?;
+                            let aa_provider = tng_evidence.provider_type();
+                            let evidence = tng_evidence.serialize_to_json()?;
+
+                            KeyConfigResponse {
+                                hpke_key_config,
+                                attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
+                                    evidence,
+                                    aa_provider: Some(aa_provider),
+                                }),
+                            }
                         }
-                    }
-                    (
-                        Some(AttestationRequest::BackgroundCheck { challenge_token }),
-                        AttestContext::BackgroundCheck { attester, .. },
-                    ) => {
-                        let userdata = ServerUserData {
-                            challenge_token: Some(challenge_token),
-                            hpke_key_config: hpke_key_config.clone(),
+                        (Some(AttestationRequest::Passport), AttestContext::BackgroundCheck { .. }) => {
+                            bail!("Background check model is expected but passport attestation is requested")
                         }
-                        .to_claims()?;
-
-                        let tng_evidence = attester
-                            .get_evidence(&ReportData::Claims(userdata))
-                            .await?;
-                        let aa_provider = tng_evidence.provider_type();
-                        let evidence = tng_evidence.serialize_to_json()?;
-
-                        KeyConfigResponse {
-                            hpke_key_config,
-                            attestation_info: Some(ServerAttestationInfo::BackgroundCheck {
-                                evidence,
-                                aa_provider: Some(aa_provider),
-                            }),
+                        (Some(AttestationRequest::BackgroundCheck { .. }), AttestContext::Passport { .. }) => {
+                            bail!("Passport model is expected but background check attestation is requested")
                         }
-                    }
-                    (Some(AttestationRequest::Passport), AttestContext::BackgroundCheck { .. }) => {
-                        bail!("Background check model is expected but passport attestation is requested")
-                    }
-                    (Some(AttestationRequest::BackgroundCheck { .. }), AttestContext::Passport { .. }) => {
-                        bail!("Passport model is expected but background check attestation is requested")
-                    }
-                    (None, _) => {
+                        (None, _) => {
 
-                            // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
+                                // Just return the key config when no attestation_request sent from client. This can happens when the server is 'attest' while client is 'no_ra'
+                            KeyConfigResponse {
+                                hpke_key_config,
+                                attestation_info: None,
+                            }
+                        }
+                    },
+                    None => {
+                        // No attestation required (VerifyOnly or NoRa)
                         KeyConfigResponse {
                             hpke_key_config,
                             attestation_info: None,
                         }
                     }
-                },
-                None => {
-                    // No attestation required (VerifyOnly or NoRa)
-                    KeyConfigResponse {
-                        hpke_key_config,
-                        attestation_info: None,
-                    }
-                }
-            })
+                })
+            }
+
+            #[cfg(not(unix))]
+            {
+                let _ = attestation_request;
+                Ok(KeyConfigResponse {
+                    hpke_key_config,
+                    attestation_info: None,
+                })
+            }
         }
         .await
         .map_err(TngError::GenServerHpkeConfigurationResponseFailed)?;

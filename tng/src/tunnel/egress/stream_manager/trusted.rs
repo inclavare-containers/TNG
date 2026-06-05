@@ -65,7 +65,7 @@ impl TrustedStreamManager {
                 .map(|a| a.multiplex)
                 .unwrap_or(true);
         let runtime = if is_h2_or_ohttp {
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             {
                 TokioRuntime::new_multi_thread(parent_runtime.shutdown_guard().clone())?
             }
@@ -74,7 +74,7 @@ impl TrustedStreamManager {
                 TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
             }
         } else {
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             {
                 TokioRuntime::current(parent_runtime.shutdown_guard().clone())?
             }

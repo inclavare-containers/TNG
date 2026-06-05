@@ -24,7 +24,7 @@ use rats_cert::tee::ReportData;
 use rats_cert::tee::{GenericConverter, GenericVerifier as _};
 
 use crate::tunnel::provider::{ProviderType, TngEvidence, TngToken};
-#[cfg(unix)]
+#[cfg(not(wasm))]
 use tokio::io::AsyncReadExt;
 use tokio_util::{
     compat::{
@@ -339,7 +339,7 @@ impl OHttpClientInner {
     )> {
         #[cfg(not(unix))]
         {
-            return Ok((None, ClientAuth::NoAuth(NoAuth {}), Expire::NoExpire));
+            Ok((None, ClientAuth::NoAuth(NoAuth {}), Expire::NoExpire))
         }
 
         #[cfg(unix)]
@@ -482,9 +482,9 @@ impl OHttpClientInner {
             let client_request =
                 client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
 
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             let (encrypted_request, request_write) = tokio::io::duplex(4096);
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             let client_request = client.encapsulate_stream(request_write.compat())?;
 
             let client_response_decapsulator = client_request.response_decapsulator()?;
@@ -514,7 +514,7 @@ impl OHttpClientInner {
             #[cfg(wasm)]
             let _: () = encryption_task.await;
 
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             self.runtime
                 .spawn_supervised_task_current_span(encryption_task);
 
@@ -552,7 +552,7 @@ impl OHttpClientInner {
                 tracing::debug!("Encrypted request body length: {:?}", body_bytes.len());
                 reqwest::Body::from(body_bytes.freeze())
             }
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             {
                 let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
                 reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(body))

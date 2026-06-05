@@ -6,12 +6,11 @@ use std::{fs::File, io::BufReader};
 use anyhow::{bail, Context};
 use clap::Parser as _;
 use cli::{Cli, GlobalSubcommand};
+use tng::build;
+use tng::config::TngConfig;
 use tng::runtime::TngRuntime;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use tng::build;
-use tng::config::TngConfig;
 
 mod cli;
 
@@ -21,11 +20,6 @@ async fn main() {
 
     // Initialize rustls crypto provider
     #[allow(clippy::expect_used)]
-    #[cfg(not(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    )))]
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
@@ -52,10 +46,19 @@ async fn main() {
                     }),
                 ),
         );
+
+    #[cfg(unix)]
     if cli.tokio_console {
-        // Initialize tokio console
         subscriber_init.with(console_subscriber::spawn()).init();
     } else {
+        subscriber_init.init();
+    }
+
+    #[cfg(not(unix))]
+    {
+        if cli.tokio_console {
+            eprintln!("Warning: --tokio-console is not supported on this platform. Ignoring.");
+        }
         subscriber_init.init();
     }
 
@@ -63,7 +66,7 @@ async fn main() {
         r#"
   _______   ________
  /_  __/ | / / ____/
-  / / /  |/ / / __  
+  / / /  |/ / / __
  / / / /|  / /_/ /  Welcome to the Trusted Network Gateway!
 /_/ /_/ |_/\____/   version: v{}  commit: {}  buildtime: {}"#,
         build::PKG_VERSION,

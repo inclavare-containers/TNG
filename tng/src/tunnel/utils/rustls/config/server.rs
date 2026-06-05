@@ -3,13 +3,12 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use rustls::ServerConfig;
 
-use crate::tunnel::utils::{
-    cert_manager::DynamicCertResolver,
-    rustls::{
-        config::{alpn::Alpn, TlsConfigGenerator},
-        dummy::RustlsDummyCert,
-        ra::client_cert_verifier::LazyClientCertVerifier,
-    },
+#[cfg(unix)]
+use crate::tunnel::utils::cert_manager::DynamicCertResolver;
+use crate::tunnel::utils::rustls::{
+    config::{alpn::Alpn, TlsConfigGenerator},
+    dummy::RustlsDummyCert,
+    ra::client_cert_verifier::LazyClientCertVerifier,
 };
 
 impl TlsConfigGenerator {
@@ -33,6 +32,7 @@ impl TlsConfigGenerator {
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
                 LazyOnetimeTlsServerConfig(tls_server_config, Some(verifier))
             }
+            #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager) => {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -42,6 +42,7 @@ impl TlsConfigGenerator {
                         )));
                 LazyOnetimeTlsServerConfig(tls_server_config, None)
             }
+            #[cfg(unix)]
             TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
                 let verifier = Arc::new(LazyClientCertVerifier::new(verify_ctx.clone())?);
                 let tls_server_config: ServerConfig =
@@ -120,6 +121,7 @@ impl TlsConfigGenerator {
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
+            #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager) => {
                 let tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -129,6 +131,7 @@ impl TlsConfigGenerator {
                         )));
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
+            #[cfg(unix)]
             TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
                 let verifier = Arc::new(BlockingClientCertVerifier::new(verify_ctx.clone())?);
                 let tls_server_config: ServerConfig =

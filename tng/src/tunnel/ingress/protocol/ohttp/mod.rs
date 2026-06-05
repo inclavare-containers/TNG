@@ -1,9 +1,9 @@
 pub mod security;
 
-#[cfg(unix)]
-pub use unix_specific_module::*;
-#[cfg(unix)]
-mod unix_specific_module {
+#[cfg(not(wasm))]
+pub use ohttp_stream_forwarder::*;
+#[cfg(not(wasm))]
+mod ohttp_stream_forwarder {
 
     use std::{convert::Infallible, pin::Pin, sync::Arc};
 

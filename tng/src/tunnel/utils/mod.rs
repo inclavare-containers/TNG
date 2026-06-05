@@ -1,22 +1,21 @@
 #[cfg(unix)]
 pub mod cert_manager;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod endpoint_matcher;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod forward;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod http_inspector;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod hyper;
 #[cfg(target_os = "linux")]
 pub mod iptables;
 pub mod maybe_cached;
 pub mod runtime;
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod rustls;
-#[cfg(unix)]
 pub mod socket;
 pub mod tokio;
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod file_watcher;

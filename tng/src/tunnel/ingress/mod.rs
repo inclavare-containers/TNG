@@ -1,9 +1,9 @@
 pub mod protocol;
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod stream_manager;
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub mod flow;
 #[cfg(feature = "ingress-http-proxy")]
 pub mod http_proxy;

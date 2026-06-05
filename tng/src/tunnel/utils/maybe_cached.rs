@@ -4,19 +4,27 @@ use std::cmp::{Ord, Ordering, PartialOrd};
 use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::select;
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 use tokio::task::JoinHandle;
 #[cfg(wasm)]
 use tokio_with_wasm::alias::task::JoinHandle;
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 use tokio::time as tokio_time;
 #[cfg(wasm)]
 use tokio_with_wasm::alias::time as tokio_time;
 
-#[cfg(unix)]
+#[cfg(not(all(
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown"
+)))]
 use std::time::SystemTime;
-#[cfg(wasm)]
+#[cfg(all(
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown"
+))]
 use web_time::SystemTime;
 
 use crate::tunnel::utils::runtime::{
@@ -141,7 +149,7 @@ impl<
                                 let expire_fut = match expire {
                                     Expire::NoExpire => {
                                         let fut = futures::future::pending();
-                                        #[cfg(unix)]
+                                        #[cfg(not(wasm))]
                                         let fut = fut.boxed();
                                         #[cfg(wasm)]
                                         let fut = fut.boxed_local();
@@ -154,7 +162,7 @@ impl<
                                             expire_time.duration_since(now).unwrap_or_default();
 
                                         let fut = tokio_time::sleep(duration);
-                                        #[cfg(unix)]
+                                        #[cfg(not(wasm))]
                                         let fut = fut.boxed();
                                         #[cfg(wasm)]
                                         let fut = fut.boxed_local();

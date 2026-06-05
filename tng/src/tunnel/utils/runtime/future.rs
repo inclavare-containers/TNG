@@ -1,7 +1,7 @@
-#[cfg(unix)]
+#[cfg(not(wasm))]
 pub trait TokioRuntimeSupportedFuture<O>: std::future::Future<Output = O> + Send + 'static {}
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 impl<T, O> TokioRuntimeSupportedFuture<O> for T where
     T: std::future::Future<Output = O> + Send + 'static
 {

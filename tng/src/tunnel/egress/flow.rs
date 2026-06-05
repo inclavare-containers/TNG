@@ -35,6 +35,7 @@ pub(super) trait EgressTrait: Sync + Send {
     fn metric_attributes(&self) -> IndexMap<String, String>;
 
     /// Return the so_mark which should be used for creating new tcp stream to upstream.
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32>;
 
     /// Accept incomming streams. The returned stream should be a stream of incomming accepted streams.

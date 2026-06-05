@@ -30,6 +30,13 @@ impl UnprotectedStreamManager {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
+impl Default for UnprotectedStreamManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamManager for UnprotectedStreamManager {
     async fn forward_stream<'a>(
         &self,

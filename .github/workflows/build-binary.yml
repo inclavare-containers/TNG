@@ -20,7 +20,7 @@ jobs:
           - "x86_64-apple-darwin"
           - "x86_64-unknown-linux-gnu"
           - "aarch64-unknown-linux-gnu"
-          # - "x86_64-pc-windows-msvc"
+          - "x86_64-pc-windows-gnu"
     name: Build For ${{ matrix.target }}
     uses: ./.github/workflows/zigbuild.yml
     with:
@@ -76,8 +76,6 @@ jobs:
           draft: false
           fail_on_unmatched_files: true
           prerelease: ${{ env.PRE_RELEASE }}
-          # files: |
-          #   ./artifacts/*.zip
-          #   ./artifacts/*.tar.gz
           files: |
             ./artifacts/*.tar.gz
+            ./artifacts/*.zip

@@ -173,7 +173,7 @@ impl IntoResponse for TngError {
             // Timeouts / Network failures
             TngError::HttpPlainTextForwardError(..) => StatusCode::BAD_GATEWAY,
             TngError::HttpCipherTextForwardError(e) => {
-                #[cfg(unix)]
+                #[cfg(not(wasm))]
                 let is_timeout = e.is_connect() || e.is_timeout();
                 #[cfg(wasm)]
                 let is_timeout = e.is_timeout();
@@ -239,13 +239,13 @@ impl IntoResponse for TngError {
     }
 }
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 #[async_trait]
 pub trait CheckErrorResponse: Sized {
     async fn check_error_response(self) -> Result<Self, anyhow::Error>;
 }
 
-#[cfg(unix)]
+#[cfg(not(wasm))]
 #[async_trait]
 impl CheckErrorResponse for reqwest::Response {
     async fn check_error_response(self) -> Result<Self, anyhow::Error> {

@@ -24,7 +24,9 @@ use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
 #[cfg(unix)]
-use crate::tunnel::provider::{create_attester, TngAttester};
+use crate::tunnel::provider::create_attester;
+#[cfg(unix)]
+use crate::tunnel::provider::TngAttester;
 use crate::tunnel::provider::{create_converter, create_verifier, TngConverter, TngVerifier};
 
 /// Pre-instantiated RA context for OHTTP security
@@ -119,6 +121,7 @@ pub enum AttestContext {
 #[cfg(unix)]
 impl AttestContext {
     /// Create attestation context from AttestArgs configuration
+    #[cfg(unix)]
     pub async fn from_attest_args(attest_args: &AttestArgs) -> Result<Self> {
         match attest_args {
             AttestArgs::Passport {
