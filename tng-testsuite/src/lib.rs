@@ -197,7 +197,7 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
 /// The generated name looks like `"no_ra.rs:10"` which uniquely identifies the call site.
 #[macro_export]
 macro_rules! run_test {
-    ($tasks:expr) => {
+    ($tasks:expr $(,)?) => {
         $crate::run_test(concat!(file!(), ":", line!()), $tasks)
     };
 }
