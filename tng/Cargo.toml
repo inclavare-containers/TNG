@@ -16,7 +16,7 @@ async-stream = {workspace = true}
 async-trait = {workspace = true}
 auto_enums = {workspace = true}
 base64 = {workspace = true}
-bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "990bc9a7add7025b020444c1a6802b500fb08e9a", features = ["http-compat"]}
+bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "89a6520b01b78d87bf4fa88dad07cac60b711fdb", features = ["http-compat"]}
 bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}

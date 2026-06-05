@@ -90,7 +90,15 @@ impl OhttpServerApi {
             Metadata::decode(buf.as_ref()).map_err(TngError::MetadataDecodeError)?
         };
 
-        let header_decoded = ohttp::Server::decode_header(reader.compat()).await?;
+        let header_decoded = ohttp::Server::decode_header(reader.compat())
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    ?e,
+                    "OHTTP decode_header failed (client ciphertext may be malformed or truncated)"
+                );
+                e
+            })?;
 
         tracing::debug!(
             ?metadata,

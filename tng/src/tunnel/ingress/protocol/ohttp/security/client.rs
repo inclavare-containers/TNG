@@ -492,7 +492,7 @@ impl OHttpClientInner {
             let encryption_task = async {
                 async {
                     let mut client_request = client_request.compat_write();
-                    tokio::io::copy(
+                    let bytes_copied = tokio::io::copy(
                         &mut bhttp_encoder
                             .map_err(std::io::Error::other)
                             .into_async_read()
@@ -500,6 +500,7 @@ impl OHttpClientInner {
                         &mut client_request,
                     )
                     .await?;
+                    tracing::debug!(bytes_copied, "BHTTP request encoded and encrypted");
                     let mut client_request = client_request.into_inner();
                     client_request.close().await?; // Remember to close the response stream
 
@@ -591,6 +592,20 @@ impl OHttpClientInner {
 
         // Check the response status code
         let status_code = response.status();
+        #[cfg(unix)]
+        let content_len = {
+            let headers = response.headers().clone();
+            headers
+                .get(http::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<usize>().ok())
+        };
+        #[cfg(unix)]
+        tracing::debug!(
+            status = ?status_code,
+            ?content_len,
+            "OHTTP response content length before decapsulation"
+        );
         let response = response.check_error_response().await.map_err(|error| {
             if status_code == StatusCode::UNPROCESSABLE_ENTITY {
                 TngError::ShouldRequestNewKeyConfigFromServerError(error)
@@ -615,6 +630,18 @@ impl OHttpClientInner {
             }
         }
 
+        #[cfg(unix)]
+        let content_len = response
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok());
+        #[cfg(unix)]
+        tracing::debug!(
+            content_length = ?content_len,
+            "OHTTP response body stream ready for decapsulation"
+        );
+
         let response_body = response.bytes_stream();
 
         #[cfg(wasm)]
@@ -635,11 +662,24 @@ impl OHttpClientInner {
         let decrypted_response = client_response_decapsulator.decapsulate_response(
             StreamReader::new(response_body.map(|result| result.map_err(std::io::Error::other)))
                 .compat(),
-        )?;
+        ).map_err(|e| {
+            tracing::error!(
+                error = ?e,
+                "OHTTP response decapsulation failed (likely server returned malformed ciphertext)"
+            );
+            e
+        })?;
         // Decode the bhttp binary message
         let decode_result = BhttpDecoder::new(decrypted_response)
             .decode_message()
-            .await?;
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    error = ?e,
+                    "BHTTP decoding of decrypted response failed"
+                );
+                e
+            })?;
 
         let HttpMessage::Response(response) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpResponse);

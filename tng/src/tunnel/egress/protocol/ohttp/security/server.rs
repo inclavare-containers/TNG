@@ -128,12 +128,31 @@ impl OhttpServer {
     pub fn create_routes(&self) -> Router<TngStreamContext> {
         let router = Router::new().fallback({
             let api = Arc::clone(&self.api);
-            move |State(state): State<TngStreamContext>, req| async move {
-                handler(state, api.clone(), req)
+            move |state: State<TngStreamContext>, req: Request| async move {
+                let method = req.method().clone();
+                let uri = req.uri().clone();
+                let content_len = req
+                    .headers()
+                    .get(http::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<usize>().ok());
+                tracing::debug!(
+                    ?method,
+                    ?uri,
+                    ?content_len,
+                    "OHTTP server received incoming request"
+                );
+                handler(state.0, api.clone(), req)
                     .await
                     .map_err(|error: TngError| {
                         // Let's log the error before return to client
-                        tracing::error!(?error, "OHTTP server failed to handle request");
+                        tracing::error!(
+                            ?error,
+                            ?method,
+                            ?uri,
+                            ?content_len,
+                            "OHTTP server failed to handle request"
+                        );
                         error
                     })
             }

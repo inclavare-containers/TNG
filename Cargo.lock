@@ -842,7 +842,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 [[package]]
 name = "bhttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=990bc9a7add7025b020444c1a6802b500fb08e9a#990bc9a7add7025b020444c1a6802b500fb08e9a"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=89a6520b01b78d87bf4fa88dad07cac60b711fdb#89a6520b01b78d87bf4fa88dad07cac60b711fdb"
 dependencies = [
  "async-stream",
  "bytes",

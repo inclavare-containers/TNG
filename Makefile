@@ -496,3 +496,45 @@ bench-multiplex:
 		$(MAKE) bin-build; \
 	fi
 	TNG_MULTIPLEX=true bash ./scripts/bench.sh
+
+# Python wheel build for current platform
+# Requires: Rust toolchain, maturin (pip install maturin)
+# Builds tng binary for current platform, embeds it in Python wheel
+# Usage: make python-wheel [PYTHON=python3.11]
+PYTHON ?= python3.11
+
+.PHONY: python-wheel
+python-wheel:
+	@if ! command -v maturin > /dev/null; then \
+		echo ">> maturin not found. Installing..."; \
+		pip install maturin; \
+	fi
+	@echo ">> Building tng binary for current platform..."
+	cargo build --release -p tng
+	@echo ">> Copying tng binary to tng-python/bin/scripts/"
+	mkdir -p tng-python/bin/scripts
+	cp target/release/tng tng-python/bin/scripts/tng
+	chmod +x tng-python/bin/scripts/tng
+	@echo ">> Building Python wheel..."
+	@if ! command -v hatch >/dev/null; then \
+		pip install --break-system-packages hatch || pip install hatch; \
+	fi
+	cd tng-python && hatch build
+	@echo ">> Wheel built successfully!"
+	@echo ">> Wheel location: tng-python/dist/"
+	@ls -lh tng-python/dist/*.whl
+
+# Install the built Python wheel
+.PHONY: python-wheel-install
+python-wheel-install: python-wheel
+	@echo ">> Installing Python wheel..."
+	pip install --force-reinstall target/wheels/*.whl
+	@echo ">> Python wheel installed successfully!"
+
+# Run Python tests
+.PHONY: python-test
+python-test:
+	@echo ">> Running Python unit tests..."
+	cd tng-python && python -m pytest tests/test_unit.py -v
+	@echo ">> Running Python integration tests (requires TNG binary)..."
+	cd tng-python && python -m pytest tests/test_integration.py -v -m e2e
