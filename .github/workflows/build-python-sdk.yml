@@ -88,7 +88,7 @@ jobs:
       - name: Install wheel and run tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          pip install dist/*.whl[dev,requests]
+          pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev,requests]"
           pytest tests/test_unit.py -v
           pytest tests/test_integration.py -v -m e2e
         working-directory: tng-python
