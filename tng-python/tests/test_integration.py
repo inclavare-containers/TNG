@@ -289,10 +289,7 @@ class TestProxyE2EWithOpenAI:
         """OpenAI client uses TNG proxy — request reaches mock server."""
         tng, egress_port = tng_proxy_egress
 
-        try:
-            from openai import OpenAI
-        except ImportError:
-            pytest.skip("openai not installed")
+        from openai import OpenAI
 
         client = OpenAI(
             api_key="sk-test-key",

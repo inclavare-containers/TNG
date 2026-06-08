@@ -175,10 +175,7 @@ class TestWrapHttpx:
 class TestWrapOpenAI:
     def test_sync_openai_proxy(self, mock_tng_startup):
         """wrap_openai sets proxy transport on OpenAI client via _mounts."""
-        try:
-            from openai import OpenAI
-        except ImportError:
-            pytest.skip("openai not installed")
+        from openai import OpenAI
 
         tng = Tng(no_ra=True)
 
@@ -188,10 +185,7 @@ class TestWrapOpenAI:
 
     def test_async_openai_proxy(self, mock_tng_startup):
         """wrap_openai sets proxy transport on AsyncOpenAI client via _mounts."""
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
-            pytest.skip("openai not installed")
+        from openai import AsyncOpenAI
 
         tng = Tng(no_ra=True)
 
@@ -201,16 +195,25 @@ class TestWrapOpenAI:
 
     def test_returns_same_client(self, mock_tng_startup):
         """wrap_openai returns the same client for chaining."""
-        try:
-            from openai import OpenAI
-        except ImportError:
-            pytest.skip("openai not installed")
+        from openai import OpenAI
 
         tng = Tng(no_ra=True)
 
         client = OpenAI(api_key="sk-test", base_url="http://127.0.0.1:8080/v1")
         result = tng.wrap_openai(client)
         assert result is client
+
+    def test_proxy_url_contains_tng_port(self, mock_tng_startup):
+        """OpenAI inner client proxy URL contains the TNG proxy port."""
+        from openai import OpenAI
+
+        tng = Tng(no_ra=True)
+
+        client = OpenAI(api_key="sk-test", base_url="http://127.0.0.1:8080/v1")
+        tng.wrap_openai(client)
+        inner = client._client
+        proxy_url = str(getattr(inner._proxy, 'url', ''))
+        assert "41000" in proxy_url
 
 
 # ---------------------------------------------------------------------------
