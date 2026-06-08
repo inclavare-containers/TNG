@@ -86,11 +86,18 @@ jobs:
           path: tng-python/dist/*.whl
 
       - name: Install wheel and run tests (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev,requests]"
           pytest tests/test_unit.py -v
           pytest tests/test_integration.py -v -m e2e
+        working-directory: tng-python
+
+      - name: Install wheel and run unit tests only (Linux cross-build)
+        if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-gnu'
+        run: |
+          pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev,requests]"
+          pytest tests/test_unit.py -v
         working-directory: tng-python
 
   release:
