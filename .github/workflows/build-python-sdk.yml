@@ -41,6 +41,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install protobuf (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protobuf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
       - name: Install cargo-zigbuild (Linux)
         if: runner.os == 'Linux'
         run: |
