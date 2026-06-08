@@ -58,7 +58,7 @@ jobs:
         shell: bash
 
       - name: Build tng binary (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.target != 'x86_64-pc-windows-gnu'
         run: |
           cargo zigbuild -p tng --release --target ${{ matrix.target }}
           mkdir -p tng-python/bin/scripts
