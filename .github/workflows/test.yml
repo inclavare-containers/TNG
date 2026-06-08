@@ -146,7 +146,7 @@ jobs:
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         # We only need to upload coverage report once
         if: ${{ matrix.distro == 'alinux3' }}
         with:
