@@ -30,30 +30,32 @@ jobs:
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.89.0
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install protobuf (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install protobuf (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
-
-      - name: Install cargo-zigbuild (Linux)
-        if: runner.os == 'Linux'
+      - name: Setup build tools
         run: |
-          pip install cargo-zigbuild
-          rustup target add ${{ matrix.target }}
+          # Install Rust toolchain
+          rustup toolchain install 1.89.0 --profile minimal --target ${{ matrix.target }}
+          rustup default 1.89.0
+
+          # Install protobuf compiler
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install protobuf
+          fi
+
+          # Install cargo-zigbuild for Linux cross-compilation
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            pip install cargo-zigbuild
+          fi
+        shell: bash
 
       - name: Build tng binary (Linux)
         if: runner.os == 'Linux'
@@ -73,6 +75,16 @@ jobs:
           chmod +x tng-python/bin/scripts/tng
         working-directory: ${{ github.workspace }}
 
+      - name: Build tng binary (Windows cross)
+        if: runner.os == 'Linux' && matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update && sudo apt-get install -y mingw-w64
+          rustup target add ${{ matrix.target }}
+          RUSTFLAGS="--cfg tokio_unstable" cargo zigbuild -p tng --release --target ${{ matrix.target }}
+          mkdir -p tng-python/bin/scripts
+          cp target/${{ matrix.target }}/release/tng.exe tng-python/bin/scripts/tng.exe
+        working-directory: ${{ github.workspace }}
+
       - name: Build wheel
         run: |
           pip install hatch
@@ -85,7 +97,7 @@ jobs:
           name: wheel-${{ matrix.target }}
           path: tng-python/dist/*.whl
 
-      - name: Install wheel and run tests (Linux)
+      - name: Run tests (Linux native)
         if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev,requests]"
@@ -93,7 +105,7 @@ jobs:
           pytest tests/test_integration.py -v -m e2e
         working-directory: tng-python
 
-      - name: Install wheel and run unit tests only (Linux cross-build)
+      - name: Run tests (Linux cross-build)
         if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-gnu'
         run: |
           pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev,requests]"

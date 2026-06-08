@@ -249,30 +249,35 @@ def _find_tng_binary() -> str:
 
     Search order:
     1. ``TNG_BINARY`` environment variable (if set)
-    2. ``shutil.which("tng")`` — system PATH (wheel installs to {venv}/bin/tng)
+    2. ``shutil.which("tng")`` — system PATH (wheel installs to {prefix}/bin/tng)
     3. ``{module_dir}/../bin/tng`` — development mode
-    4. ``/usr/bin/tng`` — system install
+    4. ``/usr/bin/tng`` — system install (Unix only)
     """
+    import sys
+
     # 1. Check environment variable
     env_bin = os.environ.get("TNG_BINARY")
     if env_bin and Path(env_bin).is_file():
         return env_bin
 
-    # 2. Check PATH (wheel installation puts it in {venv}/bin/tng)
+    # 2. Check PATH (wheel installation puts it in {prefix}/bin/tng)
     found = shutil.which("tng")
     if found:
         return found
 
     # 3. Check development mode location
     module_dir = Path(__file__).resolve().parent
-    dev_bin = module_dir.parent / "bin" / "tng"
+    # Try platform-specific binary names
+    suffix = ".exe" if sys.platform == "win32" else ""
+    dev_bin = module_dir.parent / "bin" / f"tng{suffix}"
     if dev_bin.is_file():
         return str(dev_bin)
 
-    # 4. Check system install
-    system = Path("/usr/bin/tng")
-    if system.is_file():
-        return str(system)
+    # 4. Check system install (Unix only)
+    if sys.platform != "win32":
+        system = Path("/usr/bin/tng")
+        if system.is_file():
+            return str(system)
 
     raise FileNotFoundError(
         "TNG binary not found. Options:\n"

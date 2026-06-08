@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tng"
-version = "0.1.0"
+version = "2.6.0"
 description = "TNG (Trusted Network Gateway) Python SDK — encrypted HTTP requests with remote attestation"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -19,11 +19,13 @@ dev = ["pytest>=7.0", "pytest-asyncio>=0.23"]
 # Include Python source files
 include = ["tng/**/*.py"]
 # Include the tng binary even though it's in .gitignore
-artifacts = ["bin/scripts/tng"]
+# Both Unix (tng) and Windows (tng.exe) variants
+artifacts = ["bin/scripts/tng", "bin/scripts/tng.exe"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-# Install tng binary to {prefix}/bin/tng
+# Install tng binary to {prefix}/bin/tng (Unix) or {prefix}/bin/tng.exe (Windows)
 "bin/scripts/tng" = "bin/tng"
+"bin/scripts/tng.exe" = "bin/tng.exe"
 
 [tool.pytest.ini_options]
 markers = [
