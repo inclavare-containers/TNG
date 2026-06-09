@@ -10,6 +10,11 @@ use tokio::process::{Child, Command};
 /// are piped through `BufReader::lines()` for real-time line-by-line tagging.
 /// Background tokio tasks handle the streaming and will exit when the
 /// process closes its pipes.
+///
+/// **Note**: The stream tasks are fire-and-forget. If the parent cancels
+/// the spawned task before the child process fully exits, some trailing
+/// output may be lost. This is acceptable since this function is used
+/// exclusively for debugging test output in the integration test framework.
 pub async fn spawn_with_tagged_output(cmd: &mut Command, tag: &str) -> io::Result<Child> {
     let tag = tag.to_owned();
     let mut child = cmd

@@ -22,6 +22,8 @@ use rats_cert::tee::AttesterPipeline;
 use rats_cert::tee::GenericAttester as _;
 use rats_cert::tee::ReportData;
 use rats_cert::tee::{GenericConverter, GenericVerifier as _};
+// tokio_with_wasm::task::spawn does not propagate the current tracing span,
+// so we must explicitly .instrument() the spawned future.
 #[cfg(wasm)]
 use tracing::Instrument;
 
