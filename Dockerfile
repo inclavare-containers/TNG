@@ -40,4 +40,7 @@ RUN yum reinstall -y ca-certificates
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
+# install jq for custome shell script
+RUN yum install -y jq
+
 CMD ["tng"]
