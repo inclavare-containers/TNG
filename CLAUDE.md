@@ -103,11 +103,3 @@ git filter-branch -f --msg-filter 'sed "/Co-Authored-By:/d"' --env-filter '
   fi
 ' <base-commit>..HEAD
 ```
-
-### 2. CI failure notes
-
-The following CI failures are known to be flaky in the GitHub Actions environment and are **not** caused by code changes:
-
-- **`test` / `test (alinux3)` job fails with integration test timeout**: The wasm integration tests and CoCo attestation tests can time out due to slow VM provisioning in GitHub Actions. These are infrastructure timing issues, not code bugs.
-- **`build-and-release` job fails at "Run wasm integration test"**: Same root cause — the wasm test step times out in the container environment.
-- **`codecov/patch` failure**: Coverage drops slightly on refactor commits. Not actionable.
