@@ -364,12 +364,34 @@ impl PeerSharedKeyManager {
                     let activated = cks.transition_pending_to_active(now);
 
                     // 2. Handle active -> stale transition
-                    cks.transition_active_to_stale(now);
+                    //    Capture the count of keys transitioned to stale — needed to trigger
+                    //    rotation when the bootstrap-created initial key (which skips the
+                    //    Pending->Active path) becomes stale.
+                    let stale_transitioned = cks.transition_active_to_stale(now);
 
                     // 3. Remove expired stale keys
                     cks.remove_expired_keys(now);
 
-                    activated > 0
+                    // 4. Detect if all active keys are stale-eligible but were preserved
+                    //    by transition_active_to_stale (which preserves the last active key
+                    //    to maintain the invariant that there's always at least one active key).
+                    //    Without this check, a single-node cluster would never generate a
+                    //    replacement key because the bootstrap-created initial key skips the
+                    //    Pending→Active path, leaving `activated` at 0 forever.
+                    let all_active_stale_eligible = cks.should_trigger_rotation_for_stale_active(now);
+
+                    // 5. Detect if there are multiple active keys without a pending replacement.
+                    //    This happens in split-brain scenarios where two nodes independently
+                    //    bootstrap and their key sets merge. The master must generate a new
+                    //    pending key to drive convergence to a single active key.
+                    let multiple_active_no_pending = cks.has_multiple_active_without_pending();
+
+                    // Trigger check_and_key_rotation when:
+                    // - A pending key was activated (normal rotation path), OR
+                    // - An active key became stale via transition, OR
+                    // - All active keys are stale-eligible but were preserved as the last one, OR
+                    // - Multiple active keys exist without a pending replacement (split-brain).
+                    activated > 0 || stale_transitioned > 0 || all_active_stale_eligible || multiple_active_no_pending
                 };
 
                 if should_check_rotation {
@@ -1639,14 +1661,19 @@ mod tests {
     /// Test the "two instances start simultaneously but cannot see each other" scenario.
     ///
     /// Both instances bootstrap independently, each generating their own key set.
-    /// When they eventually connect via Serf, they merge their key sets.
-    /// The system should converge to a single active key through master election.
+    /// When C joins both A and B, the key sets merge. The master node detects
+    /// multiple active keys and generates a new pending key. After the pending
+    /// key activates, the older keys transition to stale, and all nodes converge.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_split_brain_convergence() {
         run_test_with_tokio_runtime(async |runtime| {
+            // Use a short rotation interval (2s) so that keys become stale quickly
+            // and the rotation mechanism can converge the cluster to a single key.
+            let rotation_interval = 2;
+
             // Start A as bootstrap (creates its own key)
             let port_a = portpicker::pick_unused_port().unwrap();
-            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
             let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
 
             let a_pk = manager_a
@@ -1657,7 +1684,7 @@ mod tests {
 
             // Start B as bootstrap too (creates its own DIFFERENT key)
             let port_b = portpicker::pick_unused_port().unwrap();
-            let args_b = make_peer_shared_args(port_b, vec![], 300);
+            let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
             let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
 
             let b_pk = manager_b
@@ -1672,46 +1699,28 @@ mod tests {
                 "A and B should have different keys when bootstrapped independently"
             );
 
-            // Now make B join A's cluster to trigger merge
-            // We need a second manager_b that joins A (can't modify existing manager_b's peers)
-            // Instead, we trigger merge by having A query B's cluster key set.
-            // But the easiest way is: start a NEW node C that joins both, which bridges them.
-            //
-            // Actually, the most direct approach: start C joining A, then verify C has A's key.
-            // Then have C also connect to B... but that's complex.
-            //
-            // Simplest: start B with A as peer from the beginning, but with a delay.
-            // Let's just use the existing setup: B joins A via manual join.
-            // Since managers hold their own serf, we can't easily re-join.
-            //
-            // Better approach: Start A first, then B joining A BUT with B's preboot not getting
-            // responses (simulated by starting them far apart in time so B bootstraps independently).
-            //
-            // Most practical: just start A, wait for it to create keys. Then start B with A as peer.
-            // B will query A during preboot and get A's key, so they converge. This tests the
-            // "join existing cluster" path, not the split-brain path.
-            //
-            // For true split-brain test: start both independently, then have a third node bridge.
+            // Start C joining both A and B to bridge the split brain
             let port_c = portpicker::pick_unused_port().unwrap();
-            // C joins both A and B
             let args_c = make_peer_shared_args(
                 port_c,
                 vec![
                     format!("127.0.0.1:{}", port_a),
                     format!("127.0.0.1:{}", port_b),
                 ],
-                300,
+                rotation_interval,
             );
             let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
 
-            // Wait for C to get keys from either A or B via preboot
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Wait for C to get keys from both A and B via preboot merge
+            tokio::time::sleep(Duration::from_secs(3)).await;
 
-            // C should have at least 1 active key
+            // C should have at least 1 active key (likely 2 from the merge)
             wait_for_active_key_count(&manager_c, 1, Duration::from_secs(10)).await?;
 
-            // Wait for convergence across all nodes
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Wait for full convergence: master detects multiple active keys,
+            // generates pending key, it activates, old keys become stale.
+            // With 2s interval: ~2 rotation cycles needed = ~8s.
+            tokio::time::sleep(Duration::from_secs(12)).await;
 
             // All nodes should agree on the client-visible key
             let a_final_pk = manager_a
@@ -1724,7 +1733,9 @@ mod tests {
                 .await?
                 .key_config
                 .public_key()?;
-            let c_final_pk = manager_b
+            // Fixed: was incorrectly reading from manager_b (copy-paste error).
+            // This must read from manager_c to verify that all three nodes converge.
+            let c_final_pk = manager_c
                 .get_client_visible_key()
                 .await?
                 .key_config
@@ -1757,19 +1768,25 @@ mod tests {
             let port_c = portpicker::pick_unused_port().unwrap();
 
             // Start A (bootstrap)
-            let args_a = make_peer_shared_args(port_a, vec![], 2);
+            // Use a long rotation interval (300s) to ensure no time-driven key rotation
+            // occurs within the test window. This test validates that multiple member
+            // leave events do NOT create duplicate pending keys — it does not test
+            // time-based rotation. With interval=2, the leave-triggered rotation would
+            // complete and the new key would activate before the final assertion,
+            // causing the "Key should remain the same" check to fail.
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
             let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start B joining A
-            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
             let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start C joining A (to create multiple leave events later)
-            let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 2);
+            let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
             let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
 
             // Wait for convergence

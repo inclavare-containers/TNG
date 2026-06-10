@@ -281,6 +281,56 @@ impl ClusterKeySet {
         next_times.into_iter().min()
     }
 
+    /// Check if all non-pending keys are stale-eligible (stale_at <= now).
+    ///
+    /// This detects the case where `transition_active_to_stale` preserved all active keys
+    /// (because there were no other active keys to keep), but those preserved keys are
+    /// actually past their stale_at. In this scenario, rotation must be triggered to
+    /// generate a replacement pending key — otherwise the cluster stays with a stale
+    /// active key forever (the bootstrap-created initial key skips the Pending→Active path,
+    /// so `transition_pending_to_active` never fires for it).
+    ///
+    /// Returns true if there are no pending keys and all active/stale keys have stale_at <= now.
+    pub fn should_trigger_rotation_for_stale_active(&self, now: SystemTime) -> bool {
+        // Don't trigger if there's already a pending key in flight
+        let has_pending = self.keys.values().any(|k| k.status == KeyStatus::Pending);
+        if has_pending {
+            return false;
+        }
+
+        // Check if all active and stale keys are stale-eligible
+        let non_pending: Vec<&KeyInfo> = self
+            .keys
+            .values()
+            .filter(|k| k.status != KeyStatus::Pending)
+            .collect();
+
+        if non_pending.is_empty() {
+            return false;
+        }
+
+        non_pending
+            .iter()
+            .all(|k| k.status != KeyStatus::Active || k.stale_at <= now)
+    }
+
+    /// Check if there are multiple active keys without a pending replacement.
+    ///
+    /// This detects split-brain scenarios where two independently-bootstrapped nodes
+    /// merge their key sets, resulting in 2+ active keys. The master node should
+    /// generate a new pending key to drive convergence.
+    ///
+    /// Returns true if there are ≥2 active keys and no pending key exists.
+    pub fn has_multiple_active_without_pending(&self) -> bool {
+        let active_count = self
+            .keys
+            .values()
+            .filter(|k| k.status == KeyStatus::Active)
+            .count();
+        let has_pending = self.keys.values().any(|k| k.status == KeyStatus::Pending);
+        active_count >= 2 && !has_pending
+    }
+
     /// Merge another ClusterKeySet into this one.
     ///
     /// For each key in the other set, insert it if it doesn't already exist locally.
