@@ -1,290 +1,326 @@
 # Parameter Manual
 
+> This document describes all JSON configuration fields for TNG. All fields are optional unless marked as "required".
+>
+> **Tip:** For a quick start, we recommend reviewing the complete configuration examples in the [Scenario Guide](scenarios/) first, then referring back to this document for specific field details.
+
+## Table of Contents
+
+- [Top-Level Configuration Object](#top-level-configuration-object)
+- [Ingress (Tunnel Entry)](#ingress-tunnel-entry)
+  - [Common Fields](#ingress-common-fields)
+  - [Transport Layer Common Configuration](#rats-tls-transport-configuration)
+  - [Mode: mapping (Port Mapping)](#ingress-mapping-port-mapping)
+  - [Mode: http_proxy (HTTP Proxy)](#ingress-http_proxy-http-proxy)
+  - [Mode: socks5 (Socks5 Proxy)](#ingress-socks5-socks5-proxy)
+  - [Mode: netfilter (Transparent Proxy)](#ingress-netfilter-transparent-proxy)
+- [Egress (Tunnel Exit)](#egress-tunnel-exit)
+  - [Common Fields](#egress-common-fields)
+  - [direct_forward Rules](#direct_forward-rules)
+  - [Mode: mapping (Port Mapping)](#egress-mapping-port-mapping)
+  - [Mode: netfilter (Port Hijacking)](#egress-netfilter-port-hijacking)
+- [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration)
+  - [Provider Selection](#provider-selection)
+  - [Attester Configuration](#attester-configuration)
+    - [Background Check Mode](#attest-background-check-mode)
+    - [Passport Model](#attest-passport-model)
+  - [Verifier Configuration](#verifier-configuration)
+    - [Background Check Mode](#verify-background-check-mode)
+    - [Passport Model](#verify-passport-model)
+  - [Role Combination Examples](#role-combination-examples)
+- [OHTTP Protocol](#ohttp-protocol)
+  - [Ingress Side Configuration](#ohttp-ingress-side-configuration)
+  - [Egress Side Configuration](#ohttp-egress-side-configuration)
+  - [Key Management](#ohttp-key-management)
+    - [self_generated Mode](#ohttp-key-self_generated)
+    - [peer_shared Mode](#ohttp-key-peer_shared)
+    - [file Mode](#ohttp-key-file)
+- [Control Interface](#control-interface)
+  - [RESTful API](#restful-api)
+- [Deprecated Configuration](#deprecated-configuration)
+- [Observability](#observability)
+  - [Log](#log)
+  - [Metric](#metric)
+  - [Trace](#trace)
+- [Appendix: Regular Expression Syntax](#appendix-regular-expression-syntax)
+
+---
+
 ## Top-Level Configuration Object
 
-- **`control_interface`** (ControlInterface): The configuration of the control plane for the TNG instance.
-- **`metrics`** (Metrics): Specifies the configuration for Metrics, which is disabled by default.
-- **`add_ingress`** (array [Ingress]): Add ingress endpoints of the tng tunnel in the `add_ingress` array. Depending on the client-side user scenario, you can choose the appropriate inbound traffic method.
-- **`add_egress`** (array [Egress]): Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on the server-side user scenario, you can choose the appropriate outbound traffic method.
-- (Deprecated) **`admin_bind`** (AdminBind): Configuration for the Admin Interface of the Envoy instance. If this option is not specified, the Admin Interface feature will not be enabled.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `control_interface` | [ControlInterface](#control-interface) | No | Control plane configuration |
+| `metrics` | [Metrics](#metric) | No | Metrics configuration; disabled if not specified |
+| `add_ingress` | array [[Ingress](#ingress-tunnel-entry)] | No | List of tunnel ingress endpoints |
+| `add_egress` | array [[Egress](#egress-tunnel-exit)] | No | List of tunnel egress endpoints |
+| `admin_bind` | AdminBind | No | **Deprecated** — See [Deprecated Configuration](#deprecated-configuration) |
 
-## Ingress
+---
 
-The `Ingress` object is used to configure the ingress endpoints of the tng tunnel and control how traffic enters the tng tunnel. It supports multiple inbound traffic methods.
+## Ingress (Tunnel Entry)
 
-### Field Descriptions
+The `Ingress` object configures the tunnel's entry endpoints, controlling how traffic enters the tunnel.
 
-- **`ingress_mode`** (IngressMode): Specifies the method for inbound traffic, which can be `mapping`, `http_proxy`, or `netfilter`.
-- (Deprecated) **`encap_in_http`** (EncapInHttp, optional): HTTP encapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
-- **`ohttp`** (OHttp, optional): OHTTP configuration.
-- **`rats_tls`** (RatsTlsArgs, optional): rats-TLS transport configuration. When neither `ohttp` nor `rats_tls` is specified, rats-TLS mode is used by default.
-    - **`multiplex`** (boolean, optional, default is `false`): When `true`, uses HTTP/2 CONNECT tunneling to multiplex multiple TCP streams over a single rats-TLS connection, reducing handshake overhead — suitable for many short-lived connections with small data transfers. When `false` (default), each downstream connection creates an independent TLS session without HTTP/2 CONNECT or connection pooling, achieving higher per-stream throughput — recommended for high-bandwidth scenarios. Note that with `multiplex: true`, all streams share a single TLS connection whose bandwidth is limited by the TLS encryption capacity of one CPU core.
-- **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
-- **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
-- **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
+> **Naming Note:** "Ingress" refers to traffic **entering the tunnel**, not the Kubernetes Ingress meaning of "inbound server traffic".
+
+<a name="ingress-common-fields"></a>
+
+### Common Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `ohttp` | [OHttp](#ohttp-ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
+| `rats_tls` | [RatsTlsArgs](#rats-tls-transport-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
+| `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
+| `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
+| `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
 
 > [!WARNING]
-> `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same ingress or egress configuration will result in an error.
+> `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same Ingress/Egress will result in an error.
 
-## IngressMode
+> [!TIP]
+> When neither `ohttp` nor `rats_tls` is specified, RA-TLS mode is used by default. Remote attestation-related fields are described in the [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration) section.
 
-### mapping: Port Mapping Mode
+### Transport Layer Common Configuration
 
-In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and encrypts all TCP requests before sending them to a specified TCP endpoint (`out.host`, `out.port`). Therefore, the user's client program needs to change its TCP request target to (`in.host`, `in.port`).
+The following fields are shared between Ingress and Egress, describing transport layer behavior for both RA-TLS and OHTTP.
 
-#### Field Descriptions
+<a name="rats-tls-transport-configuration"></a>
 
-- **`in`** (Endpoint):
-    - **`host`** (string, optional, default is `0.0.0.0`): The host address to listen on.
-    - **`port`** (integer): The port number to listen on.
-- **`out`** (Endpoint):
-    - **`host`** (string): The target host address.
-    - **`port`** (integer): The target port number.
+#### RatsTlsArgs
 
-Example:
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `multiplex` | boolean | `false` | When `true`, uses HTTP/2 CONNECT to multiplex multiple TCP streams over a single TLS connection, suitable for many short-lived connections; when `false`, each connection has an independent TLS session with higher single-stream throughput, recommended for high-bandwidth scenarios |
+
+---
+
+<a name="ingress-mapping-port-mapping"></a>
+
+### Mode: mapping (Port Mapping)
+
+TNG listens on a local TCP port (`in.host`, `in.port`), encrypts traffic, and sends it to the specified target (`out.host`, `out.port`). Clients must change their request target to the address TNG is listening on.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mapping` | object | Yes | Port mapping configuration object |
+| `mapping.in.host` | string | No (`0.0.0.0`) | Listen address |
+| `mapping.in.port` | integer | Yes | Listen port |
+| `mapping.out.host` | string | Yes | Target address |
+| `mapping.out.port` | integer | Yes | Target port |
+
+<details>
+<summary>Example: mapping mode</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "mapping": {
-                "in": {
-                    "host": "0.0.0.0",
-                    "port": 10001
-                },
-                "out": {
-                    "host": "127.0.0.1",
-                    "port": 20001
-                }
+                "in": { "host": "0.0.0.0", "port": 10001 },
+                "out": { "host": "127.0.0.1", "port": 20001 }
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
 
-### http_proxy: HTTP Proxy Mode
+---
 
-In this scenario, tng listens on a local HTTP proxy port. User containers can route traffic through the proxy to the tng client's listening port by setting the `http_proxy` environment variable (or explicitly setting the `http_proxy` proxy when sending requests in the application code). The tng client then encrypts all user TCP requests and sends them to the original target address. Therefore, the user's client program does not need to modify its TCP request targets.
+<a name="ingress-http_proxy-http-proxy"></a>
 
-#### Field Descriptions
+### Mode: http_proxy (HTTP Proxy)
 
-- **`proxy_listen`** (Endpoint): Specifies the listening address (`host`) and port (`port`) values for the `http_proxy` protocol exposed by tng.
-    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-    - **`port`** (integer): The port number to listen on.
-- **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
-    - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
-    - **`domain_regex`** (string, optional, default is `.*`): This field specifies a regular expression for matching target domains. It supports full regular expression syntax. The `domain_regex` field and the `domain` field are mutually exclusive; only one of them can be specified simultaneously.
-    - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
-- (Deprecated) **`dst_filter`** (EndpointFilter): Used in TNG version 1.0.1 and earlier as a required parameter, now replaced by `dst_filters`. This is retained for compatibility with older configurations.
+TNG listens on an HTTP proxy port. Clients route traffic through the proxy to TNG via the `http_proxy` environment variable. TNG encrypts and forwards to the original target. Clients do not need to modify their request target.
 
-Example:
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `http_proxy` | object | Yes | HTTP proxy configuration object |
+| `http_proxy.proxy_listen.host` | string | No (`0.0.0.0`) | Listen address |
+| `http_proxy.proxy_listen.port` | integer | Yes | Listen port |
+| `http_proxy.dst_filters` | array [[EndpointFilter](#endpointfilter)] | No (`[]`) | Target filtering rules; only matching traffic enters the tunnel |
+| `http_proxy.dst_filter` | EndpointFilter | — | **Deprecated** — Replaced by `dst_filters` |
+
+#### EndpointFilter
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `domain` | string | `*` | Target domain to match (supports `*` wildcard; does not support regex) |
+| `domain_regex` | string | `.*` | Target domain regex (mutually exclusive with `domain`) |
+| `port` | integer | `80` | Target port to match |
+
+> The `domain` wildcard syntax is described in [Envoy VirtualHost domains](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost).
+
+<details>
+<summary>Example: http_proxy mode</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "http_proxy": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 41000
-                },
+                "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
                 "dst_filters": [
-                    {
-                        "domain": "*.pai-eas.aliyuncs.com",
-                        "port": 80
-                    }
+                    { "domain": "*.pai-eas.aliyuncs.com", "port": 80 }
                 ]
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
 
-### socks5: Socks5 Proxy Mode
 
-In this scenario, TNG creates a local SOCKS5 proxy server port. User applications can connect to this SOCKS5 proxy server, thereby proxying requests to TNG, which is responsible for encrypting all user TCP requests and sending them to the original destination address. In this process, the user's client program only needs to configure a SOCKS5 proxy option and does not need to modify the target of its TCP requests.
+---
 
-#### Field Descriptions
+<a name="ingress-socks5-socks5-proxy"></a>
 
-- **`proxy_listen`** (Endpoint): Specifies the listening address (`host`) and port (`port`) values for the `socks5` protocol port exposed by TNG.
-  - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-  - **`port`** (integer): The port number to listen on.
-- **`auth`** (Socks5Auth, optional): Specifies the authentication method required for accessing the locally listened SOCKS5 port. You can use this option to restrict access to the SOCKS5 proxy port to only those programs that know the password.
-  - **`username`** (string): The username required for SOCKS5 proxy authentication.
-  - **`password`** (string): The password required for SOCKS5 proxy authentication.
-- **`dst_filters`** (array [EndpointFilter], optional, default is an empty array): This specifies a filtering rule indicating the combination of target domain (or IP) and port that needs to be protected by the tng tunnel. Traffic not matched by this filtering rule will not enter the tng tunnel and will be forwarded in plaintext (ensuring that regular traffic requests that do not need protection are sent out normally). If this field is not specified or is an empty array, all traffic will enter the tng tunnel.
-    - **`domain`** (string, optional, default is `*`): The target domain to match. This field does not support regular expressions but does support certain types of wildcards (*). For specific syntax, please refer to the [description document](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost) for the `domains` field of the `config.route.v3.VirtualHost` type in the envoy documentation.
-    - **`domain_regex`** (string, optional, default is `.*`): This field specifies a regular expression for matching target domains. It supports full regular expression syntax. The `domain_regex` field and the `domain` field are mutually exclusive; only one of them can be specified simultaneously.
-    - **`port`** (integer, optional, default is `80`): The target port to match. If not specified, the default is port 80.
+### Mode: socks5 (Socks5 Proxy)
+
+TNG creates a local Socks5 proxy port. Clients connect to this proxy, and TNG encrypts and forwards to the original target. Clients only need to configure Socks5 proxy options without modifying their request target.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `socks5` | object | Yes | Socks5 proxy configuration object |
+| `socks5.proxy_listen.host` | string | No (`0.0.0.0`) | Listen address |
+| `socks5.proxy_listen.port` | integer | Yes | Listen port |
+| `socks5.auth` | [Socks5Auth](#socks5auth) | No | Access authentication |
+| `socks5.dst_filters` | array [[EndpointFilter](#endpointfilter)] | No (`[]`) | Target filtering rules |
+
+#### Socks5Auth
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `username` | string | Yes | Authentication username |
+| `password` | string | Yes | Authentication password |
 
 > [!NOTE]
-> There are two versions of the SOCKS5 protocol, which are referred to as:
-> - `socks5`: SOCKS5 protocol where domain name resolution is performed on the client side.
-> - `socks5h`: SOCKS5 protocol where domain name resolution is performed on the proxy server side.
-> If your client uses `socks5` instead of `socks5h`, the SOCKS5 proxy server in tng will not be able to obtain the original domain name of the client request, but only the destination IP address. This may cause your `dst_filters` rules to be ineffective. Fortunately, most modern clients implement the `socks5h` version, or provide both options (e.g., curl). If your client does not support `socks5h`, please add matching rules based on IP addresses, or switch to another type of ingress such as `http_proxy`.
+> **socks5 vs socks5h:** `socks5` resolves domain names on the client side, while `socks5h` resolves them on the proxy server side. If the client uses `socks5`, TNG can only obtain the target IP rather than the domain name, which may cause `dst_filters` domain rules to be ineffective. Most modern clients (such as curl) support `socks5h`.
 
-Examples:
+<details>
+<summary>Example: socks5 mode (no authentication)</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 1080
-                }
+                "proxy_listen": { "host": "0.0.0.0", "port": 1080 }
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
+
+<details>
+<summary>Example: socks5 mode (with authentication)</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 1080
-                },
-                "auth": {
-                    "username": "user",
-                    "password": "ppppppwd"
-                }
+                "proxy_listen": { "host": "0.0.0.0", "port": 1080 },
+                "auth": { "username": "user", "password": "ppppppwd" }
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
+
+<details>
+<summary>Example: socks5 mode (with target filtering)</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 1080
-                },
+                "proxy_listen": { "host": "0.0.0.0", "port": 1080 },
                 "dst_filters": [
-                    {
-                        "domain": "*.example.com",
-                        "port": 30001
-                    }
+                    { "domain": "*.example.com", "port": 30001 }
                 ]
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
 
-### netfilter: Transparent Proxy Mode
+---
 
-In this mode, tng will listen on a local TCP port and forward user traffic to the port listened to by the tng client by configuring iptables rules. The latter is responsible for encrypting all user TCP requests and sending them to the original destination address. Therefore, the user's client program does not need to modify its TCP request target.
+<a name="ingress-netfilter-transparent-proxy"></a>
 
-Precise control over the traffic to be captured can be achieved by configuring options such as the target TCP port and the cgroup where the program resides.
+### Mode: netfilter (Transparent Proxy)
 
-#### Field Descriptions
+TNG listens on a local port, and iptables rules redirect user traffic to that port. TNG encrypts and forwards to the original target. Clients do not need to modify their request target.
 
-- **`capture_dst`** (array, optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, all traffic will be captured by the tng tunnel.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `netfilter` | object | Yes | netfilter configuration object |
+| `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | No (`[]`) | Destination address and port capture rules |
+| `netfilter.capture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to capture |
+| `netfilter.nocapture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to exclude |
+| `netfilter.listen_port` | integer | No (randomly assigned) | TNG listen port for captured traffic |
+| `netfilter.so_mark` | integer | `565` | SO_MARK value for encrypted traffic sockets to prevent loops |
 
-  This field contains multiple objects in the form of an array, each representing a matching rule used to match the destination address and port information of outbound TCP requests. The specific rule fields are as follows:
+#### CaptureDst
 
-  - **Destination IP Address**: Can be specified in one of the following two ways. If not specified, it indicates a match for all destination IP addresses:
-    - Specify a target IP address or CIDR block:
-      - **`host`** (string): The target IP address or CIDR block to match. CIDR notation is supported. Examples include: `192.168.1.1`, `192.168.1.1/32`, `192.168.1.0/24`.
-    - Specify an ipset group containing the target IPs:
-      - **`ipset`** (string): The name of the ipset group to match.
-
-  - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
-    - **`port`** (integer): The target port number.
-    - **`port_end`** (integer, optional): When set together with `port`, matches a contiguous range `[port, port_end]` (translated to iptables `--dport port:port_end`). Requires `port` and must satisfy `port_end >= port`.
-- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng tunnel. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
-- **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng tunnel.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `host` | string | No | Target IP or CIDR (mutually exclusive with `ipset`) |
+| `ipset` | string | No | ipset group name (mutually exclusive with `host`) |
+| `port` | integer | No | Target port |
+| `port_end` | integer | No | Used with `port` to match continuous port range `[port, port_end]` |
 
 > [!NOTE]
-> - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
-> - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
+> - `capture_cgroup` and `nocapture_cgroup` are only supported on cgroup v2 systems.
+> - Due to [netfilter kernel implementation limitations](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105), cgroup paths are relative to the cgroup namespace where the TNG process resides. When running TNG in a container, use `--cgroupns=host`.
 
-- **`listen_port`** (integer, optional): Specifies the port number that tng listens on to receive captured requests, usually no manual specification is required. If this field is not specified, tng will randomly assign a port number.
-- **`so_mark`** (integer, optional, default value is 565): The SO_MARK value of the socket corresponding to the TCP request carrying the cyphertext traffic after encryption by the tng, used to prevent the encrypted traffic from being redirected to this ingress again by netfilter.
-
-Traffic capture follows the rules below:
+**Traffic capture logic:**
 
 ```mermaid
 flowchart TD
-    A[Start] --> G{capture_cgroup is empty?}
+    A[Start] --> G{capture_cgroup empty?}
     G --Yes--> D
-    G --No--> B{Does it match any capture_cgroup rule?}
+    G --No--> B{Matches any capture_cgroup?}
     B --No--> C[Ignore traffic]
-    B --Yes--> D{Does it match any nocapture_cgroup rule?}
+    B --Yes--> D{Matches any nocapture_cgroup?}
     D --Yes--> C
-    D --No--> E{Does it match any capture_dst rule?}
+    D --No--> E{Matches any capture_dst?}
     E --Yes--> F[Capture traffic]
     E --No--> C
 ```
 
-> **Note**：This mode can only capture TCP traffic and will not capture traffic destined for address owned by any interfaces on the local machine.
+> **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses.
 
-Example:
-
-```json
-{
-    "add_ingress": [
-        {
-            "netfilter": {
-                "capture_dst": [
-                    {
-                        "host": "127.0.0.1",
-                        "port": 30001
-                    }
-                ],
-                "capture_cgroup": ["/tng_capture.slice"],
-                "nocapture_cgroup": ["/tng_nocapture.slice"],
-                "listen_port": 50000
-            },
-            "verify": {
-                "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
-            }
-        }
-    ]
-}
-```
+<details>
+<summary>Example: Capture by target IP + port</summary>
 
 ```json
 {
@@ -292,10 +328,7 @@ Example:
         {
             "netfilter": {
                 "capture_dst": [
-                    {
-                        "host": "192.168.1.0/24",
-                        "port": 30001
-                    }
+                    { "host": "127.0.0.1", "port": 30001 }
                 ],
                 "capture_cgroup": ["/tng_capture.slice"],
                 "nocapture_cgroup": ["/tng_nocapture.slice"],
@@ -303,14 +336,16 @@ Example:
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
+
+<details>
+<summary>Example: Capture by CIDR segment</summary>
 
 ```json
 {
@@ -318,14 +353,7 @@ Example:
         {
             "netfilter": {
                 "capture_dst": [
-                    {
-                        "ipset": "myset1",
-                        "port": 30001
-                    },
-                    {
-                        "ipset": "myset2",
-                        "port": 30001
-                    }
+                    { "host": "192.168.1.0/24", "port": 30001 }
                 ],
                 "capture_cgroup": ["/tng_capture.slice"],
                 "nocapture_cgroup": ["/tng_nocapture.slice"],
@@ -333,16 +361,42 @@ Example:
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
 
-Example: Capture a contiguous port range with `port_end`
+<details>
+<summary>Example: Capture by ipset</summary>
+
+```json
+{
+    "add_ingress": [
+        {
+            "netfilter": {
+                "capture_dst": [
+                    { "ipset": "myset1", "port": 30001 },
+                    { "ipset": "myset2", "port": 30001 }
+                ],
+                "capture_cgroup": ["/tng_capture.slice"],
+                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "listen_port": 50000
+            },
+            "verify": {
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"]
+            }
+        }
+    ]
+}
+```
+</details>
+
+<details>
+<summary>Example: Capture continuous port range with port_end</summary>
 
 ```json
 {
@@ -362,51 +416,53 @@ Example: Capture a contiguous port range with `port_end`
     ]
 }
 ```
-
-## Egress
-
-Add egress endpoints of the tng tunnel in the `add_egress` array. Depending on the server-side user scenario, you can choose the appropriate outbound traffic method.
-
-### Field Descriptions
-
-- **`egress_mode`** (EgressMode): Specifies the outbound traffic method, which can be `mapping` or `netfilter`.
-- **`direct_forward`** (array [DirectForwardRule], optional): Specifies matching rules for traffic that needs to be forwarded directly (without decryption).
-- (Deprecated) **`decap_from_http`** (DecapFromHttp, optional): HTTP decapsulation configuration. This configuration has been deprecated since version 2.2.5, please use the `ohttp` field instead.
-- **`ohttp`** (OHttp, optional): OHTTP configuration.
-- **`rats_tls`** (RatsTlsArgs, optional): rats-TLS transport configuration. When neither `ohttp` nor `rats_tls` is specified, rats-TLS mode is used by default.
-    - **`multiplex`** (boolean, optional, default is `false`): When `true`, uses HTTP/2 CONNECT tunneling to multiplex multiple TCP streams over a single rats-TLS connection, reducing handshake overhead — suitable for many short-lived connections with small data transfers. When `false` (default), each downstream connection creates an independent TLS session without HTTP/2 CONNECT or connection pooling, achieving higher per-stream throughput — recommended for high-bandwidth scenarios. Note that with `multiplex: true`, all streams share a single TLS connection whose bandwidth is limited by the TLS encryption capacity of one CPU core.
-- **`no_ra`** (boolean, optional, default is `false`): Whether to disable remote attestation. Setting this option to `true` indicates that the tng uses a standard X.509 certificate for communication at this tunnel endpoint without triggering the remote attestation process. Please note that this certificate is a fixed, embedded P256 X509 self-signed certificate within the tng code and does not provide confidentiality, hence **this option is for debugging purposes only and should not be used in production environments**. This option cannot coexist with `attest` or `verify`.
-- **`attest`** (Attest, optional): If this field is specified, it indicates that the tng acts as an Attester at this tunnel endpoint.
-- **`verify`** (Verify, optional): If this field is specified, it indicates that the tng acts as a Verifier at this tunnel endpoint.
-
-> [!WARNING]
-> `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same ingress or egress configuration will result in an error.
+</details>
 
 
-### DirectForwardRule
+---
 
-In certain scenarios, you may want a protected listening port to allow both encrypted traffic and some regular traffic (e.g., health check traffic).
+## Egress (Tunnel Exit)
 
-You can use the `direct_forward` field to specify a set of matching rules. If any rule matches successfully, the traffic will be directly forwarded as regular traffic without decryption.
+The `Egress` object configures the tunnel's exit endpoints, controlling how traffic exits the tunnel.
 
-Currently supported matching rules include:
-- **`http_path`** (string): Parses the traffic as an HTTP request and matches the [Path](https://developer.mozilla.org/en-US/docs/Web/API/URL/pathname) in the HTTP request URI using a regular expression.
+<a name="egress-common-fields"></a>
 
-Example:
+### Common Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `egress_mode` | `mapping` \| `netfilter` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `direct_forward` | array [[DirectForwardRule](#direct_forward-rules)] | No | Direct forwarding (without decryption) rules |
+| `ohttp` | [OHttp](#ohttp-egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
+| `rats_tls` | [RatsTlsArgs](#rats-tls-transport-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
+| `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
+| `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
+| `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
+
+> Transport layer fields like `rats_tls.multiplex` share the same definition as Ingress. See [RatsTlsArgs](#rats-tls-transport-configuration).
+
+<a name="direct_forward-rules"></a>
+
+### direct_forward Rules
+
+In some scenarios, it is necessary to allow plain-text traffic alongside encrypted traffic (e.g., health checks). `direct_forward` specifies matching rules; if any rule matches, traffic is forwarded without decryption.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `http_path` | string | Yes | Regular expression matching the HTTP request URI [Path](https://developer.mozilla.org/en-US/docs/Web/API/URL/pathname) |
+
+<details>
+<summary>Example: Allow plaintext requests for /public/* path</summary>
 
 ```json
 {
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [
-                    { "port": 30001 }
-                ]
+                "capture_dst": [{ "port": 30001 }]
             },
             "direct_forward": [
-                {
-                    "http_path": "/public/.*"
-                }
+                { "http_path": "/public/.*" }
             ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -416,38 +472,35 @@ Example:
 }
 ```
 
-The example configuration sets up a `netfilter` type egress that allows encrypted traffic to access port 30001 while also permitting unencrypted HTTP requests whose path matches the regular expression `/public/.*`.
+This egress allows encrypted traffic to access port 30001 while also permitting unencrypted requests whose path matches `/public/.*`.
+</details>
 
-## EgressMode
+---
 
-### mapping: Port Mapping Mode
+<a name="egress-mapping-port-mapping"></a>
 
-In this scenario, tng listens on a local TCP port (`in.host`, `in.port`) and decrypts all TCP requests before sending them to a specified TCP endpoint (`out.host`, `out.port`). The user's server program needs to change its TCP listening port to listen on (`out.host`, `out.port`).
+### Mode: mapping (Port Mapping)
 
-#### Field Descriptions
+TNG listens on a local port (`in.host`, `in.port`), decrypts traffic, and forwards it to the target endpoint (`out.host`, `out.port`). Server programs must listen on the target address where TNG forwards decrypted traffic.
 
-- **`in`** (Endpoint): Specifies the local TCP port that tng listens on.
-    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-    - **`port`** (integer): The port number to listen on.
-- **`out`** (Endpoint): Specifies the target endpoint where decrypted TCP requests are sent.
-    - **`host`** (string): The target address.
-    - **`port`** (integer): The target port number.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mapping` | object | Yes | Port mapping configuration object |
+| `mapping.in.host` | string | No (`0.0.0.0`) | Listen address |
+| `mapping.in.port` | integer | Yes | Listen port |
+| `mapping.out.host` | string | Yes | Target address |
+| `mapping.out.port` | integer | Yes | Target port |
 
-Example:
+<details>
+<summary>Example: egress mapping mode</summary>
 
 ```json
 {
     "add_egress": [
         {
             "mapping": {
-                "in": {
-                    "host": "127.0.0.1",
-                    "port": 20001
-                },
-                "out": {
-                    "host": "127.0.0.1",
-                    "port": 30001
-                }
+                "in": { "host": "127.0.0.1", "port": 20001 },
+                "out": { "host": "127.0.0.1", "port": 30001 }
             },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -456,68 +509,58 @@ Example:
     ]
 }
 ```
+</details>
 
-### netfilter: Port Hijacking Mode
+---
 
-In this scenario, tng intercepts TCP traffic **arriving from other nodes** and destined to this node's server program port. The server is already listening on a local port, and it is inconvenient to change the port number or add new open ports for the tng. Netfilter redirects the incoming traffic to the `listen_port` on which the tng is listening. After decrypting the traffic, the tng sends the TCP traffic to the original local server port.
+<a name="egress-netfilter-port-hijacking"></a>
 
-This mode captures traffic arriving from other nodes that is destined to this node's ports.
+### Mode: netfilter (Port Hijacking)
 
-#### Field Descriptions
+TNG intercepts **inbound traffic from other nodes destined for specified ports** via kernel netfilter, redirecting it to the `listen_port` that TNG is listening on. After decryption, TNG sends plaintext traffic back to the original service port on the local machine.
 
-- **`capture_dst`** (array, optional, default is an empty array): Specifies the destination address and port of the traffic that needs to be captured. If this field is not specified or is set to an empty array, all TCP traffic will be captured.
+This is suitable for scenarios where the server is already listening on a port and changing the port is inconvenient.
 
-  This field contains multiple objects in the form of an array, each representing a matching rule used to match the destination address and port information of TCP requests. The specific rule fields are as follows:
-
-  - **Destination IP Address**: Can be specified in one of the following two ways. If not specified, it indicates a match for all destination IP addresses:
-    - Specify a target IP address or CIDR block:
-      - **`host`** (string): The target IP address or CIDR block to match. CIDR notation is supported. Examples include: `192.168.1.1`, `192.168.1.1/32`, `192.168.1.0/24`.
-    - Specify an ipset group containing the target IPs:
-      - **`ipset`** (string): The name of the ipset group to match.
-
-  - **Destination Port** (optional): If not specified, it indicates a match for all destination port numbers.
-    - **`port`** (integer): The target port number.
-    - **`port_end`** (integer, optional): When set together with `port`, matches a contiguous range `[port, port_end]` (translated to iptables `--dport port:port_end`). Requires `port` and must satisfy `port_end >= port`.
-- **`capture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that needs to be captured by the tng egress. If this field is not specified or is set to an empty array, the `capture_cgroup` rules will be ignored.
-- **`nocapture_cgroup`** (array [string], optional, default is an empty array): Specifies the cgroup of the traffic that does not need to be captured by the tng egress.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `netfilter` | object | Yes | netfilter configuration object |
+| `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | No (`[]`) | Destination address and port capture rules (captures all TCP if empty) |
+| `netfilter.capture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to capture |
+| `netfilter.nocapture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to exclude |
+| `netfilter.capture_local_traffic` | boolean | `false` | Whether to capture traffic with source IP being the local machine |
+| `netfilter.listen_port` | integer | No (increments from 40000) | TNG listen port for redirected traffic |
+| `netfilter.so_mark` | integer | `565` | SO_MARK value for decrypted plaintext traffic sockets to prevent loops |
 
 > [!NOTE]
-> - The `capture_cgroup` and `nocapture_cgroup` fields are only supported when your system uses **cgroup v2**.
-> - **Relation to cgroup namespace**: Due to netfilter implementation limitations [\[[1\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105) [\[[2\]](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/kernel/cgroup/cgroup.c#L6995-L6996), the cgroup path specified here is interpreted from the perspective of the cgroup namespace in which the TNG process itself resides. Therefore, if you run TNG separately in a container and need to configure the `capture_cgroup` and `nocapture_cgroup` fields, please use Docker's `--cgroupns=host` option accordingly.
+> - `capture_cgroup` and `nocapture_cgroup` are only supported on cgroup v2 systems.
+> - Due to [netfilter kernel implementation limitations](https://github.com/torvalds/linux/blob/ec7714e4947909190ffb3041a03311a975350fe0/net/netfilter/xt_cgroup.c#L105), cgroup paths are relative to the cgroup namespace where the TNG process resides. When running TNG in a container, use `--cgroupns=host`.
 
-- **`capture_local_traffic`** (boolean, optional, default is `false`): If set to `false`, requests with a source IP that is the local machine's IP will be ignored during capture and not redirected to `listen_port`. If set to `true`, requests with a source IP that is the local machine's IP will also be captured.
-- **`listen_port`** (integer, optional, default starts incrementing from port 40000): The port number on which the tng listens to receive traffic redirected by netfilter.
-- **`so_mark`** (integer, optional, default value is 565): The SO_MARK value of the socket corresponding to the TCP request carrying the plaintext traffic after decryption by the tng, used to prevent the decrypted traffic from being redirected to this egress again by netfilter.
-
-Traffic capture follows the rules below:
+**Traffic capture logic:**
 
 ```mermaid
 flowchart TD
-    A[Start] --> G{capture_cgroup is empty?}
+    A[Start] --> G{capture_cgroup empty?}
     G --Yes--> D
-    G --No--> B{Does it match any capture_cgroup rule?}
+    G --No--> B{Matches any capture_cgroup?}
     B --No--> C[Ignore traffic]
-    B --Yes--> D{Does it match any nocapture_cgroup rule?}
+    B --Yes--> D{Matches any nocapture_cgroup?}
     D --Yes--> C
-    D --No--> E{Does it match any capture_dst rule?}
+    D --No--> E{Matches any capture_dst?}
     E --Yes--> F[Capture traffic]
     E --No--> C
 ```
 
-> **Note**：This mode can only capture TCP traffic and will not capture traffic destined for address owned by any interfaces on the local machine.
+> **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses (unless `capture_local_traffic: true`).
 
-Example: Capture incoming traffic destined for port 30001
+<details>
+<summary>Example: Capture inbound traffic destined for port 30001</summary>
 
 ```json
 {
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [
-                    {
-                        "port": 30001
-                    }
-                ],
+                "capture_dst": [{ "port": 30001 }],
                 "capture_local_traffic": true,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -529,20 +572,17 @@ Example: Capture incoming traffic destined for port 30001
     ]
 }
 ```
+</details>
 
-Example: Capture incoming traffic destined for a specific IP and port
+<details>
+<summary>Example: Capture by specific IP and port</summary>
 
 ```json
 {
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [
-                    {
-                        "host": "127.0.0.1",
-                        "port": 30001
-                    }
-                ],
+                "capture_dst": [{ "host": "127.0.0.1", "port": 30001 }],
                 "capture_local_traffic": false,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -554,8 +594,10 @@ Example: Capture incoming traffic destined for a specific IP and port
     ]
 }
 ```
+</details>
 
-Example: Capture incoming traffic from a specific cgroup destined for multiple ports
+<details>
+<summary>Example: Capture by cgroup + multiple ports</summary>
 
 ```json
 {
@@ -579,17 +621,17 @@ Example: Capture incoming traffic from a specific cgroup destined for multiple p
     ]
 }
 ```
+</details>
 
-Example: Capture a contiguous port range with `port_end`
+<details>
+<summary>Example: Capture continuous port range with port_end</summary>
 
 ```json
 {
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [
-                    { "port": 30000, "port_end": 30031 }
-                ],
+                "capture_dst": [{ "port": 30000, "port_end": 30031 }],
                 "listen_port": 40000,
                 "so_mark": 565
             },
@@ -600,8 +642,10 @@ Example: Capture a contiguous port range with `port_end`
     ]
 }
 ```
+</details>
 
-Example: Capture all incoming TCP traffic (empty `capture_dst`)
+<details>
+<summary>Example: Capture all inbound TCP traffic</summary>
 
 ```json
 {
@@ -620,90 +664,61 @@ Example: Capture all incoming TCP traffic (empty `capture_dst`)
     ]
 }
 ```
+</details>
 
-<a name="remote-attestation"></a>
-## Remote Attestation
 
-Remote attestation is one of the core security mechanisms of trusted computing, used to verify the runtime integrity and trusted state of remote systems (such as virtual machines, containers, or edge devices). Through cryptographic means, a system (**Attester**) can generate "evidence" describing its hardware and software configuration, and another system (**Verifier**) can verify this evidence to ensure it comes from a legitimate, untampered trusted execution environment (TEE, such as Intel TDX, AMD SEV-SNP, HYGON CSV, etc.).
+---
 
-In the TNG architecture, we have integrated a standardized remote attestation process that supports flexibly configuring TNG endpoints as either **Attester** or **Verifier** roles, thus achieving bidirectional trusted authentication and establishing secure communication links.
+<a name="remote-attestation-common-configuration"></a>
+
+## Remote Attestation (Common Configuration)
+
+Remote attestation is one of the core security mechanisms in trusted computing, used to verify the runtime integrity and trustworthiness of remote systems. Through cryptographic means, a system (**Attester**) generates "evidence" describing its hardware and software configuration, and another system (**Verifier**) verifies this evidence to ensure it comes from a legitimate, untampered Trusted Execution Environment (TEE).
+
+<a name="provider-selection"></a>
+
+### Provider Selection
+
+The Attestation Agent stack and Attestation Service stack are selected via **`aa_provider`** and **`as_provider`** respectively. If omitted, they default to **`"coco"`** (Confidential Containers).
+
+| Provider | Usage | Description |
+|---|---|---|
+| `"coco"` | `aa_provider` / `as_provider` | Default. Interfaces with CoCo AA and CoCo AS |
+| `"ita"` | `aa_provider` / `as_provider` | Interfaces with CoCo AA for evidence collection, and Intel Trust Authority cloud service for verification |
+| `"coco_asr"` | `aa_provider` only | Collects evidence via CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy, suitable when TNG runs in a container without direct access to AA Unix socket |
+| `"ita_asr"` | `aa_provider` only | Same as `"ita"`, but collects evidence via ASR HTTP proxy |
+
+<a name="attester-configuration"></a>
+
+### Attester Configuration
+
+The **Attester** is the party being verified, responsible for collecting local platform trust state information and generating cryptographic evidence (Evidence).
+
+<a name="attest-background-check-mode"></a>
+
+#### Background Check Mode
+
+[Background Check](https://datatracker.ietf.org/doc/html/rfc9334#name-background-check-model) is TNG's default remote attestation mode. The proving party obtains evidence through the Attestation Agent, and the verifying party verifies it directly.
 
 > [!NOTE]
-> **Provider selection**: The Attestation Agent stack and the Attestation Service stack are selected with **`aa_provider`** and **`as_provider`** respectively. If `aa_provider` or `as_provider` is omitted, it defaults to **`"coco"`** (Confidential Containers). Currently supported providers are:
-> - **`"coco"`** — [Confidential Containers](https://github.com/confidential-containers) (default). Interfaces with the CoCo Attestation Agent (AA) and CoCo Attestation Service.
-> - **`"ita"`** — [Intel Trust Authority](https://www.intel.com/content/www/us/en/security/trust-authority.html). Interfaces with the CoCo Attestation Agent (AA) for evidence collection and the Intel Trust Authority cloud service for attestation and token verification.
-> - **`"coco_asr"`** (`aa_provider` only) — Same as `"coco"` but collects evidence via the CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy instead of connecting directly to the AA. Useful when TNG runs in a container without direct access to the AA Unix socket. Requires ASR version with [PR #91](https://github.com/inclavare-containers/guest-components/pull/91) merged.
-> - **`"ita_asr"`** (`aa_provider` only) — Same as `"ita"` but collects evidence via the CoCo API Server Rest (ASR) HTTP proxy instead of connecting directly to the AA.
+> When the `"model"` field is not specified, TNG automatically uses Background Check mode.
 
-<a name="attest"></a>
-### Attester: The Initiator Proving Its Trustworthiness
+**CoCo Provider (`aa_provider` = `"coco"` or omitted):**
 
-**Attester** refers to the party being verified, responsible for collecting trusted state information of the local platform and generating cryptographic evidence. This evidence contains measurements, signatures, timestamps, and attestation materials from the TEE (such as reports and certificates), which can be used to prove its integrity and security to remote parties.
-
-In TNG, you can configure any endpoint as an Attester role, enabling it to respond to remote verification requests and provide trusted evidence.
-
-> [!NOTE]
-> **Current Implementation Notes**:  
-> Currently, TNG supports obtaining Evidence through the [Attestation Agent](https://github.com/confidential-containers/guest-components/tree/main/attestation-agent) (AA) either directly (`"coco"` / `"ita"` providers) or indirectly via the [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy (`"coco_asr"` / `"ita_asr"` providers).  
-> The ASR providers are useful when TNG runs in a container that does not have direct access to the AA Unix socket.
-> Both the **CoCo** and **ITA** providers use the same Attestation Agent for evidence collection, but differ in how the runtime data is processed and injected into the evidence (according to the requirements of the respective attestation services).
-
-<a name="verify"></a>
-### Verifier: The Decision Maker Verifying Peer Trustworthiness
-
-**Verifier** is the verifying party, responsible for receiving Evidence from the Attester and performing integrity verification, policy comparison, and trust assessment. Only when the evidence complies with preset trust policies (such as specific PCR values, firmware versions, or signing keys) will the Verifier recognize the Attester as trusted and allow subsequent security operations (such as key release or connection establishment).
-
-In the TNG architecture, the Verifier can be part of the control plane or service gateway, actively or passively verifying the identity and trust level of accessing nodes.
-
-> **Current Implementation Notes**:  
-> For the **CoCo** provider, the Verifier relies on the [CoCo Attestation Service](https://github.com/confidential-containers/trustee/tree/main/attestation-service) to verify received Evidence. It provides a unified interface for parsing and verifying attestation data of different TEE types, and supports integration with the Trustee Server to achieve centralized policy management and root of trust distribution.  
-> For the **ITA** provider, the Verifier relies on the Intel Trust Authority attestation service (https://www.intel.com/content/www/us/en/security/trust-authority.html) to verify received Evidence. It can parse and verify attestation data for TDX Confidential VMs and Nvidia GPUs, and supports policy management and enforcement.
-
-
-## Attester and Verifier Combinations and Bidirectional Remote Attestation
-
-By configuring different combinations of `attest` and `verify` properties at both ends of the tunnel (including ingress and egress), a flexible trust model can be achieved.
-
-| Remote Attestation Scenario | TNG Client Configuration | TNG Server Configuration | Description |
+| Field | Type | Default | Description |
 |---|---|---|---|
-| Unidirectional | `verify` | `attest` | Most common scenario, where the TNG server is in a TEE, and the TNG client is in a normal environment. |
-| Bidirectional | `attest`, `verify` | `attest`, `verify` | The TNG server and TNG client are in two different TEEs. |
-| (Reverse) Unidirectional | `attest` | `verify` | The TNG server is in a normal environment, and the TNG client is in a TEE. In this case, only the client certificate is verified. During the TLS handshake, the TNG server will use a fixed P256 X509 self-signed certificate embedded in the TNG code as its certificate. |
-| No TEE (For Debugging Purposes Only) | `no_ra` | `no_ra` | Both the TNG server and TNG client are in non-TEE environments. In this case, a normal TLS session is established between the TNG client and TNG server through unidirectional verification. |
+| `model` | string | — | Set to `"background_check"` to explicitly enable |
+| `aa_type` | string | `"uds"` | Agent type: `"uds"` / `"builtin"` |
+| `aa_addr` | string | — | Required for `"uds"` type; AA Unix socket address |
+| `refresh_interval` | int | `600` | Evidence cache time in seconds; `0` means fetch latest each time |
 
-## Remote Attestation Models
+When using ASR HTTP proxy, set `aa_provider` = `"coco_asr"` and provide `asr_addr` instead of `aa_addr`.
 
-### Background Check Model
-
-[Background Check](https://datatracker.ietf.org/doc/html/rfc9334#name-background-check-model) is TNG's default remote attestation model, which conforms to the standard model defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In this model, the Attester obtains evidence through the Attestation Agent, and the Verifier directly verifies this evidence. The verification process requires the Verifier to be able to access the Attestation Service to verify the validity of the evidence.
-
-> [!NOTE]
-> When the `"model"` field is not specified in the configuration, TNG automatically uses the Background Check model.
-
-#### Attest (Background Check Model)
-
-In the Background Check model, the [Attest](#attest) configuration should include the following fields. The fields below apply to the default CoCo provider (`aa_provider` = `"coco"` or omitted):
-
-- **`model`** (string, optional): Set to "background_check" to enable the Background Check model
-- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
-- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
-- **`refresh_interval`** (int, optional, default value is 600): Specifies the cache time for obtaining evidence from the Attestation Agent (in seconds). If set to 0, it requests the latest evidence each time a secure session is established. In Background Check mode, this option only takes effect when communicating using the rats-tls protocol, affecting the frequency of updating its own X.509 certificate. This option has no effect when communicating using the OHTTP protocol.
-
-Alternatively, to collect evidence via the CoCo [API Server Rest](https://github.com/confidential-containers/guest-components/tree/main/api-server-rest) (ASR) HTTP proxy instead of connecting directly to the AA (useful when TNG runs in a container), set `aa_provider` to `"coco_asr"` and provide **`asr_addr`** (the ASR HTTP address, e.g. `"http://127.0.0.1:8006"`) instead of `aa_addr`.
-
-Example:
+<details>
+<summary>Example: Background Check Attest (CoCo)</summary>
 
 ```json
 "attest": {
-    // When model is not specified, Background Check mode is used by default
-    "aa_type": "uds",
-    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-}
-```
-
-```json
-"attest": {
-    "model": "background_check",
     "aa_type": "uds",
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
 }
@@ -718,26 +733,27 @@ Example:
 }
 ```
 
-Example using the ASR proxy:
-
+Via ASR proxy:
 ```json
 "attest": {
     "aa_provider": "coco_asr",
     "asr_addr": "http://127.0.0.1:8006"
 }
 ```
+</details>
 
-##### Using the ITA Provider
+**ITA Provider (`aa_provider` = `"ita"`):**
 
-When `aa_provider` is set to `"ita"`, the Attest configuration uses the following fields:
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `aa_provider` | string | Yes | Set to `"ita"` |
+| `aa_addr` | string | Yes | AA Unix socket address |
+| `refresh_interval` | int | `600` | Same as above |
 
-- **`aa_provider`** (string): Set to `"ita"`
-- **`aa_addr`** (string, required): Attestation Agent Unix socket address (e.g., `"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"`)
-- **`refresh_interval`** (int, optional, default value is 600): Same behavior as described above for the CoCo provider.
+When using ASR proxy, set `aa_provider` = `"ita_asr"` and provide `asr_addr`.
 
-Alternatively, set `aa_provider` to `"ita_asr"` and provide **`asr_addr`** instead of `aa_addr` to collect ITA evidence via the ASR HTTP proxy.
-
-Example:
+<details>
+<summary>Example: ITA Provider</summary>
 
 ```json
 "attest": {
@@ -746,50 +762,50 @@ Example:
 }
 ```
 
-Example using the ASR proxy:
-
+Via ASR proxy:
 ```json
 "attest": {
     "aa_provider": "ita_asr",
     "asr_addr": "http://127.0.0.1:8006"
 }
 ```
+</details>
 
-#### Verify (Background Check Model)
+<a name="attest-passport-model"></a>
 
-In the Background Check model, the [Verify](#verify) configuration should include the following fields. The fields below apply to the default CoCo provider (`as_provider` = `"coco"` or omitted):
+#### Passport Model
 
-- **`model`** (string, optional): Set to "background_check" to enable the Background Check model
-- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc", "builtin"
-- **`as_addr`** (string, required for "restful" and "grpc"): Address of the Attestation Service
-- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
-- **`policy`** (object, optional for "builtin"): OPA policy configuration for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
-- **`reference_values`** (array, optional for "builtin"): Reference value configurations for builtin AS. See [Builtin AS Configuration](#builtin-as-configuration) for details.
-- **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
-- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token issued by Trustee AS.
+In addition to the Background Check mode, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
 
-  > [!NOTE]
-  > **Background**: When Trustee runs inside a TEE hosted by an untrusted provider, the JWT signer certificate it generates may not be inherently trusted by verifiers — there is no built-in mechanism to prove the certificate's authenticity or binding to the TEE. The `signer_transparency` feature solves this by having Trustee AS publish a transparency claim that binds the signer certificate to TEE evidence (such as TDX quotes) and records it in a Rekor v2 transparency log. When the verifier enables this option, it validates that the certificate is genuinely produced by a TEE-protected AS and has been publicly logged, preventing certificate forgery or MITM attacks.
-  >
-  > This feature only applies to the **COCO provider** with external AS (Restful or gRPC). It is not available for the builtin AS mode.
+The Passport model is suitable for scenarios with network isolation or high performance requirements, as it reduces the interaction between the Verifier and the Attestation Service.
 
-  Verification includes:
-  - Certificate DER SHA-256 matches the transparency claim
-  - Evidence report_data matches the certificate hash (binding certificate to TEE evidence)
-  - Payload SHA-256 matches payload metadata digest
-  - Rekor v2 checkpoint signature verified locally (ECDSA P-256)
-  - Certificate expiry check
+##### CoCo Provider
 
-  For the full transparency specification, see the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md).
+In the Passport model, the [Attest](#attester-configuration) configuration should include the following fields. The fields below apply to the default CoCo provider (`aa_provider` = `"coco"` or omitted, `as_provider` = `"coco"` or omitted):
 
-  If the claim is missing or invalid when enabled, verification fails with a hard error.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | — | Set to `"passport"` to enable the Passport model |
+| `aa_type` | string | `"uds"` | Agent type: `"uds"` / `"builtin"` |
+| `aa_addr` | string | — | Required for `"uds"` type; AA Unix socket address |
+| `refresh_interval` | int | `600` | Evidence cache time in seconds; `0` means fetch latest each time |
+| `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` |
+| `as_addr` | string | — | Attestation Service address |
+| `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
+| `policy_ids` | array [string] | — | Policy ID list |
 
-Example: Connecting to a Restful HTTP type AS service
+As with Background Check mode, you can use `aa_provider` = `"coco_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
+
+<details>
+<summary>Example: Passport Attest (CoCo)</summary>
 
 ```json
-"verify": {
-    // When model is not specified, Background Check mode is used by default
+"attest": {
+    "model": "passport",
+    "aa_type": "uds",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "refresh_interval": 3600,
+    "as_type": "restful",
     "as_addr": "http://127.0.0.1:8080/",
     "as_headers": {
         "Authorization": "Bearer your-token-here",
@@ -800,110 +816,154 @@ Example: Connecting to a Restful HTTP type AS service
     ]
 }
 ```
+</details>
 
-Example: Connecting to a gRPC type AS service
+##### ITA Provider
+
+When `aa_provider` and `as_provider` are set to `"ita"`, the Attest configuration uses the following fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | Set to `"passport"` |
+| `aa_provider` | string | Yes | Set to `"ita"` |
+| `aa_addr` | string | Yes | AA Unix socket address |
+| `as_provider` | string | Yes | Set to `"ita"` |
+| `as_addr` | string | `https://api.trustauthority.intel.com` | ITA API base URL |
+| `api_key` | string | No | ITA API key (can also be set via `ITA_API_KEY` environment variable) |
+| `policy_ids` | array [string] | `[]` | ITA policy ID list |
+
+As with Background Check mode, you can use `aa_provider` = `"ita_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
+
+<details>
+<summary>Example: Passport Attest (ITA)</summary>
+
+```json
+"attest": {
+    "model": "passport",
+    "aa_provider": "ita",
+    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+    "as_provider": "ita",
+    "api_key": "your-ita-api-key",
+    "policy_ids": ["my-policy"]
+}
+```
+</details>
+
+<a name="verifier-configuration"></a>
+
+### Verifier Configuration
+
+The **Verifier** receives and verifies Evidence from the Attester, only recognizing the peer as trusted if the evidence complies with preset trust policies.
+
+<a name="verify-background-check-mode"></a>
+
+#### Background Check Mode
+
+**CoCo Provider (`as_provider` = `"coco"` or omitted):**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | — | Set to `"background_check"` to explicitly enable |
+| `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` / `"builtin"` |
+| `as_addr` | string | — | Required for `"restful"` and `"grpc"` types; AS address |
+| `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
+| `policy` | object | — | Optional for `"builtin"` type; built-in AS OPA policy configuration |
+| `reference_values` | array | — | Optional for `"builtin"` type; built-in AS reference value configuration list |
+| `policy_ids` | array [string] | Yes | Policy ID list |
+| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
+| `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS (only for COCO external AS, not applicable to builtin AS) |
+
+> **`verify_signer_transparency` description:** When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor v2 transparency log. Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
+
+<details>
+<summary>Example: Restful AS</summary>
+
+```json
+"verify": {
+    "as_addr": "http://127.0.0.1:8080/",
+    "as_headers": {
+        "Authorization": "Bearer your-token-here"
+    },
+    "policy_ids": ["default"]
+}
+```
+</details>
+
+<details>
+<summary>Example: gRPC AS</summary>
 
 ```json
 "verify": {
     "as_type": "grpc",
     "as_addr": "http://127.0.0.1:5000/",
-    "as_headers": {
-        "Authorization": "Bearer your-grpc-token"
-    },
-    "policy_ids": [
-        "default"
-    ]
+    "policy_ids": ["default"]
 }
 ```
+</details>
 
-Example: Using Builtin AS
+<details>
+<summary>Example: Builtin AS</summary>
 
 ```json
 "verify": {
     "as_type": "builtin",
-    "policy": {
-        "type": "default"
-    },
+    "policy": { "type": "default" },
     "reference_values": [],
-    "policy_ids": [
-        "default"
-    ]
+    "policy_ids": ["default"]
 }
 ```
+</details>
 
-Example: Specifying Root Certificate Paths for Attestation Token Verification
+<details>
+<summary>Example: Specify root certificate paths</summary>
 
 ```json
 "verify": {
     "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": [
-        "default"
-    ],
-    "trusted_certs_paths": [
-        "/tmp/as-ca.pem"
-    ]
+    "policy_ids": ["default"],
+    "trusted_certs_paths": ["/tmp/as-ca.pem"]
 }
 ```
+</details>
 
-##### Builtin AS Configuration
+**ITA Provider (`as_provider` = `"ita"`):**
 
-When `as_type` is set to `"builtin"`, TNG uses the built-in Attestation Service to verify Evidence locally without connecting to an external Attestation Service. This mode is suitable for the following scenarios:
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `as_provider` | string | Yes | Set to `"ita"` |
+| `as_addr` | string | `https://api.trustauthority.intel.com` | ITA API base URL |
+| `api_key` | string | No | ITA API key (can also be set via `ITA_API_KEY` environment variable) |
+| `ita_jwks_addr` | string | `https://portal.trustauthority.intel.com` | ITA portal URL for fetching JWKS |
+| `policy_ids` | array [string] | `[]` | ITA policy ID list |
 
-- Network-isolated environments where external Attestation Service cannot be reached
-- Latency-sensitive applications requiring fast verification
-- Simplified deployment architecture with reduced external dependencies
+> It is recommended to set the API key via the `ITA_API_KEY` environment variable rather than writing it in the configuration file.
+
+**Builtin AS (`as_type` = `"builtin"`):**
+
+When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locally without connecting to an external AS. This is suitable for network-isolated, latency-sensitive, or simplified deployment scenarios.
 
 > [!NOTE]
-> Builtin mode requires TNG to be compiled with the corresponding TEE type feature (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`).
+> Builtin mode requires compiling with the corresponding TEE feature enabled (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`). GitHub CI-built RPM packages and binary artifacts do not support this mode; only container images support it.
 
-> [!NOTE]
-> In current GitHub CI-built TNG release versions, RPM packages and binary artifacts do not support Builtin mode; only container images support Builtin mode.
+**PolicyConfig (OPA Policy):**
 
-###### PolicyConfig
+| type | Description |
+|---|---|
+| `"default"` | Uses the default policy built into attestation-service, performing comprehensive measurement verification of TEE hardware and software |
+| `"inline"` | Inline policy; requires `content` (Base64-encoded OPA policy content) |
+| `"path"` | File path policy; requires `path` (OPA policy file path) |
 
-Policy configuration specifies the OPA policy used for Evidence verification. Three methods are supported:
+**ReferenceValueConfig (Reference Value Source):**
 
-**Default Policy**:
+| type | Description |
+|---|---|
+| `"sample"` | Directly provides reference value payload (`payload` is `SampleProvenancePayloadConfig`) |
+| `"slsa"` | Fetches SLSA provenance from Rekor transparency log (historical compatibility) |
+| `"release_manifest"` | **Recommended**: Fetches reference values from RV release manifest bundle |
 
-- **`type`** (string): Set to `"default"`
-- Uses the default policy built into attestation-service, which performs comprehensive measurement verification of TEE hardware and software
-- Default policy source: [ear_default_policy_cpu.rego](https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego)
+**Payload Loading Methods:** Each reference value type supports both `"inline"` (inline content) and `"path"` (load from file) methods.
 
-**Inline Policy**:
-
-- **`type`** (string): Set to `"inline"`
-- **`content`** (string): Base64-encoded OPA policy content
-
-**File Path Policy**:
-
-- **`type`** (string): Set to `"path"`
-- **`path`** (string): Path to the OPA policy file
-
-###### ReferenceValueConfig
-
-Reference value configuration specifies the source of reference values used for Evidence verification. Two modes are supported:
-
-**Sample Mode**: Provide reference value payload directly
-
-- **`type`** (string): Set to `"sample"`
-- **`payload`** (SampleProvenancePayloadConfig): Reference value payload configuration
-
-**SLSA Mode**: Retrieve reference values from Rekor transparency log
-
-- **`type`** (string): Set to `"slsa"`
-- **`payload`** (SlsaReferenceValuePayloadConfig): Reference value payload configuration
-
-###### SampleProvenancePayloadConfig
-
-Payload configuration specifies the specific content of reference values in `Provenance` format:
-
-**Inline payload**:
-
-- **`type`** (string): Set to `"inline"`
-- **`content`** (object): Reference value JSON object in `Provenance` format
-
-`Provenance` format example:
-
+`Provenance` format (sample inline):
 ```json
 {
   "measurement.uki.SHA-384": [
@@ -912,40 +972,16 @@ Payload configuration specifies the specific content of reference values in `Pro
 }
 ```
 
-**Field description**:
-- Key: Identifier for any measured object, depending on Policy definition
-- Value: Expected reference value for the measured object, corresponding to the key
-
-**File path payload**:
-
-- **`type`** (string): Set to `"path"`
-- **`path`** (string): Path to the reference value JSON file in `Provenance` format
-
-###### SlsaReferenceValuePayloadConfig
-
-SLSA reference value payload configuration specifies the specific content in `ReferenceValueListPayload` format:
-
-**Inline payload**:
-
-- **`type`** (string): Set to `"inline"`
-- **`content`** (object): Reference value JSON object in `ReferenceValueListPayload` format
-
-**File path payload**:
-
-- **`type`** (string): Set to `"path"`
-- **`path`** (string): Path to the reference value JSON file in `ReferenceValueListPayload` format
-
-`ReferenceValueListPayload` format:
-
+`ReferenceValueListPayload` format (release_manifest / slsa):
 ```json
 {
     "rv_list": [
         {
-            "id": "my-artifact",
+            "id": "cvm_container_proxy",
             "version": "1.0.0",
-            "type": "binary",
+            "type": "container",
             "provenance_info": {
-                "type": "slsa-intoto-statements",
+                "type": "rv-release-manifest",
                 "rekor_url": "https://log2025-1.rekor.sigstore.dev",
                 "rekor_api_version": 2
             },
@@ -954,33 +990,14 @@ SLSA reference value payload configuration specifies the specific content in `Re
                 "uri": "oci://registry/repo:tag",
                 "artifact": "bundle"
             },
-            "operation_type": "add"
+            "operation_type": "refresh"
         }
     ]
 }
 ```
 
-**Field description**:
-- **`rv_list`** (array): Array of reference value entries
-  - **`id`** (string): Unique artifact identifier
-  - **`version`** (string): Artifact version
-  - **`type`** (string): Artifact type, such as `"binary"`, customizable. This field together with `id` determines the generated reference value name in format `measurement.{type}.{id}`
-  - **`provenance_info`** (object): Source information
-    - **`type`** (string): Source type, such as `"slsa-intoto-statements"`
-    - **`rekor_url`** (string): Rekor transparency log server URL
-    - **`rekor_api_version`** (number, optional): Rekor API version, supports 1 or 2, defaults to 2
-  - **`provenance_source`** (object, optional): Artifact source configuration. **Note: When `rekor_api_version` is 2, this field must be specified**
-    - **`protocol`** (string): Protocol type, such as `"oci"`, `"https"`
-    - **`uri`** (string): Source URI
-    - **`artifact`** (string, optional): Artifact name or identifier
-  - **`operation_type`** (string): Operation type, `"refresh"` or `"add"`
-  - **`rv_name`** (string, optional): Custom reference value name. When set, uses this value as the RVPS reference value name instead of the default `measurement.{type}.{id}` format
-
-###### Complete Examples
-
-**Example 1: Using Sample Mode to Provide Reference Values**
-
-The following example shows using inline policy and file path method to provide TDX reference values:
+<details>
+<summary>Example 1: Provide reference values in Sample mode</summary>
 
 ```json
 {
@@ -1003,8 +1020,7 @@ The following example shows using inline policy and file path method to provide 
 }
 ```
 
-Example content of `/etc/tng/tdx-reference-values.json`:
-
+`/etc/tng/tdx-reference-values.json`:
 ```json
 {
     "tdx": {
@@ -1016,18 +1032,16 @@ Example content of `/etc/tng/tdx-reference-values.json`:
     }
 }
 ```
+</details>
 
-**Example 2: Using SLSA Mode to Provide Reference Values**
-
-The following example shows using SLSA mode to retrieve reference values from Rekor transparency log:
+<details>
+<summary>Example 2: SLSA mode (historical compatibility)</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
-        "policy": {
-            "type": "default"
-        },
+        "policy": { "type": "default" },
         "reference_values": [
             {
                 "type": "slsa",
@@ -1053,111 +1067,67 @@ The following example shows using SLSA mode to retrieve reference values from Re
     }
 }
 ```
+</details>
 
-##### Using the ITA Provider
-
-When `as_provider` is set to `"ita"`, the Verify configuration uses the following fields:
-
-- **`as_provider`** (string): Set to `"ita"`
-- **`as_addr`** (string, optional, default is `"https://api.trustauthority.intel.com"`): Intel Trust Authority API base URL
-- **`api_key`** (string, optional): Intel Trust Authority API key. Can be set directly in the config or via the **`ITA_API_KEY`** environment variable. If both are set, the config value takes precedence.
-- **`ita_jwks_addr`** (string, optional, default is `"https://portal.trustauthority.intel.com"`): Intel Trust Authority portal URL used to fetch JWKS signing keys for token verification
-- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs that must match for attestation to succeed
-
-Example:
+<details>
+<summary>Example 3: Release Manifest mode (recommended)</summary>
 
 ```json
-"verify": {
-    "as_provider": "ita",
-    "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
+{
+    "verify": {
+        "as_type": "builtin",
+        "policy": { "type": "default" },
+        "reference_values": [
+            {
+                "type": "release_manifest",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "rv_list": [
+                            {
+                                "id": "cvm_container_proxy",
+                                "version": "1.0.0",
+                                "type": "container",
+                                "provenance_info": {
+                                    "type": "rv-release-manifest",
+                                    "rekor_url": "https://log2025-1.rekor.sigstore.dev",
+                                    "rekor_api_version": 2
+                                },
+                                "provenance_source": {
+                                    "protocol": "oci",
+                                    "uri": "oci://registry/trustee/provenance:cvm_container_proxy-1.0.0",
+                                    "artifact": "bundle"
+                                },
+                                "operation_type": "refresh"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+    }
 }
 ```
+</details>
 
-> [!NOTE]
-> The `api_key` can be omitted from the config JSON if the `ITA_API_KEY` environment variable is set. TNG automatically reads it from the environment at startup. This is the recommended approach for API key provisioning.
+<a name="verify-passport-model"></a>
 
-### Passport Model
+#### Passport Model
 
-In addition to the Background Check model, TNG also supports remote attestation that conforms to the [Passport model](https://datatracker.ietf.org/doc/html/rfc9334#name-passport-model) defined in the [RATS RFC 9334 document](https://datatracker.ietf.org/doc/html/rfc9334). In the Passport model, the Attester obtains evidence through the Attestation Agent and submits it to the Attestation Service to obtain a Token (i.e., Passport). The Verifier only needs to verify the validity of this Token without directly interacting with the Attestation Service.
+In the Passport model, the [Verify](#verifier-configuration) configuration should include the following fields. The fields below apply to the default CoCo provider (`as_provider` = `"coco"` or omitted):
 
-The Passport model is suitable for scenarios with network isolation or high performance requirements, as it reduces the interaction between the Verifier and the Attestation Service.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | — | Set to `"passport"` to enable the Passport model |
+| `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` |
+| `as_addr` | string | — | Attestation Service address (optional, but at least one of `as_addr` or `trusted_certs_paths` must be specified) |
+| `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
+| `policy_ids` | array [string] | — | Policy ID list |
+| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
+| `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS |
 
-#### Attest (Passport Model)
-
-In the Passport model, the [Attest](#attest) configuration should include the following fields. The fields below apply to the default CoCo provider (`aa_provider` = `"coco"` or omitted, `as_provider` = `"coco"` or omitted):
-
-- **`model`** (string): Set to "passport" to enable the Passport model
-- **`aa_type`** (string, optional, defaults to "uds"): Attestation Agent type. Possible values: "uds", "builtin"
-- **`aa_addr`** (string, required for "uds"): Attestation Agent unix socket address (e.g., "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock")
-- **`refresh_interval`** (int, optional, default value is 600): Specifies the frequency of obtaining attestation credentials (Attestation Token) from the Attestation Agent and Attestation Service (in seconds). If set to 0, it requests the latest Attestation Token each time a secure session is established. In Passport mode, if communicating using the rats-tls protocol, this option affects the frequency of updating its own X.509 certificate. If communicating using the OHTTP protocol, this option affects the internal Attestation Token cache update frequency, but does not affect the OHTTP key rotation frequency.
-- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
-- **`as_addr`** (string): Address of the Attestation Service
-- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
-- **`policy_ids`** (array [string]): List of policy IDs
-
-As with Background Check mode, you can use `aa_provider` = `"coco_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
-
-Example:
-
-```json
-"attest": {
-    "model": "passport",
-    "aa_type": "uds",
-    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-    "refresh_interval": 3600,
-    "as_type": "restful",
-    "as_addr": "http://127.0.0.1:8080/",
-    "as_headers": {
-        "Authorization": "Bearer your-token-here",
-        "X-Custom-Header": "custom-value"
-    },
-    "policy_ids": [
-        "default"
-    ]
-}
-```
-
-##### Using the ITA Provider
-
-When `aa_provider` and `as_provider` are set to `"ita"`, the Attest configuration uses the following fields:
-
-- **`model`** (string): Set to `"passport"`
-- **`aa_provider`** (string): Set to `"ita"`
-- **`aa_addr`** (string, required): Attestation Agent Unix socket address
-- **`as_provider`** (string): Set to `"ita"`
-- **`as_addr`** (string, optional, default is `"https://api.trustauthority.intel.com"`): Intel Trust Authority API base URL
-- **`api_key`** (string, optional): Intel Trust Authority API key. Can also be set via the **`ITA_API_KEY`** environment variable.
-- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs that must match for attestation to succeed
-
-As with Background Check mode, you can use `aa_provider` = `"ita_asr"` with `asr_addr` instead of `aa_addr` to collect evidence via the ASR HTTP proxy.
-
-Example:
-
-```json
-"attest": {
-    "model": "passport",
-    "aa_provider": "ita",
-    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
-    "as_provider": "ita",
-    "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
-}
-```
-
-#### Verify (Passport Model)
-
-In the Passport model, the [Verify](#verify) configuration should include the following fields. The fields below apply to the default CoCo provider (`as_provider` = `"coco"` or omitted):
-
-- **`model`** (string): Set to "passport" to enable the Passport model
-- **`as_type`** (string, optional, defaults to "restful"): Attestation Service type. Possible values: "restful", "grpc"
-- **`as_addr`** (string, optional): Attestation service address, used for fetching attestation service certificate, optional. At least one of `as_addr` (or the combination of `as_type`, `as_addr`, `as_headers` fields) or `trusted_certs_paths` must be specified.
-- **`as_headers`** (object, optional, default is {}): Custom headers to be sent with attestation service requests. This is useful when the attestation service is deployed behind an authentication mechanism that requires additional Authorization headers or other custom headers.
-- **`policy_ids`** (array [string]): List of policy IDs
-- **`trusted_certs_paths`** (array [string], optional, default is empty): Specifies the paths to root CA certificates used to verify the signature and certificate chain in the Attestation Token. If multiple root CA certificates are specified, verification succeeds if any one of them verifies successfully.
-- **`verify_signer_transparency`** (boolean, optional, default is `false`): When set to `true`, the COCO verifier validates the `signer_transparency` claim embedded in the JWT token. See the description in the [Background Check Model](#verify-background-check-model) section above.
-
-Example:
+<details>
+<summary>Example: Passport Verify (CoCo)</summary>
 
 ```json
 "verify": {
@@ -1171,17 +1141,21 @@ Example:
     ]
 }
 ```
+</details>
 
-##### Using the ITA Provider
+##### ITA Provider
 
 When `as_provider` is set to `"ita"`, the Verify configuration uses the following fields:
 
-- **`model`** (string): Set to `"passport"`
-- **`as_provider`** (string): Set to `"ita"`
-- **`ita_jwks_addr`** (string, optional, default is `"https://portal.trustauthority.intel.com"`): Intel Trust Authority portal URL used to fetch JWKS signing keys for token verification
-- **`policy_ids`** (array [string], optional, default is empty): List of ITA policy IDs. The verifier checks that all specified policy IDs appear in the token's `policy_ids_matched` claim.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | — | Set to `"passport"` |
+| `as_provider` | string | Yes | Set to `"ita"` |
+| `ita_jwks_addr` | string | `https://portal.trustauthority.intel.com` | ITA portal URL for fetching JWKS |
+| `policy_ids` | array [string] | `[]` | ITA policy ID list |
 
-Example:
+<details>
+<summary>Example: Passport Verify (ITA)</summary>
 
 ```json
 "verify": {
@@ -1190,52 +1164,63 @@ Example:
     "policy_ids": ["my-policy"]
 }
 ```
+</details>
 
-## OHTTP
+<a name="role-combination-examples"></a>
 
-Oblivious HTTP (OHTTP) is a network protocol extension designed to enhance privacy protection by encrypting HTTP requests to provide end-to-end privacy protection and anonymity enhancement. TNG can use OHTTP to provide secure communication while maintaining compatibility with existing HTTP infrastructure.
+### Role Combination Examples
 
-By default, TNG uses the rats-tls protocol to provide TCP stream-level encryption protection, which is suitable for most situations. If you need to enable this feature, you can switch to the OHTTP protocol by configuring `ohttp` in Ingress and `ohttp` in Egress respectively.
+TNG controls remote attestation roles on each Ingress/Egress via three fields: `no_ra`, `attest`, and `verify`.
+
+| Scenario | Client Configuration | Server Configuration | Description |
+|---|---|---|---|
+| Unidirectional | `verify` | `attest` | Most common; server is in TEE |
+| Bidirectional | `attest` + `verify` | `attest` + `verify` | Both ends are in different TEEs |
+| Reverse Unidirectional | `attest` | `verify` | Client is in TEE; server uses embedded fixed certificate |
+| No TEE (debugging) | `no_ra` | `no_ra` | Non-TEE environment; establishes normal TLS session |
+
+---
+
+## OHTTP Protocol
+
+OHTTP (Oblivious HTTP) is a network protocol extension designed to enhance privacy protection by encrypting HTTP requests at the application layer, providing end-to-end privacy and anonymity. TNG can utilize OHTTP for secure communication while maintaining compatibility with existing HTTP infrastructure.
+
+By default, TNG uses the rats-tls protocol for TCP stream-level encryption, which is suitable for most scenarios. To enable OHTTP, configure `ohttp` in Ingress and `ohttp` in Egress respectively.
 
 > [!WARNING]  
-> If the OHTTP feature is enabled, the inner protected business must be HTTP traffic, not ordinary TCP traffic.
+> If OHTTP is enabled, the inner protected business traffic must be HTTP traffic, not ordinary TCP traffic.
 
-### OHttp: Ingress Configuration
 
-The OHTTP capability can be enabled by specifying the `ohttp` field in the `add_ingress` object. If `ohttp` is not specified, the OHTTP capability will not be enabled.
 
-#### Field Descriptions
+<a name="ohttp-ingress-side-configuration"></a>
 
-- **`path_rewrites`** (array [PathRewrite], optional, default is an empty array): This field specifies a list of parameters for rewriting traffic paths using regular expressions. All rewrites will be applied in the order they appear in the path_rewrites list, and only one match will be performed per request. If an HTTP request does not match any valid member of the `path_rewrites` list, the default path for OHTTP traffic will be set to `/`.
+### Ingress Side Configuration
 
-    - **`match_regex`** (string): A regular expression used to match the path of the inner protected HTTP request. The value of this field will be used to match the entire path string, not just a part of it.
+Enable OHTTP in `add_ingress` by specifying the `ohttp` field.
 
-    - **`substitution`** (string): When the original path of an HTTP request matches `match_regex`, the path of the OHTTP traffic will be replaced entirely with the value of `substitution`.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `path_rewrites` | array [[PathRewrite](#pathrewrite)] | `[]` | Path rewrite rule list, matched in order |
 
-> [!NOTE]
-> For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
+#### PathRewrite
 
-> [!NOTE]
-> - Prior to version 2.0.0, the `substitution` field supported referencing captured groups using `\integer` (where `integer` starts from 1). For example, `\1` would be replaced by the content of the first captured group. Refer to the corresponding `substitution` field description in Envoy [here](https://www.envoyproxy.io/docs/envoy/latest/api-v3/type/matcher/v3/regex.proto#type-matcher-v3-regexmatchandsubstitute).
-> - Starting from version 2.0.0, the above referencing rule has been deprecated. Instead, `$ref` syntax is supported to reference captured groups, where `ref` can be an integer (index of the capturing group) or a name (for named groups). Refer to [this documentation](https://docs.rs/regex/1.11.1/regex/struct.Regex.html#method.replace). Additionally, the `\integer` referencing rule is still supported for backward compatibility.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `match_regex` | string | Yes | Regular expression matching the inner HTTP request path (full match) |
+| `substitution` | string | Yes | Rewritten path, supports `$1` / `$name` to reference capture groups |
 
-Example:
+> Version 2.0.0+ uses Rust regex's `$ref` syntax for capture group references (backward compatible with `\integer`).
 
-In this example, we add a PathRewrite rule that matches all user HTTP requests with paths that can be matched by `^/foo/bar/([^/]+)([/]?.*)$`. The path of the TNG tunnel's OHTTP traffic will be rewritten to `/foo/bar/$1` (note that `$1` is a regular expression replacement rule).
+<details>
+<summary>Example: OHTTP path rewrite</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "mapping": {
-                "in": {
-                    "host": "0.0.0.0",
-                    "port": 10001
-                },
-                "out": {
-                    "host": "127.0.0.1",
-                    "port": 20001
-                }
+                "in": { "host": "0.0.0.0", "port": 10001 },
+                "out": { "host": "127.0.0.1", "port": 20001 }
             },
             "ohttp": {
                 "path_rewrites": [
@@ -1247,68 +1232,59 @@ In this example, we add a PathRewrite rule that matches all user HTTP requests w
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": [
-                    "default"
-                ]
+                "policy_ids": ["default"]
             }
         }
     ]
 }
 ```
+</details>
 
 #### L7 Gateway Compatibility
 
-In many Layer 7 gateway scenarios, after TNG protects traffic using the OHTTP protocol, it usually needs to retain some fields of the original traffic so that functions such as routing and load balancing can work properly. However, for data confidentiality, the fields in the encrypted HTTP request should not contain sensitive information. Therefore, TNG provides some rules to configure the fields of the encrypted HTTP request:
-1. The request method of the encrypted HTTP request is uniformly `POST`
-2. The request path of the encrypted HTTP request defaults to `/`, but it can also be rewritten according to the path of the inner protected business HTTP request using regular expressions by specifying the `path_rewrites` field.
-3. The Host (or `:authority`) of the encrypted HTTP request is consistent with the inner protected business HTTP request.
-4. The encrypted HTTP request and response will use `Content-Type: message/ohttp-chunked-req` and `Content-Type: message/ohttp-chunked-res` as `Content-Type` respectively.
-5. The encrypted HTTP request and response will not contain the request headers and response headers in the encrypted HTTP request.
+OHTTP-encrypted HTTP requests follow these rules for compatibility with L7 load balancers:
 
-### OHttp: Egress Configuration
+1. Method is unified as `POST`
+2. Path defaults to `/`, can be rewritten via `path_rewrites`
+3. Host (or `:authority`) remains consistent with the inner business request
+4. `Content-Type` is `message/ohttp-chunked-req` for requests and `message/ohttp-chunked-res` for responses
+5. Does not include the original request and response headers of the encrypted request
 
-Corresponding to the ingress configuration, the egress side can enable OHTTP support by specifying the `ohttp` field in the `add_egress` object. If the `ohttp` field is not specified, the OHTTP protocol will not be used.
 
-> [NOTE]  
-> The `allow_non_tng_traffic_regexes` field has been deprecated since version 2.2.4. Please use the `direct_forward` field instead.
+<a name="ohttp-egress-side-configuration"></a>
 
-Additionally, by configuring the `allow_non_tng_traffic_regexes` sub-item, you can allow non-encrypted HTTP request traffic to enter the endpoint in addition to the encrypted TNG traffic. This can meet scenarios where both types of traffic are needed (such as health checks). The value of this sub-item is a JSON string list, where each item is a regular expression match statement. Only non-encrypted HTTP request traffic whose HTTP request PATH completely matches these regular expression statements will be allowed by TNG. The default value of the sub-item is `[]`, which means any non-encrypted HTTP requests are denied.
+### Egress Side Configuration
 
-#### Field Descriptions
+Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp` field.
 
-- (Deprecated) **`allow_non_tng_traffic_regexes`** (array [string], optional, default is an empty array): This field specifies a list of regular expressions that allow non-encrypted HTTP request traffic to enter. Each element is a regular expression string, and only when the HTTP request path matches these regular expressions will non-encrypted HTTP request traffic be allowed.
-- **`cors`** (CorsConfig, optional): CORS configuration for the OHTTP server. This field allows you to configure Cross-Origin Resource Sharing (CORS) headers to enable browser-based access to the OHTTP endpoints.
-
-    - **`allow_origins`** (array [string], optional, default is empty): A list of origins that are allowed to access the OHTTP endpoints. Use `["*"]` to allow all origins.
-    
-    - **`allow_methods`** (array [string], optional, default is empty): A list of HTTP methods that are allowed for cross-origin requests (e.g., `["GET", "POST", "OPTIONS"]`). Use `["*"]` to allow all methods.
-    
-    - **`allow_headers`** (array [string], optional, default is empty): A list of headers that are allowed in cross-origin requests (e.g., `["Content-Type", "Authorization"]`). Use `["*"]` to allow all headers.
-    
-    - **`expose_headers`** (array [string], optional, default is empty): A list of headers that browsers are allowed to access from the response. Use `["*"]` to allow all headers.
-    
-    - **`allow_credentials`** (boolean, optional, default is false): Whether to allow credentials (cookies, authorization headers, etc.) to be included in cross-origin requests.
-
-- **`key`** (KeyArgs, optional): Key configuration for the OHTTP server. Refer to the following sections for detailed configuration fields.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cors` | [CorsConfig](#corsconfig) | None | CORS configuration for browser access to OHTTP endpoints |
+| `key` | [KeyConfig](#ohttp-key-management) | None | Key management configuration (see [Key Management](#ohttp-key-management) below) |
 
 > [!NOTE]
-> For syntax information about regular expressions, please refer to the <a href="#regex">Regular Expressions</a> section.
+> `allow_non_tng_traffic_regexes` is deprecated since 2.2.4; use `direct_forward` instead.
 
-Example:
+#### CorsConfig
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allow_origins` | array [string] | `[]` | Allowed origins; `["*"]` allows all |
+| `allow_methods` | array [string] | `[]` | Allowed HTTP methods; `["*"]` allows all |
+| `allow_headers` | array [string] | `[]` | Allowed request headers; `["*"]` allows all |
+| `expose_headers` | array [string] | `[]` | Response headers accessible to browsers |
+| `allow_credentials` | boolean | `false` | Whether to allow credentials |
+
+<details>
+<summary>Example: OHTTP + CORS</summary>
 
 ```json
 {
     "add_egress": [
         {
             "mapping": {
-                "in": {
-                    "host": "127.0.0.1",
-                    "port": 20001
-                },
-                "out": {
-                    "host": "127.0.0.1",
-                    "port": 30001
-                }
+                "in": { "host": "127.0.0.1", "port": 20001 },
+                "out": { "host": "127.0.0.1", "port": 30001 }
             },
             "ohttp": {
                 "cors": {
@@ -1319,9 +1295,7 @@ Example:
                 }
             },
             "direct_forward": [
-                {
-                    "http_path": "/api/builtin/.*"
-                }
+                { "http_path": "/api/builtin/.*" }
             ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -1330,45 +1304,33 @@ Example:
     ]
 }
 ```
+</details>
 
-<a name="ohttp-key-configuration-self_generated-mode"></a>
-#### OHTTP Key Configuration: `self_generated` Mode
+<a name="ohttp-key-management"></a>
 
-TNG supports multiple OHTTP key management strategies. When keys are not provided via external mechanisms, TNG defaults to the **`self_generated` mode**, where each TNG instance independently generates its own HPKE key pair and automatically rotates it.
+### Key Management
 
-In this mode, TNG will:
-- Automatically generate an X25519 key pair at startup
-- Periodically generate new keys while retaining old keys for a certain period (to handle delayed requests)
-- Ensure that at least one active key is always available to decrypt client requests
+TNG supports three OHTTP key management strategies.
 
-If you wish to configure this explicitly, simply set `key.source = "self_generated"` in the `ohttp` configuration:
+<a name="ohttp-key-self_generated"></a>
 
-```json
-"ohttp": {
-    "key": {
-        "source": "self_generated",
-        "rotation_interval": 300
-    }
-}
-```
+#### self_generated Mode (Default)
 
-##### Field Descriptions
+TNG autonomously generates HPKE key pairs and automatically rotates them.
 
-- **`key`** (KeyConfig): Configuration for OHTTP key management.
-    - **`source`** (`string`): The source type of the key. Set to `"self_generated"` to enable automatic key generation.
-    - **`rotation_interval`** (`integer`, optional, default `300`): Key rotation interval in seconds.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `key.source` | string | `"self_generated"` | Key source |
+| `key.rotation_interval` | integer | `300` | Rotation interval in seconds |
 
-Example configuration:
+<details>
+<summary>Example</summary>
 
 ```json
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {
                 "key": {
                     "source": "self_generated",
@@ -1382,133 +1344,34 @@ Example configuration:
     ]
 }
 ```
+</details>
 
+<a name="ohttp-key-peer_shared"></a>
 
-#### OHTTP Key Configuration: `file` Mode
+#### peer_shared Mode
 
-TNG supports loading the OHTTP HPKE private key from an external file, suitable for production environments that need to integrate with external key management systems (such as Confidential Data Hub, Hashicorp Vault, Kubernetes Secrets, or custom rotation scripts). This mode is enabled by setting `key.source = "file"`.
+Multiple TNG instances share keys through a QUIC-encrypted channel based on the Serf Gossip protocol. Only nodes verified through remote attestation can participate in key exchange. For a detailed design document covering the protocol, key rotation mechanism, and failure handling, see [Peer Shared Key Sharing Protocol](./peer_shared.md).
 
-In this mode, TNG will:
-- Read a PEM-encoded PKCS#8 X25519 private key from the specified path at startup
-- Automatically monitor the file for changes, including content modifications and atomic replacements
-- Automatically reload the new key when the file is updated and trigger key change events
-- Atomically replace the current key, ensuring that subsequent requests use the public key configuration corresponding to the new key
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `key.source` | string | `"peer_shared"` | Key source |
+| `key.rotation_interval` | integer | `300` | Rotation interval in seconds |
+| `key.host` | string | `0.0.0.0` | Serf listen address |
+| `key.port` | integer | `8301` | Serf UDP port |
+| `key.peers` | array [string] | — | Initial peer node list (`IP:port` or `domain:port`) |
+| `key.peers_file` | string | None | JSON file path for dynamic peer list updates |
+| `key.attest` | object | None | Configuration for nodes to prove their identity |
+| `key.verify` | object | None | Configuration for verifying remote peer identity |
+| `key.no_ra` | boolean | `false` | Disable remote attestation between nodes |
 
-This mode allows operations systems to rotate keys without restarting the TNG instance, improving both security and availability.
-
-To use file-based key loading, simply set `key.source = "file"` in the `ohttp` configuration and provide the file path:
-
-```json
-"ohttp": {
-    "key": {
-        "source": "file",
-        "path": "/etc/tng/ohttp-key.pem"
-    }
-}
-```
-
-##### Field Description
-
-- **`key`** (KeyConfig): OHTTP key management configuration.
-  - **`source`** (`string`): Type of key source. Set to `"file"` to indicate that the private key should be loaded from a local file.
-  - **`path`** (`string`): Absolute path to the PEM file. Must point to a valid, readable PKCS#8 private key file.
-
-##### File Format Requirements
-
-The file must be a PEM-formatted, PKCS#8–encoded key, for example:
-```pem
------BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
------END PRIVATE KEY-----
-```
-
-The key must be generated using the X25519 curve. You can generate a sample key using OpenSSL:
-```bash
-openssl genpkey -algorithm X25519 -outform PEM
-```
-
-TNG uses operating system-level file change notification mechanisms (e.g., inotify on Linux) to detect file modifications and trigger key reloading.
-
-##### Example Configuration
+<details>
+<summary>Example</summary>
 
 ```json
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
-            "ohttp": {
-                "key": {
-                    "source": "file",
-                    "path": "/etc/tng/ohttp-key.pem"
-                }
-            },
-            "attest": {
-                "model": "background_check",
-                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-            }
-        }
-    ]
-}
-```
-
-#### OHTTP Key Configuration: `peer_shared` Mode
-
-> For a detailed design document covering the protocol, key rotation mechanism, and failure handling, see [Peer Shared Key Sharing Protocol](./peer_shared.md).
-
-TNG supports a decentralized key management mode for sharing OHTTP private keys among multiple TNG instances. Building upon the [self_generated](#ohttp-key-configuration-self_generated-mode) mode, this approach adds the capability for multiple TNG instances to share OHTTP private keys. This capability relies on the serf distributed protocol (Gossip), where each TNG instance joins a serf cluster by specifying the IP or domain name of any peer in the cluster. Cluster members broadcast their private keys to each other over a QUIC transport layer with remote attestation-based encryption, ensuring that only attested nodes can participate in key exchange. Therefore, even in stateless service scenarios with TNG, and even with an HTTP-based LoadBalancer in front, any node in the cluster can decrypt traffic.
-
-In this mode, TNG will:
-- Each node independently generates its own key pair
-- Exchange keys with other nodes through QUIC-encrypted channels with remote attestation verification
-- Maintain a local "key ring" containing valid private keys from all nodes
-- Allow any node to decrypt requests encrypted with other nodes' public keys
-
-If you wish to enable this mode, simply specify `key.source = "peer_shared"` in the `ohttp` configuration, with the `peers` or `peers_file` field:
-
-```json
-"ohttp": {
-    "key": {
-        "source": "peer_shared",
-        "rotation_interval": 300,
-        "host": "0.0.0.0",
-        "port": 8301,
-        "peers": [
-            "192.168.10.1:8301",
-            "tng-service.default.svc.cluster.local:8301"
-        ],
-        "peers_file": "/etc/tng/peers.json"
-    }
-}
-```
-
-##### Field Descriptions
-
-- **`key`** (KeyConfig): OHTTP key management configuration.
-    - **`source`** (`string`): The source type of the key. Set to `"peer_shared"` to enable the decentralized key sharing mode.
-    - **`rotation_interval`** (`integer`, optional, default `300`): Key rotation interval in seconds. Each node independently rotates its own key.
-    - **`host`** (`string`, optional, default `0.0.0.0`): Local listening address for inter-node secure communication.
-    - **`port`** (`integer`, optional, default `8301`): Local listening UDP port for inter-node secure communication (QUIC-based).
-    - **`peers`** (`array of strings`): List of initial node addresses (IP or DNS name:port) to connect to. At least one node must be accessible to join the cluster. When a node address is specified as a domain name, TNG will attempt to resolve that domain name and try all returned IP addresses as peer nodes in sequence (rather than just trying the first IP), which improves connection success rate in complex network environments.
-    - **`peers_file`** (`string`, optional): Path to a JSON file containing an array of peer addresses. This allows dynamic updates to the peer list without restarting the service. The file should contain a JSON array of strings representing peer addresses in IP:port or DNS name:port format. TNG will monitor this file for changes and automatically join new peers when the file is updated.
-    - **`attest`** (object, optional): Defines how this node proves its identity when connecting to other nodes. See [Attest Configuration](#attest) section for detailed configuration.
-    - **`verify`** (object, optional): Defines how this node verifies the identity of remote peer nodes. See [Verify Configuration](#verify) section for detailed configuration.
-    - **`no_ra`** (boolean, optional, default `false`): Whether to disable remote attestation functionality. When set to `true`, inter-node communication will not perform remote attestation verification.
-
-Example configuration:
-
-```json
-{
-    "add_egress": [
-        {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {
                 "key": {
                     "source": "peer_shared",
@@ -1536,57 +1399,103 @@ Example configuration:
     ]
 }
 ```
+</details>
+
+<a name="ohttp-key-file"></a>
+
+#### file Mode
+
+Load OHTTP HPKE private key from an external file, suitable for integration with external key management systems.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `key.source` | string | Yes | Set to `"file"` |
+| `key.path` | string | Yes | PEM-format PKCS#8 X25519 private key file path |
+
+File format example:
+```pem
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
+-----END PRIVATE KEY-----
+```
+
+Generate using `openssl genpkey -algorithm X25519 -outform PEM`. TNG uses inotify to monitor file changes and automatically reloads the key.
+
+<details>
+<summary>Example</summary>
+
+```json
+{
+    "add_egress": [
+        {
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
+            "ohttp": {
+                "key": {
+                    "source": "file",
+                    "path": "/etc/tng/ohttp-key.pem"
+                }
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+</details>
 
 ## Control Interface
 
 > [!NOTE]
-> This interface is distinct from the <a href="#envoy_admin_interface">Envoy Admin Interface</a> below. The latter is Envoy's built-in management interface, which we plan to remove in future versions.
+> This interface is completely different from the [Envoy Admin Interface](#deprecated-configuration) described in [Deprecated Configuration](#deprecated-configuration).
 
-### Field Description
-- **`control_interface`** (ControlInterface, optional, default is empty): This field specifies the listening address and port for the control interface.
-    - **`restful`** (Endpoint, optional, default is empty): This field specifies the configuration for the RESTful API. It includes the following subfields:
-        - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-        - **`port`** (integer): The port number to listen on, required.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `control_interface.restful.host` | string | `0.0.0.0` | Listen address |
+| `control_interface.restful.port` | integer | — | Listen port (required) |
 
-Example:
+<details>
+<summary>Example</summary>
 
 ```json
-                "control_interface": {
-                    "restful": {
-                        "host": "0.0.0.0",
-                        "port": 50000
-                    }
-                }
+"control_interface": {
+    "restful": {
+        "host": "0.0.0.0",
+        "port": 50000
+    }
+}
 ```
-
-In this example, tng will enable the Control Interface, and its RESTful API will listen on port `50000` at `0.0.0.0`.
+</details>
 
 ### RESTful API
 
-Exposes RESTful API endpoints, supporting the following operations:
-- **`/livez`**: This endpoint returns the liveness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running.
-- **`/readyz`**: This endpoint returns the readiness status of the tng instance. If it returns `200 OK`, it indicates that the instance is running and ready to handle traffic.
+| Endpoint | Description |
+|---|---|
+| `/livez` | Liveness check; returns `200 OK` indicating the instance is running |
+| `/readyz` | Readiness check; returns `200 OK` indicating the instance can handle traffic |
 
-## Envoy Admin Interface
-<span id = "envoy_admin_interface"></span>
+---
+
+<a name="deprecated-configuration"></a>
+
+## Deprecated Configuration
+
+<a name="envoy_admin_interface"></a>
+
+### admin_bind (Envoy Admin Interface)
 
 > [!WARNING]
-> Due to the removal of Envoy, this option has been deprecated. Configuring this option will have no effect.
+> Deprecated. TNG has abandoned integration with Envoy; configuring this option has no effect.
 
-The `admin_bind` option can be used to enable the [Admin Interface](https://www.envoyproxy.io/docs/envoy/latest/operations/admin) capability of the Envoy instance.
+| Field | Type | Description |
+|---|---|---|
+| `admin_bind.host` | string | Listen address, default `0.0.0.0` |
+| `admin_bind.port` | integer | Listen port (required) |
 
-> [!WARNING]  
-> As this port does not use authentication, do not use this option in a production environment.
+> This port does not use authentication; do not use it in production environments.
 
-#### Field Descriptions
-
-- **`admin_bind`** (Endpoint, optional, default is empty): This field specifies the listening address and port for the Envoy admin interface. It includes the following sub-fields:
-    - **`host`** (string, optional, default is `0.0.0.0`): The local address to listen on.
-    - **`port`** (integer): The port number to listen on, required.
-
-Example:
-
-In this example, the `admin_bind` field specifies that the Envoy admin interface listens on the address `0.0.0.0` and port `9901`.
+<details>
+<summary>Example (deprecated)</summary>
 
 ```json
 {
@@ -1596,130 +1505,72 @@ In this example, the `admin_bind` field specifies that the Envoy admin interface
     }
 }
 ```
+</details>
+
+---
+
+<a name="observability"></a>
 
 ## Observability
 
-Observability refers to the monitoring of the system's operational status to help operations personnel understand the system's running conditions and take appropriate measures. The concept of observability includes three aspects: Log, Metric, and Trace.
+Includes Log, Metric, and Trace aspects.
 
 ### Log
 
-The current version of TNG defaults to enabling the capability of outputting logs to standard output. Users can control the log level of tng by setting the value of the `RUST_LOG` environment variable. Supported levels include `error`, `warn`, `info`, `debug`, `trace`, and a special level `off`.
+TNG outputs logs to standard output by default. Control the log level via the `RUST_LOG` environment variable: `error`, `warn`, `info`, `debug`, `trace`, `off`. Default is `info`, with all third-party library logs disabled.
 
-By default, the log level is set to `info`, and logging from all third-party libraries is disabled.
-
-> [!NOTE]
-> In addition to simple log levels, complex configurations are also supported. Please refer to the documentation for the [tracing-subscriber](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives) crate.
+> Supports complex configurations; see [tracing-subscriber EnvFilter](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives).
 
 ### Metric
 
-Observability refers to the monitoring of system runtime status to help operations personnel understand the system's operating conditions and take appropriate measures. The concept of observability includes three levels: Log, Metric, and Tracing. TNG currently includes support for Metrics.
+| Scope | Name | Type | Description |
+|---|---|---|---|
+| Instance | `live` | Gauge | `1` indicates instance is alive and healthy |
+| ingress/egress | `tx_bytes_total` | Counter | Total bytes sent |
+| ingress/egress | `rx_bytes_total` | Counter | Total bytes received |
+| ingress/egress | `cx_active` | Gauge | Currently active connections |
+| ingress/egress | `cx_total` | Counter | Total connections |
+| ingress/egress | `cx_failed` | Counter | Total failed connections |
 
-In TNG, we provide the following Metrics:
+**Export labels:**
 
-<table>
-    <tr>
-        <th>Scope</th>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Labels</th>
-        <th>Description</th>
-    </tr>
-    <tr>
-        <td>Instance</td>
-        <td><code>live</code></td>
-        <td>Gauge</td>
-        <td>None</td>
-        <td><code>1</code> to indicates the server is alive, or <code>0</code> otherwise</td>
-    </tr>
-    <tr>
-        <td rowspan="6">ingress/egress</td>
-        <td><code>tx_bytes_total</code></td>
-        <td>Counter</td>
-        <td rowspan="6"><a href="#metric_labels">See below table</a></td>
-        <td>The total number of bytes sent</td>
-    </tr>
-    <tr>
-        <td><code>rx_bytes_total</code></td>
-        <td>Counter</td>
-        <td>The total number of bytes received</td>
-    </tr>
-    <tr>
-        <td><code>cx_active</code></td>
-        <td>Gauge</td>
-        <td>The number of active connections</td>
-    </tr>
-    <tr>
-        <td><code>cx_total</code></td>
-        <td>Counter</td>
-        <td>Total number of connections handled since the instance started</td>
-    </tr>
-    <tr>
-        <td><code>cx_failed</code></td>
-        <td>Counter</td>
-        <td>Total number of failed connections since the instance started</td>
-    </tr>
-</table>
+| Mode | Labels |
+|---|---|
+| ingress mapping | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
+| egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 
-<span id="metric_labels">Export labels for ingress/egress</span> are as follows:
+**Supported Exporters:**
 
-| Scope | Type | Labels | 
-| --- | --- | --- |
-| ingress | `mapping` | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
-| ingress | `http_proxy` | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
-| egress | `mapping` | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
-| egress | `netfilter` | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
+| Type | Configuration Fields |
+|---|---|
+| `otlp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers`, `step` (default 60s) |
+| `falcon` | `server_url`, `endpoint`, `tags`, `step` (default 60s) |
+| `stdout` | `step` (default 60s) |
 
-Currently, TNG supports the following types of exporters:
-
-- **`otlp`**: Exports to endpoints compatible with the OpenTelemetry Protocol (OTLP), such as Prometheus and Jaeger.
-- **`falcon`**: Exports to the open-falcon service.
-- **`stdout`**: Prints to log output.
-
-You can enable Metric support by specifying the `metric` field.
-
-### Field Description
-
-- **`metric`** (Metric, optional, default is empty): This field specifies the configuration of Metric. It includes the following subfields:
-    - **`exporters`** (array [MetricExporter], optional, default is an empty array): This field specifies the list of Metric exporters. It includes the following subfields:
-        - **`type`** (string): This field specifies the type of the Metric exporter.
-
-- For the OTLP exporter (`type="otlp"`), it includes the following sub-fields:
-    - **`protocol`** (string): This field specifies the data format type of the OTLP protocol, with the following optional values:
-        - `grpc`: Reports using gRPC.
-        - `http/protobuf`: Reports using HTTP, with content serialized in protobuf format.
-        - `http/json`: Reports using HTTP, with content serialized in JSON format.
-    - **`endpoint`** (string): This field specifies the URL of the OTLP endpoint.
-    - **`headers`** (Map, optional): A list of HTTP Headers to be attached in the export request. For example, you can add an `Authorization` header to meet the authentication requirements of the OTLP endpoint. Additionally, regardless of whether this field is filled or not, headers can also be added via [environment variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration).
-    - **`step`** (integer, optional, default is 60): This field specifies the interval time step value for metric collection and reporting, in seconds.
-
-- For the open-falcon exporter (`type="falcon"`), it includes the following subfields:
-    - **`server_url`** (string): This field specifies the address of the open-falcon server.
-    - **`endpoint`** (string): This field specifies the endpoint value bound to each metric.
-    - **`tags`** (map [string], optional, default is empty): This field specifies additional tags for each metric. These tags will be sent to the open-falcon server along with the labels generated by TNG.
-    - **`step`** (integer, optional, default is 60): This field specifies the interval time step value for metric collection and reporting, in seconds.
-
-- For the `stdout` exporter (`type="stdout"`), it includes the following subfields:
-    - **`step`** (integer, optional, default is 60): This field specifies the interval time step value for metric collection and printing, in seconds.
-
-Example:
+<details>
+<summary>Example: OTLP</summary>
 
 ```json
 {
     "metric": {
         "exporters": [
             {
-                "type": "oltp",
+                "type": "otlp",
                 "protocol": "http/protobuf",
-                "endpoint": "https://oltp.example.com/example/url",
-                "headers": {
-                    "Authorization": "XXXXXXXXX",
-                },
+                "endpoint": "https://otlp.example.com/url",
+                "headers": { "Authorization": "XXXXXXXXX" },
                 "step": 2
             }
         ]
     }
 }
 ```
+</details>
+
+<details>
+<summary>Example: Falcon</summary>
 
 ```json
 {
@@ -1729,91 +1580,49 @@ Example:
                 "type": "falcon",
                 "server_url": "http://127.0.0.1:1988",
                 "endpoint": "master-node",
-                "tags": {
-                    "namespace": "ns1",
-                    "app": "tng"
-                },
+                "tags": { "namespace": "ns1", "app": "tng" },
                 "step": 60
             }
         ]
     }
 }
 ```
-
-```json
-{
-    "metric": {
-        "exporters": [
-            {
-                "type": "stdout",
-                "step": 60
-            }
-        ]
-    }
-}
-```
+</details>
 
 ### Trace
 
-TNG supports the export of tracing events under the OpenTelemetry standard semantics, including Trace, Span, and Events information for each request.
+Supports OpenTelemetry standard tracing export.
 
-The following types of exporters are supported:
+| Type | Description |
+|---|---|
+| `otlp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers` |
+| `stdout` | Synchronous output; impacts performance under high concurrency; for debugging only |
 
-- **`otlp`**: Export to an endpoint compatible with the OpenTelemetry Protocol (OTLP).  
-- **`stdout`**: Print to standard output. Note that this exporter outputs Trace information synchronously (not asynchronously), which can significantly impact performance in high-concurrency scenarios, so it should only be used for debugging purposes.
-
-You can enable support for Trace by specifying the `trace` field.
-
-
-#### Field Description
-
-- **`trace`** (Trace, optional, default is empty): This field specifies the configuration for Trace. It includes the following subfields:
-    - **`exporters`** (array [TraceExporter], optional, default is an empty array): This field specifies the list of Trace exporters. It includes the following subfields:
-        - **`type`** (string): This field specifies the type of the Trace exporter.
-
-- For the OTLP exporter (`type="otlp"`), it includes the following subfields:
-    - **`protocol`** (string): This field specifies the data format type of the OTLP protocol, with the following optional values:
-        - `grpc`: Use gRPC for reporting.
-        - `http/protobuf`: Use HTTP for reporting, with content serialized using protobuf.
-        - `http/json`: Use HTTP for reporting, with content serialized using JSON.
-    - **`endpoint`** (string): This field specifies the URL of the OTLP endpoint.
-    - **`headers`** (Map, optional): This is a list of HTTP Headers to be attached to the export request. For example, you can add an `Authorization` header to meet the authentication requirements of the OTLP endpoint. Additionally, regardless of whether this field is filled or not, headers can also be added via [environment variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/#header-configuration).
-
-- For the stdout exporter (`type="stdout"`), no additional fields need to be configured.
-
-Examples:
+<details>
+<summary>Example</summary>
 
 ```json
 {
     "trace": {
         "exporters": [
             {
-                "type": "oltp",
+                "type": "otlp",
                 "protocol": "http/protobuf",
-                "endpoint": "https://oltp.example.com/example/url"
+                "endpoint": "https://otlp.example.com/url"
             }
         ]
     }
 }
 ```
+</details>
 
-```json
-{
-    "trace": {
-        "exporters": [
-            {
-                "type": "stdout"
-            }
-        ]
-    }
-}
-```
+---
 
+## Appendix: Regular Expression Syntax
 
-## Regular Expressions
-<span id="regex"></span>
+Some fields in TNG configuration allow specifying regular expressions.
 
-Some fields in the TNG configuration file allow the specification of regular expressions. During the evolution of TNG, the syntax rules for regular expressions have been updated. The following provides an explanation:
-
-- In versions prior to 2.0.0, only RE2 syntax was supported. RE2 is Google's regular expression engine. Its syntax format can be found [here](https://github.com/google/re2/wiki/Syntax). If you need to test the correctness of your syntax online, you can use tools available [here](https://re2js.leopard.in.ua/).
-- Starting from version 2.0.0 and onwards, common regular expression syntax is supported instead of RE2 syntax. As a result, features such as look-around assertions and backreferences are not supported. Complete syntax rules can be found [here](https://docs.rs/regex/1.11.1/regex/index.html#syntax).
+| Version | Syntax |
+|---|---|
+| Before 2.0.0 | RE2 syntax; see [Google RE2](https://github.com/google/re2/wiki/Syntax) |
+| 2.0.0+ | Rust regex syntax; does not support look-around and backreferences; see [regex crate](https://docs.rs/regex/1.11.1/regex/index.html#syntax) |

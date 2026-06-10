@@ -24,6 +24,9 @@ Although there is a distinction between Ingress and Egress, both TNG instances a
 
 A TNG instance can be configured to act as an Ingress or an Egress. The main difference lies in how traffic is accessed. To facilitate integration with existing business processes, TNG provides multiple methods for accessing regular business traffic on both Ingress and Egress sides. This allows users to flexibly control the encryption and decryption process of traffic according to their needs without modifying existing applications.
 
+> [!NOTE]
+> **Naming clarification:** In TNG, "Ingress" does **not** mean "incoming to a server" (as in Kubernetes Ingress). It means traffic **entering the tunnel** — the client-side endpoint where plaintext traffic gets encrypted and sent through the secure channel. Egress is the opposite end where traffic exits the tunnel and reaches the destination service. Think of it from the tunnel's perspective, not the server's.
+
 > [!TIP]
 > You can check the specific configuration parameters for [Ingress](configuration.md#ingress) and [Egress](configuration.md#egress) in the [Configuration Manual](configuration.md).
 

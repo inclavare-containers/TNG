@@ -22,6 +22,9 @@
 
 TNG 实例可以被配置为扮演 Ingress 或者 Egress。主要区别在于对流量的接入方式上。为了更方便实现与已有业务的结合，在 TNG 的 Ingress 和 Egress 侧都提供了多种方法来实现普通业务流量的接入。使得用户可以在无需修改已有应用程序的同时，根据自己的需求灵活地控制流量的加密和解密过程。
 
+> [!NOTE]
+> **命名澄清：** TNG 中的 "Ingress" **不是** "流量进入服务器" 的意思（与 Kubernetes Ingress 不同）。它表示流量**进入隧道**——客户端将明文送入 Ingress，Ingress 将其加密并通过隧道发出。Egress 则是隧道的另一端，流量从这里出来后被转发到目标服务。请从隧道的视角而非服务器的视角来理解这两个概念。
+
 > [!TIP]
 > 可在 [参数手册](configuration_zh.md) 中查看 [Ingress](configuration_zh.md#ingress) 和 [Egress](configuration_zh.md#egress) 的具体配置参数。
 
