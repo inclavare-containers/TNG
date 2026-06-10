@@ -1,0 +1,105 @@
+<mxfile host="65bd71144e">
+    <diagram id="2V9JCVXqdDrcTl7a3T0K" name="第 1 页">
+        <mxGraphModel dx="2178" dy="989" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0" adaptiveColors="auto">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="5" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+                    <mxGeometry x="-80" y="40" width="420" height="290" as="geometry"/>
+                </mxCell>
+                <mxCell id="server-group" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="40" width="400" height="360" as="geometry"/>
+                </mxCell>
+                <mxCell id="client-app" value="客户端应用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1a5490;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="-60" y="200" width="140" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="tng-ingress" value="TNG Ingress" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#333333;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="180" width="150" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="nginx-gateway" value="Nginx 网关&lt;br&gt;(least_conn, 端口 8080)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="190" width="160" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="tng-egress-1" value="TNG Egress 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="80" width="180" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="tng-egress-2" value="TNG Egress 2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="195" width="180" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="tng-egress-3" value="TNG Egress 3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="310" width="180" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1" value="vLLM&lt;br&gt;端口 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="970" y="80" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-2" value="vLLM&lt;br&gt;端口 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="970" y="195" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-3" value="vLLM&lt;br&gt;端口 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="970" y="310" width="120" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="attestation-service" value="Attestation Service" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="80" width="150" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-client-ingress" value="明文 HTTP" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#1a5490;fontSize=11;fontColor=#1a5490;" parent="1" source="client-app" target="tng-ingress" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-ingress-nginx" value="OHTTP 加密" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#82b366;dashed=1;fontSize=11;fontColor=#333333;" parent="1" source="tng-ingress" target="nginx-gateway" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-nginx-egress1" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#d79b00;" parent="1" source="nginx-gateway" target="tng-egress-1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="2" value="&lt;span style=&quot;color: rgb(51, 51, 51);&quot;&gt;OHTTP 加密&lt;/span&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="arrow-nginx-egress1">
+                    <mxGeometry x="-0.1541" y="2" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-nginx-egress2" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#d79b00;" parent="1" source="nginx-gateway" target="tng-egress-2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="&lt;span style=&quot;color: rgb(51, 51, 51);&quot;&gt;OHTTP 加密&lt;/span&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="arrow-nginx-egress2">
+                    <mxGeometry x="-0.05" y="-3" relative="1" as="geometry">
+                        <mxPoint x="-1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-nginx-egress3" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#d79b00;" parent="1" source="nginx-gateway" target="tng-egress-3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="&lt;span style=&quot;color: rgb(51, 51, 51);&quot;&gt;OHTTP 加密&lt;/span&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="arrow-nginx-egress3">
+                    <mxGeometry x="-0.2986" y="2" relative="1" as="geometry">
+                        <mxPoint x="6" y="3" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-egress1-vllm1" value="解密 &amp;#8594; vLLM" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#82b366;fontSize=10;fontColor=#333333;" parent="1" source="tng-egress-1" target="vllm-1" edge="1">
+                    <mxGeometry y="15" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-egress2-vllm2" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#82b366;" parent="1" source="tng-egress-2" target="vllm-2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-egress3-vllm3" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#82b366;" parent="1" source="tng-egress-3" target="vLLm-3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="peer-shared-1-2" style="endArrow=classic;dashed=1;html=1;strokeWidth=2;strokeColor=#82b366;startArrow=classic;startFill=1;endFill=1;" parent="1" source="tng-egress-1" target="tng-egress-2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="peer-shared-2-3" style="endArrow=classic;dashed=1;html=1;strokeWidth=2;strokeColor=#82b366;startArrow=classic;startFill=1;endFill=1;" parent="1" source="tng-egress-2" target="tng-egress-3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="peer-shared-label" value="Serf Gossip (UDP:8301)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#82b366;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="165" width="80" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-verify" value="远程证明" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#666666;dashed=1;fontSize=10;fontColor=#666666;" parent="1" source="tng-ingress" target="attestation-service" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="server-label" value="服务端集群（3 个 TEE 节点）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="50" width="250" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="6" value="客户端环境" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+                    <mxGeometry x="-50" y="50" width="250" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
