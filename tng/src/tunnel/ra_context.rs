@@ -212,12 +212,12 @@ impl VerifyContext {
             } => {
                 #[cfg(feature = "__builtin-as")]
                 if let ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                    policy,
+                    attestation_policy,
                     reference_values,
                 }) = converter_args
                 {
                     let builtin_converter =
-                        BuiltinCocoConverter::new(policy, reference_values).await?;
+                        BuiltinCocoConverter::new(attestation_policy, reference_values).await?;
                     let builtin_verifier =
                         CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
                     return Ok(Self::BackgroundCheck {
@@ -594,7 +594,7 @@ mod tests {
 
         fn make_builtin_converter_args() -> ConverterArgs {
             ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                policy: PolicyConfig::Default,
+                attestation_policy: PolicyConfig::Default,
                 reference_values: vec![],
             })
         }
@@ -678,12 +678,12 @@ mod tests {
         use serial_test::serial;
 
         fn make_verify_builtin_args(
-            policy: PolicyConfig,
+            attestation_policy: PolicyConfig,
             reference_values: Vec<ReferenceValueConfig>,
         ) -> VerifyArgs {
             VerifyArgs::BackgroundCheck {
                 converter: ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                    policy,
+                    attestation_policy,
                     reference_values,
                 }),
                 verifier: VerifierArgs::Coco(CocoVerifierArgs::Builtin),

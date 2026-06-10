@@ -867,9 +867,9 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 | `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` / `"builtin"` |
 | `as_addr` | string | — | Required for `"restful"` and `"grpc"` types; AS address |
 | `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
-| `policy` | object | — | Optional for `"builtin"` type; built-in AS OPA policy configuration |
+| `attestation_policy` | object | — | Optional for `"builtin"` type; built-in AS attestation policy configuration. Defaults to `{"type": "default"}` if omitted |
 | `reference_values` | array | — | Optional for `"builtin"` type; built-in AS reference value configuration list |
-| `policy_ids` | array [string] | Yes | Policy ID list |
+| `policy_ids` | array [string] | — | Policy ID list. Only for `"restful"` and `"grpc"` types; ignored when `as_type` is `"builtin"` |
 | `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
 | `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS (only for COCO external AS, not applicable to builtin AS) |
 
@@ -907,9 +907,10 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 ```json
 "verify": {
     "as_type": "builtin",
-    "policy": { "type": "default" },
-    "reference_values": [],
-    "policy_ids": ["default"]
+    "attestation_policy": {
+        "type": "default"
+    },
+    "reference_values": []
 }
 ```
 </details>
@@ -1003,7 +1004,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 {
     "verify": {
         "as_type": "builtin",
-        "policy": {
+        "attestation_policy": {
             "type": "inline",
             "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
         },
@@ -1041,7 +1042,9 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 {
     "verify": {
         "as_type": "builtin",
-        "policy": { "type": "default" },
+        "attestation_policy": {
+            "type": "default"
+        },
         "reference_values": [
             {
                 "type": "slsa",
@@ -1076,7 +1079,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 {
     "verify": {
         "as_type": "builtin",
-        "policy": { "type": "default" },
+        "attestation_policy": { "type": "default" },
         "reference_values": [
             {
                 "type": "release_manifest",

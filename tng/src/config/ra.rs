@@ -279,7 +279,7 @@ impl RaArgsUnchecked {
                         // Validate builtin configuration
                         #[cfg(feature = "__builtin-as")]
                         CocoConverterArgs::Builtin {
-                            policy,
+                            attestation_policy,
                             reference_values,
                         } => {
                             use rats_cert::cert::verify::{
@@ -287,7 +287,7 @@ impl RaArgsUnchecked {
                                 SlsaReferenceValuePayloadConfig,
                             };
                             // Check policy path exists if using Path variant
-                            if let PolicyConfig::Path { path } = policy {
+                            if let PolicyConfig::Path { path } = attestation_policy {
                                 if !Path::new(path).exists() {
                                     return Err(TngError::InvalidParameter(anyhow!(
                                         "Policy file path does not exist: {}",
@@ -496,8 +496,9 @@ pub enum CocoConverterArgs {
     /// Builtin AS (embedded)
     #[cfg(feature = "__builtin-as")]
     Builtin {
-        /// OPA policy configuration
-        policy: rats_cert::cert::verify::PolicyConfig,
+        /// Attestation policy configuration for builtin AS
+        #[serde(default)]
+        attestation_policy: rats_cert::cert::verify::PolicyConfig,
         /// Reference value configurations
         #[serde(default)]
         reference_values: Vec<rats_cert::cert::verify::ReferenceValueConfig>,
@@ -1083,7 +1084,7 @@ mod tests {
                 "verify": {
                     "model": "background_check",
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "inline",
                         "content": "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU="
                     },
@@ -1097,10 +1098,10 @@ mod tests {
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
                 ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                    policy,
+                    attestation_policy,
                     reference_values,
                 }) => {
-                    match policy {
+                    match attestation_policy {
                         PolicyConfig::Inline { content } => {
                             assert_eq!(content, "cGFja2FnZSBwb2xpY3kKZGVmYXVsdCBhbGxvdyA9IHRydWU=");
                         }
@@ -1127,7 +1128,7 @@ mod tests {
                 "verify": {
                     "model": "background_check",
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "path",
                         "path": "/path/to/policy.rego"
                     },
@@ -1140,7 +1141,9 @@ mod tests {
 
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
-                ConverterArgs::Coco(CocoConverterArgs::Builtin { policy, .. }) => match policy {
+                ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                    attestation_policy, ..
+                }) => match attestation_policy {
                     PolicyConfig::Path { path } => {
                         assert_eq!(path, "/path/to/policy.rego");
                     }
@@ -1160,7 +1163,7 @@ mod tests {
                 "verify": {
                     "model": "background_check",
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "inline",
                         "content": "cGFja2FnZQ=="
                     },
@@ -1209,7 +1212,7 @@ mod tests {
                 "verify": {
                     "model": "background_check",
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "inline",
                         "content": "cGFja2FnZQ=="
                     },
@@ -1299,7 +1302,7 @@ mod tests {
                 "verify": {
                     "model": "background_check",
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "inline",
                         "content": "cGFja2FnZQ=="
                     },
@@ -1555,11 +1558,10 @@ mod tests {
             {
                 "verify": {
                     "as_type": "builtin",
-                    "policy": {
+                    "attestation_policy": {
                         "type": "default"
                     },
-                    "reference_values": [],
-                    "policy_ids": ["default"]
+                    "reference_values": []
                 }
             }
         );
@@ -1569,10 +1571,10 @@ mod tests {
         match &ra_args.verify {
             Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
                 ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                    policy,
+                    attestation_policy,
                     reference_values,
                 }) => {
-                    assert!(matches!(policy, PolicyConfig::Default));
+                    assert!(matches!(attestation_policy, PolicyConfig::Default));
                     assert!(reference_values.is_empty());
                 }
                 _ => panic!("Expected Coco/Builtin converter"),
@@ -1583,6 +1585,36 @@ mod tests {
         // Test serialization
         let serialized = serde_json::to_string(&ra_args).expect("Failed to serialize");
         assert!(serialized.contains(r#""as_type":"builtin""#));
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[test]
+    fn test_builtin_verify_omit_attestation_policy_defaults() {
+        // Omit attestation_policy entirely — should default to PolicyConfig::Default
+        let json = json!(
+            {
+                "verify": {
+                    "as_type": "builtin",
+                    "reference_values": []
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
+                ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                    attestation_policy,
+                    reference_values,
+                }) => {
+                    assert!(matches!(attestation_policy, PolicyConfig::Default));
+                    assert!(reference_values.is_empty());
+                }
+                _ => panic!("Expected Coco/Builtin converter"),
+            },
+            _ => panic!("Expected BackgroundCheck variant"),
+        }
     }
 
     // =====================================================================
