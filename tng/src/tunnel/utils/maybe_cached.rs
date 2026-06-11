@@ -153,7 +153,10 @@ impl<
             + 'static,
     {
         match refresh_strategy {
-            RefreshStrategy::Periodically { interval } => {
+            RefreshStrategy::Periodically {
+                interval,
+                min_fallback_interval,
+            } => {
                 // Fetch the value first time
                 let (init_value, init_expire) = f().await?;
 
@@ -186,6 +189,10 @@ impl<
                                         let now = SystemTime::now();
                                         let duration =
                                             expire_time.duration_since(now).unwrap_or_default(); // If already expired, set the duration to 0
+                                                                                                 // Force a minimum sleep interval to prevent busy-wait loops
+                                                                                                 // when the server returns a zero or outdated timestamp.
+                                        let duration = duration
+                                            .max(Duration::from_secs(min_fallback_interval));
 
                                         let fut = tokio_time::sleep(duration);
                                         #[cfg(not(wasm))]
@@ -259,7 +266,13 @@ impl<
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum RefreshStrategy {
-    Periodically { interval: u64 },
+    Periodically {
+        interval: u64,
+        /// Minimum sleep duration (in seconds) used as a fallback when the
+        /// expire timestamp is in the past. Prevents busy-wait loops when
+        /// the server returns a zero or outdated timestamp.
+        min_fallback_interval: u64,
+    },
     Always,
 }
 
@@ -423,7 +436,10 @@ mod tests {
 
             let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
                 runtime,
-                RefreshStrategy::Periodically { interval: 1 }, // 1 second interval
+                RefreshStrategy::Periodically {
+                    interval: 1,
+                    min_fallback_interval: 1,
+                }, // 1 second interval
                 move || {
                     let call_count_clone = call_count_clone.clone();
                     Box::pin(async move {
@@ -477,7 +493,10 @@ mod tests {
 
             let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
                 runtime,
-                RefreshStrategy::Periodically { interval: 3600 }, // Long interval, rely on expire instead
+                RefreshStrategy::Periodically {
+                    interval: 3600,
+                    min_fallback_interval: 1,
+                }, // Long interval, rely on expire instead
                 move || {
                     let call_count_clone = call_count_clone.clone();
                     Box::pin(async move {
@@ -535,7 +554,10 @@ mod tests {
 
             let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
                 runtime,
-                RefreshStrategy::Periodically { interval: 1 }, // Short interval
+                RefreshStrategy::Periodically {
+                    interval: 1,
+                    min_fallback_interval: 1,
+                }, // Short interval
                 move || {
                     let call_count_clone = call_count_clone.clone();
                     Box::pin(async move {
@@ -590,6 +612,125 @@ mod tests {
             assert_eq!(*value4, "value3");
             // Verify the function was called three times
             assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 3);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test that a past expire timestamp does NOT cause a busy-wait loop.
+    ///
+    /// When the server returns an expire timestamp that is already in the past,
+    /// the refresh loop should sleep at least `min_fallback_interval` seconds
+    /// before re-fetching, instead of spinning at 100% CPU.
+    ///
+    /// This test verifies that with `min_fallback_interval: 2`, the function
+    /// is called at most once every ~2 seconds even when returning a past
+    /// expire timestamp (1 hour ago).
+    #[tokio::test]
+    async fn test_maybe_cached_past_expire_no_busy_wait() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let call_times = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let call_times_clone = call_times.clone();
+
+            let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
+                runtime,
+                RefreshStrategy::Periodically {
+                    interval: 3600, // Long interval — should NOT drive the refresh
+                    min_fallback_interval: 2, // Fallback: at least 2s between retries
+                },
+                move || {
+                    let call_times_clone = call_times_clone.clone();
+                    Box::pin(async move {
+                        call_times_clone.lock().unwrap().push(std::time::Instant::now());
+                        // Return a PAST expire time (1 hour ago) to simulate
+                        // a server returning an outdated timestamp.
+                        let past = SystemTime::now() - Duration::from_secs(3600);
+                        Ok(("value".to_string(), Expire::ExpireAt(past)))
+                    })
+                },
+            )
+            .await
+            .expect("Failed to create MaybeCached");
+
+            // First call (initial fetch)
+            let value1 = maybe_cached.get_latest().await.expect("Failed to get value");
+            assert_eq!(*value1, "value");
+
+            // Wait 5 seconds — with min_fallback_interval=2, we expect at most
+            // 1 initial call + ~2 refreshes in 5 seconds (never a busy-loop spin).
+            tokio_time::sleep(Duration::from_secs(5)).await;
+
+            let call_count = call_times.lock().unwrap().len();
+            // Without the fix, call_count would be in the millions (busy loop).
+            // With the fix (2s fallback), we expect roughly: 1 (initial) + 2 (refreshes) = 3,
+            // allow up to 5 for timing variance.
+            assert!(
+                call_count <= 5,
+                "expected at most 5 calls in 5 seconds with 2s fallback, got {} (busy-wait suspected)",
+                call_count
+            );
+            // And at least 2 calls (initial + at least one refresh)
+            assert!(
+                call_count >= 2,
+                "expected at least 2 calls (initial + 1 refresh), got {}",
+                call_count
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test that expire_timestamp = 0 (UNIX_EPOCH) does NOT cause a busy-wait loop.
+    ///
+    /// This simulates the worst-case scenario: the server returns an
+    /// expire_timestamp of 0, which maps to UNIX_EPOCH (1970-01-01).
+    /// Without the min_fallback_interval clamp, duration_since(now) would
+    /// underflow to Duration::ZERO and cause a tight busy loop.
+    #[tokio::test]
+    async fn test_maybe_cached_zero_expire_no_busy_wait() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let call_count_clone = call_count.clone();
+
+            let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
+                runtime,
+                RefreshStrategy::Periodically {
+                    interval: 3600, // Long interval — should NOT drive the refresh
+                    min_fallback_interval: 2, // Fallback: at least 2s between retries
+                },
+                move || {
+                    let call_count_clone = call_count_clone.clone();
+                    Box::pin(async move {
+                        call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // Simulate server returning expire_timestamp = 0
+                        let zero_time = SystemTime::UNIX_EPOCH;
+                        Ok(("value".to_string(), Expire::ExpireAt(zero_time)))
+                    })
+                },
+            )
+            .await
+            .expect("Failed to create MaybeCached");
+
+            // First call (initial fetch)
+            let value1 = maybe_cached.get_latest().await.expect("Failed to get value");
+            assert_eq!(*value1, "value");
+
+            // Wait 5 seconds. With min_fallback_interval=2, expect ~3 calls max.
+            tokio_time::sleep(Duration::from_secs(5)).await;
+
+            let count = call_count.load(std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                count <= 5,
+                "expected at most 5 calls in 5 seconds with 2s fallback, got {} (busy-wait suspected)",
+                count
+            );
+            assert!(
+                count >= 2,
+                "expected at least 2 calls (initial + 1 refresh), got {}",
+                count
+            );
+
             Ok(())
         })
         .await

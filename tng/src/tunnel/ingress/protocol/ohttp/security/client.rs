@@ -124,12 +124,14 @@ impl OHttpClient {
             } else {
                 RefreshStrategy::Periodically {
                     interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
+                    min_fallback_interval: 1,
                 }
             }
             #[cfg(not(unix))]
             {
                 RefreshStrategy::Periodically {
                     interval: DEFAULT_KEY_CONFIG_REFRESH_SECOND,
+                    min_fallback_interval: 1,
                 }
             }
         };

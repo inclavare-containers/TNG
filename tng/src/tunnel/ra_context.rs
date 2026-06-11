@@ -453,7 +453,10 @@ mod tests {
             assert!(
                 matches!(
                     ctx.refresh_strategy(),
-                    RefreshStrategy::Periodically { interval: 600 }
+                    RefreshStrategy::Periodically {
+                        interval: 600,
+                        min_fallback_interval: 1
+                    }
                 ),
                 "Expected Periodically with interval 600"
             );

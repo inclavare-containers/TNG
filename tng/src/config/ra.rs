@@ -648,7 +648,10 @@ impl AttestArgs {
         if interval == 0 {
             RefreshStrategy::Always
         } else {
-            RefreshStrategy::Periodically { interval }
+            RefreshStrategy::Periodically {
+                interval,
+                min_fallback_interval: 1,
+            }
         }
     }
 }
