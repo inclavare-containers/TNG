@@ -14,8 +14,8 @@ use crate::tunnel::ohttp::key_config::PublicKeyData;
 /// Custom error type
 #[derive(Error, Debug, AsRefStr)]
 pub enum TngError {
-    #[error("System time error: {0}")]
-    SystemTimeError(#[from] std::time::SystemTimeError),
+    #[error("Key expire timestamp is before UNIX epoch: {0}")]
+    KeyExpireTimestampBeforeEpoch(#[source] std::time::SystemTimeError),
 
     #[error("OHTTP error: {0}")]
     OhttpError(#[from] ohttp::Error),
@@ -219,7 +219,7 @@ impl IntoResponse for TngError {
             TngError::MetadataTooLong => StatusCode::PAYLOAD_TOO_LARGE,
 
             // 500 for all other internal errors
-            TngError::SystemTimeError(..)
+            TngError::KeyExpireTimestampBeforeEpoch(..)
             | TngError::OhttpError(..)
             | TngError::BhttpError(..)
             | TngError::MetadataValidateError(..)

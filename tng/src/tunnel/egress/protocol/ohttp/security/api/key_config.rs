@@ -192,7 +192,7 @@ impl OhttpServerApi {
 
         let keys_expire_timestamp = keys_expire_time
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(TngError::from)?
+            .map_err(TngError::KeyExpireTimestampBeforeEpoch)?
             .as_secs();
 
         // Generate final HpkeKeyConfig

@@ -7,6 +7,7 @@ When refactoring or modifying code:
 - **Always preserve existing comments** if the code is kept and the comment is still accurate. This is especially important for comments containing URLs, as they are often critical for debugging and tracing issues back to their source (e.g., GitHub issue links, documentation references, bug reports).
 - Only remove or update a comment if the described behavior no longer exists or is incorrect.
 - When moving code, carry its comments along.
+- When replacing a code block, **carry over the comments from the original block** to the replacement unless they are no longer accurate. For example, if refactoring `if let Ok(duration) = earliest_time.duration_since(now)` into a chain expression, keep the "Calculate time until earliest event" comment.
 
 ## Git Commit Requirements
 

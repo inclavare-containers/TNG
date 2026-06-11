@@ -89,14 +89,12 @@ impl RandomKeyManagerInner {
             earliest_time = std::cmp::min(earliest_time, key_info.expire_at);
         }
 
-        // Calculate time until earliest event
-        if let Ok(duration) = earliest_time.duration_since(now) {
-            // Make sure we return at least 1 second to prevent busy loops
-            if duration.as_secs() > 0 {
-                return duration;
-            }
-        }
-        Duration::from_secs(1) // at least 1 second
+        // Calculate time until earliest event.
+        // Make sure we return at least 1 second to prevent busy loops.
+        earliest_time
+            .duration_since(now)
+            .unwrap_or(Duration::ZERO)
+            .max(Duration::from_secs(1))
     }
 
     /// Refresh keys based on their expiration times
