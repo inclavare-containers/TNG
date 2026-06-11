@@ -280,6 +280,7 @@ mod tests {
             as_headers: HashMap::new(),
             trusted_certs_paths: Some(vec![TEST_AS_CERT_PATH.to_string()]),
             verify_signer_transparency: false,
+            skip_as_token_cert_verify: false,
         })
     }
 
@@ -290,6 +291,7 @@ mod tests {
             as_headers: HashMap::new(),
             trusted_certs_paths: Some(vec![TEST_AS_CERT_PATH.to_string()]),
             verify_signer_transparency: false,
+            skip_as_token_cert_verify: false,
         })
     }
 

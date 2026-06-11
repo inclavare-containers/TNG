@@ -22,6 +22,7 @@ impl BuiltinCocoVerifier {
             as_addr: None,
             as_headers: None,
             insecure_key: true,
+            skip_cert_verify: false,
         };
 
         let token_verifier = TokenVerifier::from_config(config)

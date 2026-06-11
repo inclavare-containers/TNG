@@ -104,6 +104,7 @@ pub mod tests {
                                 as_headers: Default::default(),
                                 trusted_certs_paths: Some(vec!["/tmp/as.pem".to_owned()]),
                                 verify_signer_transparency: false,
+                                skip_as_token_cert_verify: false,
                             }),
                         })
                     },

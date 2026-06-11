@@ -47,6 +47,16 @@ pub struct AttestationTokenVerifierConfig {
     /// Default: false
     #[serde(default = "bool::default")]
     pub insecure_key: bool,
+
+    /// Skip certificate verification for the AS token.
+    /// When true, the token signing certificate chain is not validated
+    /// against trusted CAs. The JWT signature is still verified using
+    /// the embedded JWK public key.
+    ///
+    /// When true, `as_addr` (for cert fetching) and `trusted_certs_paths`
+    /// are ignored during initialization.
+    #[serde(default = "bool::default")]
+    pub skip_cert_verify: bool,
 }
 
 #[derive(Clone)]

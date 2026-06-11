@@ -71,6 +71,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 as_headers,
                 trusted_certs_paths,
                 verify_signer_transparency,
+                skip_as_token_cert_verify,
             } => {
                 let as_addr_config = as_addr.as_ref().map(|addr| {
                     rats_cert::cert::verify::AttestationServiceAddrArgs {
@@ -85,6 +86,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                         trusted_certs_paths,
                         policy_ids,
                         *verify_signer_transparency,
+                        *skip_as_token_cert_verify,
                     )
                     .await?,
                 )))
@@ -95,6 +97,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 as_headers,
                 trusted_certs_paths,
                 verify_signer_transparency,
+                skip_as_token_cert_verify,
             } => {
                 let as_addr_config = as_addr.as_ref().map(|addr| {
                     rats_cert::cert::verify::AttestationServiceAddrArgs {
@@ -109,6 +112,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                         trusted_certs_paths,
                         policy_ids,
                         *verify_signer_transparency,
+                        *skip_as_token_cert_verify,
                     )
                     .await?,
                 )))

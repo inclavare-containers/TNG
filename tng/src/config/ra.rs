@@ -223,12 +223,14 @@ impl RaArgsUnchecked {
                                 as_addr,
                                 as_headers,
                                 trusted_certs_paths,
+                                skip_as_token_cert_verify,
                                 ..
                             }
                             | CocoVerifierArgs::Grpc {
                                 as_addr,
                                 as_headers,
                                 trusted_certs_paths,
+                                skip_as_token_cert_verify,
                                 ..
                             } => {
                                 if as_addr.is_none() && !as_headers.is_empty() {
@@ -237,8 +239,27 @@ impl RaArgsUnchecked {
                                     )));
                                 }
 
-                                // Additional checks for Passport mode
+                                // Validation for skip_as_token_cert_verify
+                                if *skip_as_token_cert_verify {
+                                    if trusted_certs_paths.is_some() {
+                                        return Err(TngError::InvalidParameter(anyhow!(
+                                            "'trusted_certs_paths' cannot be set when 'skip_as_token_cert_verify' is true"
+                                        )));
+                                    }
+
+                                    // In Passport mode, as_addr must also be None when skipping
+                                    if matches!(verify_args, VerifyArgs::Passport { .. })
+                                        && as_addr.is_some()
+                                    {
+                                        return Err(TngError::InvalidParameter(anyhow!(
+                                            "'as_addr' cannot be set in Passport mode when 'skip_as_token_cert_verify' is true"
+                                        )));
+                                    }
+                                }
+
+                                // Additional checks for Passport mode (skip when skip_as_token_cert_verify is true)
                                 if matches!(verify_args, VerifyArgs::Passport { .. })
+                                    && !skip_as_token_cert_verify
                                     && as_addr.is_none()
                                     && trusted_certs_paths.is_none()
                                 {
@@ -551,6 +572,9 @@ pub enum CocoVerifierArgs {
         /// Verify signer transparency claim in JWT token (optional, default: false)
         #[serde(default)]
         verify_signer_transparency: bool,
+        /// Skip AS token certificate verification (optional, default: false)
+        #[serde(default)]
+        skip_as_token_cert_verify: bool,
     },
     /// gRPC API
     Grpc {
@@ -568,6 +592,9 @@ pub enum CocoVerifierArgs {
         /// Verify signer transparency claim in JWT token (optional, default: false)
         #[serde(default)]
         verify_signer_transparency: bool,
+        /// Skip AS token certificate verification (optional, default: false)
+        #[serde(default)]
+        skip_as_token_cert_verify: bool,
     },
     /// Builtin AS (embedded)
     #[cfg(feature = "__builtin-as")]
@@ -1929,5 +1956,256 @@ mod tests {
             debug_output.contains("[REDACTED]"),
             "Debug output should show [REDACTED] for api_key"
         );
+    }
+
+    // =====================================================================
+    // skip_as_token_cert_verify tests
+    // =====================================================================
+
+    // --- Success cases ---
+
+    #[test]
+    fn test_skip_as_token_cert_verify_passport_succeeds_without_as_addr_and_certs() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_ok(), "should pass validation: {result:?}");
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_background_check_allows_as_addr() {
+        let json = json!({
+            "verify": {
+                "model": "background_check",
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_ok(), "should pass validation: {result:?}");
+    }
+
+    #[test]
+    // Note: In background_check mode, as_addr is required for the converter
+    // (CocoConverterArgs::Restful/Grpc). The skip_as_token_cert_verify flag
+    // only affects the verifier's cert fetching, not the converter's AS access.
+    // Therefore we cannot test "skip=true without as_addr" in background_check mode
+    // at the config level — the deserializer requires as_addr for the converter.
+
+    // --- Conflict: skip + trusted_certs_paths → error (all modes) ---
+    #[test]
+    fn test_skip_as_token_cert_verify_passport_fails_with_trusted_certs_paths() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "policy_ids": ["default"],
+                "trusted_certs_paths": ["/tmp/as-ca.pem"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'trusted_certs_paths' cannot be set"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_background_check_fails_with_trusted_certs_paths() {
+        let json = json!({
+            "verify": {
+                "model": "background_check",
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"],
+                "trusted_certs_paths": ["/tmp/as-ca.pem"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'trusted_certs_paths' cannot be set"),
+            "{error:?}"
+        );
+    }
+
+    // --- Conflict: skip + as_addr in Passport → error ---
+
+    #[test]
+    fn test_skip_as_token_cert_verify_passport_fails_with_as_addr() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'as_addr' cannot be set in Passport mode"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_passport_fails_with_both_as_addr_and_certs() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"],
+                "trusted_certs_paths": ["/tmp/as-ca.pem"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'trusted_certs_paths' cannot be set"),
+            "{error:?}"
+        );
+    }
+
+    // --- Grpc variant: same validation rules ---
+
+    #[test]
+    fn test_skip_as_token_cert_verify_grpc_passport_succeeds() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_type": "grpc",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_ok(), "should pass validation: {result:?}");
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_grpc_passport_fails_with_as_addr() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_type": "grpc",
+                "as_addr": "http://127.0.0.1:5000/",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'as_addr' cannot be set in Passport mode"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_grpc_background_check_allows_as_addr() {
+        let json = json!({
+            "verify": {
+                "model": "background_check",
+                "as_type": "grpc",
+                "as_addr": "http://127.0.0.1:5000/",
+                "policy_ids": ["default"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_ok(), "should pass validation: {result:?}");
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_grpc_fails_with_trusted_certs_paths() {
+        let json = json!({
+            "verify": {
+                "model": "background_check",
+                "as_type": "grpc",
+                "as_addr": "http://127.0.0.1:5000/",
+                "policy_ids": ["default"],
+                "trusted_certs_paths": ["/tmp/as-ca.pem"],
+                "skip_as_token_cert_verify": true
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("'trusted_certs_paths' cannot be set"),
+            "{error:?}"
+        );
+    }
+
+    // --- Regression: existing behavior preserved ---
+
+    #[test]
+    fn test_passport_without_skip_still_requires_trust_source() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "policy_ids": ["default"]
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        let result = ra_args.into_checked();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:?}")
+                .contains("At least one of 'as_addr' or 'trusted_certs_paths' must be set"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn test_skip_as_token_cert_verify_default_is_false() {
+        let json = json!({
+            "verify": {
+                "model": "passport",
+                "as_addr": "http://127.0.0.1:8080/",
+                "policy_ids": ["default"]
+            }
+        });
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+        match &ra_args.verify {
+            Some(VerifyArgs::Passport { verifier }) => match verifier {
+                VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                    skip_as_token_cert_verify,
+                    ..
+                }) => {
+                    assert!(
+                        !skip_as_token_cert_verify,
+                        "skip_as_token_cert_verify should default to false"
+                    );
+                }
+                _ => panic!("Expected Coco/Restful verifier"),
+            },
+            _ => panic!("Expected Passport variant"),
+        }
     }
 }

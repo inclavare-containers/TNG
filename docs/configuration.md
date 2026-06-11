@@ -872,6 +872,7 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 | `policy_ids` | array [string] | — | Policy ID list. Only for `"restful"` and `"grpc"` types; ignored when `as_type` is `"builtin"` |
 | `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
 | `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS (only for COCO external AS, not applicable to builtin AS) |
+| `skip_as_token_cert_verify` | boolean | `false` | **DANGER:** Skip AS token certificate verification. The token signing certificate is not validated. When `true`, `trusted_certs_paths` cannot be set. In Passport mode, `as_addr` also cannot be set. Only use this when you fully trust the token source. |
 
 > **`verify_signer_transparency` description:** When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor v2 transparency log. Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
 
@@ -1128,6 +1129,7 @@ In the Passport model, the [Verify](#verifier-configuration) configuration shoul
 | `policy_ids` | array [string] | — | Policy ID list |
 | `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
 | `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS |
+| `skip_as_token_cert_verify` | boolean | `false` | **DANGER:** Skip AS token certificate verification. The token signing certificate is not validated. When `true`, neither `trusted_certs_paths` nor `as_addr` can be set. Only use this when you fully trust the token source. |
 
 <details>
 <summary>Example: Passport Verify (CoCo)</summary>
@@ -1144,6 +1146,23 @@ In the Passport model, the [Verify](#verifier-configuration) configuration shoul
     ]
 }
 ```
+</details>
+
+<details>
+<summary>Example: Passport Verify with skip_as_token_cert_verify</summary>
+
+```json
+"verify": {
+    "model": "passport",
+    "policy_ids": [
+        "default"
+    ],
+    "skip_as_token_cert_verify": true
+}
+```
+
+> [!WARNING]
+> This example skips token certificate verification entirely. Only use this when you fully trust the token source (e.g., the token comes from a trusted trustee in a controlled environment).
 </details>
 
 ##### ITA Provider

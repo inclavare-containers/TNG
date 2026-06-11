@@ -59,6 +59,7 @@ mod tests {
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
             false,
+            false,
         )
         .await
         .expect("Failed to create verifier");
@@ -113,6 +114,7 @@ mod tests {
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
             false,
+            false,
         )
         .await
         .expect("Failed to create verifier");
@@ -151,6 +153,7 @@ mod tests {
             &Some(make_as_addr_config()),
             &Some(vec![TEST_AS_CERT_PATH.to_string()]),
             &vec!["default".to_string()],
+            false,
             false,
         )
         .await

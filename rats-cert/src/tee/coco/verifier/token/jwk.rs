@@ -66,6 +66,7 @@ pub struct JwkAttestationTokenVerifier {
     trusted_jwk_sets: jwk::JwkSet,
     trusted_certs: Vec<CertificateDer<'static>>,
     insecure_key: bool,
+    skip_cert_verify: bool,
 }
 
 async fn get_jwks_from_file_or_url(
@@ -180,40 +181,45 @@ impl JwkAttestationTokenVerifier {
 
         let mut trusted_certs = Vec::new();
 
-        // Fetch certificates from AS address if provided
-        if let Some(as_addr) = &config.as_addr {
-            let certs = Self::fetch_certs_from_as(&client, as_addr, &config.as_headers)
-                .await
-                .context("Failed to fetch certificates from AS")?;
-            trusted_certs.extend(certs);
-        }
-
-        // Load certificates from file paths
-        for path in &config.trusted_certs_paths {
-            #[cfg(not(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            )))]
-            {
-                let cert_content = tokio::fs::read(path).await.map_err(|e| {
-                    JwksGetError::AccessFailed(format!("failed to read certificate {path}: {e:?}"))
-                })?;
-
-                let cert_der = CertificateDer::from_pem_slice(&cert_content)
-                    .with_context(|| format!("Failed to parse PEM certificate {}", path))?;
-
-                trusted_certs.push(cert_der);
+        // Skip cert loading when skip_cert_verify is true
+        if !config.skip_cert_verify {
+            // Fetch certificates from AS address if provided
+            if let Some(as_addr) = &config.as_addr {
+                let certs = Self::fetch_certs_from_as(&client, as_addr, &config.as_headers)
+                    .await
+                    .context("Failed to fetch certificates from AS")?;
+                trusted_certs.extend(certs);
             }
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
-            {
-                Err(JwksGetError::AccessFailed(format!(
-                    "failed to read certificate {path}: not supported in wasm"
-                )))?
+
+            // Load certificates from file paths
+            for path in &config.trusted_certs_paths {
+                #[cfg(not(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                )))]
+                {
+                    let cert_content = tokio::fs::read(path).await.map_err(|e| {
+                        JwksGetError::AccessFailed(format!(
+                            "failed to read certificate {path}: {e:?}"
+                        ))
+                    })?;
+
+                    let cert_der = CertificateDer::from_pem_slice(&cert_content)
+                        .with_context(|| format!("Failed to parse PEM certificate {}", path))?;
+
+                    trusted_certs.push(cert_der);
+                }
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_vendor = "unknown",
+                    target_os = "unknown"
+                ))]
+                {
+                    Err(JwksGetError::AccessFailed(format!(
+                        "failed to read certificate {path}: not supported in wasm"
+                    )))?
+                }
             }
         }
 
@@ -221,6 +227,7 @@ impl JwkAttestationTokenVerifier {
             trusted_jwk_sets,
             trusted_certs,
             insecure_key: config.insecure_key,
+            skip_cert_verify: config.skip_cert_verify,
         })
     }
 
@@ -407,6 +414,10 @@ impl JwkAttestationTokenVerifier {
     fn get_verification_jwk<'a>(&'a self, header: &'a Header) -> anyhow::Result<&'a Jwk> {
         if let Some(key) = &header.jwk {
             if self.insecure_key {
+                return Ok(key);
+            }
+            // Skip endorsement check when skip_cert_verify is true
+            if self.skip_cert_verify {
                 return Ok(key);
             }
             if self.trusted_certs.is_empty() {

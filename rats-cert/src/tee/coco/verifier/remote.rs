@@ -15,6 +15,7 @@ impl CocoRemoteVerifier {
         trusted_certs_paths: &Option<Vec<String>>,
         policy_ids: &Vec<String>,
         verify_signer_transparency: bool,
+        skip_as_token_cert_verify: bool,
     ) -> Result<Self> {
         if let Some(as_addr_config) = as_addr_config {
             if as_addr_config.as_is_grpc {
@@ -24,21 +25,32 @@ impl CocoRemoteVerifier {
 
         let trusted_certs_paths = trusted_certs_paths.clone().unwrap_or_default();
 
-        // Check if any trust source is provided
-        let has_trust_source = !trusted_certs_paths.is_empty() || as_addr_config.is_some();
-
-        if !has_trust_source {
-            Err(Error::NoTrustSource)?
+        // Check if any trust source is provided (skip when skip_as_token_cert_verify is true)
+        if !skip_as_token_cert_verify {
+            let has_trust_source = !trusted_certs_paths.is_empty() || as_addr_config.is_some();
+            if !has_trust_source {
+                Err(Error::NoTrustSource)?
+            }
         }
 
         let config = AttestationTokenVerifierConfig {
             trusted_certs_paths,
             trusted_jwk_sets: Default::default(),
-            as_addr: as_addr_config.as_ref().map(|config| config.as_addr.clone()),
-            as_headers: as_addr_config
-                .as_ref()
-                .map(|config| config.as_headers.clone()),
+            as_addr: if skip_as_token_cert_verify {
+                // Don't pass as_addr to token verifier when skipping cert verify
+                None
+            } else {
+                as_addr_config.as_ref().map(|config| config.as_addr.clone())
+            },
+            as_headers: if skip_as_token_cert_verify {
+                None
+            } else {
+                as_addr_config
+                    .as_ref()
+                    .map(|config| config.as_headers.clone())
+            },
             insecure_key: false,
+            skip_cert_verify: skip_as_token_cert_verify,
         };
 
         let token_verifier = TokenVerifier::from_config(config)
@@ -87,9 +99,10 @@ mod tests {
 
         let report_data = ReportData::Claims(Claims::default());
 
-        let verifier = CocoRemoteVerifier::new(&None, &trusted_certs_paths, &policy_ids, false)
-            .await
-            .expect("Failed to create CocoRemoteVerifier");
+        let verifier =
+            CocoRemoteVerifier::new(&None, &trusted_certs_paths, &policy_ids, false, false)
+                .await
+                .expect("Failed to create CocoRemoteVerifier");
 
         let result = verifier.verify_evidence(&token, &report_data).await;
         result.unwrap();
@@ -240,5 +253,33 @@ mod tests {
             Some(vec![cert_path]),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_verify_jwt_with_skip_cert_verify() {
+        // When skip_as_token_cert_verify is true, the verifier should
+        // accept tokens without any trusted certs or AS address
+        let token = CocoAsToken::new(include_str!("test_cases/simple.jwt").trim().to_string())
+            .expect("Failed to create CocoAsToken");
+
+        let report_data = ReportData::Claims(Claims::default());
+
+        // Create verifier with skip=true, no certs, no as_addr
+        let verifier = CocoRemoteVerifier::new(
+            &None,
+            &None,
+            &vec!["default".to_string()],
+            false,
+            true, // skip_as_token_cert_verify
+        )
+        .await
+        .expect("Failed to create CocoRemoteVerifier with skip=true");
+
+        // Should succeed - token signature is still verified using embedded JWK
+        let result = verifier.verify_evidence(&token, &report_data).await;
+        assert!(
+            result.is_ok(),
+            "should succeed with skip_cert_verify: {result:?}"
+        );
     }
 }
