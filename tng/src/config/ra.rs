@@ -1990,6 +1990,7 @@ mod tests {
         });
         let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
         let result = ra_args.into_checked();
+        assert!(result.is_ok(), "should pass validation: {result:?}");
     }
 
     // Note: In background_check mode, as_addr is required for the converter
