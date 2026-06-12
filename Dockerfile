@@ -40,6 +40,10 @@ RUN yum reinstall -y ca-certificates
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 
+# Install vendor config setup tool
+COPY scripts/setup-vendor-config /usr/local/bin/setup-vendor-config
+RUN chmod +x /usr/local/bin/setup-vendor-config
+
 # install jq for custome shell script
 RUN yum install -y jq
 

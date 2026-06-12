@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+#
+# setup-vendor-config — Configure vendor-specific PCCS settings for TNG builtin AS mode.
+#
+# When using TNG's builtin attestation service (e.g., the Docker image built with
+# the builtin-as-tdx feature), local quote verification requires a correctly
+# configured PCCS (Provisioning Certificate Caching Service). If the PCCS_URL in
+# /etc/sgx_default_qcnl.conf does not point to your cloud provider's service,
+# quote verification will fail with:
+#
+#   tee_verify_quote failed: 0xe019
+#
+# This tool updates the configuration for supported vendors automatically.
+#
+# Usage:
+#   setup-vendor-config <vendor> [options]
+#
+# Examples:
+#   setup-vendor-config aliyun
+#   setup-vendor-config aliyun --region cn-beijing
+#   setup-vendor-config aliyun --dry-run
+#   setup-vendor-config --list
+
+set -euo pipefail
+
+CONFIG_FILE="/etc/sgx_default_qcnl.conf"
+# shellcheck disable=SC2034
+DEFAULT_QCNL_CONTENT='# PCCS server address
+PCCS_URL=https://localhost:8081/sgx/certification/v4/
+USE_SECURE_CERT=TRUE
+RETRY_TIMES=6
+RETRY_DELAY=10
+PCK_CACHE_EXPIRE_HOURS=168
+VERIFY_COLLATERAL_CACHE_EXPIRE_HOURS=168'
+
+# ==============================================================================
+# Vendor definitions
+# ==============================================================================
+# Add a new vendor by defining:
+#   VENDOR_PCCS_URL_<name>  — the PCCS URL template (use __REGION__ placeholder)
+#   VENDOR_REQUIRES_REGION_<name> — set to "true" if region is mandatory
+#   VENDOR_DEFAULT_REGION_<name> — default region if --region not specified
+
+# These variables are accessed via indirect expansion (${!var}) in main().
+# shellcheck disable=SC2034
+VENDOR_PCCS_URL_aliyun="https://sgx-dcap-server.__REGION__.aliyuncs.com/sgx/certification/v4/"
+# shellcheck disable=SC2034
+VENDOR_REQUIRES_REGION_aliyun="false"
+# shellcheck disable=SC2034
+VENDOR_DEFAULT_REGION_aliyun="cn-hangzhou"
+
+# ==============================================================================
+# Supported vendors list (kebab-case names)
+# ==============================================================================
+SUPPORTED_VENDORS="aliyun"
+
+# ==============================================================================
+# Usage / Help
+# ==============================================================================
+usage() {
+    cat <<'EOF'
+Usage: setup-vendor-config <vendor> [options]
+
+Setup vendor-specific PCCS configuration for TNG builtin AS mode.
+
+Arguments:
+  <vendor>              Cloud provider name to configure
+
+Options:
+  --region REGION       Cloud region ID (optional for some vendors, see --list)
+  --dry-run             Show what would be changed without applying
+  --no-backup           Skip creating a backup of the existing config
+  --list                List all supported vendors with details
+  --help                Show this help message
+
+Supported Vendors:
+  aliyun    Alibaba Cloud SGX DCAP PCCS
+            Default region: cn-hangzhou (covers all TDX instances)
+
+Examples:
+  setup-vendor-config aliyun
+  setup-vendor-config aliyun --region cn-beijing
+  setup-vendor-config aliyun --region cn-shanghai --dry-run
+  setup-vendor-config --list
+
+For more information, see docs/configuration.md.
+EOF
+}
+
+list_vendors() {
+    echo "Supported vendors:"
+    echo ""
+    for vendor in $SUPPORTED_VENDORS; do
+        local url_var="VENDOR_PCCS_URL_${vendor}"
+        local requires_var="VENDOR_REQUIRES_REGION_${vendor}"
+        local default_var="VENDOR_DEFAULT_REGION_${vendor}"
+        local url="${!url_var}"
+        local requires="${!requires_var}"
+        local default_region="${!default_var}"
+
+        echo "  ${vendor}"
+        if [[ "$requires" == "true" ]]; then
+            echo "    PCCS URL template: ${url}"
+            echo "    Region: required (use --region)"
+        else
+            echo "    PCCS URL template: ${url}"
+            echo "    Default region: ${default_region}"
+        fi
+        echo ""
+    done
+}
+
+# ==============================================================================
+# Core logic
+# ==============================================================================
+main() {
+    local vendor=""
+    local region=""
+    local dry_run=false
+    local do_backup=true
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            --list)
+                list_vendors
+                exit 0
+                ;;
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            --no-backup)
+                do_backup=false
+                shift
+                ;;
+            --region)
+                if [[ -z "${2:-}" ]]; then
+                    echo "Error: --region requires a value" >&2
+                    exit 1
+                fi
+                region="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Error: unknown option: $1" >&2
+                usage >&2
+                exit 1
+                ;;
+            *)
+                if [[ -n "$vendor" ]]; then
+                    echo "Error: unexpected argument: $1" >&2
+                    usage >&2
+                    exit 1
+                fi
+                vendor="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$vendor" ]]; then
+        echo "Error: vendor name is required" >&2
+        usage >&2
+        exit 1
+    fi
+
+    # Validate vendor
+    local supported=false
+    for v in $SUPPORTED_VENDORS; do
+        if [[ "$v" == "$vendor" ]]; then
+            supported=true
+            break
+        fi
+    done
+    if [[ "$supported" != "true" ]]; then
+        echo "Error: unsupported vendor '${vendor}'" >&2
+        echo "Run '$0 --list' to see supported vendors." >&2
+        exit 1
+    fi
+
+    # Resolve region
+    local requires_var="VENDOR_REQUIRES_REGION_${vendor}"
+    local default_var="VENDOR_DEFAULT_REGION_${vendor}"
+    local url_var="VENDOR_PCCS_URL_${vendor}"
+    local requires_region="${!requires_var}"
+    local default_region="${!default_var}"
+    local url_template="${!url_var}"
+
+    if [[ -z "$region" ]]; then
+        if [[ "$requires_region" == "true" ]]; then
+            echo "Error: --region is required for vendor '${vendor}'" >&2
+            exit 1
+        fi
+        region="$default_region"
+    fi
+
+    # Build the final URL
+    local pccs_url="${url_template//__REGION__/$region}"
+
+    # Show configuration
+    echo "Vendor:      ${vendor}"
+    echo "Region:      ${region}"
+    echo "PCCS URL:    ${pccs_url}"
+    echo "Config file: ${CONFIG_FILE}"
+    echo ""
+
+    # Dry run
+    if [[ "$dry_run" == "true" ]]; then
+        echo "[DRY RUN] The following changes would be made:"
+        echo ""
+        if [[ -f "$CONFIG_FILE" ]]; then
+            local current_url
+            current_url=$(grep '^PCCS_URL=' "$CONFIG_FILE" | head -1 | cut -d= -f2-)
+            echo "  Current PCCS_URL: ${current_url}"
+            echo "  New PCCS_URL:     ${pccs_url}"
+            echo ""
+            echo "Backup: ${CONFIG_FILE}.$(date +%m%d%y) (would be created)"
+        else
+            echo "  Config file does not exist — would be created with default content."
+            echo "  Then PCCS_URL would be set to: ${pccs_url}"
+        fi
+        exit 0
+    fi
+
+    # Apply configuration
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # Backup
+        if [[ "$do_backup" == "true" ]]; then
+            local backup_path
+            backup_path="${CONFIG_FILE}.$(date +%m%d%y)"
+            cp "$CONFIG_FILE" "$backup_path"
+            echo "Backup created: ${backup_path}"
+        fi
+
+        # Update PCCS_URL
+        sed -i "s|^PCCS_URL=.*|PCCS_URL=${pccs_url}|" "$CONFIG_FILE"
+        echo "Updated PCCS_URL in ${CONFIG_FILE}"
+    else
+        echo "Config file not found — creating with vendor settings."
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        cat > "$CONFIG_FILE" <<EOCONF
+# PCCS server address
+PCCS_URL=${pccs_url}
+USE_SECURE_CERT=TRUE
+RETRY_TIMES=6
+RETRY_DELAY=10
+PCK_CACHE_EXPIRE_HOURS=168
+VERIFY_COLLATERAL_CACHE_EXPIRE_HOURS=168
+EOCONF
+        echo "Created ${CONFIG_FILE}"
+    fi
+
+    echo ""
+    echo "Configuration applied successfully."
+    echo "You can now start TNG with builtin AS mode."
+}
+
+main "$@"
