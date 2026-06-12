@@ -28,7 +28,6 @@
     - [Background Check Mode](#verify-background-check-mode)
     - [Passport Model](#verify-passport-model)
   - [Role Combination Examples](#role-combination-examples)
-  - [Builtin AS PCCS Configuration](#builtin-as-pccs-configuration)
 - [OHTTP Protocol](#ohttp-protocol)
   - [Ingress Side Configuration](#ohttp-ingress-side-configuration)
   - [Egress Side Configuration](#ohttp-egress-side-configuration)
@@ -947,55 +946,8 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 
 > [!NOTE]
 > Builtin mode requires compiling with the corresponding TEE feature enabled (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`). GitHub CI-built RPM packages and binary artifacts do not support this mode; only container images support it.
-
-### Builtin AS PCCS Configuration
-
-When using builtin AS mode with **SGX or TDX** enclaves, the local quote verification process needs to fetch and verify provisioning certificates from a **PCCS** (Provisioning Certificate Caching Service). The PCCS URL is configured in `/etc/sgx_default_qcnl.conf`.
-
-If the PCCS URL is not set correctly for your cloud provider, quote verification will fail with:
-
-```
-tee_verify_quote failed: 0xe019
-```
-
-#### Using the `setup-vendor-config` Tool
-
-TNG ships with a `setup-vendor-config` tool to automatically configure `/etc/sgx_default_qcnl.conf` for supported cloud providers:
-
-```sh
-# Configure for Alibaba Cloud (default region: cn-hangzhou)
-setup-vendor-config aliyun
-
-# Configure for a specific region
-setup-vendor-config aliyun --region cn-beijing
-
-# Preview changes without applying
-setup-vendor-config aliyun --region cn-beijing --dry-run
-
-# List all supported vendors
-setup-vendor-config --list
-```
-
-Run this tool **before** starting TNG in builtin AS mode. In Docker, you can run it inside the container before `tng launch`:
-
-```sh
-docker run -it --rm --privileged --network host --cgroupns=host \
-  ghcr.io/inclavare-containers/tng:latest \
-  sh -c 'setup-vendor-config aliyun && tng launch --config-content="..."'
-```
-
-> [!TIP]
-> The `--region` flag is optional for Alibaba Cloud — `cn-hangzhou` works for all TDX instances. Use `--region` only if you need a different endpoint.
-
-#### Manual Configuration
-
-If your provider is not yet supported by the tool, manually edit `/etc/sgx_default_qcnl.conf`:
-
-```sh
-sudo sed -i.$(date "+%m%d%y") 's|PCCS_URL=.*|PCCS_URL=https://sgx-dcap-server.<region>.<provider-domain>/sgx/certification/v4/|' /etc/sgx_default_qcnl.conf
-```
-
-Replace `<region>` and `<provider-domain>` with your cloud provider's PCCS endpoint. Consult your provider's confidential computing documentation for the correct URL.
+>
+> For SGX/TDX builtin AS mode, you also need to configure the PCCS URL in `/etc/sgx_default_qcnl.conf` for your cloud provider. See the [Vendor Configuration Setup](setup-vendor-config.md) guide for details.
 
 **PolicyConfig (OPA Policy):**
 
