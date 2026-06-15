@@ -61,7 +61,7 @@ where
 
     /// Launch the task, wait until the task is ready and return a handle to the task.
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
-        self.1.launch(token).await
+        self.1.launch_with_node_type(token, self.0).await
     }
 }
 
@@ -73,6 +73,18 @@ pub trait Task: Send + Sync + 'static {
 
     /// Launch the task, wait until the task is ready and return a handle to the task.
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>>;
+
+    /// Launch the task with an explicit node type for output tagging.
+    /// Default implementation delegates to `launch`.
+    /// Override this to use the provided node type for the output prefix.
+    async fn launch_with_node_type(
+        &self,
+        token: CancellationToken,
+        node_type: NodeType,
+    ) -> Result<JoinHandle<Result<()>>> {
+        let _ = node_type; // default impl ignores it
+        self.launch(token).await
+    }
 
     fn boxed(self) -> Box<dyn Task>
     where
