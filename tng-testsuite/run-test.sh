@@ -180,10 +180,22 @@ for case_name in $test_cases; do
         continue
     fi
 
+    # Some tests require additional features
+    extra_features=""
+    if [[ "$case_name" == "js_sdk_http" ]]; then
+        extra_features="js-sdk"
+    fi
+
+    if [[ -n "$extra_features" ]]; then
+        features="on-source-code,$extra_features"
+    else
+        features="on-source-code"
+    fi
+
     integ_args=(
         --no-report
         --no-default-features
-        --features on-source-code
+        --features "$features"
         --package tng-testsuite
         --test "$case_name"
         --

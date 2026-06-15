@@ -83,6 +83,11 @@ Wait until both services are ready before running tests. The e2E CoCo tests (`te
 
 The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service Router) HTTP proxy listening on `127.0.0.1:8006`, which is NOT started by the `make test-dep-*` targets. If ASR is not available, this test will fail with "Connection refused".
 
+## Running Integration Tests
+
+- **Always use `make run-test`** to run integration tests. Running individual `cargo test -p tng-testsuite --test <name>` commands manually is fine for debugging, but **do NOT run multiple tests in parallel** — they share iptables rules and network namespaces, so concurrent execution causes conflicts. `make run-test` runs tests sequentially to prevent this.
+- If a test fails with "Connection refused" on a netfilter test, check for stale `TNG_EGRESS_*` iptables rules and clean them up before re-running.
+
 ## Pre-Push Checks
 
 Before pushing, verify the following:
