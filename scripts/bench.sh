@@ -21,7 +21,6 @@ IP_S="10.200.1.2"
 
 # Ports
 IPERF_PORT=5201
-STUNNEL_SERVER_PORT=5601
 STUNNEL_CLIENT_PORT=9001
 
 TNG_EGRESS_LISTEN=40000
@@ -267,8 +266,8 @@ for streams in "${STREAM_COUNTS[@]}"; do
     c_ns "$CLIENT_NS" pkill -f stunnel 2>/dev/null || true
     sleep 0.5
 
-    c_ns "$SERVER_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-server.conf &
-    c_ns "$CLIENT_NS" $STUNNEL_BIN /tmp/tng-bench-stunnel-client.conf &
+    c_ns "$SERVER_NS" "$STUNNEL_BIN" /tmp/tng-bench-stunnel-server.conf &
+    c_ns "$CLIENT_NS" "$STUNNEL_BIN" /tmp/tng-bench-stunnel-client.conf &
     sleep 1
 
     STUNNEL_RESULTS[$streams]=$(run_iperf "$IP_C" "$STUNNEL_CLIENT_PORT" "$CLIENT_NS" "stunnel ($streams streams)" "$streams")
