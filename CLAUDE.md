@@ -18,6 +18,7 @@ When creating or amending commits:
 - **Never** include any Claude session URLs, session IDs, or links to claude.ai in commit messages or PR descriptions. Commit messages should only describe the code changes.
 - **Never** include "🤖 Generated with [Claude Code](https://claude.com/claude-code)" or similar AI attribution footers in PR descriptions or commit messages.
 - **Always** use `--no-gpg-sign` to avoid GPG signing.
+- **Never commit plan or spec files** (e.g. `docs/*-plan.md`, `docs/*-design.md`, `docs/*-spec.md`). These should be gitignored and kept local only.
 
 ## PR Requirements
 

@@ -237,6 +237,10 @@ update-rpm-tree:
 docker-build:
 	docker build -t tng:${VERSION} .
 
+.PHONY: docker-build-ubuntu
+docker-build-ubuntu:
+	docker build -t tng:${VERSION}-ubuntu2404 -f Dockerfile.ubuntu2404 .
+
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \

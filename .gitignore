@@ -2,4 +2,7 @@
 tng-*.tar.gz
 .package/
 /.vscode/
-/docs/superpowers/
+docs/superpowers/
+docs/*-plan.md
+docs/*-design.md
+docs/*-spec.md

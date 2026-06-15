@@ -1,0 +1,77 @@
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# install core build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    protobuf-compiler \
+    libprotobuf-dev \
+    gcc \
+    clang \
+    make \
+    pkg-config \
+    libssl-dev \
+    gnupg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# install intel tdx dcap dependencies via Intel SGX repo
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSLO https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key && \
+    mv intel-sgx-deb.key /etc/apt/keyrings/intel-sgx-keyring.asc && \
+    tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null <<EOF
+deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main
+EOF
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libtdx-attest-dev \
+    libsgx-dcap-quote-verify-dev \
+    libsgx-dcap-default-qpl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain none
+
+WORKDIR /code/
+
+COPY rust-toolchain.toml .
+
+# install toolchain and cache it
+RUN . "$HOME/.cargo/env" && rustup show
+
+COPY . .
+
+RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --features 'builtin-as-tdx' --path ./tng/ --root /usr/local/cargo/
+
+
+FROM ubuntu:24.04 AS release
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    iptables \
+    iproute2 \
+    jq \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# install intel tdx dcap runtime dependencies
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSLO https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key && \
+    mv intel-sgx-deb.key /etc/apt/keyrings/intel-sgx-keyring.asc && \
+    tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null <<EOF
+deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main
+EOF
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libtdx-attest \
+    libsgx-dcap-quote-verify \
+    libsgx-dcap-default-qpl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
+
+CMD ["tng"]
