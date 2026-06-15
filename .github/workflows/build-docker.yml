@@ -300,7 +300,14 @@ jobs:
           set -e
           set -x
 
-          for tag in ${{ steps.meta.outputs.tags }} ${{ steps.meta-alias.outputs.tags || '' }}; do
+          # docker/metadata-action outputs.tags is newline-separated;
+          # convert to space-separated so bash word-splits correctly in a for loop.
+          tags=$(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ')
+          alias_tags=""
+          if [ "${{ steps.meta-alias.outcome }}" = "success" ]; then
+              alias_tags=$(echo "${{ steps.meta-alias.outputs.tags }}" | tr '\n' ' ')
+          fi
+          for tag in $tags $alias_tags; do
               docker tag tng:test ${tag}
               docker push ${tag}
           done
