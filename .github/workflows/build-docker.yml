@@ -236,7 +236,6 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
-      - test
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v8
