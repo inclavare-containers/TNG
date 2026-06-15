@@ -45,6 +45,8 @@ VERIFY_COLLATERAL_CACHE_EXPIRE_HOURS=168'
 # shellcheck disable=SC2034
 VENDOR_PCCS_URL_aliyun="https://sgx-dcap-server.__REGION__.aliyuncs.com/sgx/certification/v4/"
 # shellcheck disable=SC2034
+VENDOR_PCCS_URL_INTERNAL_aliyun="https://sgx-dcap-server-vpc.__REGION__.aliyuncs.com/sgx/certification/v4/"
+# shellcheck disable=SC2034
 VENDOR_REQUIRES_REGION_aliyun="false"
 # shellcheck disable=SC2034
 VENDOR_DEFAULT_REGION_aliyun="cn-hangzhou"
@@ -68,6 +70,7 @@ Arguments:
 
 Options:
   --region REGION       Cloud region ID (optional for some vendors, see --list)
+  --internal            Use VPC internal endpoint (requires --region)
   --dry-run             Show what would be changed without applying
   --no-backup           Skip creating a backup of the existing config
   --list                List all supported vendors with details
@@ -80,6 +83,7 @@ Supported Vendors:
 Examples:
   setup-vendor-config aliyun
   setup-vendor-config aliyun --region cn-beijing
+  setup-vendor-config aliyun --internal --region cn-hangzhou
   setup-vendor-config aliyun --region cn-shanghai --dry-run
   setup-vendor-config --list
 
@@ -118,6 +122,7 @@ main() {
     local region=""
     local dry_run=false
     local do_backup=true
+    local use_internal=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -136,6 +141,10 @@ main() {
                 ;;
             --no-backup)
                 do_backup=false
+                shift
+                ;;
+            --internal)
+                use_internal=true
                 shift
                 ;;
             --region)
@@ -187,9 +196,17 @@ main() {
     local requires_var="VENDOR_REQUIRES_REGION_${vendor}"
     local default_var="VENDOR_DEFAULT_REGION_${vendor}"
     local url_var="VENDOR_PCCS_URL_${vendor}"
+    local url_var_internal="VENDOR_PCCS_URL_INTERNAL_${vendor}"
     local requires_region="${!requires_var}"
     local default_region="${!default_var}"
     local url_template="${!url_var}"
+    local url_template_internal="${!url_var_internal:-}"
+
+    # --internal requires explicit region (no default fallback)
+    if [[ "$use_internal" == "true" && -z "$region" ]]; then
+        echo "Error: --internal requires --region to be specified explicitly" >&2
+        exit 1
+    fi
 
     if [[ -z "$region" ]]; then
         if [[ "$requires_region" == "true" ]]; then
@@ -199,12 +216,26 @@ main() {
         region="$default_region"
     fi
 
+    # Select the URL template (internal VPC or public)
+    if [[ "$use_internal" == "true" ]]; then
+        if [[ -z "$url_template_internal" ]]; then
+            echo "Error: vendor '${vendor}' does not support --internal" >&2
+            exit 1
+        fi
+        url_template="$url_template_internal"
+    fi
+
     # Build the final URL
     local pccs_url="${url_template//__REGION__/$region}"
 
     # Show configuration
     echo "Vendor:      ${vendor}"
     echo "Region:      ${region}"
+    if [[ "$use_internal" == "true" ]]; then
+        echo "Endpoint:    internal (VPC)"
+    else
+        echo "Endpoint:    public"
+    fi
     echo "PCCS URL:    ${pccs_url}"
     echo "Config file: ${CONFIG_FILE}"
     echo ""

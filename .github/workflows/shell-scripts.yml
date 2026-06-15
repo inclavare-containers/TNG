@@ -69,6 +69,19 @@ jobs:
           echo "=== Test: --region without value fails ==="
           ! "$SCRIPT" aliyun --region 2>/dev/null
 
+          echo "=== Test: --internal without --region fails ==="
+          ! "$SCRIPT" aliyun --internal 2>/dev/null
+
+          echo "=== Test: --internal with --region uses VPC endpoint ==="
+          output=$("$SCRIPT" aliyun --internal --region cn-hangzhou --dry-run)
+          echo "$output" | grep -q "sgx-dcap-server-vpc.cn-hangzhou.aliyuncs.com"
+          echo "$output" | grep -q "internal (VPC)"
+
+          echo "=== Test: public endpoint (default) ==="
+          output=$("$SCRIPT" aliyun --region cn-beijing --dry-run)
+          echo "$output" | grep -q "sgx-dcap-server.cn-beijing.aliyuncs.com"
+          echo "$output" | grep -q "Endpoint:    public"
+
           echo "=== Test: apply and verify config ==="
           # Create a temp config file for testing
           tmp_conf=$(mktemp)

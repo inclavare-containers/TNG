@@ -26,6 +26,7 @@ setup-vendor-config <vendor> [options]
 |---|---|
 | `<vendor>` | Cloud provider name (required) |
 | `--region REGION` | Cloud region ID (optional for some vendors) |
+| `--internal` | Use VPC internal endpoint (requires `--region`) |
 | `--dry-run` | Show what would be changed without applying |
 | `--no-backup` | Skip creating a backup of the existing config |
 | `--list` | List all supported vendors with details |
@@ -46,6 +47,9 @@ setup-vendor-config aliyun
 # Configure for a specific region
 setup-vendor-config aliyun --region cn-beijing
 
+# Use VPC internal endpoint (requires explicit --region)
+setup-vendor-config aliyun --internal --region cn-hangzhou
+
 # Preview changes without applying
 setup-vendor-config aliyun --region cn-shanghai --dry-run
 
@@ -65,6 +69,18 @@ docker run -it --rm --privileged --network host --cgroupns=host \
 
 > [!TIP]
 > The `--region` flag is optional for Alibaba Cloud — `cn-hangzhou` works for all TDX instances. Use `--region` only if you need a different endpoint.
+
+### VPC Internal Endpoint
+
+> [!IMPORTANT]
+> When `--internal` is specified, `--region` **must** be provided explicitly — the default region (`cn-hangzhou`) will not be used.
+
+The `--internal` flag switches the PCCS URL to the VPC internal endpoint (`sgx-dcap-server-vpc.<region>.aliyuncs.com`), which uses Alibaba Cloud's internal network instead of the public internet. This provides lower latency and avoids public bandwidth charges when running inside a VPC.
+
+```sh
+# VPC internal endpoint for cn-hangzhou
+setup-vendor-config aliyun --internal --region cn-hangzhou
+```
 
 ## Manual Configuration
 
