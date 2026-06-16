@@ -178,11 +178,11 @@ rev = "6fde2c7c2e00b4fc1b9e31b827654230f488630f"
 
 [patch.crates-io]
 hyper-util = {path = "./deps/hyper-util-shim"}
-memberlist = {git = "https://github.com/inclavare-containers/memberlist", rev = "b91b5658c435348563a2c2fe5a1211f52d92abbe"}
-memberlist-core = {git = "https://github.com/inclavare-containers/memberlist", rev = "b91b5658c435348563a2c2fe5a1211f52d92abbe"}
-memberlist-net = {git = "https://github.com/inclavare-containers/memberlist", rev = "b91b5658c435348563a2c2fe5a1211f52d92abbe"}
-memberlist-proto = {git = "https://github.com/inclavare-containers/memberlist", rev = "b91b5658c435348563a2c2fe5a1211f52d92abbe"}
-memberlist-quic = {git = "https://github.com/inclavare-containers/memberlist", rev = "b91b5658c435348563a2c2fe5a1211f52d92abbe"}
+memberlist = {git = "https://github.com/al8n/memberlist", rev = "ac5a2798655c066f065aaa231702240776b32b7a"}
+memberlist-core = {git = "https://github.com/al8n/memberlist", rev = "ac5a2798655c066f065aaa231702240776b32b7a"}
+memberlist-net = {git = "https://github.com/al8n/memberlist", rev = "ac5a2798655c066f065aaa231702240776b32b7a"}
+memberlist-proto = {git = "https://github.com/al8n/memberlist", rev = "ac5a2798655c066f065aaa231702240776b32b7a"}
+memberlist-quic = {git = "https://github.com/al8n/memberlist", rev = "ac5a2798655c066f065aaa231702240776b32b7a"}
 
 [profile.release.package.tng-wasm]
 # Tell `rustc` to optimize for small code size.

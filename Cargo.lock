@@ -4139,7 +4139,7 @@ dependencies = [
 [[package]]
 name = "memberlist"
 version = "0.8.2"
-source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
+source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
 dependencies = [
  "agnostic",
  "agnostic-lite",
@@ -4154,7 +4154,7 @@ dependencies = [
 [[package]]
 name = "memberlist-core"
 version = "0.8.3"
-source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
+source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4199,7 +4199,7 @@ dependencies = [
 [[package]]
 name = "memberlist-net"
 version = "0.8.3"
-source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
+source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
 dependencies = [
  "agnostic",
  "async-channel",
@@ -4228,7 +4228,7 @@ dependencies = [
 [[package]]
 name = "memberlist-proto"
 version = "0.3.3"
-source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
+source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4263,7 +4263,7 @@ dependencies = [
 [[package]]
 name = "memberlist-quic"
 version = "0.8.3"
-source = "git+https://github.com/inclavare-containers/memberlist?rev=b91b5658c435348563a2c2fe5a1211f52d92abbe#b91b5658c435348563a2c2fe5a1211f52d92abbe"
+source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
 dependencies = [
  "agnostic",
  "agnostic-lite",
