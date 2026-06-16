@@ -1,7 +1,14 @@
 use crate::error::TngError;
+use serde::ser::Serializer;
 
 #[derive(Eq, Hash, PartialEq, Clone, Ord, PartialOrd)]
 pub struct PublicKeyData(Vec<u8>);
+
+impl serde::Serialize for PublicKeyData {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&hex::encode(&self.0))
+    }
+}
 
 impl PublicKeyData {
     pub fn new(data: Vec<u8>) -> Self {

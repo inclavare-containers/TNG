@@ -15,6 +15,8 @@ pub mod runtime;
 mod service;
 #[cfg(not(wasm))]
 mod state;
+#[cfg(not(wasm))]
+pub(crate) mod status;
 pub mod tunnel;
 
 shadow!(build);

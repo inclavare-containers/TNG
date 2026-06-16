@@ -1,4 +1,5 @@
 use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
 };
@@ -13,6 +14,28 @@ use std::time::{Duration, SystemTime};
 use anyhow::Result;
 use async_trait::async_trait;
 use itertools::Itertools;
+use serde::Serialize;
+
+/// Snapshot of the self-generated key manager status for the status API.
+#[derive(Serialize)]
+struct SelfGeneratedStatus<'a> {
+    key_manager_type: &'static str,
+    local_keys: Vec<KeyValue<'a>>,
+}
+
+/// Single key entry in the self-generated status snapshot.
+#[derive(Serialize)]
+struct KeyValue<'a> {
+    key_id: u8,
+    public_key: &'a PublicKeyData,
+    status: KeyStatus,
+    #[serde(with = "humantime_serde")]
+    actived_at: SystemTime,
+    #[serde(with = "humantime_serde")]
+    stale_at: SystemTime,
+    #[serde(with = "humantime_serde")]
+    expire_at: SystemTime,
+}
 
 /// Implementation of KeyManager that generates random keys with automatic rotation
 pub struct SelfGeneratedKeyManager {
@@ -163,10 +186,48 @@ impl KeyManager for SelfGeneratedKeyManager {
             .map(|(_, key_info)| key_info.clone())
             .ok_or(TngError::NoActiveKey)
     }
+
+    fn key_manager_type(&self) -> &'static str {
+        "self_generated"
+    }
 }
 
 impl Drop for SelfGeneratedKeyManager {
     fn drop(&mut self) {
         self.refresh_task.abort();
+    }
+}
+
+#[async_trait]
+impl StatusProvider for SelfGeneratedKeyManager {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["keys".into()])),
+            ["keys"] => {
+                let keys = self.inner.keys.read().await;
+                let local_keys: Vec<KeyValue<'_>> = keys
+                    .iter()
+                    .map(|(public_key, info)| KeyValue {
+                        key_id: info.key_config.key_id(),
+                        public_key,
+                        status: info.status,
+                        actived_at: info.actived_at,
+                        stale_at: info.stale_at,
+                        expire_at: info.expire_at,
+                    })
+                    .collect::<Vec<_>>();
+                let status = SelfGeneratedStatus {
+                    key_manager_type: "self_generated",
+                    local_keys,
+                };
+                serde_json::to_value(&status)
+                    .map(StatusQueryResult::Value)
+                    .map_err(|e| {
+                        tracing::error!(?e, "Failed to serialise key status");
+                        TngError::StatusPathNotFound
+                    })
+            }
+            _ => Err(TngError::StatusPathNotFound),
+        }
     }
 }

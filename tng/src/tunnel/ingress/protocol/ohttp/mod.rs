@@ -9,6 +9,8 @@ mod ohttp_stream_forwarder {
 
     use crate::{
         config::ingress::OHttpArgs,
+        error::TngError,
+        status::{StatusProvider, StatusQueryResult},
         tunnel::{
             endpoint::TngEndpoint,
             ingress::protocol::{
@@ -108,6 +110,13 @@ mod ohttp_stream_forwarder {
             }
             .instrument(tracing::info_span!("security"))
             .await
+        }
+    }
+
+    #[async_trait]
+    impl StatusProvider for OHttpStreamForwarder {
+        async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+            self.security_layer.query_status(path).await
         }
     }
 }

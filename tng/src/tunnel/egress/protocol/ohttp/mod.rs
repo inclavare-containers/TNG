@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::OHttpArgs,
     tunnel::{
@@ -61,5 +62,15 @@ impl ProtocolStreamDecoder for OHttpStreamDecoder {
             }
         }
         .boxed())
+    }
+}
+
+#[async_trait]
+impl StatusProvider for OHttpStreamDecoder {
+    async fn query_status(
+        &self,
+        path: &[&str],
+    ) -> Result<StatusQueryResult, crate::error::TngError> {
+        self.security_layer.query_status(path).await
     }
 }

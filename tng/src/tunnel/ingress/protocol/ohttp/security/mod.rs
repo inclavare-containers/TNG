@@ -3,6 +3,8 @@ mod path_rewrite;
 
 use std::{collections::HashMap, sync::Arc};
 
+#[cfg(not(wasm))]
+use crate::status::{StatusProvider, StatusQueryResult};
 #[cfg(unix)]
 use crate::tunnel::utils::socket::{
     TCP_KEEPALIVE_IDLE_SECS, TCP_KEEPALIVE_INTERVAL_SECS, TCP_KEEPALIVE_PROBE_COUNT,
@@ -12,20 +14,35 @@ use crate::{
     error::TngError,
     tunnel::{
         endpoint::TngEndpoint,
-        ingress::protocol::ohttp::security::{client::OHttpClient, path_rewrite::PathRewriteGroup},
+        ingress::protocol::ohttp::security::{
+            client::{OHttpClient, ServerStatusEntry},
+            path_rewrite::PathRewriteGroup,
+        },
         ra_context::RaContext,
     },
     AttestationResult, TokioRuntime, HTTP_REQUEST_USER_AGENT_HEADER,
 };
 use anyhow::{Context, Result};
+#[cfg(not(wasm))]
+use async_trait::async_trait;
 use http::HeaderValue;
+use serde::Serialize;
 use tokio::sync::{OnceCell, RwLock};
 use url::Url;
+
+/// Cached OHTTP client per base URL, lazily initialized on first use.
+type OhttpClientCache = RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>;
+
+/// Root status response for /status/.../ohttp/keys.
+#[derive(Serialize)]
+struct ServersStatus {
+    servers: Vec<ServerStatusEntry>,
+}
 
 pub struct OHttpSecurityLayer {
     ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
-    ohttp_clients: RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>,
+    ohttp_clients: OhttpClientCache,
     path_rewrite_group: PathRewriteGroup,
     runtime: TokioRuntime,
 }
@@ -67,10 +84,12 @@ impl OHttpSecurityLayer {
             builder.build()?
         };
 
+        let ohttp_clients: OhttpClientCache = Default::default();
+
         Ok(Self {
             ra_context,
             http_client: Arc::new(http_client),
-            ohttp_clients: Default::default(),
+            ohttp_clients,
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
             runtime,
         })
@@ -164,5 +183,74 @@ impl OHttpSecurityLayer {
         })
         .await
         .cloned()
+    }
+}
+
+#[cfg(not(wasm))]
+#[async_trait]
+impl StatusProvider for OHttpSecurityLayer {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["keys".into()])),
+            ["keys"] => {
+                let map = self.ohttp_clients.read().await;
+                let mut servers = Vec::with_capacity(map.len());
+                for cell in map.values() {
+                    if let Some(client) = cell.get() {
+                        if let Some(entry) = client.server_status().await {
+                            servers.push(entry);
+                        }
+                    }
+                }
+                let status = ServersStatus { servers };
+                serde_json::to_value(&status)
+                    .map(StatusQueryResult::Value)
+                    .map_err(|e| {
+                        tracing::error!(?e, "Failed to serialise server status");
+                        TngError::StatusPathNotFound
+                    })
+            }
+            _ => Err(TngError::StatusPathNotFound),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client::ServerStatusEntry;
+    use super::ServersStatus;
+
+    #[test]
+    fn test_servers_status_collection() {
+        let status = ServersStatus {
+            servers: vec![
+                ServerStatusEntry {
+                    url: "http://a.com".to_string(),
+                    server_public_key: Some("key1".to_string()),
+                    server_attestation: None,
+                },
+                ServerStatusEntry {
+                    url: "http://b.com".to_string(),
+                    server_public_key: Some("key2".to_string()),
+                    server_attestation: Some("jwt2".to_string()),
+                },
+            ],
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        let servers = value["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0]["url"], "http://a.com");
+        assert_eq!(servers[0]["server_public_key"], "key1");
+        assert!(servers[0].get("server_attestation").is_none());
+        assert_eq!(servers[1]["url"], "http://b.com");
+        assert_eq!(servers[1]["server_attestation"], "jwt2");
+    }
+
+    #[test]
+    fn test_servers_status_empty() {
+        let status = ServersStatus { servers: vec![] };
+        let value = serde_json::to_value(&status).unwrap();
+        let servers = value["servers"].as_array().unwrap();
+        assert!(servers.is_empty());
     }
 }

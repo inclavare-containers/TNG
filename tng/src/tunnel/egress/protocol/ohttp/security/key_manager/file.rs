@@ -1,20 +1,44 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
+use serde::Serialize;
 use tokio::sync::RwLock;
 
+use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
+    KeyInfo, KeyManager, KeyStatus,
+};
+use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::{
     error::TngError,
-    tunnel::{
-        egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyManager},
-        ohttp::key_config::{KeyConfigExtend, PublicKeyData},
-        utils::{file_watcher::FileWatcher, runtime::supervised_task::SupervisedTaskResult},
-    },
+    tunnel::utils::{file_watcher::FileWatcher, runtime::supervised_task::SupervisedTaskResult},
     TokioRuntime,
 };
+
+/// Snapshot of the file-based key manager status for the status API.
+#[derive(Serialize)]
+struct FileKeyStatus<'a> {
+    key_manager_type: &'static str,
+    key: FileKeyValue<'a>,
+}
+
+/// Single key entry in the file-based status snapshot.
+#[derive(Serialize)]
+struct FileKeyValue<'a> {
+    key_id: u8,
+    public_key: &'a PublicKeyData,
+    status: KeyStatus,
+    #[serde(with = "humantime_serde")]
+    actived_at: SystemTime,
+    #[serde(with = "humantime_serde")]
+    stale_at: SystemTime,
+    #[serde(with = "humantime_serde")]
+    expire_at: SystemTime,
+}
 
 /// A key manager that loads an HPKE private key from a PEM file and monitors the file for changes.
 ///
@@ -161,6 +185,41 @@ impl KeyManager for FileBasedKeyManager {
     async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
         let key = self.inner.key.read().await;
         Ok(key.1.clone())
+    }
+
+    fn key_manager_type(&self) -> &'static str {
+        "file"
+    }
+}
+
+#[async_trait]
+impl StatusProvider for FileBasedKeyManager {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["keys".into()])),
+            ["keys"] => {
+                let key = self.inner.key.read().await;
+                let (public_key, info) = &*key;
+                let status = FileKeyStatus {
+                    key_manager_type: "file",
+                    key: FileKeyValue {
+                        key_id: info.key_config.key_id(),
+                        public_key,
+                        status: info.status,
+                        actived_at: info.actived_at,
+                        stale_at: info.stale_at,
+                        expire_at: info.expire_at,
+                    },
+                };
+                serde_json::to_value(&status)
+                    .map(StatusQueryResult::Value)
+                    .map_err(|e| {
+                        tracing::error!(?e, "Failed to serialise key status");
+                        TngError::StatusPathNotFound
+                    })
+            }
+            _ => Err(TngError::StatusPathNotFound),
+        }
     }
 }
 

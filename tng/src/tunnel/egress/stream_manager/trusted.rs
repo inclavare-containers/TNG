@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
@@ -31,7 +33,7 @@ pub type ProtocolStreamDecoderOutput =
     BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, Option<AttestationResult>)>>;
 
 #[async_trait]
-pub trait ProtocolStreamDecoder {
+pub trait ProtocolStreamDecoder: StatusProvider {
     async fn decode_stream(
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
@@ -139,6 +141,17 @@ impl StreamManager for TrustedStreamManager {
                 yield Ok(NextStream::DirectlyForward(Box::new(stream)));
             }
             .boxed()),
+        }
+    }
+}
+
+#[async_trait]
+impl StatusProvider for TrustedStreamManager {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["ohttp".into()])),
+            ["ohttp", rest @ ..] => self.decoder.query_status(rest).await,
+            _ => Err(TngError::StatusPathNotFound),
         }
     }
 }

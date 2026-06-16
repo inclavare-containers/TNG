@@ -5,11 +5,13 @@ pub mod tunnel;
 use std::sync::Arc;
 
 use anyhow::Result;
+use async_trait::async_trait;
 #[cfg(unix)]
 use tokio::sync::RwLock;
 
 use crate::config::egress::KeyArgs;
 use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::file::FileBasedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::PeerSharedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
@@ -80,5 +82,12 @@ impl OhttpServerApi {
             #[cfg(unix)]
             passport_cache: Arc::new(RwLock::new(None)),
         })
+    }
+}
+
+#[async_trait]
+impl StatusProvider for OhttpServerApi {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        self.key_manager.query_status(path).await
     }
 }

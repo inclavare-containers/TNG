@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::observability::metric::simple_exporter::noop::NoopMeterProvider;
 use crate::service::RegistedService;
-use crate::state::TngState;
+use crate::state::{EgressStatusHandle, IngressStatusHandle, TngState};
 use crate::tunnel::egress::flow::EgressFlow;
 use crate::tunnel::egress::mapping::MappingEgress;
 use crate::tunnel::ingress::flow::IngressFlow;
@@ -99,88 +99,89 @@ impl TngRuntime {
 
         // Create all ingress and egress.
         let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
+        let mut state = TngState::new();
 
         for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
             let add_ingress = add_ingress.clone();
             let span = tracing::info_span!("ingress", id);
 
-            let sevice = async {
-                Ok::<Box<_>, anyhow::Error>(match &add_ingress.ingress_mode {
+            let service = async {
+                let flow = match &add_ingress.ingress_mode {
                     IngressMode::Mapping(mapping_args) => {
-                        Box::new(
-                            IngressFlow::new(
-                                MappingIngress::new(id, mapping_args).await?,
-                                &add_ingress.common,
-                                &service_metrics_creator,
-                                runtime.clone(),
-                            )
-                            .await?,
+                        IngressFlow::new(
+                            MappingIngress::new(id, mapping_args).await?,
+                            &add_ingress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
                         )
+                        .await?
                     }
                     IngressMode::HttpProxy(http_proxy_args) => {
-                        Box::new(
-                            IngressFlow::new(
-                                HttpProxyIngress::new(id, http_proxy_args).await?,
-                                &add_ingress.common,
-                                &service_metrics_creator,
-                                runtime.clone(),
-                            )
-                            .await?,
+                        IngressFlow::new(
+                            HttpProxyIngress::new(id, http_proxy_args).await?,
+                            &add_ingress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
                         )
+                        .await?
                     }
                     IngressMode::Netfilter(netfilter_args) => {
                         #[cfg(not(target_os = "linux"))]
                         {
                             let _ = netfilter_args;
-                            anyhow::bail!("Using egress with 'netfilter' type is not supported on OS other than Linux");
+                            anyhow::bail!("Using ingress with 'netfilter' type is not supported on OS other than Linux");
                         }
 
                         #[cfg(target_os = "linux")]
                         {
                             use crate::tunnel::ingress::netfilter::NetfilterIngress;
-                            Box::new(
-                                IngressFlow::new(
-                                    NetfilterIngress::new(id, netfilter_args).await?,
-                                    &add_ingress.common,
-                                    &service_metrics_creator,
-                                    runtime.clone(),
-                                )
-                                .await?,
-                            )
-                        }
-                    }
-                    IngressMode::Socks5(socks5_args) => {
-                        Box::new(
                             IngressFlow::new(
-                                Socks5Ingress::new(id, socks5_args).await?,
+                                NetfilterIngress::new(id, netfilter_args).await?,
                                 &add_ingress.common,
                                 &service_metrics_creator,
                                 runtime.clone(),
                             )
-                            .await?,
-                        )
+                            .await?
+                        }
                     }
-                })
+                    IngressMode::Socks5(socks5_args) => {
+                        IngressFlow::new(
+                            Socks5Ingress::new(id, socks5_args).await?,
+                            &add_ingress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
+                        )
+                        .await?
+                    }
+                };
+                Ok::<IngressFlow, anyhow::Error>(flow)
             }.instrument(span.clone()).await?;
 
-            services.push((sevice, span));
+            let flow = Arc::new(service);
+            state.add_ingress(IngressStatusHandle {
+                flow: Arc::downgrade(&flow),
+            });
+            services.push((
+                Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
+                span,
+            ));
         }
 
         for (id, add_egress) in tng_config.add_egress.iter().enumerate() {
             let add_egress = add_egress.clone();
             let span = tracing::info_span!("egress", id);
 
-            let sevice = async {
-                Ok::<Box<_>, anyhow::Error>(match &add_egress.egress_mode {
-                    EgressMode::Mapping(mapping_args) => Box::new(
+            let service = async {
+                let flow = match &add_egress.egress_mode {
+                    EgressMode::Mapping(mapping_args) => {
                         EgressFlow::new(
                             MappingEgress::new(id, mapping_args).await?,
                             &add_egress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?,
-                    ),
+                        .await?
+                    }
                     EgressMode::Netfilter(netfilter_args) => {
                         #[cfg(not(target_os = "linux"))]
                         {
@@ -191,24 +192,30 @@ impl TngRuntime {
                         #[cfg(target_os = "linux")]
                         {
                             use crate::tunnel::egress::netfilter::NetfilterEgress;
-                            Box::new(
-                                EgressFlow::new(
-                                    NetfilterEgress::new(id, netfilter_args).await?,
-                                    &add_egress.common,
-                                    &service_metrics_creator,
-                                    runtime.clone(),
-                                )
-                                .await?,
+                            EgressFlow::new(
+                                NetfilterEgress::new(id, netfilter_args).await?,
+                                &add_egress.common,
+                                &service_metrics_creator,
+                                runtime.clone(),
                             )
+                            .await?
                         }
                     }
-                })
+                };
+                Ok::<EgressFlow, anyhow::Error>(flow)
             }.instrument(span.clone()).await?;
 
-            services.push((sevice, span));
+            let flow = Arc::new(service);
+            state.add_egress(EgressStatusHandle {
+                flow: Arc::downgrade(&flow),
+            });
+            services.push((
+                Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
+                span,
+            ));
         }
 
-        let state = Arc::new(TngState::new());
+        let state = Arc::new(state);
 
         // Launch Control Interface
         if let Some(args) = tng_config.control_interface {

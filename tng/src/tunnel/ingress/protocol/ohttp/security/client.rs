@@ -22,6 +22,7 @@ use rats_cert::tee::AttesterPipeline;
 use rats_cert::tee::GenericAttester as _;
 use rats_cert::tee::ReportData;
 use rats_cert::tee::{GenericConverter, GenericVerifier as _};
+use serde::Serialize;
 // tokio_with_wasm::task::spawn does not propagate the current tracing span,
 // so we must explicitly .instrument() the spawned future.
 #[cfg(wasm)]
@@ -110,7 +111,36 @@ struct KeyStoreValue {
     server_attestation_result: Option<AttestationResult>,
 }
 
+/// A single entry in the status API response for an upstream OHTTP server.
+///
+/// Contains the server URL, optional HPKE public key in hex format,
+/// and optional server attestation result as a raw JWT string.
+#[derive(Serialize)]
+pub struct ServerStatusEntry {
+    pub(crate) url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server_attestation: Option<String>,
+}
+
 impl OHttpClient {
+    /// Return server status info for the status API.
+    pub async fn server_status(&self) -> Option<ServerStatusEntry> {
+        let ksv = self.key_store_value.get_latest().await.ok()?;
+        Some(ServerStatusEntry {
+            url: self.inner.base_url.to_string(),
+            server_public_key: ksv
+                .server_key_config_list
+                .first()
+                .and_then(|kc| kc.public_key().ok().map(|pk| hex::encode(pk.as_ref()))),
+            server_attestation: ksv
+                .server_attestation_result
+                .as_ref()
+                .map(|ar| ar.token_str().to_string()),
+        })
+    }
+
     pub async fn new(
         ra_context: Arc<RaContext>,
         http_client: Arc<reqwest::Client>,
@@ -783,5 +813,45 @@ impl OHttpClientInner {
             .map_err(|e| TngError::ClientGetBackgroundCheckResultFaild(e.into()))?;
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_status_entry_full() {
+        let entry = ServerStatusEntry {
+            url: "http://10.0.0.1:8080/path".to_string(),
+            server_public_key: Some("a1b2c3d4".to_string()),
+            server_attestation: Some("eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig".to_string()),
+        };
+        let value = serde_json::to_value(&entry).unwrap();
+        assert_eq!(value["url"], "http://10.0.0.1:8080/path");
+        assert_eq!(value["server_public_key"], "a1b2c3d4");
+        assert_eq!(
+            value["server_attestation"],
+            "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig"
+        );
+    }
+
+    #[test]
+    fn test_server_status_entry_partial() {
+        let entry = ServerStatusEntry {
+            url: "http://10.0.0.2:9090/".to_string(),
+            server_public_key: None,
+            server_attestation: None,
+        };
+        let value = serde_json::to_value(&entry).unwrap();
+        assert_eq!(value["url"], "http://10.0.0.2:9090/");
+        assert!(
+            value.get("server_public_key").is_none(),
+            "server_public_key should be omitted when None"
+        );
+        assert!(
+            value.get("server_attestation").is_none(),
+            "server_attestation should be omitted when None"
+        );
     }
 }

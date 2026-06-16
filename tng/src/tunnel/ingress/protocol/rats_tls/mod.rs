@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::{
+    error::TngError,
+    status::{StatusProvider, StatusQueryResult},
     tunnel::{
         endpoint::TngEndpoint,
         ingress::protocol::{
@@ -81,5 +83,12 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
             attestation_result,
             local_addr,
         ))
+    }
+}
+
+#[async_trait]
+impl StatusProvider for RatsTlsStreamForwarder {
+    async fn query_status(&self, _path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        Err(TngError::StatusPathNotFound)
     }
 }

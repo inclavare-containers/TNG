@@ -144,7 +144,7 @@ pub enum TngError {
     #[error("Failed to watch file {0}")]
     WatchFileFailed(PathBuf, #[source] anyhow::Error),
 
-    #[error("bad expire timestamp: {0}")]
+    #[error("bad expire timestamp")]
     BadExpireTimeStamp(#[source] anyhow::Error),
 
     #[error("Failed to decode TngToken from wire format")]
@@ -158,6 +158,9 @@ pub enum TngError {
 
     #[error("Failed to verify attestation evidence")]
     EvidenceVerifyError(#[source] rats_cert::errors::Error),
+
+    #[error("Status path not found")]
+    StatusPathNotFound,
 }
 
 /// Error response structure
@@ -235,6 +238,7 @@ impl IntoResponse for TngError {
             | TngError::LoadPrivateKeyFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::StatusPathNotFound => StatusCode::NOT_FOUND,
             #[cfg(feature = "__egress-common")]
             TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::KeyUpdateMessageEncodeError(..)

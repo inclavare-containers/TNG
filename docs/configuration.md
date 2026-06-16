@@ -1497,6 +1497,12 @@ Generate using `openssl genpkey -algorithm X25519 -outform PEM`. TNG uses inotif
 |---|---|
 | `/livez` | Liveness check; returns `200 OK` indicating the instance is running |
 | `/readyz` | Readiness check; returns `200 OK` indicating the instance can handle traffic |
+| `/status/` | Returns a list of available component types (e.g., `["egress", "ingress"]`) |
+| `/status/egress/` | Returns a list of egress instance IDs |
+| `/status/egress/{id}/` | Returns a list of resources for the specified egress |
+| `/status/egress/{id}/ohttp/keys` | Returns the OHTTP key status snapshot for the specified egress |
+| `/status/ingress/` | Returns a list of ingress instance IDs |
+| `/status/ingress/{id}/ohttp/keys` | Returns the ingress OHTTP client cache state |
 
 ---
 

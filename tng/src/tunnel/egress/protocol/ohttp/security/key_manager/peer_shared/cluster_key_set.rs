@@ -366,6 +366,11 @@ impl ClusterKeySet {
         self.trigger_notify();
         true
     }
+
+    /// Iterate over all keys in the cluster key set.
+    pub fn iter_keys(&self) -> impl Iterator<Item = (&PublicKeyData, &KeyInfo)> {
+        self.keys.iter()
+    }
 }
 
 impl TryFrom<super::cluster_key_set::ClusterKeySet> for super::serf_message::pb::ClusterKeySet {

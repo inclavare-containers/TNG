@@ -4,7 +4,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use async_trait::async_trait;
 
+use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::ingress::protocol::ohttp::OHttpStreamForwarder;
 use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
 use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
@@ -131,5 +134,16 @@ impl StreamManager for TrustedStreamManager {
         self.stream_forwarder
             .forward_stream(endpoint, downstream)
             .await
+    }
+}
+
+#[async_trait]
+impl StatusProvider for TrustedStreamManager {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["ohttp".into()])),
+            ["ohttp", rest @ ..] => self.stream_forwarder.query_status(rest).await,
+            _ => Err(TngError::StatusPathNotFound),
+        }
     }
 }

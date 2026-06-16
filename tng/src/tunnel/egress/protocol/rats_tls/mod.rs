@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
+    error::TngError,
+    status::{StatusProvider, StatusQueryResult},
     tunnel::{
         egress::{
             protocol::rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
@@ -79,5 +81,12 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
             }
             .boxed())
         }
+    }
+}
+
+#[async_trait]
+impl StatusProvider for RatsTlsStreamDecoder {
+    async fn query_status(&self, _path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        Err(TngError::StatusPathNotFound)
     }
 }

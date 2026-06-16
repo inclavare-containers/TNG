@@ -14,6 +14,7 @@ use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders},
 };
 
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::ra_context::RaContext;
 use crate::{
     config::egress::{CorsConfig, OHttpArgs},
@@ -28,6 +29,7 @@ use crate::{
     tunnel::egress::protocol::ohttp::security::{api::OhttpServerApi, context::TngStreamContext},
     HTTP_RESPONSE_SERVER_HEADER,
 };
+use async_trait::async_trait;
 
 /// TNG OHTTP Server implementation
 ///
@@ -173,6 +175,13 @@ impl OhttpServer {
             )
             .layer(axum::middleware::from_fn(add_server_header))
             .layer(axum::middleware::from_fn(log_request))
+    }
+}
+
+#[async_trait]
+impl StatusProvider for OhttpServer {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        self.api.query_status(path).await
     }
 }
 

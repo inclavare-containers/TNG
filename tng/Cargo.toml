@@ -30,6 +30,7 @@ futures = {workspace = true}
 getrandom = {workspace = true}
 h2 = {workspace = true}
 hex = {workspace = true}
+humantime-serde = {workspace = true}
 hpke = {workspace = true}
 http = {workspace = true}
 http-body = {workspace = true}

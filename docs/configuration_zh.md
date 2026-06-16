@@ -1509,6 +1509,12 @@ MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
 |---|---|
 | `/livez` | 存活检查，返回 `200 OK` 表示实例正在运行 |
 | `/readyz` | 就绪检查，返回 `200 OK` 表示实例可以处理流量 |
+| `/status/` | 返回可用组件类型列表（如 `["egress", "ingress"]`） |
+| `/status/egress/` | 返回 egress 实例 ID 列表 |
+| `/status/egress/{id}/` | 返回指定 egress 的资源列表 |
+| `/status/egress/{id}/ohttp/keys` | 返回 egress 的 OHTTP 密钥状态快照 |
+| `/status/ingress/` | 返回 ingress 实例 ID 列表 |
+| `/status/ingress/{id}/ohttp/keys` | 返回 ingress OHTTP 客户端缓存状态 |
 
 ---
 

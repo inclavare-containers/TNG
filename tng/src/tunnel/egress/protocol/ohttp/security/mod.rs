@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use hyper_util::rt::TokioIo;
 use tower::Service;
 use tracing::Instrument;
 
+use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::OHttpArgs,
     tunnel::{
@@ -68,5 +71,12 @@ impl OHttpSecurityLayer {
         }
         .instrument(tracing::info_span!("security"))
         .await
+    }
+}
+
+#[async_trait]
+impl StatusProvider for OHttpSecurityLayer {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        self.ohttp_server.query_status(path).await
     }
 }

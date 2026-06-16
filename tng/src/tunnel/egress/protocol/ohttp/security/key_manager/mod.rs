@@ -1,8 +1,11 @@
 //! Key management for OHTTP servers
 //!
 //! This module provides abstractions for managing OHTTP key configurations.
-//! It defines traits and implementations for different key management strategies:
+//! It defines traits and implementations for different key management strategies,
+//! and requires [`StatusProvider`] as a supertrait so every key manager can respond
+//! to `/status/egress/<id>` queries with its current key state.
 
+use crate::status::StatusProvider;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 use crate::{error::TngError, tunnel::ohttp::key_config::KeyConfigExtend};
 use std::time::SystemTime;
@@ -15,7 +18,8 @@ pub mod peer_shared;
 pub mod self_generated;
 
 /// Key status indicating whether a key is pending, active or stale
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum KeyStatus {
     /// Pending key that is waiting to be activated, can be used for new connections but not given to new clients
     Pending,
@@ -175,7 +179,7 @@ fn format_system_time(t: SystemTime) -> String {
 /// This trait abstracts different ways of obtaining OHTTP key configurations,
 /// allowing for flexibility in how keys are generated or acquired.
 #[async_trait]
-pub trait KeyManager: Send + Sync {
+pub trait KeyManager: StatusProvider + Send + Sync {
     /// Get an key info with their status by key ID
     ///
     /// Returns an key configuration for the given ID.
@@ -185,4 +189,41 @@ pub trait KeyManager: Send + Sync {
     ///
     /// Returns the key that is active, valid, and safe to expose.
     async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError>;
+
+    /// Return a human-readable type name for this key manager.
+    fn key_manager_type(&self) -> &'static str;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn make_test_key_info(key_id: u8) -> KeyInfo {
+        KeyInfo {
+            key_config: ohttp::KeyConfig::new(
+                key_id,
+                ohttp::hpke::Kem::X25519Sha256,
+                vec![ohttp::SymmetricSuite::new(
+                    ohttp::hpke::Kdf::HkdfSha256,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                )],
+            )
+            .expect("create key config"),
+            status: KeyStatus::Active,
+            actived_at: SystemTime::now(),
+            stale_at: SystemTime::now() + Duration::from_secs(300),
+            expire_at: SystemTime::now() + Duration::from_secs(600),
+        }
+    }
+
+    #[test]
+    fn test_key_info_debug_output() {
+        let info = make_test_key_info(1);
+        let debug = format!("{:?}", info);
+        assert!(debug.contains("public_key"));
+        assert!(debug.contains("status"));
+        assert!(debug.contains("actived_at"));
+        assert!(debug.contains("expire_at"));
+    }
 }

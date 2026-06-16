@@ -18,7 +18,8 @@ When creating or amending commits:
 - **Never** include any Claude session URLs, session IDs, or links to claude.ai in commit messages or PR descriptions. Commit messages should only describe the code changes.
 - **Never** include "🤖 Generated with [Claude Code](https://claude.com/claude-code)" or similar AI attribution footers in PR descriptions or commit messages.
 - **Always** use `--no-gpg-sign` to avoid GPG signing.
-- **Never commit plan or spec files** (e.g. `docs/*-plan.md`, `docs/*-design.md`, `docs/*-spec.md`). These should be gitignored and kept local only.
+- **Never commit plan or spec files** (e.g. `docs/*-plan.md`, `docs/*-design.md`, `docs/*-spec.md`, or anything under `docs/superpowers/`). These should be gitignored (already covered by `.gitignore`) and kept local only.
+- **Never commit any file that is already gitignored** — if a file matches `.gitignore`, it is intentionally local-only.
 
 ## PR Requirements
 
@@ -105,3 +106,27 @@ git filter-branch -f --msg-filter 'sed "/Co-Authored-By:/d"' --env-filter '
   fi
 ' <base-commit>..HEAD
 ```
+
+
+## API Compatibility
+
+When designing public APIs (REST endpoints, config fields, trait methods, public structs/traits), always design the full namespace structure upfront — do not defer naming decisions. Retrofitting a namespace layer later (e.g. inserting `/ohttp/` into an existing path like `/status/egress/<id>/keys` → `/status/egress/<id>/ohttp/keys`) breaks backward compatibility and is extremely costly. If a category of resources might grow multiple sub-resources in the future, include that category's namespace from day one.
+
+When a change breaks backward compatibility:
+1. **Update `docs/version_compatibility.md` and `docs/version_compatibility_zh.md`** — add a new row to the compatibility table describing the breaking change and the version it was introduced.
+2. **Do not silently remove or rename existing endpoints, config fields, or public struct fields** — either keep the old path working (with deprecation warnings) or ensure the version compatibility doc reflects the break.
+3. **Consider additive-only changes first** — new endpoints alongside old ones, optional fields alongside required ones, new trait methods with default implementations.
+
+
+## Error Handling
+
+- **Never** discard error context by formatting errors into strings (e.g., `anyhow::anyhow!("[{}] {}", source, e)` or `format!("{}", e)`).
+- Use `anyhow::Context::context()` or `anyhow::Context::with_context()` to attach labels while preserving the original error in the chain:
+  ```rust
+  // Good — original error is preserved via source()
+  .map_err(|e| anyhow::Error::from(e).context("source label"))
+
+  // Bad — original error type is lost, only Display string remains
+  .map_err(|e| anyhow::anyhow!("[source] {}", e))
+  ```
+- When wrapping `io::Error` into `io::Error::other(anyhow::Error)`, convert with `anyhow::Error::from(e)` and use `.context()` for the label.

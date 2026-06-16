@@ -10,6 +10,8 @@ use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
 
 use crate::config::ingress::CommonArgs;
+use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessLog, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
@@ -121,6 +123,13 @@ impl RegistedService for IngressFlow {
     }
 }
 
+#[async_trait]
+impl RegistedService for Arc<IngressFlow> {
+    async fn serve(&self, ready: Sender<()>) -> Result<()> {
+        (**self).serve(ready).await
+    }
+}
+
 impl IngressFlow {
     async fn serve_in_async_task_no_throw_error(
         &self,
@@ -214,5 +223,12 @@ impl IngressFlow {
                 }
             },
         );
+    }
+}
+
+#[async_trait]
+impl StatusProvider for IngressFlow {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        self.trusted_stream_manager.query_status(path).await
     }
 }

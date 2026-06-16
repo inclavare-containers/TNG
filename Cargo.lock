@@ -7686,6 +7686,7 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "httparse",
+ "humantime-serde",
  "hyper 1.8.1",
  "hyper-util 0.1.7",
  "indexmap 2.13.0",

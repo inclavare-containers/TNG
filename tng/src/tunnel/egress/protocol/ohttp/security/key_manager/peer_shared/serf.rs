@@ -42,7 +42,7 @@ const SERF_USER_EVENT_BROADCAST_CLUSTER_KEY_SET: &str = "broadcast_cluster_key_s
 
 pub struct PeerSharedKeyManager {
     pub(super) inner: Arc<PeerSharedKeyManagerInner>,
-    serf: Arc<SerfGracefulShutdown>,
+    pub(super) serf: Arc<SerfGracefulShutdown>,
 }
 
 type InstrumentedTokioRuntime = InstrumentedRuntime<serf::agnostic::tokio::TokioRuntime>;
@@ -802,7 +802,7 @@ async fn load_peers_from_file(path: &str) -> Result<Vec<String>, anyhow::Error> 
         .with_context(|| format!("Failed to parse peers file as JSON: {path}"))
 }
 
-struct SerfGracefulShutdown {
+pub(super) struct SerfGracefulShutdown {
     serf: Option<Serf>,
     runtime: TokioRuntime,
 }

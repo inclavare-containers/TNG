@@ -11,6 +11,8 @@ use indexmap::IndexMap;
 use tokio::sync::mpsc::Sender;
 
 use crate::config::egress::CommonArgs;
+use crate::error::TngError;
+use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessLog, EgressMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -108,6 +110,13 @@ impl RegistedService for EgressFlow {
         }
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl RegistedService for Arc<EgressFlow> {
+    async fn serve(&self, ready: Sender<()>) -> Result<()> {
+        (**self).serve(ready).await
     }
 }
 
@@ -212,5 +221,12 @@ impl EgressFlow {
                 });
             }
         });
+    }
+}
+
+#[async_trait]
+impl StatusProvider for EgressFlow {
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        self.trusted_stream_manager.query_status(path).await
     }
 }
