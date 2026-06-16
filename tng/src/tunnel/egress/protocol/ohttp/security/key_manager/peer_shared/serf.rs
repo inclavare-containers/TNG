@@ -193,52 +193,51 @@ impl PeerSharedKeyManager {
             let mut file_watcher = FileWatcher::new(peers_file_path_for_watcher.clone())
                 .map_err(|e| TngError::WatchFileFailed(peers_file_path_for_watcher.clone(), e))?;
 
-            runtime.spawn_supervised_task_current_span(async move {
-                    defer!{
-                        tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file watcher stopped");
-                    }
+            runtime.spawn_supervised_task_with_span(tracing::info_span!("cluster_join_task"), async move {
+                defer! {
+                    tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file watcher stopped");
+                }
 
-                    while let Some(result) = file_watcher.recv().await {
-                        match result {
-                            Ok(()) => {
-                                tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file changed, reloading and joining new peers");
+                while let Some(result) = file_watcher.recv().await {
+                    match result {
+                        Ok(()) => {
+                            tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file changed, reloading and joining new peers");
 
-                                match load_peers_from_file(&peers_file_path_for_watcher.to_string_lossy()).await {
-                                    Ok(new_peers) => {
-                                        tracing::info!(peers_count = new_peers.len(), "Loaded peers from file");
+                            match load_peers_from_file(&peers_file_path_for_watcher.to_string_lossy()).await {
+                                Ok(new_peers) => {
+                                    tracing::info!(peers_count = new_peers.len(), "Loaded peers from file");
 
-                                        // Join using newly loaded peers
-                                        let Some(serf_clone) = serf_weak_for_watcher.upgrade() else {
-                                            tracing::debug!(
-                                                "stop watching peers file since serf has been dropped"
-                                            );
-                                            break;
-                                        };
-
-                                        if let Err(error) = join_serf_cluster(&serf_clone, &new_peers).await {
-                                            tracing::warn!(?error, "Some peers from file failed to join, continuing...");
-                                        }
-                                    }
-                                    Err(error) => {
-                                        tracing::error!(
-                                            peers_file = ?peers_file_path_for_watcher,
-                                            ?error,
-                                            "Failed to load peers from updated file"
+                                    // Join using newly loaded peers
+                                    let Some(serf_clone) = serf_weak_for_watcher.upgrade() else {
+                                        tracing::debug!(
+                                            "stop watching peers file since serf has been dropped"
                                         );
+                                        break;
+                                    };
+
+                                    if let Err(error) = join_serf_cluster(&serf_clone, &new_peers).await {
+                                        tracing::warn!(?error, "Some peers from file failed to join, continuing...");
                                     }
                                 }
-                            }
-                            Err(error) => {
-                                tracing::error!(
-                                    peers_file = ?peers_file_path_for_watcher,
-                                    ?error,
-                                    "Internal error in peers file watcher"
-                                );
+                                Err(error) => {
+                                    tracing::error!(
+                                        peers_file = ?peers_file_path_for_watcher,
+                                        ?error,
+                                        "Failed to load peers from updated file"
+                                    );
+                                }
                             }
                         }
+                        Err(error) => {
+                            tracing::error!(
+                                peers_file = ?peers_file_path_for_watcher,
+                                ?error,
+                                "Internal error in peers file watcher"
+                            );
+                        }
                     }
-
-                });
+                }
+            });
         }
 
         Ok(())
@@ -285,9 +284,18 @@ impl PeerSharedKeyManager {
                     if let Ok(pb_response) =
                         pb::QueryClusterKeySetResponse::decode(response.payload().as_ref())
                     {
-                        if let Some(cks) = pb_response.cluster_key_set {
-                            if let Ok(remote_key_set) = ClusterKeySet::try_from(cks) {
-                                tracing::info!("Received cluster key set from peer");
+                        if let Some(pb_cks) = pb_response.cluster_key_set {
+                            if let Ok(remote_key_set) = ClusterKeySet::try_from(pb_cks) {
+                                let remote_keys: Vec<String> = remote_key_set
+                                    .iter_keys()
+                                    .map(|(pk, _)| hex::encode(pk.as_ref()))
+                                    .collect();
+                                tracing::info!(
+                                    peer_node_id = ?response.from(),
+                                    key_count = remote_keys.len(),
+                                    public_key_hex = ?remote_keys,
+                                    "Received cluster key set from peer"
+                                );
 
                                 if let Some(ref mut local) = merged_key_set {
                                     local.merge(remote_key_set);
@@ -300,7 +308,15 @@ impl PeerSharedKeyManager {
                 }
 
                 if let Some(key_set) = merged_key_set {
-                    tracing::info!("Preboot completed with synchronized cluster key set");
+                    let key_hex: Vec<String> = key_set
+                        .iter_keys()
+                        .map(|(pk, _)| hex::encode(pk.as_ref()))
+                        .collect();
+                    tracing::info!(
+                        key_count = key_hex.len(),
+                        public_key_hex = ?key_hex,
+                        "Preboot completed with synchronized cluster key set"
+                    );
                     return Ok(key_set);
                 }
 
@@ -322,7 +338,6 @@ impl PeerSharedKeyManager {
         }
 
         // Bootstrap: create initial active key
-        tracing::info!("Creating initial active key");
         let initial_key = KeyInfo::generate(
             0,
             KeyStatus::Active,
@@ -332,8 +347,11 @@ impl PeerSharedKeyManager {
         .map_err(|e| {
             TngError::KeyUpdateMessageDecodeError(anyhow!("Failed to generate initial key: {}", e))
         })?;
-
         let public_key = initial_key.key_config.public_key()?;
+        tracing::info!(
+            public_key_hex = %hex::encode(public_key.as_ref()),
+            "Created initial active key"
+        );
         Ok(ClusterKeySet::new(
             public_key,
             initial_key,
@@ -347,7 +365,7 @@ impl PeerSharedKeyManager {
         inner: Arc<PeerSharedKeyManagerInner>,
         serf: Weak<SerfGracefulShutdown>,
     ) {
-        runtime.spawn_supervised_task_current_span(async move {
+        runtime.spawn_supervised_task_with_span(tracing::info_span!("key_watcher"), async move {
             defer! {
                 tracing::info!("Key watcher stopped");
             }
@@ -362,15 +380,51 @@ impl PeerSharedKeyManager {
 
                     // 1. Handle pending -> active transition (first, as it triggers check_and_key_rotation)
                     let activated = cks.transition_pending_to_active(now);
+                    if activated > 0 {
+                        let active_keys: Vec<String> = cks
+                            .iter_keys()
+                            .filter(|(_, ki)| ki.status == KeyStatus::Active)
+                            .map(|(pk, _)| hex::encode(pk.as_ref()))
+                            .collect();
+                        tracing::info!(
+                            key_count = activated,
+                            active_keys_hex = ?active_keys,
+                            "Pending key transitioned to active"
+                        );
+                    }
 
                     // 2. Handle active -> stale transition
                     //    Capture the count of keys transitioned to stale — needed to trigger
                     //    rotation when the bootstrap-created initial key (which skips the
                     //    Pending->Active path) becomes stale.
                     let stale_transitioned = cks.transition_active_to_stale(now);
+                    if stale_transitioned > 0 {
+                        let stale_keys: Vec<String> = cks
+                            .iter_keys()
+                            .filter(|(_, ki)| ki.status == KeyStatus::Stale)
+                            .map(|(pk, _)| hex::encode(pk.as_ref()))
+                            .collect();
+                        tracing::info!(
+                            key_count = stale_transitioned,
+                            stale_keys_hex = ?stale_keys,
+                            "Active key(s) transitioned to stale"
+                        );
+                    }
 
                     // 3. Remove expired stale keys
-                    cks.remove_expired_keys(now);
+                    let removed_count = cks.remove_expired_keys(now);
+                    if removed_count > 0 {
+                        let remaining_keys: Vec<String> = cks
+                            .iter_keys()
+                            .map(|(pk, _)| hex::encode(pk.as_ref()))
+                            .collect();
+                        tracing::info!(
+                            removed_count,
+                            remaining_key_count = remaining_keys.len(),
+                            remaining_keys_hex = ?remaining_keys,
+                            "Removed expired stale key(s)"
+                        );
+                    }
 
                     // 4. Detect if all active keys are stale-eligible but were preserved
                     //    by transition_active_to_stale (which preserves the last active key
@@ -459,6 +513,7 @@ impl PeerSharedKeyManager {
         if let Some(public_key) = generated {
             tracing::info!(
                 ?public_key,
+                public_key_hex = %hex::encode(public_key.as_ref()),
                 "Master node generated new pending key, broadcasting to cluster"
             );
 
@@ -528,53 +583,65 @@ impl PeerSharedKeyManager {
         inner: Arc<PeerSharedKeyManagerInner>,
         serf: Weak<SerfGracefulShutdown>,
     ) {
-        runtime.spawn_unsupervised_task_current_span(async move {
-            defer! {
-                tracing::info!("Serf watcher stopped");
-            }
+        runtime.spawn_unsupervised_task_with_span(
+            tracing::info_span!("serf_watcher"),
+            async move {
+                defer! {
+                    tracing::info!("Serf watcher stopped");
+                }
 
-            tracing::info!("Starting serf watcher");
+                tracing::info!("Starting serf watcher");
 
-            loop {
-                let Ok(event) = subscriber.recv().await else {
-                    tracing::debug!("Serf event channel closed, task quit");
-                    break;
-                };
+                loop {
+                    let Ok(event) = subscriber.recv().await else {
+                        tracing::debug!("Serf event channel closed, task quit");
+                        break;
+                    };
 
-                match event {
-                    Event::Query(query) => {
-                        if let Err(error) = Self::handle_query(&query, &inner).await {
-                            tracing::warn!(?error, "Error handling query");
+                    match event {
+                        Event::Query(query) => {
+                            if let Err(error) = Self::handle_query(&query, &inner).await {
+                                tracing::warn!(
+                                    ?error,
+                                    name = query.name().as_str(),
+                                    from = query.from().to_string(),
+                                    "Error handling query"
+                                );
+                            }
                         }
-                    }
-                    Event::User(user_event) => {
-                        if let Err(error) = Self::handle_user_event(
-                            user_event.name().as_str(),
-                            user_event.payload(),
-                            &inner,
-                        )
-                        .await
-                        {
-                            tracing::warn!(?error, "Error handling user event");
-                        }
-                    }
-                    Event::Member(member_event) => {
-                        if matches!(member_event.ty(), MemberEventType::Leave) {
-                            tracing::info!("Member left, triggering key rotation check");
+                        Event::User(user_event) => {
+                            if let Err(error) = Self::handle_user_event(
+                                user_event.name().as_str(),
+                                user_event.payload(),
+                                &inner,
+                            )
+                            .await
                             {
-                                let Some(serf) = serf.upgrade() else {
-                                    tracing::debug!(
-                                        "stop serf watcher since serf has been dropped"
-                                    );
-                                    break;
-                                };
-                                Self::check_and_key_rotation(&serf, &inner).await;
+                                tracing::warn!(
+                                    ?error,
+                                    name = user_event.name().as_str(),
+                                    "Error handling user event"
+                                );
+                            }
+                        }
+                        Event::Member(member_event) => {
+                            if matches!(member_event.ty(), MemberEventType::Leave) {
+                                tracing::info!("Member left, triggering key rotation check");
+                                {
+                                    let Some(serf) = serf.upgrade() else {
+                                        tracing::debug!(
+                                            "stop serf watcher since serf has been dropped"
+                                        );
+                                        break;
+                                    };
+                                    Self::check_and_key_rotation(&serf, &inner).await;
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     /// Handle incoming query requests.
@@ -635,13 +702,21 @@ impl PeerSharedKeyManager {
 
                 if let Some(pb_cluster_key_set) = event.cluster_key_set {
                     let remote_key_set: ClusterKeySet = pb_cluster_key_set.try_into()?;
+                    let merged_keys: Vec<String> = remote_key_set
+                        .iter_keys()
+                        .map(|(pk, _)| hex::encode(pk.as_ref()))
+                        .collect();
 
                     {
                         let mut cks = inner.cluster_key_set.write().await;
                         cks.merge(remote_key_set);
                     }
 
-                    tracing::info!("Merged broadcasted cluster key set");
+                    tracing::info!(
+                        key_count = merged_keys.len(),
+                        public_key_hex = ?merged_keys,
+                        "Merged broadcasted cluster key set"
+                    );
                 }
             }
             _ => {
@@ -694,6 +769,7 @@ impl PeerSharedKeyManager {
                                 tracing::info!(
                                     node_id = ?response.from(),
                                     ?public_key,
+                                    public_key_hex = %hex::encode(public_key.as_ref()),
                                     "Received key from peer via query"
                                 );
                                 return Ok(Some(key_info));
