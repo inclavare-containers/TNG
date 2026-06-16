@@ -37,26 +37,6 @@ impl Task for TngInstance {
     }
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
-        self.launch_with_node_type(token, self.node_type()).await
-    }
-
-    #[cfg(any(feature = "on-bin", feature = "on-podman"))]
-    async fn launch_with_node_type(
-        &self,
-        token: CancellationToken,
-        node_type: NodeType,
-    ) -> Result<JoinHandle<Result<()>>> {
-        let tag = format!("{}@{}", self.name(), node_type.ip());
-        self.launch_inner(token, &tag).await
-    }
-
-    #[cfg(feature = "on-source-code")]
-    async fn launch_with_node_type(
-        &self,
-        token: CancellationToken,
-        node_type: NodeType,
-    ) -> Result<JoinHandle<Result<()>>> {
-        let _ = node_type; // source_code mode doesn't use tag prefixes
-        self.launch_inner(token, "").await
+        self.launch_inner(token).await
     }
 }

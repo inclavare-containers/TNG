@@ -2,12 +2,13 @@ use std::io;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tracing::Instrument;
 
-/// Spawn a command with its stdout and stderr captured and re-emitted
-/// with a `[tag]` prefix on each line.
+/// Spawn a command with its stdout and stderr captured and logged
+/// via `tracing::info!` under the current tracing span.
 ///
-/// The child process inherits stdin (set to null), while stdout and stderr
-/// are piped through `BufReader::lines()` for real-time line-by-line tagging.
+/// The child process has its stdin set to null, while stdout and stderr
+/// are piped through `BufReader::lines()` for real-time line-by-line logging.
 /// Background tokio tasks handle the streaming and will exit when the
 /// process closes its pipes.
 ///
@@ -15,33 +16,37 @@ use tokio::process::{Child, Command};
 /// the spawned task before the child process fully exits, some trailing
 /// output may be lost. This is acceptable since this function is used
 /// exclusively for debugging test output in the integration test framework.
-pub async fn spawn_with_tagged_output(cmd: &mut Command, tag: &str) -> io::Result<Child> {
-    let tag = tag.to_owned();
+pub async fn spawn_with_span_output(cmd: &mut Command) -> io::Result<Child> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 
-    // Stream stdout with tag prefix
+    // Stream stdout with span prefix
     if let Some(stdout) = child.stdout.take() {
-        let tag_clone = tag.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                println!("[{}] {}", tag_clone, line);
+        tokio::spawn(
+            async move {
+                let mut reader = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    tracing::info!(target: "spawn", "{}", line);
+                }
             }
-        });
+            .instrument(tracing::Span::current()),
+        );
     }
 
-    // Stream stderr with tag prefix
+    // Stream stderr with span prefix
     if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                eprintln!("[{}] {}", tag, line);
+        tokio::spawn(
+            async move {
+                let mut reader = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    tracing::info!(target: "spawn", "{}", line);
+                }
             }
-        });
+            .instrument(tracing::Span::current()),
+        );
     }
 
     Ok(child)

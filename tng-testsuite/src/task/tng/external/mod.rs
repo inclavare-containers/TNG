@@ -5,8 +5,9 @@ use serde_json::json;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
-use crate::task::tagged_spawn::spawn_with_tagged_output;
+use crate::task::tagged_spawn::spawn_with_span_output;
 
 use super::TngInstance;
 
@@ -42,7 +43,6 @@ impl TngInstance {
     pub(super) async fn launch_inner(
         &self,
         token: CancellationToken,
-        tag: &str,
     ) -> Result<JoinHandle<Result<()>>> {
         let config_json = match self {
             TngInstance::TngClient(config_json) | TngInstance::TngServer(config_json) => {
@@ -62,9 +62,9 @@ impl TngInstance {
                 .get_tokio_command(&config_json)
                 .await
                 .context("Failed to get command line for creating tng process")?;
-            spawn_with_tagged_output(&mut cmd, tag)
+            spawn_with_span_output(&mut cmd)
                 .await
-                .context("Failed to spawn tagged tng process")?
+                .context("Failed to spawn tng process")?
         };
 
         // Wait for the tng process to be ready by polling the ready signal from 127.0.0.1:50000/readyz.
@@ -87,6 +87,7 @@ impl TngInstance {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
+        let parent_span = tracing::Span::current();
         let join_handle = tokio::task::spawn(async move {
             tokio::select! {
                 status = process.wait() => {
@@ -107,7 +108,7 @@ impl TngInstance {
             }
 
             Ok::<_, anyhow::Error>(())
-        });
+        }.instrument(parent_span));
 
         return Ok(join_handle);
     }
