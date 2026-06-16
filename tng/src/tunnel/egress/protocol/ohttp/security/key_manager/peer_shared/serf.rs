@@ -600,6 +600,20 @@ impl PeerSharedKeyManager {
 
                     match event {
                         Event::Query(query) => {
+                            {
+                                let Some(serf) = serf.upgrade() else {
+                                    tracing::debug!(
+                                        "stop serf watcher since serf has been dropped"
+                                    );
+                                    return;
+                                };
+
+                                // Skip queries from ourselves
+                                if query.from().id() == serf.local_id() {
+                                    continue;
+                                }
+                            }
+
                             if let Err(error) = Self::handle_query(&query, &inner).await {
                                 tracing::warn!(
                                     ?error,
