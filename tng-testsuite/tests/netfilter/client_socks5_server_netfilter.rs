@@ -71,7 +71,7 @@ async fn test() -> Result<()> {
                 curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -121,7 +121,7 @@ async fn test() -> Result<()> {
                 curl --socks5 user:ppppppwd@127.0.0.1:1080 --socks5-basic -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -177,7 +177,7 @@ async fn test() -> Result<()> {
                 curl --socks5 user:ppppppwd@127.0.0.1:1080 --socks5-basic -H "Host: example.com" "http://192.168.1.1:30001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
 
         }
@@ -237,7 +237,7 @@ async fn test() -> Result<()> {
                 curl --socks5 127.0.0.1:1080 -H "Host: example.com" "http://192.168.1.1:40001/foo/bar/www?type=1&case=1"
             "#
             .to_owned(),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),

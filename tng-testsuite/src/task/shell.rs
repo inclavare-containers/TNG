@@ -7,17 +7,33 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 /// Controls how a shell script is executed within a test.
+///
+/// Two independent dimensions are covered:
+///
+/// 1. **Execution style**: foreground (blocks `launch()`) vs background (returns immediately)
+/// 2. **Finish policy**: stop (cancels the test token on finish) vs continue
+///
+/// | Variant                        | Blocks `launch()`? | On finish → cancel token? |
+/// |--------------------------------|--------------------|----------------------------|
+/// | `ForegroundStop`               | Yes                | Yes                        |
+/// | `ForegroundContinue`           | Yes                | No                         |
+/// | `BackgroundContinue`           | No                 | No                         |
+/// | `BackgroundStop`               | No                 | Yes                        |
 #[derive(Clone, Copy)]
 pub enum ShellMode {
-    /// Run the script synchronously. If it fails, the test fails.
-    Blocking,
-    /// Spawn the script in the background. Errors are logged but do not stop the test.
-    /// Use for fire-and-forget scripts that are not critical to test outcome.
-    FireAndForget,
-    /// Spawn the script in the background and wait for it to complete before continuing
-    /// to the next stage of the test. Errors are logged but do not stop the test.
-    /// Use for setup / barrier scripts that must complete before subsequent tasks run.
-    Barrier,
+    /// Run the script synchronously (blocks `launch()`). On finish, the test token is
+    /// cancelled so all other tasks wind down.
+    ForegroundStop,
+    /// Run the script synchronously (blocks `launch()`). On finish, the error is
+    /// propagated but the test token is NOT cancelled — other tasks continue running
+    /// and the harness collects all errors to report at the end.
+    ForegroundContinue,
+    /// Spawn the script in the background (`launch()` returns immediately). On finish,
+    /// the error is logged but the test token is NOT cancelled.
+    BackgroundContinue,
+    /// Spawn the script in the background (`launch()` returns immediately). On finish,
+    /// the test token is cancelled so all other tasks wind down.
+    BackgroundStop,
 }
 
 pub struct ShellTask {
@@ -39,7 +55,6 @@ impl Task for ShellTask {
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
         let script = self.script.clone();
-        let name = self.name.clone();
         let mode = self.mode;
 
         let shell_task = async move {
@@ -77,27 +92,15 @@ impl Task for ShellTask {
             };
 
             match mode {
-                ShellMode::Blocking => {
+                ShellMode::ForegroundStop | ShellMode::BackgroundStop => {
                     let _drop_guard = token.drop_guard();
                     task.await?;
                 }
-                ShellMode::FireAndForget => {
+                ShellMode::ForegroundContinue | ShellMode::BackgroundContinue => {
                     tokio::select! {
                         _ = token.cancelled() => {}
                         res = task => {
-                            if let Err(e) = res {
-                                tracing::debug!("Background shell task '{name}' completed with error: {e}");
-                            }
-                        }
-                    }
-                }
-                ShellMode::Barrier => {
-                    tokio::select! {
-                        _ = token.cancelled() => {}
-                        res = task => {
-                            if let Err(e) = res {
-                                tracing::debug!("Barrier shell task '{name}' completed with error: {e}");
-                            }
+                            res?;
                         }
                     }
                 }
@@ -109,14 +112,14 @@ impl Task for ShellTask {
         let parent_span = tracing::Span::current();
 
         match mode {
-            ShellMode::Blocking => {
+            ShellMode::ForegroundStop | ShellMode::ForegroundContinue => {
                 let _handle = shell_task.await?;
                 // The task completed synchronously, return a no-op spawned task.
                 Ok(tokio::task::spawn(
                     async move { Ok(()) }.instrument(parent_span),
                 ))
             }
-            ShellMode::FireAndForget | ShellMode::Barrier => {
+            ShellMode::BackgroundContinue | ShellMode::BackgroundStop => {
                 // Spawn the shell task in the background and return immediately.
                 Ok(tokio::task::spawn(shell_task.instrument(parent_span)))
             }

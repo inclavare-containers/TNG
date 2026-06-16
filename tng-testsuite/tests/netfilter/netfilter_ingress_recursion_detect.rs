@@ -48,7 +48,7 @@ async fn test() -> Result<()> {
                 fi
             "#
             .to_owned(),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
         }
         .boxed(),
     ])

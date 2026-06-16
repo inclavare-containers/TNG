@@ -79,7 +79,7 @@ async fn test_ingress_netfilter_cgroup_capture() -> Result<()> {
                 echo "ingress cgroup capture test passed"
             "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -177,7 +177,7 @@ async fn test_ingress_netfilter_cgroup_nocapture() -> Result<()> {
                 echo "ingress nocapture test passed"
             "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -257,7 +257,7 @@ async fn test_ingress_netfilter_cgroup_and_capture_dst() -> Result<()> {
                 echo "ingress cgroup + capture_dst combo test passed"
             "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -334,7 +334,7 @@ async fn test_ingress_netfilter_cgroup_only_all_tcp() -> Result<()> {
                 echo "ingress cgroup-only all-TCP test passed"
             "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),

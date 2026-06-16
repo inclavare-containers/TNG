@@ -707,7 +707,7 @@ async fn test_server_attest_passport_cache() -> Result<()> {
             script: check_rotation_script(
                 r#"{"attestation_request":{"model":"passport"}}"#
             ),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -756,7 +756,7 @@ async fn test_server_attest_passport_rotation_interval() -> Result<()> {
             script: check_rotation_script(
                 r#"{"attestation_request":{"model":"passport"}}"#
             ),
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -825,7 +825,7 @@ echo "SUCCESS: All tests passed"
                     call_api_fn()
                 )
             },
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -1042,7 +1042,7 @@ EOF
                     "#
                 )
             },
-            mode: ShellMode::Blocking,
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),
@@ -1261,25 +1261,6 @@ async fn test_egress_key_from_peer_shared_with_peers_file() -> Result<()> {
 
     tasks.extend(vec![
         ShellTask {
-            name: "waiting for tng cluster keys sharing and peers file monitoring".to_owned(),
-            node_type: NodeType::Client,
-            script: {
-                format!(
-                    r#"
-                    set -euo pipefail
-
-                    echo "Waiting 5 seconds for TNG cluster to establish and file watcher to start..."
-                    sleep 3
-
-                    echo "Initial cluster setup complete"
-                    "#
-                )
-            },
-            mode: ShellMode::FireAndForget,
-
-        }
-        .boxed(),
-        ShellTask {
             name: "update peers file and verify new peer joins".to_owned(),
             node_type: NodeType::Client,
             script: {
@@ -1305,7 +1286,12 @@ EOF
                     peers_file_path
                 )
             },
-            mode: ShellMode::FireAndForget,
+            // The peers file update triggers new nodes to join a cluster that may still be
+            // converging from a split-brain state. During this convergence window, even the
+            // fallback Serf query mechanism can fail to reach other nodes' keys. We use
+            // Blocking here to ensure the key synchronization completes before subsequent
+            // tasks (LoadBalancer, TngClient) begin sending requests.
+            mode: ShellMode::ForegroundStop,
 
         }
         .boxed(),

@@ -268,7 +268,7 @@ async fn test_ipset_and_port() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -325,7 +325,7 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -384,7 +384,7 @@ async fn test_ipset_only() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),

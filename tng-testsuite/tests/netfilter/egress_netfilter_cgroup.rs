@@ -89,7 +89,7 @@ async fn test_egress_netfilter_cgroup_capture() -> Result<()> {
                 echo "cgroup capture test passed"
             "#
             ),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -187,7 +187,7 @@ async fn test_egress_netfilter_cgroup_nocapture() -> Result<()> {
                 sleep 30
             "#
             .to_owned(),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -273,7 +273,7 @@ async fn test_egress_netfilter_cgroup_and_capture_dst() -> Result<()> {
                 echo "cgroup + capture_dst combo test passed"
             "#
             ),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
@@ -358,7 +358,7 @@ async fn test_egress_netfilter_cgroup_only_all_tcp() -> Result<()> {
                 echo "cgroup-only all-TCP test passed"
             "#
             ),
-            mode: ShellMode::FireAndForget,
+            mode: ShellMode::BackgroundContinue,
 
         }
         .boxed(),
