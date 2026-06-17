@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod control_interface;
 pub mod egress;
 pub mod ingress;
+pub mod mapping_rule;
 pub mod observability;
 pub mod ra;
 
