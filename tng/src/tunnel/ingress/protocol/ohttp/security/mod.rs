@@ -45,6 +45,7 @@ pub struct OHttpSecurityLayer {
     ohttp_clients: OhttpClientCache,
     path_rewrite_group: PathRewriteGroup,
     runtime: TokioRuntime,
+    passthrough_request_headers: Arc<Vec<String>>,
 }
 
 impl OHttpSecurityLayer {
@@ -86,12 +87,21 @@ impl OHttpSecurityLayer {
 
         let ohttp_clients: OhttpClientCache = Default::default();
 
+        let passthrough_request_headers = Arc::new(
+            ohttp_args
+                .header_passthrough
+                .as_ref()
+                .map(|hp| hp.request_headers.clone())
+                .unwrap_or_default(),
+        );
+
         Ok(Self {
             ra_context,
             http_client: Arc::new(http_client),
             ohttp_clients,
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
             runtime,
+            passthrough_request_headers,
         })
     }
 
@@ -176,6 +186,7 @@ impl OHttpSecurityLayer {
                     self.http_client.clone(),
                     base_url,
                     self.runtime.clone(),
+                    self.passthrough_request_headers.clone(),
                 )
                 .await
                 .map_err(TngError::CreateOHttpClientFailed)?,

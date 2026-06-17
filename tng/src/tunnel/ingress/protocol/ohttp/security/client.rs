@@ -93,6 +93,9 @@ pub struct OHttpClientInner {
     base_url: Url,
     #[allow(unused)]
     runtime: TokioRuntime,
+    /// Headers to copy from downstream requests to the outer OHTTP POST.
+    #[allow(unused)]
+    passthrough_request_headers: Arc<Vec<String>>,
 }
 
 struct KeyStoreValue {
@@ -146,6 +149,7 @@ impl OHttpClient {
         http_client: Arc<reqwest::Client>,
         base_url: Url,
         runtime: TokioRuntime,
+        passthrough_request_headers: Arc<Vec<String>>,
     ) -> Result<Self> {
         let refresh_strategy = {
             #[cfg(unix)]
@@ -173,6 +177,7 @@ impl OHttpClient {
             http_client,
             base_url,
             runtime: runtime.clone(),
+            passthrough_request_headers,
         });
 
         let key_store_value = MaybeCached::new(runtime.clone(), refresh_strategy, {
