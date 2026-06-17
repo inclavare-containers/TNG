@@ -1,5 +1,7 @@
-use anyhow::{anyhow, Context, Result};
-use async_stream::stream;
+use std::sync::Arc;
+
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use tokio::net::TcpListener;
@@ -13,38 +15,53 @@ use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 use super::flow::{Incomming, IngressTrait};
 
-pub struct MappingIngress {
-    id: usize,
+/// Config for a single listener (without the TcpListener itself).
+struct ListenerConfig {
+    bind_addr: String,
     listen_addr: String,
     listen_port: u16,
-    upstream_addr: String,
-    upstream_port: u16,
+    upstream: TngEndpoint,
+}
+
+pub struct MappingIngress {
+    id: usize,
+    configs: Vec<ListenerConfig>,
 }
 
 impl MappingIngress {
     pub async fn new(id: usize, mapping_args: &IngressMappingArgs) -> Result<Self> {
-        let rule = mapping_args
-            .rules
-            .first()
-            .ok_or_else(|| anyhow!("ingress mapping requires at least one rule"))?;
-        let listen_addr = rule.r#in.host.as_deref().unwrap_or("0.0.0.0").to_owned();
-        let listen_port = rule.r#in.port;
+        if mapping_args.rules.is_empty() {
+            anyhow::bail!("at least one mapping rule is required");
+        }
 
-        let upstream_addr = rule
-            .out
-            .host
-            .as_deref()
-            .context("'host' of 'out' field must be set")?
-            .to_owned();
-        let upstream_port = rule.out.port;
+        let mut configs = Vec::new();
 
-        Ok(Self {
-            id,
-            listen_addr,
-            listen_port,
-            upstream_addr,
-            upstream_port,
-        })
+        for rule in &mapping_args.rules {
+            let listen_addr = rule
+                .r#in
+                .host
+                .clone()
+                .unwrap_or_else(|| "0.0.0.0".to_owned());
+            let listen_port = rule.r#in.port;
+            let bind_addr = format!("{}:{}", listen_addr, listen_port);
+
+            let upstream_addr = rule
+                .out
+                .host
+                .as_ref()
+                .context("'host' of 'out' field must be set")?
+                .clone();
+            let upstream_port = rule.out.port;
+
+            configs.push(ListenerConfig {
+                bind_addr,
+                listen_addr,
+                listen_port,
+                upstream: TngEndpoint::new(upstream_addr, upstream_port),
+            });
+        }
+
+        Ok(Self { id, configs })
     }
 }
 
@@ -52,16 +69,18 @@ impl MappingIngress {
 impl IngressTrait for MappingIngress {
     /// ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}
     fn metric_attributes(&self) -> IndexMap<String, String> {
+        // Use the first listener's addresses for metric attributes (single-rule compatible)
+        let first = &self.configs[0];
         [
             ("ingress_type".to_owned(), "mapping".to_owned()),
             ("ingress_id".to_owned(), self.id.to_string()),
             (
                 "ingress_in".to_owned(),
-                format!("{}:{}", self.listen_addr, self.listen_port),
+                format!("{}:{}", first.listen_addr, first.listen_port),
             ),
             (
                 "ingress_out".to_owned(),
-                format!("{}:{}", self.upstream_addr, self.upstream_port),
+                format!("{}:{}", first.upstream.host(), first.upstream.port()),
             ),
         ]
         .into()
@@ -72,29 +91,49 @@ impl IngressTrait for MappingIngress {
         None
     }
 
-    async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
-        let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!(%listen_addr, "Add TCP listener");
+    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
+        // Create all listeners and spawn a task for each.
+        // Results are merged via a shared mpsc channel (multi-listener select_all pattern).
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AcceptedStream>>(32);
 
-        let listener = TcpListener::bind(listen_addr).await?;
-        listener.set_listener_common_sock_opts()?;
+        for cfg in &self.configs {
+            tracing::debug!(bind_addr = %cfg.bind_addr, "Add TCP listener");
 
-        let listener_addr = listener.local_addr()?;
+            let listener = TcpListener::bind(&cfg.bind_addr).await?;
+            listener.set_listener_common_sock_opts()?;
 
-        Ok(Box::new(stream! {
-            loop {
-                match listener.accept_with_common_sock_opts().await {
-                    Ok((stream, peer_addr)) => yield Ok(AcceptedStream{
-                        stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
-                        src: peer_addr,
-                        dst: TngEndpoint::new(self.upstream_addr.clone(), self.upstream_port),
-                        via_tunnel: true,
-                        listener_addr,
-                        ingress_mode: IngressMode::Mapping,
-                    }),
-                    Err(e) => yield Err(anyhow!(e)),
-                };
-            }
-        }))
+            let listener_addr = listener.local_addr()?;
+            let upstream = Arc::new(cfg.upstream.clone());
+            let tx = tx.clone();
+
+            runtime.spawn_supervised_task_fn_current_span(move |_rt| async move {
+                loop {
+                    let result = match listener.accept_with_common_sock_opts().await {
+                        Ok((stream, peer_addr)) => Ok(AcceptedStream {
+                            stream: Box::new(crate::ContextualStream::new(
+                                stream,
+                                "ingress-mapping",
+                            )),
+                            src: peer_addr,
+                            dst: upstream.clone(),
+                            via_tunnel: true,
+                            listener_addr,
+                            ingress_mode: IngressMode::Mapping,
+                        }),
+                        Err(e) => Err(anyhow!(e)),
+                    };
+                    if tx.send(result).await.is_err() {
+                        break; // Channel closed, exit
+                    }
+                }
+            });
+        }
+
+        // Drop the original sender so the channel closes when all tasks exit.
+        drop(tx);
+
+        Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|item| (item, rx))
+        })))
     }
 }

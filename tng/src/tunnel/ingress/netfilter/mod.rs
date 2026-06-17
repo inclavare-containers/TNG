@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{anyhow, bail, Context, Result};
 use async_stream::stream;
 use async_trait::async_trait;
@@ -96,7 +98,7 @@ impl IngressTrait for NetfilterIngress {
 
         let listen_addr = listener.local_addr()?;
 
-        Ok(Box::new(
+        Ok(Box::pin(
             stream!{
                 let _iptables_guard = iptables_guard; // Move iptables guard to here to keep it alive
                 loop {
@@ -124,7 +126,7 @@ impl IngressTrait for NetfilterIngress {
                 Ok::<_, anyhow::Error>(AcceptedStream{
                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
                     src: peer_addr,
-                    dst: orig_dst,
+                    dst: Arc::new(orig_dst),
                     via_tunnel: true,
                     listener_addr: listen_addr,
                     ingress_mode: IngressMode::Netfilter,

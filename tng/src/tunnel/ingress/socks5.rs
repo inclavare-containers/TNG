@@ -134,7 +134,7 @@ impl IngressTrait for Socks5Ingress {
 
         let listener_addr = listener.local_addr()?;
 
-        Ok(Box::new(
+        Ok(Box::pin(
             stream! {
                 loop {
                     yield listener.accept_with_common_sock_opts().await
@@ -164,7 +164,7 @@ impl IngressTrait for Socks5Ingress {
                     Ok(AcceptedStream {
                         stream: Box::new(crate::ContextualStream::new(stream, "ingress-socks5")),
                         src: peer_addr,
-                        dst,
+                        dst: Arc::new(dst),
                         via_tunnel,
                         listener_addr,
                         ingress_mode: IngressMode::Socks5,

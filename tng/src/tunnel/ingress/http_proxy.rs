@@ -154,7 +154,7 @@ impl RequestHelper {
                                 "ingress-http-connect",
                             )),
                             src: peer_addr,
-                            dst,
+                            dst: Arc::new(dst),
                             via_tunnel,
                             listener_addr,
                             ingress_mode: IngressMode::HttpProxy,
@@ -188,7 +188,7 @@ impl RequestHelper {
 
                 let send_accepted_stream = async {
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
-                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst, via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
+                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
                 };
 
                 let send_task = async {
@@ -304,7 +304,7 @@ impl IngressTrait for HttpProxyIngress {
 
         let listener_addr = listener.local_addr()?;
 
-        Ok(Box::new(
+        Ok(Box::pin(
             stream! {
                 loop {
                     yield listener.accept_with_common_sock_opts().await

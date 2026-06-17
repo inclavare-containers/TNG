@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -47,12 +48,12 @@ pub(super) trait IngressTrait: Sync + Send {
     async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming>;
 }
 
-pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
+pub(super) type Incomming<'a> = Pin<Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>>;
 
 pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Send>,
     pub src: SocketAddr,
-    pub dst: TngEndpoint,
+    pub dst: Arc<TngEndpoint>,
     pub via_tunnel: bool,
     pub listener_addr: SocketAddr,
     pub ingress_mode: IngressMode,
@@ -102,7 +103,7 @@ impl IngressFlow {
 impl RegistedService for IngressFlow {
     async fn serve(&self, ready: Sender<()>) -> Result<()> {
         // Accept incomming streams
-        let mut incomming = Box::into_pin(self.ingress.accept(self.runtime.clone()).await?);
+        let mut incomming = self.ingress.accept(self.runtime.clone()).await?;
 
         ready.send(()).await?;
 
