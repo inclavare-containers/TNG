@@ -249,6 +249,11 @@ pub struct OHttpArgs {
     /// ```
     #[serde(default = "Default::default")]
     pub key: KeyArgs,
+
+    /// Controls which headers from the upstream response are copied to the
+    /// outer OHTTP HTTP response.
+    #[serde(default)]
+    pub header_passthrough: Option<EgressHeaderPassthroughConfig>,
 }
 
 /// Defines the strategy for obtaining the HPKE private key used in OHTTP decryption.
@@ -388,6 +393,20 @@ pub struct CorsConfig {
     /// Allow credentials for CORS
     #[serde(default)]
     pub allow_credentials: bool,
+}
+
+/// Configuration for copying selected headers from the upstream plaintext
+/// response to the outer OHTTP HTTP response.
+///
+/// These headers are visible to intermediaries between Egress and Ingress
+/// but are NOT forwarded to the downstream client — they remain encrypted
+/// inside the OHTTP body.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct EgressHeaderPassthroughConfig {
+    /// Header names to copy from the upstream response to the outer response.
+    #[serde(default)]
+    pub response_headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
