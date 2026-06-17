@@ -128,6 +128,10 @@ name = "no_ra_http_encapulation_with_egress_mapping"
 path = "tests/http/no_ra_http_encapulation_with_egress_mapping.rs"
 
 [[test]]
+name = "http_proxy_port_end"
+path = "tests/http/http_proxy_port_end.rs"
+
+[[test]]
 name = "no_ra_ingress_httpproxy"
 path = "tests/http/no_ra_ingress_httpproxy.rs"
 
