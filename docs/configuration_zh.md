@@ -320,6 +320,15 @@ flowchart TD
 
 > **注意**：该模式仅捕获 TCP 流量，不捕获发往本机地址的流量。
 
+> [!NOTE]
+> **在无 `CAP_NET_ADMIN` 的容器中运行**：netfilter 模式需要 `CAP_NET_ADMIN` 来创建 iptables 规则。如果容器缺少此能力，可以通过 [pasta](https://passt.top) 来解决——它通过创建子 network namespace 和子 user namespace 的方式，在子 namespace 内获得 `CAP_NET_ADMIN`，从而绕过缺该能力的问题：
+>
+> 1. 确保容器环境允许创建 user namespace：`clone(CLONE_NEWUSER)` 不能被 seccomp 拦截。可通过简单 C 程序调用 `clone()` + `CLONE_NEWUSER` 验证。
+> 2. 确保 `/dev/net/tun` 存在。如果缺失且拥有 `CAP_MKNOD`，可手动创建：`mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 666 /dev/net/tun`。
+> 3. 以非 root 用户通过 pasta 运行 TNG：`su <非root用户> -s /bin/bash -c 'pasta -t none -a 10.0.2.100 -4 -- /path/to/tng ...'`。pasta 会创建 user namespace + network namespace，进程在其中获得 `CAP_NET_ADMIN`，iptables 即可正常工作。**TNG 和你的业务进程必须运行在同一个 pasta namespace 内**，netfilter 规则才能生效。
+>
+> 如果 `clone(CLONE_NEWUSER)` 报 `Operation not permitted`，说明容器运行时的 seccomp 配置阻止了 user namespace 创建，此方案不可行。
+
 <details>
 <summary>示例：按目标 IP + 端口捕获</summary>
 
@@ -552,6 +561,9 @@ flowchart TD
 ```
 
 > **注意**：该模式仅捕获 TCP 流量，不捕获发往本机地址的流量（除非 `capture_local_traffic: true`）。
+
+> [!NOTE]
+> **在无 `CAP_NET_ADMIN` 的容器中运行**：同上，参考 [Ingress netfilter 章节](#ingress-netfilter透明代理)中的 pasta 方案。
 
 <details>
 <summary>示例：捕获目标端口 30001 的入站流量</summary>

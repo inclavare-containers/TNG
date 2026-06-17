@@ -320,6 +320,15 @@ flowchart TD
 
 > **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses.
 
+> [!NOTE]
+> **Running in containers without `CAP_NET_ADMIN`:** The netfilter mode requires `CAP_NET_ADMIN` to create iptables rules. If your container lacks this capability, you can work around it using [pasta](https://passt.top), which bypasses the missing capability by creating a child network namespace and user namespace pair:
+>
+> 1. Ensure the container environment allows user namespace creation: `clone(CLONE_NEWUSER)` must not be blocked by seccomp. Verify with a simple C program calling `clone()` with `CLONE_NEWUSER`.
+> 2. Ensure `/dev/net/tun` is available. If missing and you have `CAP_MKNOD`, create it manually: `mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 666 /dev/net/tun`.
+> 3. Run TNG as a non-root user via pasta: `su <non-root-user> -s /bin/bash -c 'pasta -t none -a 10.0.2.100 -4 -- /path/to/tng ...'`. Pasta creates a user namespace + network namespace where the process gains `CAP_NET_ADMIN`, enabling iptables to function. **Both TNG and your business application must run inside the same pasta namespace** for the netfilter rules to take effect.
+>
+> If `clone(CLONE_NEWUSER)` fails with `Operation not permitted`, your container runtime's seccomp profile blocks user namespace creation, and this workaround will not work.
+
 <details>
 <summary>Example: Capture by target IP + port</summary>
 
@@ -552,6 +561,9 @@ flowchart TD
 ```
 
 > **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses (unless `capture_local_traffic: true`).
+
+> [!NOTE]
+> **Running in containers without `CAP_NET_ADMIN`:** See the [Ingress netfilter note](#ingress-netfilter-transparent-proxy) above for the same workaround using pasta.
 
 <details>
 <summary>Example: Capture inbound traffic destined for port 30001</summary>
