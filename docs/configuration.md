@@ -101,26 +101,38 @@ The following fields are shared between Ingress and Egress, describing transport
 
 ### Mode: mapping (Port Mapping)
 
-TNG listens on a local TCP port (`in.host`, `in.port`), encrypts traffic, and sends it to the specified target (`out.host`, `out.port`). Clients must change their request target to the address TNG is listening on.
+TNG listens on one or more local TCP ports (`in.host`, `in.port`, optionally `in.port_end`), encrypts traffic, and sends it to the specified target(s) (`out.host`, `out.port`, optionally `out.port_end`). Clients must change their request target to the address TNG is listening on.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `mapping` | object | Yes | Port mapping configuration object |
-| `mapping.in.host` | string | No (`0.0.0.0`) | Listen address |
-| `mapping.in.port` | integer | Yes | Listen port |
-| `mapping.out.host` | string | Yes | Target address |
-| `mapping.out.port` | integer | Yes | Target port |
+| `mapping.rules` | array | Yes | List of forwarding rules (or use legacy `in`/`out` format, see below) |
+| `mapping.rules[].in.host` | string | No (`0.0.0.0`) | Listen address |
+| `mapping.rules[].in.port` | integer | Yes | Start listen port |
+| `mapping.rules[].in.port_end` | integer | No | End listen port (inclusive, closed interval `[port, port_end]`). Must be >= `port` |
+| `mapping.rules[].out.host` | string | Yes | Target address |
+| `mapping.rules[].out.port` | integer | Yes | Start target port |
+| `mapping.rules[].out.port_end` | integer | No | End target port (inclusive). Range size must match `in` range size |
+
+> **Note:** The legacy format with `mapping.in` and `mapping.out` (single object, no `rules` array) is still supported for backward compatibility.
 
 <details>
-<summary>Example: mapping mode</summary>
+<summary>Example: mapping mode with multiple rules and port range</summary>
 
 ```json
 {
     "add_ingress": [
         {
             "mapping": {
-                "in": { "host": "0.0.0.0", "port": 10001 },
-                "out": { "host": "127.0.0.1", "port": 20001 }
+                "rules": [
+                    {
+                        "in": { "host": "0.0.0.0", "port": 10001 },
+                        "out": { "host": "127.0.0.1", "port": 20001 }
+                    },
+                    {
+                        "in": { "host": "0.0.0.0", "port": 10010, "port_end": 10020 },
+                        "out": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 }
+                    }
+                ]
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
@@ -130,6 +142,25 @@ TNG listens on a local TCP port (`in.host`, `in.port`), encrypts traffic, and se
     ]
 }
 ```
+
+</details>
+
+<details>
+<summary>Example: legacy mapping format (single in/out)</summary>
+
+```json
+{
+    "add_ingress": [
+        {
+            "mapping": {
+                "in": { "host": "0.0.0.0", "port": 10001 },
+                "out": { "host": "127.0.0.1", "port": 20001 }
+            }
+        }
+    ]
+}
+```
+
 </details>
 
 ---
@@ -491,18 +522,51 @@ This egress allows encrypted traffic to access port 30001 while also permitting 
 
 ### Mode: mapping (Port Mapping)
 
-TNG listens on a local port (`in.host`, `in.port`), decrypts traffic, and forwards it to the target endpoint (`out.host`, `out.port`). Server programs must listen on the target address where TNG forwards decrypted traffic.
+TNG listens on one or more local ports (`in.host`, `in.port`, optionally `in.port_end`), decrypts traffic, and forwards it to the target endpoint(s) (`out.host`, `out.port`, optionally `out.port_end`). Server programs must listen on the target address where TNG forwards decrypted traffic.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `mapping` | object | Yes | Port mapping configuration object |
-| `mapping.in.host` | string | No (`0.0.0.0`) | Listen address |
-| `mapping.in.port` | integer | Yes | Listen port |
-| `mapping.out.host` | string | Yes | Target address |
-| `mapping.out.port` | integer | Yes | Target port |
+| `mapping.rules` | array | Yes | List of forwarding rules (or use legacy `in`/`out` format, see below) |
+| `mapping.rules[].in.host` | string | No (`0.0.0.0`) | Listen address |
+| `mapping.rules[].in.port` | integer | Yes | Start listen port |
+| `mapping.rules[].in.port_end` | integer | No | End listen port (inclusive, closed interval `[port, port_end]`). Must be >= `port` |
+| `mapping.rules[].out.host` | string | Yes | Target address |
+| `mapping.rules[].out.port` | integer | Yes | Start target port |
+| `mapping.rules[].out.port_end` | integer | No | End target port (inclusive). Range size must match `in` range size |
+
+> **Note:** The legacy format with `mapping.in` and `mapping.out` (single object, no `rules` array) is still supported for backward compatibility.
 
 <details>
-<summary>Example: egress mapping mode</summary>
+<summary>Example: egress mapping mode with multiple rules and port range</summary>
+
+```json
+{
+    "add_egress": [
+        {
+            "mapping": {
+                "rules": [
+                    {
+                        "in": { "host": "127.0.0.1", "port": 20001 },
+                        "out": { "host": "127.0.0.1", "port": 30001 }
+                    },
+                    {
+                        "in": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 },
+                        "out": { "host": "127.0.0.1", "port": 30010, "port_end": 30020 }
+                    }
+                ]
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+</details>
+
+<details>
+<summary>Example: legacy egress mapping format (single in/out)</summary>
 
 ```json
 {
@@ -519,6 +583,7 @@ TNG listens on a local port (`in.host`, `in.port`), decrypts traffic, and forwar
     ]
 }
 ```
+
 </details>
 
 ---
