@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use socket2::SockRef;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::{
@@ -127,7 +128,7 @@ impl EgressTrait for NetfilterEgress {
                     Err(anyhow::anyhow!("The original destination is the same as the listener port, recursion is detected"))?
                 }
 
-                let dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
+                let dst = Arc::new(TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port()));
 
                 Ok(AcceptedStream {
                     stream: Box::new(crate::ContextualStream::new(stream, "egress-netfilter")),

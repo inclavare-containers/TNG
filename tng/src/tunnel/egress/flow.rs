@@ -50,7 +50,7 @@ pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + 
 pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Sync>,
     pub src: SocketAddr,
-    pub dst: TngEndpoint,
+    pub dst: Arc<TngEndpoint>,
     pub listener_addr: SocketAddr,
     pub egress_mode: EgressMode,
 }
