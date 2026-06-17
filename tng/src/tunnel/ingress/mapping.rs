@@ -1,8 +1,11 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::{Context, Result};
+use async_stream::stream;
 use async_trait::async_trait;
+use futures::stream::select_all;
 use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
@@ -15,17 +18,9 @@ use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 use super::flow::{Incomming, IngressTrait};
 
-/// Config for a single listener (without the TcpListener itself).
-struct ListenerConfig {
-    bind_addr: String,
-    listen_addr: String,
-    listen_port: u16,
-    upstream: TngEndpoint,
-}
-
 pub struct MappingIngress {
     id: usize,
-    configs: Vec<ListenerConfig>,
+    rules: Vec<crate::config::mapping_rule::MappingRule>,
 }
 
 impl MappingIngress {
@@ -34,50 +29,10 @@ impl MappingIngress {
             anyhow::bail!("at least one mapping rule is required");
         }
 
-        let mut configs = Vec::new();
-
-        for rule in &mapping_args.rules {
-            let listen_addr = rule
-                .r#in
-                .host
-                .clone()
-                .unwrap_or_else(|| "0.0.0.0".to_owned());
-            let upstream_addr = rule
-                .out
-                .host
-                .as_ref()
-                .context("'host' of 'out' field must be set")?
-                .clone();
-
-            if let Some(port_end) = rule.r#in.port_end {
-                let offset_base = rule.out.port;
-                for port in rule.r#in.port..=port_end {
-                    let offset = port - rule.r#in.port;
-                    let out_port = offset_base + offset;
-                    let bind_addr = format!("{}:{}", listen_addr, port);
-
-                    configs.push(ListenerConfig {
-                        bind_addr,
-                        listen_addr: listen_addr.clone(),
-                        listen_port: port,
-                        upstream: TngEndpoint::new(upstream_addr.clone(), out_port),
-                    });
-                }
-            } else {
-                let listen_port = rule.r#in.port;
-                let bind_addr = format!("{}:{}", listen_addr, listen_port);
-                let upstream_port = rule.out.port;
-
-                configs.push(ListenerConfig {
-                    bind_addr,
-                    listen_addr,
-                    listen_port,
-                    upstream: TngEndpoint::new(upstream_addr, upstream_port),
-                });
-            }
-        }
-
-        Ok(Self { id, configs })
+        Ok(Self {
+            id,
+            rules: mapping_args.rules.clone(),
+        })
     }
 }
 
@@ -85,19 +40,27 @@ impl MappingIngress {
 impl IngressTrait for MappingIngress {
     /// ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}
     fn metric_attributes(&self) -> IndexMap<String, String> {
-        // Use the first listener's addresses for metric attributes (single-rule compatible)
-        let first = &self.configs[0];
+        let first = self.rules.first();
+        let in_desc = first.map_or("".to_owned(), |rule| {
+            format!(
+                "{}:{}",
+                rule.r#in.host.as_deref().unwrap_or("0.0.0.0"),
+                rule.r#in.port
+            )
+        });
+        let out_desc = first.map_or("".to_owned(), |rule| {
+            format!(
+                "{}:{}",
+                rule.out.host.as_deref().unwrap_or(""),
+                rule.out.port
+            )
+        });
+
         [
             ("ingress_type".to_owned(), "mapping".to_owned()),
             ("ingress_id".to_owned(), self.id.to_string()),
-            (
-                "ingress_in".to_owned(),
-                format!("{}:{}", first.listen_addr, first.listen_port),
-            ),
-            (
-                "ingress_out".to_owned(),
-                format!("{}:{}", first.upstream.host(), first.upstream.port()),
-            ),
+            ("ingress_in".to_owned(), in_desc),
+            ("ingress_out".to_owned(), out_desc),
         ]
         .into()
     }
@@ -107,49 +70,76 @@ impl IngressTrait for MappingIngress {
         None
     }
 
-    async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
-        // Create all listeners and spawn a task for each.
-        // Results are merged via a shared mpsc channel (multi-listener select_all pattern).
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AcceptedStream>>(32);
-
-        for cfg in &self.configs {
-            tracing::debug!(bind_addr = %cfg.bind_addr, "Add TCP listener");
-
-            let listener = TcpListener::bind(&cfg.bind_addr).await?;
-            listener.set_listener_common_sock_opts()?;
-
-            let listener_addr = listener.local_addr()?;
-            let upstream = Arc::new(cfg.upstream.clone());
-            let tx = tx.clone();
-
-            runtime.spawn_supervised_task_fn_current_span(move |_rt| async move {
-                loop {
-                    let result = match listener.accept_with_common_sock_opts().await {
-                        Ok((stream, peer_addr)) => Ok(AcceptedStream {
-                            stream: Box::new(crate::ContextualStream::new(
-                                stream,
-                                "ingress-mapping",
-                            )),
-                            src: peer_addr,
-                            dst: upstream.clone(),
-                            via_tunnel: true,
-                            listener_addr,
-                            ingress_mode: IngressMode::Mapping,
-                        }),
-                        Err(e) => Err(anyhow!(e)),
-                    };
-                    if tx.send(result).await.is_err() {
-                        break; // Channel closed, exit
-                    }
-                }
-            });
+    async fn accept(&self, _runtime: TokioRuntime) -> Result<Incomming> {
+        struct ListenerTarget {
+            listener: TcpListener,
+            local_addr: SocketAddr,
+            out_ep: Arc<TngEndpoint>,
         }
 
-        // Drop the original sender so the channel closes when all tasks exit.
-        drop(tx);
+        let mut targets: Vec<ListenerTarget> = Vec::new();
 
-        Ok(Box::pin(futures::stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|item| (item, rx))
-        })))
+        for rule in &self.rules {
+            let host = rule.r#in.host.as_deref().unwrap_or("0.0.0.0");
+            let out_host = rule.out.host.as_deref().context("out.host is required")?;
+
+            if let Some(port_end) = rule.r#in.port_end {
+                let offset_base = rule.out.port;
+                for port in rule.r#in.port..=port_end {
+                    let offset = port - rule.r#in.port;
+                    let out_port = offset_base + offset;
+                    let addr = format!("{host}:{port}");
+                    tracing::debug!(%addr, "Add TCP listener");
+
+                    let listener = TcpListener::bind(&addr).await?;
+                    listener.set_listener_common_sock_opts()?;
+                    let local_addr = listener.local_addr()?;
+                    let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), out_port));
+
+                    targets.push(ListenerTarget {
+                        listener,
+                        local_addr,
+                        out_ep,
+                    });
+                }
+            } else {
+                let addr = format!("{host}:{}", rule.r#in.port);
+                tracing::debug!(%addr, "Add TCP listener");
+
+                let listener = TcpListener::bind(&addr).await?;
+                listener.set_listener_common_sock_opts()?;
+                let local_addr = listener.local_addr()?;
+                let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), rule.out.port));
+
+                targets.push(ListenerTarget {
+                    listener,
+                    local_addr,
+                    out_ep,
+                });
+            }
+        }
+
+        let streams: Vec<_> = targets
+            .into_iter()
+            .map(|target| {
+                Box::pin(stream! {
+                    loop {
+                        match target.listener.accept_with_common_sock_opts().await {
+                            Ok((stream, peer_addr)) => yield Ok(AcceptedStream {
+                                stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
+                                src: peer_addr,
+                                dst: Arc::clone(&target.out_ep),
+                                via_tunnel: true,
+                                listener_addr: target.local_addr,
+                                ingress_mode: IngressMode::Mapping,
+                            }),
+                            Err(e) => yield Err(anyhow!(e)),
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        Ok(Box::pin(select_all(streams)))
     }
 }
