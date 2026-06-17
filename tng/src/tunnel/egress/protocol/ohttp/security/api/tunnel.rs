@@ -1,6 +1,4 @@
 use anyhow::{anyhow, bail, Result};
-use std::collections::HashSet;
-use std::str::FromStr;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use bhttp::http_compat::decode::{BhttpDecoder, HttpMessage};
@@ -9,6 +7,8 @@ use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
+use std::collections::HashSet;
+use std::str::FromStr;
 
 use crate::tunnel::provider::{ProviderType, TngToken};
 use tokio::io::AsyncReadExt;
