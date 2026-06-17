@@ -155,6 +155,7 @@ TNG listens on an HTTP proxy port. Clients route traffic through the proxy to TN
 | `domain` | string | `*` | Target domain to match (supports `*` wildcard; does not support regex) |
 | `domain_regex` | string | `.*` | Target domain regex (mutually exclusive with `domain`) |
 | `port` | integer | `80` | Target port to match |
+| `port_end` | integer | None | Optional end port for range matching. When set with `port`, matches ports in `[port, port_end]` inclusive range. Requires `port` to be set. |
 
 > The `domain` wildcard syntax is described in [Envoy VirtualHost domains](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost).
 
