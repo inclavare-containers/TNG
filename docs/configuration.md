@@ -1352,6 +1352,26 @@ OHTTP-encrypted HTTP requests follow these rules for compatibility with L7 load 
 4. `Content-Type` is `message/ohttp-chunked-req` for requests and `message/ohttp-chunked-res` for responses
 5. Does not include the original request and response headers of the encrypted request
 
+#### `header_passthrough` (Ingress)
+
+Controls which HTTP headers are copied from the plaintext downstream request
+to the outer OHTTP POST request. This allows intermediaries (ALB, WAF, load
+balancers) between Ingress and Egress to read specific headers for routing,
+tracing, or rate limiting.
+
+| Field | Type | Description |
+|---|---|---|
+| `request_headers` | `string[]` | Header names to copy from the downstream request to the outer OHTTP POST request. These headers are NOT forwarded to the upstream server — they remain encrypted in the OHTTP body. |
+
+Example:
+```json
+"ohttp": {
+  "header_passthrough": {
+    "request_headers": ["x-trace-id", "x-tenant-id"]
+  }
+}
+```
+
 
 <a name="ohttp-egress-side-configuration"></a>
 
@@ -1407,6 +1427,25 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 }
 ```
 </details>
+
+#### `header_passthrough` (Egress)
+
+Controls which HTTP headers are copied from the plaintext upstream response
+to the outer OHTTP HTTP response. This allows intermediaries between Egress
+and Ingress to read specific headers.
+
+| Field | Type | Description |
+|---|---|---|
+| `response_headers` | `string[]` | Header names to copy from the upstream response to the outer OHTTP HTTP response. These headers are NOT forwarded to the downstream client — they remain encrypted in the OHTTP body. |
+
+Example:
+```json
+"ohttp": {
+  "header_passthrough": {
+    "response_headers": ["x-custom-header", "x-rate-limit-remaining"]
+  }
+}
+```
 
 <a name="ohttp-key-management"></a>
 

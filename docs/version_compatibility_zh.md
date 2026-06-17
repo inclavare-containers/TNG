@@ -11,3 +11,4 @@
 | 2.2.5 | 从该版本开始，TNG 使用 OHTTP 替代之前的 rats-tls over HTTP CONNECT 协议组合，并引入护照模型支持。 |
 | >= 2.2.6 | 从该版本开始，对 OHTTP 协议做了调整，解决 2.2.5 在 HTTP 路由场景下的设计问题。 |
 | > 2.6.0 | **破坏性变更**：`rats_tls.multiplex` 的默认值从 `true` 改为 `false`。此前，当指定 `rats_tls` 但未显式设置 `multiplex` 时，默认使用 HTTP/2 CONNECT 隧道在单条 rats-TLS 连接上复用多个 TCP 流。现在，默认每个下游连接创建独立的 TLS 会话，以获得更高的单流吞吐量。如果你依赖之前的复用行为，必须在配置中显式设置 `"rats_tls": { "multiplex": true }`。这一变更的原因是：H2 复用的带宽受限于单核 CPU 的 TLS 加密能力，在高带宽场景下无法有效扩展，而独立的 TLS 连接可以在多个 CPU 核心上并行加解密。 |
+| > 2.6.0 | 在 Ingress 和 Egress 的 `ohttp` 配置中新增可选的 `header_passthrough` 字段。未配置时行为不变（外层 OHTTP 消息不暴露任何业务 header）。 |
