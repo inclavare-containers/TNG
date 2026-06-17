@@ -1,4 +1,6 @@
 use anyhow::{anyhow, bail, Result};
+use std::collections::HashSet;
+use std::str::FromStr;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use bhttp::http_compat::decode::{BhttpDecoder, HttpMessage};
@@ -147,6 +149,24 @@ impl OhttpServerApi {
             "Received response from upstream server"
         );
 
+        // Collect passthrough headers before response is consumed by BhttpEncoder
+        let mut passthrough_headers: Vec<(http::HeaderName, http::HeaderValue)> = Vec::new();
+        let protected: HashSet<&str> = [
+            http::header::CONTENT_TYPE.as_str(),
+            crate::HTTP_RESPONSE_SERVER_HEADER,
+        ]
+        .into_iter()
+        .collect();
+        for header_name in self.passthrough_response_headers.iter() {
+            if let Ok(name) = http::HeaderName::from_str(header_name) {
+                if !protected.contains(name.as_str()) {
+                    if let Some(value) = response.headers().get(&name) {
+                        passthrough_headers.push((name, value.clone()));
+                    }
+                }
+            }
+        }
+
         // Encode the response to bhttp message
         let bhttp_encoder = BhttpEncoder::from_response(response);
         // Encrypt to get the ohttp message
@@ -178,12 +198,18 @@ impl OhttpServerApi {
         };
 
         // Return the response
-        let response = http::Response::builder()
+        let mut response_builder = http::Response::builder()
             .status(axum::http::StatusCode::OK)
             .header(
                 http::header::CONTENT_TYPE,
                 OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
-            )
+            );
+
+        for (name, value) in passthrough_headers {
+            response_builder = response_builder.header(name, value);
+        }
+
+        let response = response_builder
             .body(axum::body::Body::from_stream(ReaderStream::new(
                 encrypted_response,
             )))
