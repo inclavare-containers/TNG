@@ -42,23 +42,39 @@ impl MappingIngress {
                 .host
                 .clone()
                 .unwrap_or_else(|| "0.0.0.0".to_owned());
-            let listen_port = rule.r#in.port;
-            let bind_addr = format!("{}:{}", listen_addr, listen_port);
-
             let upstream_addr = rule
                 .out
                 .host
                 .as_ref()
                 .context("'host' of 'out' field must be set")?
                 .clone();
-            let upstream_port = rule.out.port;
 
-            configs.push(ListenerConfig {
-                bind_addr,
-                listen_addr,
-                listen_port,
-                upstream: TngEndpoint::new(upstream_addr, upstream_port),
-            });
+            if let Some(port_end) = rule.r#in.port_end {
+                let offset_base = rule.out.port;
+                for port in rule.r#in.port..=port_end {
+                    let offset = port - rule.r#in.port;
+                    let out_port = offset_base + offset;
+                    let bind_addr = format!("{}:{}", listen_addr, port);
+
+                    configs.push(ListenerConfig {
+                        bind_addr,
+                        listen_addr: listen_addr.clone(),
+                        listen_port: port,
+                        upstream: TngEndpoint::new(upstream_addr.clone(), out_port),
+                    });
+                }
+            } else {
+                let listen_port = rule.r#in.port;
+                let bind_addr = format!("{}:{}", listen_addr, listen_port);
+                let upstream_port = rule.out.port;
+
+                configs.push(ListenerConfig {
+                    bind_addr,
+                    listen_addr,
+                    listen_port,
+                    upstream: TngEndpoint::new(upstream_addr, upstream_port),
+                });
+            }
         }
 
         Ok(Self { id, configs })
