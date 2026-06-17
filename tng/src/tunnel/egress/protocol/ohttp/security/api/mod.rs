@@ -52,6 +52,8 @@ pub struct OhttpServerApi {
     /// When keys change, the cache is invalidated and regenerated.
     #[cfg(unix)]
     passport_cache: Arc<RwLock<Option<PassportCache>>>,
+    /// Headers to copy from upstream responses to the outer OHTTP response.
+    passthrough_response_headers: Arc<Vec<String>>,
 }
 
 impl OhttpServerApi {
@@ -62,6 +64,7 @@ impl OhttpServerApi {
         ra_context: Arc<RaContext>,
         key: KeyArgs,
         runtime: TokioRuntime,
+        passthrough_response_headers: Arc<Vec<String>>,
     ) -> Result<Self, TngError> {
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
@@ -81,6 +84,7 @@ impl OhttpServerApi {
             key_manager,
             #[cfg(unix)]
             passport_cache: Arc::new(RwLock::new(None)),
+            passthrough_response_headers,
         })
     }
 }

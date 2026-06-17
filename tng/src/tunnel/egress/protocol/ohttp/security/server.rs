@@ -49,8 +49,24 @@ impl OhttpServer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        let passthrough_response_headers = Arc::new(
+            ohttp_args
+                .header_passthrough
+                .as_ref()
+                .map(|hp| hp.response_headers.clone())
+                .unwrap_or_default(),
+        );
+
         Ok(Self {
-            api: Arc::new(OhttpServerApi::new(ra_context, ohttp_args.key, runtime).await?),
+            api: Arc::new(
+                OhttpServerApi::new(
+                    ra_context,
+                    ohttp_args.key,
+                    runtime,
+                    passthrough_response_headers,
+                )
+                .await?,
+            ),
             cors_layer: match &ohttp_args.cors {
                 Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
                 None => None,
