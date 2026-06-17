@@ -223,6 +223,12 @@ pub struct EndpointFilter {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+
+    /// Optional end port for port range matching.
+    ///
+    /// When set together with `port`, matches destination ports in the range `[port, port_end]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_end: Option<u16>,
 }
 
 #[cfg(test)]
@@ -481,6 +487,81 @@ mod tests {
                 ]
             }
         ))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_endpoint_filter_port_end() -> Result<()> {
+        // Valid: port + port_end
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [
+                {
+                    "http_proxy": {
+                        "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                        "dst_filters": [
+                            { "domain": "*", "port": 30000, "port_end": 30063 }
+                        ]
+                    },
+                    "no_ra": true
+                }
+            ]
+        }))?;
+        // Serialize and round-trip
+        let json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_endpoint_filter_port_end_omitted_when_none() -> Result<()> {
+        // port_end should NOT appear in serialized output when not set
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [
+                {
+                    "http_proxy": {
+                        "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                        "dst_filters": [
+                            { "domain": "*", "port": 5600 }
+                        ]
+                    },
+                    "no_ra": true
+                }
+            ]
+        }))?;
+        let json = serde_json::to_string(&config)?;
+        assert!(
+            !json.contains("port_end"),
+            "port_end should be omitted when None"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_endpoint_filter_socks5_port_end() -> Result<()> {
+        // Verify port_end also works for socks5
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [
+                {
+                    "socks5": {
+                        "proxy_listen": { "host": "0.0.0.0", "port": 1080 },
+                        "dst_filters": [
+                            { "domain": "*.example.com", "port": 30000, "port_end": 30063 }
+                        ]
+                    },
+                    "no_ra": true
+                }
+            ]
+        }))?;
+        let json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
         Ok(())
     }
 }
