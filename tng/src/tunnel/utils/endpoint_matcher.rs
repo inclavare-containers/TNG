@@ -13,6 +13,7 @@ pub struct EndpointMatcher {
 struct MatchItem {
     matcher: Either<Regex, EnvoyDomainMatcher>,
     port: u16,
+    port_end: Option<u16>,
 }
 
 impl EndpointMatcher {
@@ -31,9 +32,19 @@ impl EndpointMatcher {
                         bail!("Cannot specify both 'domain' and 'domain_regex")
                     }
                 };
+                let port = dst_filter.port.unwrap_or(80);
+                if let Some(end) = dst_filter.port_end {
+                    if dst_filter.port.is_none() {
+                        bail!("`port_end` requires `port` to be specified");
+                    }
+                    if end < port {
+                        bail!("`port_end` ({end}) must be >= `port` ({port})");
+                    }
+                }
                 Ok(MatchItem {
                     matcher,
-                    port: dst_filter.port.unwrap_or(80),
+                    port,
+                    port_end: dst_filter.port_end,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -52,11 +63,18 @@ impl EndpointMatcher {
                 Either::Right(m) => m.is_match(endpoint.host()),
             };
 
-            if is_match && item.port == endpoint.port() {
+            if is_match && Self::port_matches(item.port, item.port_end, endpoint.port()) {
                 return true;
             }
         }
         false
+    }
+
+    fn port_matches(port: u16, port_end: Option<u16>, actual: u16) -> bool {
+        match port_end {
+            Some(end) => port <= actual && actual <= end,
+            None => port == actual,
+        }
     }
 }
 
@@ -200,6 +218,76 @@ mod tests {
         assert!(endpoint_matcher.matches(&TngEndpoint::new("www.sub.foo.com", 9991)));
         assert!(endpoint_matcher.matches(&TngEndpoint::new("new-foo.com", 9991)));
         assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.bar.com", 9991)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_port_range_match() -> Result<()> {
+        // Single port (existing behavior)
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port": 9991
+        }))?])?;
+        assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 9991)));
+        assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 9992)));
+
+        // Port range
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port": 30000,
+            "port_end": 30063
+        }))?])?;
+        assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 29999))); // below range
+        assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 30000))); // lower bound
+        assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 30031))); // mid-range
+        assert!(endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 30063))); // upper bound
+        assert!(!endpoint_matcher.matches(&TngEndpoint::new("www.foo.com", 30064))); // above range
+
+        // Port range with specific domain
+        let endpoint_matcher = EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*.example.com",
+            "port": 30000,
+            "port_end": 30063
+        }))?])?;
+        assert!(endpoint_matcher.matches(&TngEndpoint::new("api.example.com", 30000)));
+        assert!(!endpoint_matcher.matches(&TngEndpoint::new("api.other.com", 30000)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_port_end_validation() -> Result<()> {
+        // port_end without port — error
+        assert!(EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port_end": 30063
+        }))?])
+        .is_err());
+
+        // port_end < port — error
+        assert!(EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port": 30063,
+            "port_end": 30000
+        }))?])
+        .is_err());
+
+        // port_end == port — valid (single port range)
+        assert!(EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port": 30000,
+            "port_end": 30000
+        }))?])
+        .is_ok());
+
+        // Valid range
+        assert!(EndpointMatcher::new(&[serde_json::from_value(json!({
+            "domain": "*",
+            "port": 30000,
+            "port_end": 30063
+        }))?])
+        .is_ok());
 
         Ok(())
     }
