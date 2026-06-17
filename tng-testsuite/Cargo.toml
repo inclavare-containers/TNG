@@ -136,6 +136,14 @@ name = "no_ra_ingress_httpproxy"
 path = "tests/http/no_ra_ingress_httpproxy.rs"
 
 [[test]]
+name = "mapping_port_range"
+path = "tests/http/mapping_port_range.rs"
+
+[[test]]
+name = "mapping_multi_rule"
+path = "tests/http/mapping_multi_rule.rs"
+
+[[test]]
 name = "ohttp"
 path = "tests/ohttp/ohttp.rs"
 
