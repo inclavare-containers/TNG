@@ -119,14 +119,18 @@ pub mod tests {
             }],
             add_egress: vec![AddEgressArgs {
                 egress_mode: EgressMode::Mapping (EgressMappingArgs{
-                    r#in: Endpoint {
-                        host: Some("127.0.0.1".to_owned()),
-                        port: 20001,
-                    },
-                    out: Endpoint {
-                        host: Some("127.0.0.1".to_owned()),
-                        port: 30001,
-                    },
+                    rules: vec![MappingRule {
+                        r#in: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 20001,
+                            port_end: None,
+                        },
+                        out: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 30001,
+                            port_end: None,
+                        },
+                    }],
                 }),
                 common:egress::CommonArgs{
                     direct_forward: None,

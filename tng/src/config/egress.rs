@@ -3,7 +3,8 @@ use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
-use super::{ra::RaArgsUnchecked, Endpoint};
+use super::mapping_rule::MappingDe;
+use super::ra::RaArgsUnchecked;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddEgressArgs {
@@ -56,11 +57,24 @@ pub struct DirectForwardRule {
     pub http_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EgressMappingArgs {
-    pub r#in: Endpoint,
-    pub out: Endpoint,
+    /// Parsed rules: either from the new `rules` array, or a single rule
+    /// synthesized from the legacy `in`/`out` fields.
+    pub rules: Vec<super::mapping_rule::MappingRule>,
+}
+
+impl<'de> Deserialize<'de> for EgressMappingArgs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let de = MappingDe::deserialize(deserializer)?;
+        let rules = de
+            .into_checked("egress mapping")
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self { rules })
+    }
 }
 
 #[serde_as]

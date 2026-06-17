@@ -25,23 +25,22 @@ pub struct MappingEgress {
 
 impl MappingEgress {
     pub async fn new(id: usize, mapping_args: &EgressMappingArgs) -> Result<Self> {
+        let rule = mapping_args
+            .rules
+            .first()
+            .context("egress mapping requires at least one rule")?;
         Ok(Self {
             id,
-            listen_addr: mapping_args
-                .r#in
-                .host
-                .as_deref()
-                .unwrap_or("0.0.0.0")
-                .to_owned(),
-            listen_port: mapping_args.r#in.port,
+            listen_addr: rule.r#in.host.as_deref().unwrap_or("0.0.0.0").to_owned(),
+            listen_port: rule.r#in.port,
 
-            upstream_addr: mapping_args
+            upstream_addr: rule
                 .out
                 .host
                 .as_deref()
                 .context("'host' of 'out' field must be set")?
                 .to_owned(),
-            upstream_port: mapping_args.out.port,
+            upstream_port: rule.out.port,
         })
     }
 }
