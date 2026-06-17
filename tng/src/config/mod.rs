@@ -49,8 +49,8 @@ pub struct Endpoint {
 #[cfg(test)]
 pub mod tests {
     use anyhow::Result;
-    use egress::EgressMode;
-    use ingress::{IngressMode, PathRewrite};
+    use egress::{EgressHeaderPassthroughConfig, EgressMode};
+    use ingress::{IngressHeaderPassthroughConfig, IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
     use crate::config::mapping_rule::{MappingRule, RuleEndpoint};
@@ -94,6 +94,9 @@ pub mod tests {
                             match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
                             substitution: "/foo/bar/\\1".to_owned(),
                         }],
+                        header_passthrough: Some(IngressHeaderPassthroughConfig {
+                            request_headers: vec!["x-trace-id".to_owned()],
+                        }),
                     }),
                     rats_tls: None,
                     ra_args: RaArgsUnchecked {
@@ -138,6 +141,9 @@ pub mod tests {
                         allow_non_tng_traffic_regexes: None,
                         cors: None,
                         key: Default::default(),
+                        header_passthrough: Some(EgressHeaderPassthroughConfig {
+                            response_headers: vec!["x-custom-header".to_owned()],
+                        }),
                     }),
                     rats_tls: None,
                     ra_args: RaArgsUnchecked {
