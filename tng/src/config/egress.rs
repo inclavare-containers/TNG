@@ -413,7 +413,7 @@ mod tests {
 
     use crate::config::TngConfig;
 
-    use super::{EgressNetfilterCaptureDst, EgressNetfilterCaptureDstArgs};
+    use super::{EgressMode, EgressNetfilterCaptureDst, EgressNetfilterCaptureDstArgs};
 
     fn test_deserialize_egress_netfilter_common(value: serde_json::Value) -> Result<()> {
         let config: TngConfig = serde_json::from_value(value)?;
@@ -582,5 +582,89 @@ mod tests {
         .is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_mapping_backward_compat() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "0.0.0.0", "port": 20001 },
+                            "out": { "host": "127.0.0.1", "port": 30001 }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(&config)?,
+            serde_json::to_value(&config2)?
+        );
+        if let EgressMode::Mapping(m) = &config.add_egress[0].egress_mode {
+            assert_eq!(m.rules.len(), 1);
+            assert_eq!(m.rules[0].r#in.port, 20001);
+            assert_eq!(m.rules[0].out.port, 30001);
+        } else {
+            panic!("expected mapping mode");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_mapping_port_range() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                {
+                                    "in": { "host": "0.0.0.0", "port": 20010, "port_end": 20020 },
+                                    "out": { "host": "127.0.0.1", "port": 30010, "port_end": 30020 }
+                                }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        if let EgressMode::Mapping(m) = &config.add_egress[0].egress_mode {
+            assert_eq!(m.rules[0].r#in.port_end, Some(20020));
+            assert_eq!(m.rules[0].out.port_end, Some(30020));
+        } else {
+            panic!("expected mapping mode");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_egress_mapping_validation_overlapping_rules() {
+        let result = serde_json::from_value::<TngConfig>(json!(
+            {
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                { "in": { "host": "0.0.0.0", "port": 20010, "port_end": 20020 }, "out": { "host": "127.0.0.1", "port": 30010, "port_end": 30020 } },
+                                { "in": { "host": "0.0.0.0", "port": 20015, "port_end": 20025 }, "out": { "host": "127.0.0.1", "port": 30015, "port_end": 30025 } }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overlapping"),
+            "error should mention overlapping: {err}"
+        );
     }
 }

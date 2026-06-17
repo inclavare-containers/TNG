@@ -252,7 +252,7 @@ mod tests {
 
     use crate::config::TngConfig;
 
-    use super::{IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs};
+    use super::{IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs};
 
     fn test_deserialize_netfilter_common(value: serde_json::Value) -> Result<()> {
         // Check deserialize
@@ -577,5 +577,208 @@ mod tests {
             serde_json::to_value(config2)?
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_mapping_backward_compat() -> Result<()> {
+        // Legacy format: single in/out
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "0.0.0.0", "port": 10001 },
+                            "out": { "host": "127.0.0.1", "port": 20001 }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        // Verify round-trip: serialize and deserialize again
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(&config)?,
+            serde_json::to_value(&config2)?
+        );
+        // Verify rules were parsed correctly
+        if let IngressMode::Mapping(m) = &config.add_ingress[0].ingress_mode {
+            assert_eq!(m.rules.len(), 1);
+            assert_eq!(m.rules[0].r#in.host, Some("0.0.0.0".to_owned()));
+            assert_eq!(m.rules[0].r#in.port, 10001);
+            assert_eq!(m.rules[0].r#in.port_end, None);
+            assert_eq!(m.rules[0].out.host, Some("127.0.0.1".to_owned()));
+            assert_eq!(m.rules[0].out.port, 20001);
+        } else {
+            panic!("expected mapping mode");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_mapping_multi_rule() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                { "in": { "host": "0.0.0.0", "port": 10001 }, "out": { "host": "127.0.0.1", "port": 20001 } },
+                                { "in": { "host": "0.0.0.0", "port": 10002 }, "out": { "host": "127.0.0.1", "port": 20002 } }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        // Verify round-trip
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(&config)?,
+            serde_json::to_value(&config2)?
+        );
+        // Verify rules
+        if let IngressMode::Mapping(m) = &config.add_ingress[0].ingress_mode {
+            assert_eq!(m.rules.len(), 2);
+            assert_eq!(m.rules[0].r#in.port, 10001);
+            assert_eq!(m.rules[1].r#in.port, 10002);
+        } else {
+            panic!("expected mapping mode");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_mapping_port_range() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                {
+                                    "in": { "host": "0.0.0.0", "port": 10010, "port_end": 10020 },
+                                    "out": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 }
+                                }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        if let IngressMode::Mapping(m) = &config.add_ingress[0].ingress_mode {
+            assert_eq!(m.rules[0].r#in.port_end, Some(10020));
+            assert_eq!(m.rules[0].out.port_end, Some(20020));
+        } else {
+            panic!("expected mapping mode");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mapping_validation_port_end_less_than_port() {
+        let result = serde_json::from_value::<TngConfig>(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                {
+                                    "in": { "host": "0.0.0.0", "port": 10020, "port_end": 10010 },
+                                    "out": { "host": "127.0.0.1", "port": 20010 }
+                                }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("port_end"),
+            "error should mention port_end: {err}"
+        );
+    }
+
+    #[test]
+    fn test_mapping_validation_range_size_mismatch() {
+        let result = serde_json::from_value::<TngConfig>(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                {
+                                    "in": { "host": "0.0.0.0", "port": 10010, "port_end": 10020 },
+                                    "out": { "host": "127.0.0.1", "port": 20010, "port_end": 20015 }
+                                }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("range size"),
+            "error should mention range size: {err}"
+        );
+    }
+
+    #[test]
+    fn test_mapping_validation_overlapping_rules() {
+        let result = serde_json::from_value::<TngConfig>(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                { "in": { "host": "0.0.0.0", "port": 10010, "port_end": 10020 }, "out": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 } },
+                                { "in": { "host": "0.0.0.0", "port": 10015, "port_end": 10025 }, "out": { "host": "127.0.0.1", "port": 20015, "port_end": 20025 } }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overlapping"),
+            "error should mention overlapping: {err}"
+        );
+    }
+
+    #[test]
+    fn test_mapping_validation_out_host_missing() {
+        let result = serde_json::from_value::<TngConfig>(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "rules": [
+                                { "in": { "host": "0.0.0.0", "port": 10001 }, "out": { "port": 20001 } }
+                            ]
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("out.host"),
+            "error should mention out.host: {err}"
+        );
     }
 }
