@@ -214,6 +214,11 @@ pub struct Socks5AuthArgs {
 pub struct OHttpArgs {
     #[serde(default)]
     pub path_rewrites: Vec<PathRewrite>,
+
+    /// Controls which headers from the downstream request are copied to the
+    /// outer OHTTP POST request.
+    #[serde(default)]
+    pub header_passthrough: Option<IngressHeaderPassthroughConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -221,6 +226,20 @@ pub struct OHttpArgs {
 pub struct PathRewrite {
     pub match_regex: String,
     pub substitution: String,
+}
+
+/// Configuration for copying selected headers from the downstream plaintext
+/// request to the outer OHTTP POST request.
+///
+/// These headers are visible to intermediaries between Ingress and Egress
+/// but are NOT forwarded to the upstream server — they remain encrypted
+/// inside the OHTTP body.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct IngressHeaderPassthroughConfig {
+    /// Header names to copy from the downstream request to the outer POST.
+    #[serde(default)]
+    pub request_headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
