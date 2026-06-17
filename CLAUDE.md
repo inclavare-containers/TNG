@@ -31,15 +31,17 @@ When creating a pull request, always:
 
 ## Pre-Commit Checks
 
-Before creating any commit, always run and ensure the following pass:
+**Before creating any commit**, always run and ensure the following pass:
 
 ```bash
-make clippy        # Rust lints (wraps cargo clippy)
-cargo fmt --check  # Formatting check
-cargo build        # Compilation
+cargo fmt           # Format code
+make clippy         # Rust lints (wraps cargo clippy)
+cargo build         # Compilation
 ```
 
 Fix any errors or warnings reported before proceeding with the commit.
+
+> **Important:** Run `cargo fmt` and `make clippy` _before_ committing, not just as a final verification. The CI will fail if formatting or lints are incorrect — fix them locally first.
 
 **When renaming a boolean variable or changing its meaning**, verify that all
 if/else branches have been swapped accordingly. A common mistake is flipping
@@ -130,3 +132,25 @@ When a change breaks backward compatibility:
   .map_err(|e| anyhow::anyhow!("[source] {}", e))
   ```
 - When wrapping `io::Error` into `io::Error::other(anyhow::Error)`, convert with `anyhow::Error::from(e)` and use `.context()` for the label.
+
+## Testing New Features
+
+When implementing a new feature or modifying existing behavior:
+
+1. **Unit tests** — add tests for the new logic in the same module's `#[cfg(test)]` block. Cover:
+   - Normal cases (expected input → expected output)
+   - Boundary conditions (edge values, min/max, empty inputs)
+   - Error cases (invalid input → correct error)
+   - Backward compatibility (existing behavior unchanged)
+
+2. **Integration tests** — add a test in `tng-testsuite/tests/` that exercises the feature end-to-end through the TNG tunnel. Follow these guidelines:
+   - Use `no_ra: true` on both client and server to avoid external AA/AS service dependencies, unless RA is specifically being tested.
+   - Register the test in `tng-testsuite/Cargo.toml` under a `[[test]]` section.
+   - Name the test file descriptively (e.g., `http_proxy_port_end.rs` for the `port_end` feature).
+   - Verify the test passes locally before committing.
+
+3. **When to add integration tests**:
+   - New configuration fields that affect routing/matching behavior
+   - New ingress/egress modes or modifiers
+   - Changes to protocol behavior or tunnel establishment
+   - Changes that could break existing configs (regression testing)

@@ -17,7 +17,8 @@ use tng_testsuite::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_http_proxy_port_end() -> Result<()> {
     run_test!(vec![
-        TngInstance::TngServer(r#"
+        TngInstance::TngServer(
+            r#"
             {
                 "add_egress": [
                     {
@@ -34,8 +35,10 @@ async fn test_http_proxy_port_end() -> Result<()> {
                 ]
             }
             "#
-        ).boxed(),
-        TngInstance::TngClient(r#"
+        )
+        .boxed(),
+        TngInstance::TngClient(
+            r#"
             {
                 "add_ingress": [
                     {
@@ -57,7 +60,8 @@ async fn test_http_proxy_port_end() -> Result<()> {
                 ]
             }
             "#
-        ).boxed(),
+        )
+        .boxed(),
         AppType::HttpServer {
             port: 30015,
             expected_host_header: "192.168.1.1:30015",
