@@ -40,7 +40,7 @@ use tokio_util::{
 };
 use url::Url;
 
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, str::FromStr, sync::Arc};
 
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
@@ -506,6 +506,34 @@ impl OHttpClientInner {
         Ok(response)
     }
 
+    /// Copy passthrough headers from the downstream request to the outer POST builder.
+    /// Protocol headers (content-type, x-tng-ohttp-api) are never overwritten.
+    fn passthrough_headers<'a>(
+        &'a self,
+        request: &'a axum::extract::Request,
+    ) -> Vec<(http::HeaderName, http::HeaderValue)> {
+        let protected: std::collections::HashSet<&str> = [
+            http::header::CONTENT_TYPE.as_str(),
+            crate::tunnel::ohttp::protocol::header::OhttpApi::HEADER_NAME,
+        ]
+        .into_iter()
+        .collect();
+
+        self.passthrough_request_headers
+            .iter()
+            .filter_map(|name| {
+                let header_name = http::HeaderName::from_str(name).ok()?;
+                if protected.contains(header_name.as_str()) {
+                    return None;
+                }
+                request
+                    .headers()
+                    .get(&header_name)
+                    .map(|v| (header_name, v.clone()))
+            })
+            .collect()
+    }
+
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
     /// and send the encrypted ciphertext as the request body to the server.
     async fn send_encrypted_request(
@@ -514,6 +542,9 @@ impl OHttpClientInner {
         client_auth: &ClientAuth,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
+        // Extract passthrough headers before the request is consumed by BHttp encoding
+        let passthrough_headers = self.passthrough_headers(&request);
+
         // Encode the request to bhttp message
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
@@ -624,14 +655,21 @@ impl OHttpClientInner {
 
         tracing::debug!(?url, "Sending OHTTP request to upstream server");
 
-        let response = self
+        let mut request_builder = self
             .http_client
             .post(url)
             .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
             .header(
                 http::header::CONTENT_TYPE,
                 OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
-            )
+            );
+
+        // Copy passthrough headers from the original downstream request
+        for (name, value) in passthrough_headers {
+            request_builder = request_builder.header(name, value);
+        }
+
+        let response = request_builder
             .body(ohttp_request_body)
             .send()
             .await
