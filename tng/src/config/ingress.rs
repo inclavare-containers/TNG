@@ -3,6 +3,7 @@ use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
+use super::mapping_rule::MappingDe;
 use super::{ra::RaArgsUnchecked, Endpoint};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,11 +64,24 @@ pub enum IngressMode {
     Socks5(IngressSocks5Args),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IngressMappingArgs {
-    #[serde(rename = "in")]
-    pub r#in: Endpoint,
-    pub out: Endpoint,
+    /// Parsed rules: either from the new `rules` array, or a single rule
+    /// synthesized from the legacy `in`/`out` fields.
+    pub rules: Vec<super::mapping_rule::MappingRule>,
+}
+
+impl<'de> Deserialize<'de> for IngressMappingArgs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let de = MappingDe::deserialize(deserializer)?;
+        let rules = de
+            .into_checked("ingress mapping")
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self { rules })
+    }
 }
 
 #[serde_as]

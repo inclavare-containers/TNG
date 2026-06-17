@@ -53,6 +53,8 @@ pub mod tests {
     use ingress::{IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
+    use crate::config::mapping_rule::{MappingRule, RuleEndpoint};
+
     use crate::config::{
         egress::EgressMappingArgs,
         ra::{
@@ -72,14 +74,18 @@ pub mod tests {
             trace: None,
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping(ingress::IngressMappingArgs {
-                    r#in: Endpoint {
-                        host: None,
-                        port: 10001,
-                    },
-                    out: Endpoint {
-                        host: Some("127.0.0.1".to_owned()),
-                        port: 20001,
-                    },
+                    rules: vec![MappingRule {
+                        r#in: RuleEndpoint {
+                            host: None,
+                            port: 10001,
+                            port_end: None,
+                        },
+                        out: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 20001,
+                            port_end: None,
+                        },
+                    }],
                 }),
                 common: ingress::CommonArgs{
                     web_page_inject: false,

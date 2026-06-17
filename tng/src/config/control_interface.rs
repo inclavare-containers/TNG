@@ -29,6 +29,7 @@ mod tests {
 
     use crate::config::{
         ingress::{self, AddIngressArgs, IngressMode},
+        mapping_rule::{MappingRule, RuleEndpoint},
         ra::RaArgsUnchecked,
         Endpoint, TngConfig,
     };
@@ -77,14 +78,18 @@ mod tests {
             }),
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping(ingress::IngressMappingArgs {
-                    r#in: Endpoint {
-                        host: None,
-                        port: 10001,
-                    },
-                    out: Endpoint {
-                        host: Some("127.0.0.1".to_owned()),
-                        port: 30001,
-                    },
+                    rules: vec![MappingRule {
+                        r#in: RuleEndpoint {
+                            host: None,
+                            port: 10001,
+                            port_end: None,
+                        },
+                        out: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 30001,
+                            port_end: None,
+                        },
+                    }],
                 }),
                 common: ingress::CommonArgs {
                     web_page_inject: false,
@@ -147,14 +152,18 @@ mod tests {
             }),
             add_ingress: vec![AddIngressArgs {
                 ingress_mode: IngressMode::Mapping(ingress::IngressMappingArgs {
-                    r#in: Endpoint {
-                        host: None,
-                        port: 10001,
-                    },
-                    out: Endpoint {
-                        host: Some("127.0.0.1".to_owned()),
-                        port: 30001,
-                    },
+                    rules: vec![MappingRule {
+                        r#in: RuleEndpoint {
+                            host: None,
+                            port: 10001,
+                            port_end: None,
+                        },
+                        out: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 30001,
+                            port_end: None,
+                        },
+                    }],
                 }),
                 common: ingress::CommonArgs {
                     web_page_inject: false,

@@ -23,21 +23,20 @@ pub struct MappingIngress {
 
 impl MappingIngress {
     pub async fn new(id: usize, mapping_args: &IngressMappingArgs) -> Result<Self> {
-        let listen_addr = mapping_args
-            .r#in
-            .host
-            .as_deref()
-            .unwrap_or("0.0.0.0")
-            .to_owned();
-        let listen_port = mapping_args.r#in.port;
+        let rule = mapping_args
+            .rules
+            .first()
+            .ok_or_else(|| anyhow!("ingress mapping requires at least one rule"))?;
+        let listen_addr = rule.r#in.host.as_deref().unwrap_or("0.0.0.0").to_owned();
+        let listen_port = rule.r#in.port;
 
-        let upstream_addr = mapping_args
+        let upstream_addr = rule
             .out
             .host
             .as_deref()
             .context("'host' of 'out' field must be set")?
             .to_owned();
-        let upstream_port = mapping_args.out.port;
+        let upstream_port = rule.out.port;
 
         Ok(Self {
             id,
