@@ -600,6 +600,12 @@ impl PeerSharedKeyManager {
 
                     match event {
                         Event::Query(query) => {
+                            tracing::trace!(
+                                name = query.name().as_str(),
+                                from = query.from().to_string(),
+                                "Handling query"
+                            );
+
                             {
                                 let Some(serf) = serf.upgrade() else {
                                     tracing::debug!(
@@ -624,6 +630,11 @@ impl PeerSharedKeyManager {
                             }
                         }
                         Event::User(user_event) => {
+                            tracing::trace!(
+                                name = user_event.name().as_str(),
+                                "Handling user event"
+                            );
+
                             if let Err(error) = Self::handle_user_event(
                                 user_event.name().as_str(),
                                 user_event.payload(),
@@ -639,6 +650,12 @@ impl PeerSharedKeyManager {
                             }
                         }
                         Event::Member(member_event) => {
+                            tracing::trace!(
+                                type = member_event.ty().as_str(),
+                                members = ?member_event.members().iter().map(|m| m.node()).collect::<Vec<_>>(),
+                                "Handling member event"
+                            );
+
                             if matches!(member_event.ty(), MemberEventType::Leave) {
                                 tracing::info!("Member left, triggering key rotation check");
                                 {
@@ -807,6 +824,19 @@ impl PeerSharedKeyManager {
 
         Ok(None)
     }
+
+    /// Join a set of peers after construction.
+    ///
+    /// This mirrors the file watcher scenario: when new peers are discovered,
+    /// only `join_serf_cluster` is called — no `QueryClusterKeySetRequest` is sent.
+    /// Key synchronization must happen through subsequent Serf queries.
+    #[cfg(test)]
+    pub(crate) async fn join_peers(&self, peers: &[String]) -> Result<(), TngError> {
+        if peers.is_empty() {
+            return Ok(());
+        }
+        join_serf_cluster(&self.serf, peers).await
+    }
 }
 
 async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngError> {
@@ -945,6 +975,7 @@ mod tests {
     use crate::tests::run_test_with_tokio_runtime;
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
     use anyhow::{anyhow, Result};
+    use hex;
     use std::time::Duration;
 
     // -----------------------------------------------------------------------
@@ -1022,6 +1053,98 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// Collect all public keys from every node, then verify that on every node
+    /// each key is reachable via `query_key_from_cluster`.
+    ///
+    /// Before collecting keys, verify Serf connectivity between all node pairs.
+    ///
+    /// After all queries succeed, also verifies that every node's local
+    /// `ClusterKeySet` contains the full union of keys.
+    async fn verify_all_keys_reachable(nodes: &[(&str, &PeerSharedKeyManager)]) -> Result<()> {
+        // --- Step 1: Verify Serf connectivity — ping every expected node pair ---
+        // For each pinger, check that all other expected nodes are visible in its
+        // member list, then ping each one to confirm connectivity.
+        for (pinger_name, mgr) in nodes {
+            let members = mgr.serf.members().await;
+            let local_id = mgr.serf.local_id();
+
+            // Build a map from node ID to the member's Node (for ping).
+            // Use string IDs as keys to avoid Borrow trait issues with NodeId.
+            let member_map: std::collections::HashMap<_, _> = members
+                .iter()
+                .filter(|m| m.node().id() != local_id)
+                .map(|m| (m.node().id().clone(), m.node().clone()))
+                .collect();
+
+            for (target_name, target_mgr) in nodes {
+                if target_name == pinger_name {
+                    continue;
+                }
+                let target_id = target_mgr.serf.local_id();
+
+                let Some(target_node) = member_map.get(target_id) else {
+                    return Err(anyhow!(
+                        "membership check failed: {pinger_name} does not see {target_name} ({target_id}) in its member list"
+                    ));
+                };
+
+                if let Err(error) = mgr.serf.memberlist().ping(target_node.clone()).await {
+                    return Err(anyhow!(
+                        "ping failed: {pinger_name} -> {target_name}: {error:?}"
+                    ));
+                }
+                tracing::info!(from = pinger_name, to = target_name, "Serf ping OK");
+            }
+        }
+
+        // --- Step 2: Collect the full set of public keys across all nodes ---
+        // mapping each public key to all nodes that own it.
+        let mut pk_to_nodes: std::collections::HashMap<PublicKeyData, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut all_pks = std::collections::HashSet::new();
+        for (name, mgr) in nodes {
+            let cks = mgr.inner.cluster_key_set.read().await;
+            for (pk, _) in cks.iter_keys() {
+                pk_to_nodes.entry(pk.clone()).or_default().push(name);
+                all_pks.insert(pk.clone());
+            }
+        }
+
+        assert!(
+            all_pks.len() >= 2,
+            "Cluster should have at least 2 distinct keys, got {}",
+            all_pks.len()
+        );
+
+        // On each node, call `get_key_by_public_key` for every key.
+        for (querier_name, mgr) in nodes {
+            for pk in &all_pks {
+                let owners = pk_to_nodes
+                    .get(pk)
+                    .map(|v| v.join(","))
+                    .unwrap_or_else(|| "?".into());
+                let pk_hex = hex::encode(pk.as_ref());
+                tracing::info!(
+                    querier = querier_name,
+                    key_owners = %owners,
+                    public_key_hex = %pk_hex,
+                    "Verifying key reachability"
+                );
+
+                let key_info = mgr.get_key_by_public_key(pk).await?;
+                let got_pk = key_info.key_config.public_key()?;
+                assert_eq!(
+                    &got_pk,
+                    pk,
+                    "Node {querier_name} returned wrong key: expected {pk_hex}, got {}",
+                    hex::encode(got_pk.as_ref())
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Wait until the target's cluster_key_set no longer contains the given public key,
@@ -1747,6 +1870,165 @@ mod tests {
     // -----------------------------------------------------------------------
     // Group 5: Split-brain / convergence / edge case tests
     // -----------------------------------------------------------------------
+
+    /// Test that immediately after C joins both A and B (bridging a split brain),
+    /// every node can retrieve every key from the cluster via query.
+    ///
+    /// Scenario:
+    ///   A (bootstrap) → generates key_A
+    ///   B (bootstrap) → generates key_B (different from A)
+    ///   C (join A, B) → preboot merges key_A + key_B from both peers
+    ///
+    /// After C's `new()` returns (no artificial sleep), collect the full key set
+    /// from each node. Then, on each node, use `query_key_from_cluster` to fetch
+    /// every key (including keys the node doesn't have locally). Finally verify
+    /// that the union of all keys is reachable from every node.
+    ///
+    /// rotation_interval is set to 1 hour to prevent key rotation from
+    /// interfering with this test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_split_brain_cross_node_key_query() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let rotation_interval = 3600; // 1 hour — no rotation during test
+
+            // --- Phase 1: A and B bootstrap independently (split brain) ---
+
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            assert_ne!(
+                a_pk, b_pk,
+                "A and B should have different keys when bootstrapped independently"
+            );
+
+            // --- Phase 2: C joins both A and B, bridging the split brain ---
+
+            let port_c = portpicker::pick_unused_port().unwrap();
+            let args_c = make_peer_shared_args(
+                port_c,
+                vec![
+                    format!("127.0.0.1:{}", port_a),
+                    format!("127.0.0.1:{}", port_b),
+                ],
+                rotation_interval,
+            );
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            // --- Phase 3: Verify cross-node key accessibility ---
+
+            {
+                let c_keys: Vec<_> = manager_c
+                    .inner
+                    .cluster_key_set
+                    .read()
+                    .await
+                    .iter_keys()
+                    .map(|(pk, _)| pk.clone())
+                    .collect();
+                assert!(
+                    c_keys.len() >= 2,
+                    "C should have at least 2 keys after merging A and B, got {}",
+                    c_keys.len()
+                );
+            }
+
+            verify_all_keys_reachable(&[("A", &manager_a), ("B", &manager_b), ("C", &manager_c)])
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .expect("test_split_brain_cross_node_key_query failed");
+    }
+
+    /// Test that after C bootstraps independently and later joins A + B,
+    /// every key becomes reachable from every node via query.
+    ///
+    /// Unlike `test_split_brain_cross_node_key_query` where C joins A/B during
+    /// construction (preboot merges keys automatically), this test has C start
+    /// as a fully independent third node, then explicitly call `join_peers_and_sync`
+    /// **after** `new()` returns. No artificial sleep is used.
+    ///
+    /// Rotation interval is 1 hour to prevent key rotation from interfering.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_split_brain_cross_node_key_query_deferred_join() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let rotation_interval = 3600; // 1 hour
+
+            // --- Phase 1: A, B, C all bootstrap independently ---
+
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
+            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            let a_pk = manager_a
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            let port_b = portpicker::pick_unused_port().unwrap();
+            let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            let b_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            let port_c = portpicker::pick_unused_port().unwrap();
+            let args_c = make_peer_shared_args(port_c, vec![], rotation_interval);
+            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+
+            let c_pk = manager_c
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+
+            assert_ne!(a_pk, b_pk, "A and B should have different keys");
+            assert_ne!(a_pk, c_pk, "A and C should have different keys");
+            assert_ne!(b_pk, c_pk, "B and C should have different keys");
+
+            // --- Phase 2: C explicitly joins A and B after construction ---
+            // This mirrors the file watcher scenario: only join_serf_cluster is called.
+            // No QueryClusterKeySetRequest is sent. A and B do NOT join C.
+
+            manager_c
+                .join_peers(&[
+                    format!("127.0.0.1:{}", port_a),
+                    format!("127.0.0.1:{}", port_b),
+                ])
+                .await?;
+
+            // --- Phase 3: Verify cross-node key accessibility ---
+
+            verify_all_keys_reachable(&[("A", &manager_a), ("B", &manager_b), ("C", &manager_c)])
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .expect("test_split_brain_cross_node_key_query_deferred_join failed");
+    }
 
     /// Test the "two instances start simultaneously but cannot see each other" scenario.
     ///
