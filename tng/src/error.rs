@@ -265,7 +265,8 @@ impl IntoResponse for TngError {
             status,
             Json(ErrorResponse {
                 code: self.as_ref().to_owned(),
-                message: self.to_string(),
+                // Use anyhow to print the full debug format for the error message
+                message: format!("{:#}", anyhow::Error::new(self)),
             }),
         )
             .into_response()
