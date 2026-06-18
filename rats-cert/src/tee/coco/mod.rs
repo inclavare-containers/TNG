@@ -193,9 +193,10 @@ mod tests {
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
 
             // Create builtin converter (embedded AS)
-            let converter = BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
-                .await
-                .expect("Failed to create builtin converter");
+            let converter =
+                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
+                    .await
+                    .expect("Failed to create builtin converter");
 
             // Create builtin verifier from converter's work dir
             let verifier = converter

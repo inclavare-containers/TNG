@@ -162,11 +162,23 @@ impl AttestationServiceWorkDir {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PolicyConfig {
-    /// Use the attestation-service default policy.
-    /// The default policy performs comprehensive measurements of TEE hardware and software.
+    /// Use the attestation-service default policy (the trustee
+    /// `ear_default_policy_cpu.rego`): a comprehensive appraisal that checks
+    /// hardware, boot measurements, configuration and filesystem against
+    /// configured reference values. Suited to deployments where those
+    /// reference values are available and mandatory.
     /// See: https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego
+    HardwareWithReferenceValues,
+    /// tng-bundled template: only hardware TEE recognition is enforced; the
+    /// other three trustworthiness dimensions are affirming by default and
+    /// `data.reference` is ignored. This is the default policy, suited to
+    /// general-purpose deployments that only need to assert the hardware TEE.
     #[default]
-    Default,
+    #[serde(alias = "default")]
+    HardwareOnly,
+    /// tng-bundled template: every trustworthiness dimension is affirming
+    /// regardless of input. **For development and testing only.**
+    TrustAll,
     /// Base64 encoded policy content
     Inline { content: String },
     /// Path to policy file
@@ -287,12 +299,21 @@ impl BuiltinCocoConverter {
     }
 
     /// Load policy from configuration
-    /// Returns None for Default policy (use AS built-in default)
+    /// Returns None for the AS built-in default policy
+    /// (HardwareWithReferenceValues), and a URL-safe base64 encoding of the
+    /// policy source for the tng-bundled templates and the user-supplied
+    /// Inline/Path variants.
     async fn load_policy_as_base64_url_safe_no_pad(
         policy: &PolicyConfig,
     ) -> Result<Option<String>> {
         match policy {
-            PolicyConfig::Default => Ok(None),
+            PolicyConfig::HardwareWithReferenceValues => Ok(None),
+            PolicyConfig::HardwareOnly => Ok(Some(
+                URL_SAFE_NO_PAD.encode(include_str!("policies/hardware_only.rego")),
+            )),
+            PolicyConfig::TrustAll => Ok(Some(
+                URL_SAFE_NO_PAD.encode(include_str!("policies/trust_all.rego")),
+            )),
             PolicyConfig::Inline { content } => {
                 // Decode base64 encoded policy
                 let decoded = BASE64_STANDARD
@@ -539,15 +560,53 @@ default file_system := 2"#;
     }
 
     #[tokio::test]
-    async fn test_load_default_policy() {
-        let policy_config = PolicyConfig::Default;
+    async fn test_load_hardware_with_reference_values_policy() {
+        // Equivalent to the former Default: falls through to the AS built-in
+        // trustee rego, so no inline content is registered.
+        let policy_config = PolicyConfig::HardwareWithReferenceValues;
         let result =
             BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
         assert!(result.is_ok());
         assert!(
             result.unwrap().is_none(),
-            "Default policy should return None"
+            "HardwareWithReferenceValues policy should return None"
         );
+    }
+
+    #[tokio::test]
+    async fn test_load_hardware_only_policy() {
+        let policy_config = PolicyConfig::HardwareOnly;
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
+        assert!(result.is_ok());
+        let encoded = result
+            .unwrap()
+            .expect("Should return Some for HardwareOnly policy");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("Failed to decode policy");
+        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
+        assert!(content.contains("package policy"));
+        assert!(content.contains("default hardware := 97"));
+        assert!(content.contains("input.tdx.quote.header.tee_type"));
+        assert!(content.contains(r#"vendor_id == "939a7233f79c4ca9940a0db3957f0607""#));
+    }
+
+    #[tokio::test]
+    async fn test_load_trust_all_policy() {
+        let policy_config = PolicyConfig::TrustAll;
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
+        assert!(result.is_ok());
+        let encoded = result
+            .unwrap()
+            .expect("Should return Some for TrustAll policy");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("Failed to decode policy");
+        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
+        assert!(content.contains("package policy"));
+        assert!(content.contains("default hardware := 2"));
     }
 
     #[tokio::test]
@@ -679,7 +738,9 @@ default file_system := 2"#;
                 content: provenance,
             },
         };
-        let result = BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference]).await;
+        let result =
+            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+                .await;
         assert!(
             result.is_ok(),
             "Failed to create converter with inline sample reference: {:?}",
@@ -701,7 +762,7 @@ default file_system := 2"#;
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
             .expect("Failed to create converter with path sample reference");
     }
@@ -737,7 +798,7 @@ default file_system := 2"#;
         let reference = ReferenceValueConfig::ReleaseManifest {
             payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
             .expect("Failed to create converter with path slsa reference");
     }
@@ -770,7 +831,7 @@ default file_system := 2"#;
         let reference = ReferenceValueConfig::ReleaseManifest {
             payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
             .expect("Failed to create converter with release manifest reference");
     }
@@ -813,7 +874,7 @@ default file_system := 2"#;
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
             .expect("Failed to create converter with release manifest path reference");
     }
@@ -841,7 +902,9 @@ default file_system := 2"#;
                 },
             },
         ];
-        let result = BuiltinCocoConverter::new(&PolicyConfig::Default, &references).await;
+        let result =
+            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &references)
+                .await;
         assert!(
             result.is_ok(),
             "Failed with multiple references: {:?}",
@@ -852,7 +915,7 @@ default file_system := 2"#;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_converter_new_with_empty_references() {
-        BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
             .await
             .expect("Failed with empty references");
     }
@@ -865,7 +928,9 @@ default file_system := 2"#;
                 path: "/nonexistent/reference_values.json".to_string(),
             },
         };
-        let result = BuiltinCocoConverter::new(&PolicyConfig::Default, &[reference]).await;
+        let result =
+            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+                .await;
         assert!(
             result.is_err(),
             "Should fail with nonexistent reference path"
@@ -1115,9 +1180,10 @@ default file_system := 2"#;
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_builtin_convert_with_default_policy() {
-            let converter = BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
-                .await
-                .expect("Failed to create converter");
+            let converter =
+                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
+                    .await
+                    .expect("Failed to create converter");
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
             let report_data = ReportData::Claims(serde_json::Map::new());
             let evidence = attester
@@ -1182,9 +1248,10 @@ default file_system := 2"#,
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_builtin_convert_and_verify_roundtrip() {
-            let converter = BuiltinCocoConverter::new(&PolicyConfig::Default, &[])
-                .await
-                .expect("Failed to create converter");
+            let converter =
+                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
+                    .await
+                    .expect("Failed to create converter");
             let verifier = converter
                 .new_verifier()
                 .await
