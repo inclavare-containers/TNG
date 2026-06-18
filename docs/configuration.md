@@ -1543,6 +1543,17 @@ Multiple TNG instances share keys through a QUIC-encrypted channel based on the 
 ```
 </details>
 
+> 💡 **Join retry behavior**: When a node configured with `peers` (or `peers_file`) starts, it retries joining
+> each configured peer with exponential backoff (base 1s, doubling, full jitter,
+> capped at 5 minutes) and **does not become operational until every configured peer
+> has joined**. This prevents a node from silently bootstrapping as a standalone
+> cluster when a peer is briefly unavailable. A node with no configured peers at
+> all (a dedicated bootstrap node, `peers: []`) skips joining and bootstraps
+> immediately, as before.
+>
+> New peers discovered later via `peers_file` are also retried in the background
+> (non-blocking) until joined.
+
 <a name="ohttp-key-file"></a>
 
 #### file Mode

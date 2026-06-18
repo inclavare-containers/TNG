@@ -9,9 +9,9 @@ use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::file_watcher::FileWatcher;
 
+use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
-use futures::StreamExt;
 use prost::Message;
 use scopeguard::defer;
 use serf::delegate::CompositeDelegate;
@@ -26,11 +26,12 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use uuid::Uuid;
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
 
 use crate::tunnel::ra_context::RaContext;
@@ -158,32 +159,60 @@ impl PeerSharedKeyManager {
     }
 
     /// Handles joining the Serf cluster using both static peers and file-based dynamic peers.
+    ///
+    /// Startup blocks until EVERY configured peer has joined (concurrent per-peer
+    /// retries with exponential backoff). A node with no configured peers at all
+    /// (dedicated bootstrap node) skips joining and never blocks.
     async fn spawn_cluster_join_tasks(
         runtime: &TokioRuntime,
         serf: &Arc<SerfGracefulShutdown>,
         peer_shared: &PeerSharedArgs,
     ) -> Result<(), TngError> {
-        // First, join using static peers
-        if !peer_shared.peers.is_empty() {
-            if let Err(error) = join_serf_cluster(serf.as_ref(), &peer_shared.peers).await {
-                tracing::warn!(
-                    ?error,
-                    "Some peers from static peers list failed to join, continuing..."
-                );
+        // Build the combined, de-duplicated initial peer list (static + file).
+        let mut initial_peers: Vec<String> = peer_shared.peers.clone();
+        if let Some(peers_file) = &peer_shared.peers_file {
+            if let Ok(file_peers) = load_peers_from_file(peers_file).await {
+                for p in file_peers {
+                    if !initial_peers.contains(&p) {
+                        initial_peers.push(p);
+                    }
+                }
             }
         }
 
-        // If peers_file is configured, start monitoring it for changes
+        // Join every configured peer, retrying forever with per-peer backoff.
+        // Concurrent so a slow peer does not block joining faster ones; we await
+        // ALL of them (A2: all configured peers must join before proceeding).
+        if !initial_peers.is_empty() {
+            let serf_for_tasks = serf.clone();
+            let join_results = futures::future::join_all(
+                initial_peers
+                    .iter()
+                    .map(|peer| {
+                        let serf = serf_for_tasks.clone();
+                        let peer = peer.clone();
+                        async move {
+                            let res = retry_join_peer(&serf, &peer).await;
+                            if let Err(e) = &res {
+                                tracing::warn!(?peer, ?e, "join ultimately failed");
+                            }
+                            res
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await;
+            // A2: any peer that could not ultimately join is a fatal startup error.
+            // (retry_join_peer only returns on Ok, so this is belt-and-suspenders.)
+            for r in join_results {
+                r?;
+            }
+        }
+        // Else: no configured peers -> dedicated bootstrap node, do not join, do not block.
+
+        // If peers_file is configured, start monitoring it for changes.
         if let Some(peers_file) = &peer_shared.peers_file {
             let peers_file_path = peers_file.clone();
-
-            // Load initial peers from file and join if any
-            if let Ok(file_peers) = load_peers_from_file(&peers_file_path).await {
-                // Join using peers from file
-                if let Err(error) = join_serf_cluster(serf, &file_peers).await {
-                    tracing::warn!(?error, "Some peers from file failed to join, continuing...");
-                }
-            }
 
             // Start file watcher to monitor peers file changes
             let serf_weak_for_watcher = Arc::downgrade(serf);
@@ -193,8 +222,17 @@ impl PeerSharedKeyManager {
             let mut file_watcher = FileWatcher::new(peers_file_path_for_watcher.clone())
                 .map_err(|e| TngError::WatchFileFailed(peers_file_path_for_watcher.clone(), e))?;
 
+            // In-flight peer set shared with the background retry tasks spawned by
+            // the watcher. Dedups retries so a peer already being retried is not
+            // re-spawned on every file change. Entries are cleared by the task
+            // itself once the peer is joined (retry_join_peer only returns on Ok).
+            let in_flight_peers: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+            // Clone the runtime handle so the watcher task can spawn supervised
+            // background retry tasks (tokio::spawn is disallowed by clippy).
+            let runtime_for_watcher = runtime.clone();
+
             runtime.spawn_supervised_task_with_span(tracing::info_span!("cluster_join_task"), async move {
-                defer! {
+                defer ! {
                     tracing::info!(peers_file = ?peers_file_path_for_watcher, "Peers file watcher stopped");
                 }
 
@@ -207,7 +245,6 @@ impl PeerSharedKeyManager {
                                 Ok(new_peers) => {
                                     tracing::info!(peers_count = new_peers.len(), "Loaded peers from file");
 
-                                    // Join using newly loaded peers
                                     let Some(serf_clone) = serf_weak_for_watcher.upgrade() else {
                                         tracing::debug!(
                                             "stop watching peers file since serf has been dropped"
@@ -215,29 +252,37 @@ impl PeerSharedKeyManager {
                                         break;
                                     };
 
-                                    if let Err(error) = join_serf_cluster(&serf_clone, &new_peers).await {
-                                        tracing::warn!(?error, "Some peers from file failed to join, continuing...");
+                                        // Spawn non-blocking per-peer retries for any peer not
+                                        // already being retried. Deterministic dedup via the
+                                        // in-flight set; never blocks the watcher loop, never
+                                        // stacks duplicate tasks.
+                                        spawn_peer_retry_tasks(
+                                            &runtime_for_watcher,
+                                            &serf_clone,
+                                            &new_peers,
+                                            &in_flight_peers,
+                                        );
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(
+                                            peers_file = ?peers_file_path_for_watcher,
+                                            ?error,
+                                            "Failed to load peers from updated file"
+                                        );
                                     }
                                 }
-                                Err(error) => {
-                                    tracing::error!(
-                                        peers_file = ?peers_file_path_for_watcher,
-                                        ?error,
-                                        "Failed to load peers from updated file"
-                                    );
-                                }
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    peers_file = ?peers_file_path_for_watcher,
+                                    ?error,
+                                    "Internal error in peers file watcher"
+                                );
                             }
                         }
-                        Err(error) => {
-                            tracing::error!(
-                                peers_file = ?peers_file_path_for_watcher,
-                                ?error,
-                                "Internal error in peers file watcher"
-                            );
-                        }
                     }
-                }
-            });
+
+                });
         }
 
         Ok(())
@@ -862,55 +907,127 @@ async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngErr
     Ok(socket_addrs)
 }
 
-/// Joins the Serf cluster via a list of peer addresses.
-async fn join_serf_cluster(serf: &Serf, peers: &[String]) -> Result<(), TngError> {
-    for peer in peers.iter() {
-        tracing::info!(peer, "Attempting to join Serf cluster");
+/// Attempts to join the Serf cluster via a single peer address.
+///
+/// Resolves every socket address for `peer` and tries to join via each.
+/// It is sufficient to successfully join via at least one resolved address.
+/// Returns the first Ok, or the last error if none succeeded.
+async fn try_join_one_peer(serf: &Serf, peer: &str) -> Result<(), TngError> {
+    tracing::info!(peer, "Attempting to join Serf cluster");
 
-        let socket_addrs = resolve_peer_addresses(peer).await?;
+    let socket_addrs = resolve_peer_addresses(&peer.to_string()).await?;
 
-        // Attempt to join the cluster using every resolved socket address for this host.
-        // Since a hostname (e.g., via DNS) may resolve to multiple IPs (A/AAAA records),
-        // we try each one to maximize the chance of successful connectivity.
-        // It's sufficient to successfully join via at least one address.
-        let count_success = futures::stream::iter(socket_addrs.into_iter()).filter_map(|socket_addr| async move {
-            tracing::debug!(
-                ?peer,
-                resolved_address = %socket_addr,
-                "Attempting to join serf cluster using resolved socket address"
-            );
+    // Attempt to join the cluster using every resolved socket address for this host.
+    // Since a hostname (e.g., via DNS) may resolve to multiple IPs (A/AAAA records),
+    // we try each one to maximize the chance of successful connectivity.
+    // It's sufficient to successfully join via at least one address.
+    let mut last_error: Option<TngError> = None;
+    for socket_addr in socket_addrs {
+        tracing::debug!(
+            peer,
+            resolved_address = %socket_addr,
+            "Attempting to join serf cluster using resolved socket address"
+        );
 
-            match serf.join(MaybeResolvedAddress::resolved(socket_addr), false).await {
-                Ok(_) => {
-                    tracing::info!(
-                        ?peer,
-                        via = %socket_addr,
-                        "Successfully joined serf cluster via resolved address"
-                    );
-                    Some(())
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        ?peer,
-                        failed_address = %socket_addr,
-                        ?error,
-                        "Failed to join serf cluster via this address, will try next if available"
-                    );
-                    None
-                }
+        match serf
+            .join(MaybeResolvedAddress::resolved(socket_addr), false)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    peer,
+                    via = %socket_addr,
+                    "Successfully joined serf cluster via resolved address"
+                );
+                return Ok(());
             }
-        }).count().await;
-
-        if count_success > 0 {
-            continue;
-        } else {
-            return Err(TngError::SerfCrateError(anyhow!(
-                "Failed to join any address of peer: {peer}"
-            )));
+            Err(error) => {
+                tracing::warn!(
+                    peer,
+                    failed_address = %socket_addr,
+                    ?error,
+                    "Failed to join serf cluster via this address, will try next if available"
+                );
+                last_error = Some(TngError::SerfCrateError(anyhow!(error)));
+            }
         }
     }
 
-    Ok(())
+    match last_error {
+        Some(e) => Err(e),
+        None => Err(TngError::SerfCrateError(anyhow!(
+            "Failed to join any address of peer: {peer}"
+        ))),
+    }
+}
+
+/// Retries joining a single Serf peer forever with exponential backoff.
+///
+/// Uses the `again` crate: base delay 1s doubling each attempt, full jitter
+/// (delay multiplied by a random factor in (0, 1]), capped at 300s. Retries
+/// indefinitely (`max_retries = usize::MAX`). Blocks the caller until the peer
+/// is joined — callers that must not block should run this in a spawned task.
+async fn retry_join_peer(serf: &Serf, peer: &str) -> Result<(), TngError> {
+    // k8s-style exponential backoff: 1s -> 2s -> 4s -> ... -> 300s (cap), full jitter.
+    // `max_retries = usize::MAX` makes the policy effectively unbounded.
+    let policy = RetryPolicy::exponential(Duration::from_secs(1))
+        .with_jitter(true)
+        .with_max_delay(Duration::from_secs(300))
+        .with_max_retries(usize::MAX);
+
+    policy
+        .retry(|| async {
+            try_join_one_peer(serf, peer).await.map_err(|e| {
+                tracing::warn!(?peer, error = ?e, "join attempt failed, will retry after backoff");
+                e
+            })
+        })
+        .await
+}
+
+/// Spawns background per-peer retry tasks for peers not already being retried.
+///
+/// Called from the peers-file watcher. Uses an in-flight set to avoid stacking
+/// duplicate tasks for the same peer. Each task removes its entry on success.
+/// `retry_join_peer` only returns on success, so in-flight entries are cleared
+/// exactly when the peer is joined. This never blocks the caller.
+///
+/// Tasks are spawned via the runtime's supervised-task spawner rather than
+/// `tokio::spawn` (which is disallowed by this crate's clippy config).
+fn spawn_peer_retry_tasks(
+    runtime: &TokioRuntime,
+    serf: &Arc<SerfGracefulShutdown>,
+    peers: &[String],
+    in_flight: &Arc<Mutex<HashSet<String>>>,
+) {
+    // Collect peers to start under the lock, so we don't hold it across spawns.
+    // Recover from a poisoned lock by taking the inner data: the in-flight set
+    // is best-effort dedup state, so a panic in a retry task must not cascade to
+    // the watcher loop. (This crate denies clippy::expect_used.)
+    let to_start: Vec<String> = {
+        let mut set = in_flight.lock().unwrap_or_else(|p| p.into_inner());
+        peers
+            .iter()
+            .filter(|p| set.insert((**p).clone())) // insert returns false if already present
+            .cloned()
+            .collect()
+    };
+
+    for peer in to_start {
+        let serf_clone = serf.clone();
+        let in_flight_clone = in_flight.clone();
+        let peer_for_task = peer.clone();
+        runtime.spawn_supervised_task_current_span(async move {
+            if let Err(e) = retry_join_peer(&serf_clone, &peer_for_task).await {
+                tracing::warn!(?peer_for_task, ?e, "background join ultimately failed");
+            }
+            // Clear in-flight entry so a future file change can retry this peer.
+            in_flight_clone
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&peer_for_task);
+        });
+    }
 }
 
 /// Loads peer list from JSON file.
@@ -999,6 +1116,37 @@ mod tests {
                 attest: None,
                 verify: None,
             },
+        }
+    }
+
+    /// Wait until the target's serf cluster reaches the expected alive-member
+    /// count, or timeout.
+    async fn wait_for_member_count(
+        target: &PeerSharedKeyManager,
+        expected: usize,
+        timeout: Duration,
+    ) -> Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                let members = target.serf.members().await;
+                let alive = members
+                    .iter()
+                    .filter(|m| m.status == MemberStatus::Alive)
+                    .count();
+                return Err(anyhow!(
+                    "timeout waiting for {expected} alive members, current: {alive}"
+                ));
+            }
+            let members = target.serf.members().await;
+            let alive = members
+                .iter()
+                .filter(|m| m.status == MemberStatus::Alive)
+                .count();
+            if alive >= expected {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -1326,6 +1474,73 @@ mod tests {
         })
         .await
         .expect("test_node_join_key_sync failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_retry_join_on_startup() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // Channel for the delayed bootstrap node A to report its active public
+            // key back to the test body. A is started inside a background task, so
+            // its manager is not directly accessible; we capture its client-visible
+            // key via this oneshot to prove (later) that B actually synced A's key
+            // rather than bootstrapping its own.
+            let (a_pk_tx, a_pk_rx) = tokio::sync::oneshot::channel::<PublicKeyData>();
+
+            // A is not up yet. Start it after a short delay in a background task.
+            let runtime_a = runtime.clone();
+            runtime
+                .clone()
+                .spawn_supervised_task_current_span(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let args_a = make_peer_shared_args(port_a, vec![], 300);
+                    let manager_a = PeerSharedKeyManager::new(runtime_a, args_a).await.unwrap();
+                    // Report A's active public key to the test body.
+                    let a_pk = manager_a
+                        .get_client_visible_key()
+                        .await
+                        .expect("A should have a client-visible key")
+                        .key_config
+                        .public_key()
+                        .expect("A's key should have a public key");
+                    let _ = a_pk_tx.send(a_pk);
+                    // Keep A alive for the rest of the test by not dropping until later;
+                    // rely on the spawned serf tasks staying alive.
+                    std::future::pending::<()>().await;
+                });
+
+            // B points at A. PeerSharedKeyManager::new must block (retry) until A is up,
+            // then return — rather than bootstrap standalone on the first failed attempt.
+            let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            let manager_b = PeerSharedKeyManager::new(runtime, args_b).await?;
+
+            // After B joined A, B must NOT have bootstrapped its own key — it should
+            // have synced A's key set (members.len() > 1 at preboot).
+            wait_for_active_key_count(&manager_b, 1, Duration::from_secs(15)).await?;
+
+            // Stronger assertion: B's client-visible key must equal A's key, proving
+            // B actually synced A's key set rather than bootstrapping standalone.
+            // (A standalone bootstrap would leave B with exactly 1 active key too —
+            // the count check above cannot distinguish the two cases.)
+            let a_pk = a_pk_rx
+                .await
+                .expect("A should have reported its public key");
+            let b_visible_pk = manager_b
+                .get_client_visible_key()
+                .await?
+                .key_config
+                .public_key()?;
+            assert_eq!(
+                a_pk, b_visible_pk,
+                "B's client-visible key must match A's, proving B synced A's key set"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_retry_join_on_startup failed");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
@@ -2126,6 +2341,71 @@ mod tests {
         })
         .await
         .expect("test_split_brain_convergence failed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_file_watcher_retries_new_peer() {
+        run_test_with_tokio_runtime(async |runtime| {
+            use std::io::Write;
+
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // A is started in a background task after a short delay. This means
+            // the watcher's first background retry_join_peer attempt will FAIL
+            // (A is not yet listening) and must rely on the per-peer backoff to
+            // keep retrying until A comes up — exercising the retry feature.
+            let runtime_for_a = runtime.clone();
+            runtime
+                .clone()
+                .spawn_supervised_task_current_span(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let args_a = make_peer_shared_args(port_a, vec![], 300);
+                    let _manager_a = PeerSharedKeyManager::new(runtime_for_a, args_a)
+                        .await
+                        .expect("A should start");
+                    // Keep A alive for the rest of the test.
+                    std::future::pending::<()>().await;
+                });
+
+            // B starts with an EMPTY peers file -> bootstraps standalone, watcher
+            // running. The watcher will pick up later writes to the file.
+            let peers_file = std::env::temp_dir()
+                .join(format!("tng_join_retry_file_{}.json", std::process::id()));
+            std::fs::write(&peers_file, "[]")?;
+
+            let mut args_b = make_peer_shared_args(port_b, vec![], 300);
+            args_b.peers_file = Some(peers_file.to_string_lossy().to_string());
+            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+
+            // Now write A's address into the file. The watcher should pick it up
+            // and spawn a background retry_join_peer task that retries until A
+            // (still down at this point) comes up, then joins it.
+            // The FileWatcher only reloads on a Close following a Data modify, so
+            // drop/flush the handle to emit the OS-level Close event.
+            {
+                let mut f = std::fs::File::create(&peers_file)?;
+                writeln!(f, "[\"127.0.0.1:{}\"]", port_a)?;
+                f.sync_all()?;
+            }
+
+            // B should eventually join A via the watcher-triggered background
+            // retry, gaining A as an alive serf member.
+            //
+            // NOTE: we assert cluster membership (not key sync) because the
+            // join-retry design (see docs/superpowers/specs/2026-06-18-join-retry-design.md,
+            // "Known Limitations" #2) deliberately scopes key reconciliation to
+            // the existing preboot/broadcast/event handlers — a node that already
+            // bootstrapped does NOT re-run preboot after a late file-watcher
+            // join. Verifying the join itself (A becomes an alive member of B's
+            // cluster) is what this task delivers.
+            wait_for_member_count(&manager_b, 2, Duration::from_secs(30)).await?;
+
+            let _ = std::fs::remove_file(&peers_file);
+            Ok(())
+        })
+        .await
+        .expect("test_file_watcher_retries_new_peer failed");
     }
 
     /// Test that key rotation does not create duplicate pending keys.
