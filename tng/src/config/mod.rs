@@ -171,4 +171,161 @@ pub mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_header_passthrough_deserialization() -> anyhow::Result<()> {
+        use super::mapping_rule::{MappingRule, RuleEndpoint};
+        use egress::EgressHeaderPassthroughConfig;
+        use ingress::IngressHeaderPassthroughConfig;
+
+        // Ingress config with header_passthrough
+        let ingress_config = TngConfig {
+            admin_bind: None,
+            control_interface: None,
+            metric: None,
+            trace: None,
+            add_ingress: vec![AddIngressArgs {
+                ingress_mode: ingress::IngressMode::Mapping(ingress::IngressMappingArgs {
+                    rules: vec![MappingRule {
+                        r#in: RuleEndpoint {
+                            host: None,
+                            port: 10001,
+                            port_end: None,
+                        },
+                        out: RuleEndpoint {
+                            host: Some("127.0.0.1".to_owned()),
+                            port: 20001,
+                            port_end: None,
+                        },
+                    }],
+                }),
+                common: ingress::CommonArgs {
+                    web_page_inject: false,
+                    ohttp: Some(ingress::OHttpArgs {
+                        path_rewrites: vec![],
+                        header_passthrough: Some(IngressHeaderPassthroughConfig {
+                            request_headers: vec![
+                                "x-trace-id".to_owned(),
+                                "x-tenant-id".to_owned(),
+                            ],
+                        }),
+                    }),
+                    rats_tls: None,
+                    ra_args: RaArgsUnchecked {
+                        no_ra: false,
+                        attest: None,
+                        verify: None,
+                    },
+                },
+            }],
+            add_egress: vec![],
+        };
+        let json = serde_json::to_string_pretty(&ingress_config)?;
+        let parsed: TngConfig = serde_json::from_str(&json)?;
+        let hp = parsed.add_ingress[0]
+            .common
+            .ohttp
+            .as_ref()
+            .unwrap()
+            .header_passthrough
+            .as_ref()
+            .unwrap();
+        assert_eq!(hp.request_headers, vec!["x-trace-id", "x-tenant-id"]);
+
+        // Egress config with header_passthrough (using netfilter mode)
+        let egress_config = TngConfig {
+            admin_bind: None,
+            control_interface: None,
+            metric: None,
+            trace: None,
+            add_ingress: vec![],
+            add_egress: vec![AddEgressArgs {
+                egress_mode: egress::EgressMode::Netfilter(egress::EgressNetfilterArgs {
+                    capture_dst: vec![],
+                    capture_local_traffic: false,
+                    capture_cgroup: vec![],
+                    nocapture_cgroup: vec![],
+                    listen_port: None,
+                    so_mark: None,
+                }),
+                common: egress::CommonArgs {
+                    direct_forward: None,
+                    ohttp: Some(egress::OHttpArgs {
+                        allow_non_tng_traffic_regexes: None,
+                        cors: None,
+                        key: Default::default(),
+                        header_passthrough: Some(EgressHeaderPassthroughConfig {
+                            response_headers: vec!["x-custom".to_owned()],
+                        }),
+                    }),
+                    rats_tls: None,
+                    ra_args: RaArgsUnchecked {
+                        no_ra: false,
+                        attest: None,
+                        verify: None,
+                    },
+                },
+            }],
+        };
+        let json = serde_json::to_string_pretty(&egress_config)?;
+        let parsed: TngConfig = serde_json::from_str(&json)?;
+        let hp = parsed.add_egress[0]
+            .common
+            .ohttp
+            .as_ref()
+            .unwrap()
+            .header_passthrough
+            .as_ref()
+            .unwrap();
+        assert_eq!(hp.response_headers, vec!["x-custom"]);
+
+        // Empty header_passthrough
+        let empty_config = TngConfig {
+            admin_bind: None,
+            control_interface: None,
+            metric: None,
+            trace: None,
+            add_ingress: vec![],
+            add_egress: vec![AddEgressArgs {
+                egress_mode: egress::EgressMode::Netfilter(egress::EgressNetfilterArgs {
+                    capture_dst: vec![],
+                    capture_local_traffic: false,
+                    capture_cgroup: vec![],
+                    nocapture_cgroup: vec![],
+                    listen_port: None,
+                    so_mark: None,
+                }),
+                common: egress::CommonArgs {
+                    direct_forward: None,
+                    ohttp: Some(egress::OHttpArgs {
+                        allow_non_tng_traffic_regexes: None,
+                        cors: None,
+                        key: Default::default(),
+                        header_passthrough: Some(EgressHeaderPassthroughConfig {
+                            response_headers: vec![],
+                        }),
+                    }),
+                    rats_tls: None,
+                    ra_args: RaArgsUnchecked {
+                        no_ra: false,
+                        attest: None,
+                        verify: None,
+                    },
+                },
+            }],
+        };
+        let json = serde_json::to_string_pretty(&empty_config)?;
+        let parsed: TngConfig = serde_json::from_str(&json)?;
+        let hp = parsed.add_egress[0]
+            .common
+            .ohttp
+            .as_ref()
+            .unwrap()
+            .header_passthrough
+            .as_ref()
+            .unwrap();
+        assert!(hp.response_headers.is_empty());
+
+        Ok(())
+    }
 }
