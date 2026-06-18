@@ -1285,4 +1285,96 @@ default file_system := 2"#,
             );
         }
     }
+
+    // --- Rego behavior tests -------------------------------------------------
+    // These evaluate the bundled rego templates through the real attestation-service
+    // OPA engine (regorus, pure-Rust) against constructed evidence, asserting the
+    // resulting trust vector. This is the only test that actually *executes* the
+    // rego, so it guards against the class of bug the substring tests can't catch
+    // (e.g. a typo in a TDX vendor_id that silently makes `hardware` never affirm).
+
+    /// Evaluate a bundled rego policy against `input` and return the four AR4SI
+    /// trust-vector values as (executables, hardware, configuration, file_system).
+    async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
+        use attestation_service::policy_engine::PolicyEngineType;
+
+        let dir = tempfile::tempdir().expect("create temp work dir");
+        let engine = PolicyEngineType::OPA
+            .to_policy_engine(dir.path(), policy, "default.rego")
+            .expect("create OPA policy engine");
+        // The four rules our templates define. The real AS also queries four more
+        // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
+        // skipped when a policy leaves them undefined, so they need not be queried.
+        let rules = vec![
+            "executables".to_string(),
+            "hardware".to_string(),
+            "configuration".to_string(),
+            "file_system".to_string(),
+        ];
+        let result = engine
+            .evaluate("{}", input, "default", rules)
+            .await
+            .expect("evaluate policy");
+        let get = |name: &str| -> i8 {
+            result
+                .rules_result
+                .get(name)
+                .and_then(|v| v.as_i8().ok())
+                .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
+        };
+        (
+            get("executables"),
+            get("hardware"),
+            get("configuration"),
+            get("file_system"),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_recognizes_known_tees() {
+        let policy = include_str!("policies/hardware_only.rego");
+
+        // TDX with the canonical Intel quoting-enclave vendor_id -> all affirming.
+        let tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}}}}"#;
+        assert_eq!(eval_policy_vector(policy, tdx).await, (2, 2, 2, 2));
+
+        // Hygon CSV v2.
+        let csv = r#"{"csv":{"version":"2"}}"#;
+        assert_eq!(eval_policy_vector(policy, csv).await, (2, 2, 2, 2));
+
+        // TPM and generic SYSTEM attesters.
+        let tpm = r#"{"tpm":{"firmware_version":"1.0"}}"#;
+        assert_eq!(eval_policy_vector(policy, tpm).await, (2, 2, 2, 2));
+        let system = r#"{"system":{}}"#;
+        assert_eq!(eval_policy_vector(policy, system).await, (2, 2, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_rejects_unrecognized_hardware() {
+        let policy = include_str!("policies/hardware_only.rego");
+
+        // A valid TDX tee_type but a WRONG vendor_id: hardware must stay at its
+        // "unrecognized" default (97 -> Contraindicated), while the other three
+        // dimensions remain affirming. This pins the exact canonical vendor_id.
+        let tdx_bad_vendor = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}}}"#;
+        assert_eq!(
+            eval_policy_vector(policy, tdx_bad_vendor).await,
+            (2, 97, 2, 2)
+        );
+
+        // No TEE evidence at all -> hardware stays unrecognized.
+        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 97, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_rego_trust_all_affirms_everything() {
+        let policy = include_str!("policies/trust_all.rego");
+
+        // trust_all affirms every dimension regardless of input, even with no
+        // TEE evidence and an unrecognized vendor_id.
+        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 2, 2, 2));
+        let bad_tdx =
+            r#"{"tdx":{"quote":{"header":{"tee_type":"00000000","vendor_id":"deadbeef"}}}}"#;
+        assert_eq!(eval_policy_vector(policy, bad_tdx).await, (2, 2, 2, 2));
+    }
 }
