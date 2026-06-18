@@ -2,11 +2,7 @@ use anyhow::Result;
 use serial_test::serial;
 use tng_testsuite::{
     run_test,
-    task::{
-        app::AppType,
-        tng::TngInstance,
-        Task as _,
-    },
+    task::{app::AppType, tng::TngInstance, Task as _},
 };
 
 /// Test that header_passthrough config is correctly parsed and does not break
