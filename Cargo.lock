@@ -842,7 +842,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 [[package]]
 name = "bhttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=89a6520b01b78d87bf4fa88dad07cac60b711fdb#89a6520b01b78d87bf4fa88dad07cac60b711fdb"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=7d45814b747eb3944b234956edc1e56e2bf9cb2f#7d45814b747eb3944b234956edc1e56e2bf9cb2f"
 dependencies = [
  "async-stream",
  "bytes",
@@ -4749,7 +4749,7 @@ dependencies = [
 [[package]]
 name = "ohttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=89a6520b01b78d87bf4fa88dad07cac60b711fdb#89a6520b01b78d87bf4fa88dad07cac60b711fdb"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=7d45814b747eb3944b234956edc1e56e2bf9cb2f#7d45814b747eb3944b234956edc1e56e2bf9cb2f"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4768,7 +4768,7 @@ dependencies = [
  "serde_derive",
  "sha2",
  "thiserror 2.0.17",
- "toml 0.8.23",
+ "toml 0.5.11",
 ]
 
 [[package]]

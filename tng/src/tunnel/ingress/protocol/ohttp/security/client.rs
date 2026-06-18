@@ -375,7 +375,7 @@ impl OHttpClientInner {
         Ok((
             KeyStoreValue {
                 client_auth,
-                client_key, // TODO: ohttp hpke setup with the client key
+                client_key,
                 server_key_config_list,
                 server_attestation_result,
             },

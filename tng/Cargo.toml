@@ -16,7 +16,7 @@ async-stream = {workspace = true}
 async-trait = {workspace = true}
 auto_enums = {workspace = true}
 base64 = {workspace = true}
-bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "89a6520b01b78d87bf4fa88dad07cac60b711fdb", features = ["http-compat"]}
+bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "7d45814b747eb3944b234956edc1e56e2bf9cb2f", features = ["http-compat"]}
 bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}
@@ -41,7 +41,7 @@ hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
 nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "89a6520b01b78d87bf4fa88dad07cac60b711fdb"}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "7d45814b747eb3944b234956edc1e56e2bf9cb2f"}
 opentelemetry = {workspace = true, optional = true}
 opentelemetry-otlp = {workspace = true, features = [
   "logs",
