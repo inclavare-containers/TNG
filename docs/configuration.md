@@ -945,7 +945,7 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 | `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` / `"builtin"` |
 | `as_addr` | string | — | Required for `"restful"` and `"grpc"` types; AS address |
 | `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
-| `attestation_policy` | object | — | Optional for `"builtin"` type; built-in AS attestation policy configuration. Defaults to `{"type": "default"}` if omitted |
+| `attestation_policy` | object | — | Optional for `"builtin"` type; built-in AS attestation policy configuration. Defaults to `{"type": "hardware_only"}` if omitted (the alias `{"type": "default"}` resolves to the same). Accepted `type` values: `hardware_only` (alias `default`) — only verifies hardware TEE recognition, ignores reference values (the default, suited to general-purpose deployments); `hardware_with_reference_values` — trustee comprehensive appraisal against configured reference values; `trust_all` — affirms every dimension unconditionally (debug/test only); `inline` — base64-encoded rego; `path` — path to a rego file |
 | `reference_values` | array | — | Optional for `"builtin"` type; built-in AS reference value configuration list |
 | `policy_ids` | array [string] | — | Policy ID list. Only for `"restful"` and `"grpc"` types; ignored when `as_type` is `"builtin"` |
 | `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
@@ -987,7 +987,7 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 "verify": {
     "as_type": "builtin",
     "attestation_policy": {
-        "type": "default"
+        "type": "hardware_only"
     },
     "reference_values": []
 }
@@ -1125,7 +1125,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "default"
+            "type": "hardware_with_reference_values"
         },
         "reference_values": [
             {
@@ -1161,7 +1161,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 {
     "verify": {
         "as_type": "builtin",
-        "attestation_policy": { "type": "default" },
+        "attestation_policy": { "type": "hardware_with_reference_values" },
         "reference_values": [
             {
                 "type": "release_manifest",
