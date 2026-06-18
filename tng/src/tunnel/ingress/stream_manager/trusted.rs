@@ -51,7 +51,7 @@ impl TrustedStreamManager {
                 .rats_tls
                 .as_ref()
                 .map(|a| a.multiplex)
-                .unwrap_or(true);
+                .unwrap_or(false);
         let runtime = if is_h2_or_ohttp {
             #[cfg(not(wasm))]
             {
@@ -98,7 +98,7 @@ impl TrustedStreamManager {
                             .rats_tls
                             .as_ref()
                             .map(|a| a.multiplex)
-                            .unwrap_or(true);
+                            .unwrap_or(false);
                         Box::new(
                             RatsTlsStreamForwarder::new(
                                 #[cfg(any(
