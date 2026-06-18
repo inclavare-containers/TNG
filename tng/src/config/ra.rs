@@ -1604,7 +1604,7 @@ mod tests {
                     attestation_policy,
                     reference_values,
                 }) => {
-                    assert!(matches!(attestation_policy, PolicyConfig::Default));
+                    assert!(matches!(attestation_policy, PolicyConfig::HardwareOnly));
                     assert!(reference_values.is_empty());
                 }
                 _ => panic!("Expected Coco/Builtin converter"),
@@ -1620,7 +1620,7 @@ mod tests {
     #[cfg(feature = "__builtin-as")]
     #[test]
     fn test_builtin_verify_omit_attestation_policy_defaults() {
-        // Omit attestation_policy entirely — should default to PolicyConfig::Default
+        // Omit attestation_policy entirely — should default to PolicyConfig::HardwareOnly
         let json = json!(
             {
                 "verify": {
@@ -1638,7 +1638,7 @@ mod tests {
                     attestation_policy,
                     reference_values,
                 }) => {
-                    assert!(matches!(attestation_policy, PolicyConfig::Default));
+                    assert!(matches!(attestation_policy, PolicyConfig::HardwareOnly));
                     assert!(reference_values.is_empty());
                 }
                 _ => panic!("Expected Coco/Builtin converter"),
