@@ -1289,10 +1289,9 @@ EOF
             // The peers file update triggers new nodes to join a cluster that may still be
             // converging from a split-brain state. During this convergence window, even the
             // fallback Serf query mechanism can fail to reach other nodes' keys. We use
-            // Blocking here to ensure the key synchronization completes before subsequent
+            // ForegroundContinue here to ensure the key synchronization completes before subsequent
             // tasks (LoadBalancer, TngClient) begin sending requests.
-            mode: ShellMode::ForegroundStop,
-
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         AppType::LoadBalancer {
@@ -1328,7 +1327,7 @@ EOF
                         }
                     }
                 ]
-            }"#
+            }"#,
         )
         .boxed(),
         AppType::HttpClient {
