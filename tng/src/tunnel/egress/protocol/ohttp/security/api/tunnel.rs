@@ -108,6 +108,12 @@ impl OhttpServerApi {
             "Received OHTTP request"
         );
 
+        // Extract client public key before validation moves client_auth
+        let client_pk_bytes = match &metadata.client_auth {
+            Some(ClientAuth::AttestedPublicKey(AttestedPublicKey { pk_s, .. })) => Some(pk_s.clone()),
+            _ => None,
+        };
+
         // Check metadata
         self.validate_client_attestation_consistency(metadata.client_auth)
             .await
@@ -123,7 +129,20 @@ impl OhttpServerApi {
         };
 
         // Decrypt the ohttp message
-        let plain_text = header_decoded.into_server_request(key_info.key_config);
+        let plain_text = match client_pk_bytes {
+            Some(pk_s) => {
+                // Use Auth mode: server verifies client identity via HPKE Auth
+                let client_pk = ohttp::PublicKey::from_x25519_bytes(&pk_s)
+                    .map_err(|e| TngError::ClientRequestKeyConfigFailed(anyhow!(
+                        "Failed to construct client public key: {}", e
+                    )))?;
+                header_decoded.into_server_request_with_client_pk(key_info.key_config, client_pk)
+            }
+            None => {
+                // Base mode: no client authentication
+                header_decoded.into_server_request(key_info.key_config)
+            }
+        };
 
         // Decode the bhttp binary message
         let decode_result = BhttpDecoder::new(plain_text).decode_message().await?;
