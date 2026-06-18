@@ -101,7 +101,6 @@ pub struct OHttpClientInner {
 struct KeyStoreValue {
     client_auth: ClientAuth,
 
-    #[allow(unused)]
     client_key: Option<(
         <X25519HkdfSha256 as Kem>::PrivateKey,
         <X25519HkdfSha256 as Kem>::PublicKey,
@@ -208,6 +207,7 @@ impl OHttpClient {
             .send_encrypted_request(
                 &key_store_value.server_key_config_list,
                 &key_store_value.client_auth,
+                key_store_value.client_key.as_ref(),
                 request,
             )
             .await
@@ -540,6 +540,10 @@ impl OHttpClientInner {
         &self,
         server_key_config_list: &[KeyConfig],
         client_auth: &ClientAuth,
+        client_key: Option<&(
+            <X25519HkdfSha256 as Kem>::PrivateKey,
+            <X25519HkdfSha256 as Kem>::PublicKey,
+        )>,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
         // Extract passthrough headers before the request is consumed by BHttp encoding
@@ -560,7 +564,26 @@ impl OHttpClientInner {
             "Encrypting request with HPKE key"
         );
 
-        let client = ohttp::ClientRequest::from_config(&mut key_config)?;
+        let client = {
+            #[cfg(unix)]
+            {
+                match client_key {
+                    Some((sk, _pk)) => {
+                        let sk_bytes = hpke::Serializable::to_bytes(sk);
+                        ohttp::ClientRequest::from_config_with_client_key_bytes(
+                            &mut key_config,
+                            sk_bytes.as_ref(),
+                        )?
+                    }
+                    None => ohttp::ClientRequest::from_config(&mut key_config)?,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = client_key; // unused on wasm
+                ohttp::ClientRequest::from_config(&mut key_config)?
+            }
+        };
 
         let (encrypted_request, client_response_decapsulator) = {
             #[cfg(wasm)]
