@@ -64,8 +64,8 @@ impl TrustedStreamManager {
             || common_args
                 .rats_tls
                 .as_ref()
-                .map(|a| a.multiplex)
-                .unwrap_or(true);
+                .unwrap_or(&Default::default())
+                .multiplex;
         let runtime = if is_h2_or_ohttp {
             #[cfg(not(wasm))]
             {
@@ -100,8 +100,8 @@ impl TrustedStreamManager {
                     let multiplex = common_args
                         .rats_tls
                         .as_ref()
-                        .map(|a| a.multiplex)
-                        .unwrap_or(true);
+                        .unwrap_or(&Default::default())
+                        .multiplex;
                     Box::new(
                         RatsTlsStreamDecoder::new(ra_context, runtime.clone(), multiplex).await?,
                     )
