@@ -23,12 +23,8 @@ async fn test_ohttp_header_passthrough() -> Result<()> {
             {
                 "add_egress": [
                     {
-                        "mapping": {
-                            "in": {
-                                "port": 20001
-                            },
-                            "out": {
-                                "host": "127.0.0.1",
+                        "netfilter": {
+                            "capture_dst": {
                                 "port": 30001
                             }
                         },
@@ -38,7 +34,10 @@ async fn test_ohttp_header_passthrough() -> Result<()> {
                             }
                         },
                         "attest": {
-                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            "model": "passport",
+                            "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
+                            "as_addr": "http://192.168.1.254:8080/",
+                            "policy_ids": ["default"]
                         }
                     }
                 ]
@@ -50,13 +49,9 @@ async fn test_ohttp_header_passthrough() -> Result<()> {
             {
                 "add_ingress": [
                     {
-                        "mapping": {
-                            "in": {
-                                "port": 10001
-                            },
-                            "out": {
-                                "host": "192.168.1.252",
-                                "port": 20001
+                        "netfilter": {
+                            "capture_dst": {
+                                "port": 30001
                             }
                         },
                         "ohttp": {
@@ -65,10 +60,9 @@ async fn test_ohttp_header_passthrough() -> Result<()> {
                             }
                         },
                         "verify": {
+                            "model": "passport",
                             "as_addr": "http://192.168.1.254:8080/",
-                            "policy_ids": [
-                                "default"
-                            ]
+                            "policy_ids": ["default"]
                         }
                     }
                 ]
@@ -81,8 +75,8 @@ async fn test_ohttp_header_passthrough() -> Result<()> {
             expected_path_and_query: "/test/path?foo=bar",
         }.boxed(),
         AppType::HttpClient {
-            host: "127.0.0.1",
-            port: 10001,
+            host: "192.168.1.1",
+            port: 30001,
             host_header: "example.com",
             path_and_query: "/test/path?foo=bar",
         }.boxed(),
@@ -211,8 +205,8 @@ async fn test_ohttp_header_passthrough_with_path_rewrite() -> Result<()> {
                         "ohttp": {
                             "path_rewrites": [
                                 {
-                                    "match_regex": "^/api/([^/]+)([/]?.*)$",
-                                    "substitution": "/v1/\\1"
+                                    "match_regex": "^/foo/([^/]+)([/]?.*)$",
+                                    "substitution": "/foo/\\1"
                                 }
                             ],
                             "header_passthrough": {
@@ -234,19 +228,19 @@ async fn test_ohttp_header_passthrough_with_path_rewrite() -> Result<()> {
             upstream_servers: vec![
                 ("192.168.1.1".into(), 30001),
             ],
-            path_matcher: r"^/api/(.*)$",
-            rewrite_to: r"/v1/$1",
+            path_matcher: r"^/foo/(.*)$",
+            rewrite_to: r"/baz/$1",
         }.boxed(),
         AppType::HttpServer {
             port: 30001,
             expected_host_header: "example.com",
-            expected_path_and_query: "/api/resource?id=123",
+            expected_path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
         AppType::HttpClient {
             host: "192.168.1.252",
             port: 30001,
             host_header: "example.com",
-            path_and_query: "/api/resource?id=123",
+            path_and_query: "/foo/bar/www?type=1&case=1",
         }.boxed(),
     ])
     .await?;
