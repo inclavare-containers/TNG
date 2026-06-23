@@ -1,6 +1,6 @@
 ## Use Case 6: vLLM P/D Separation with NIXL/UCX KV Cache Transfer Encryption
 
-[中文文档](scenario_vllm_pd_separation_zh.md)
+[中文文档](scenario_zh.md)
 
 ### Scenario Overview
 

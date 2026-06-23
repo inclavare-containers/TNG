@@ -1,6 +1,6 @@
 ## 用例 6：vLLM P/D 分离 + NIXL/UCX KV Cache 传输加密
 
-[English Document](scenario_vllm_pd_separation.md)
+[English Document](scenario.md)
 
 ### 场景概述
 

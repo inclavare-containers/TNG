@@ -1,6 +1,6 @@
 ## Use Case 1: Client Accessing Single Confidential Computing Node via HTTP Proxy
 
-[中文文档](scenario_http_proxy_single_zh.md)
+[中文文档](scenario_zh.md)
 
 ### Scenario Overview
 

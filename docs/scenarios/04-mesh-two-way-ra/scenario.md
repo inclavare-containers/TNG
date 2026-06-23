@@ -1,6 +1,6 @@
 ## Use Case 3: Mutual Remote Attestation between Mesh Cluster Nodes
 
-[中文文档](scenario_mesh_two_way_ra_zh.md)
+[中文文档](scenario_zh.md)
 
 ### Scenario Overview
 

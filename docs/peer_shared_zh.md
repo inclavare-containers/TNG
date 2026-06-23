@@ -28,7 +28,7 @@
 
 > `peers` 列表中填写的是任意一个已知对等节点的地址（IP 或域名 + 端口），只需保证至少填写一个可达的地址即可。新实例会通过该地址加入集群，进而与所有其他节点建立连接。
 
-`peer_shared` 模式的详细配置方式请参考 [configuration.md — peer_shared Mode](./configuration.md#ohttp-key-configuration-peer_shared-mode)。
+`peer_shared` 模式的详细配置方式请参考 [configuration.md — peer_shared Mode](./configuration.md#ohttp-key-peer_shared)。
 
 #### TNG 服务端配置
 
@@ -95,7 +95,7 @@
 }
 ```
 
-> **注意**：上述示例中 `attest` 和 `verify` 使用了外部 Attestation Agent 和 Attestation Service 的地址。实际上，TNG 支持内置（builtin）的远程证明验证功能，无需单独部署外部服务。内置模式下，TNG 在本地直接验证 TEE 证据（如 TDX Quote），适合单机部署或简化部署的场景。详细配置方式请参考 [configuration.md — Builtin AS Configuration](./configuration.md#builtin-as-configuration)。
+> **注意**：上述示例中 `attest` 和 `verify` 使用了外部 Attestation Agent 和 Attestation Service 的地址。实际上，TNG 支持内置（builtin）的远程证明验证功能，无需单独部署外部服务。内置模式下，TNG 在本地直接验证 TEE 证据（如 TDX Quote），适合单机部署或简化部署的场景。详细配置方式请参考 [configuration.md — Builtin AS Configuration](./configuration.md#background-check-模式)。
 
 ## 私钥定义
 

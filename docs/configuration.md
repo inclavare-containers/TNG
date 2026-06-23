@@ -8,33 +8,33 @@
 
 - [Top-Level Configuration Object](#top-level-configuration-object)
 - [Ingress (Tunnel Entry)](#ingress-tunnel-entry)
-  - [Common Fields](#ingress-common-fields)
-  - [Transport Layer Common Configuration](#rats-tls-transport-configuration)
-  - [Mode: mapping (Port Mapping)](#ingress-mapping-port-mapping)
-  - [Mode: http_proxy (HTTP Proxy)](#ingress-http_proxy-http-proxy)
-  - [Mode: socks5 (Socks5 Proxy)](#ingress-socks5-socks5-proxy)
-  - [Mode: netfilter (Transparent Proxy)](#ingress-netfilter-transparent-proxy)
+  - [Common Fields](#common-fields)
+  - [Transport Layer Common Configuration](#transport-layer-common-configuration)
+  - [Mode: mapping (Port Mapping)](#mode-mapping-port-mapping)
+  - [Mode: http_proxy (HTTP Proxy)](#mode-http_proxy-http-proxy)
+  - [Mode: socks5 (Socks5 Proxy)](#mode-socks5-socks5-proxy)
+  - [Mode: netfilter (Transparent Proxy)](#mode-netfilter-transparent-proxy)
 - [Egress (Tunnel Exit)](#egress-tunnel-exit)
-  - [Common Fields](#egress-common-fields)
+  - [Common Fields](#common-fields)
   - [direct_forward Rules](#direct_forward-rules)
-  - [Mode: mapping (Port Mapping)](#egress-mapping-port-mapping)
-  - [Mode: netfilter (Port Hijacking)](#egress-netfilter-port-hijacking)
+  - [Mode: mapping (Port Mapping)](#mode-mapping-port-mapping)
+  - [Mode: netfilter (Port Hijacking)](#mode-netfilter-port-hijacking)
 - [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration)
   - [Provider Selection](#provider-selection)
   - [Attester Configuration](#attester-configuration)
-    - [Background Check Mode](#attest-background-check-mode)
-    - [Passport Model](#attest-passport-model)
+    - [Background Check Mode](#background-check-mode)
+    - [Passport Model](#passport-model)
   - [Verifier Configuration](#verifier-configuration)
-    - [Background Check Mode](#verify-background-check-mode)
-    - [Passport Model](#verify-passport-model)
+    - [Background Check Mode](#background-check-mode)
+    - [Passport Model](#passport-model)
   - [Role Combination Examples](#role-combination-examples)
 - [OHTTP Protocol](#ohttp-protocol)
-  - [Ingress Side Configuration](#ohttp-ingress-side-configuration)
-  - [Egress Side Configuration](#ohttp-egress-side-configuration)
-  - [Key Management](#ohttp-key-management)
-    - [self_generated Mode](#ohttp-key-self_generated)
-    - [peer_shared Mode](#ohttp-key-peer_shared)
-    - [file Mode](#ohttp-key-file)
+  - [Ingress Side Configuration](#ingress-side-configuration)
+  - [Egress Side Configuration](#egress-side-configuration)
+  - [Key Management](#key-management)
+    - [self_generated Mode](#self_generated-mode-default)
+    - [peer_shared Mode](#peer_shared-mode)
+    - [file Mode](#file-mode)
 - [Control Interface](#control-interface)
   - [RESTful API](#restful-api)
 - [Deprecated Configuration](#deprecated-configuration)
@@ -71,8 +71,8 @@ The `Ingress` object configures the tunnel's entry endpoints, controlling how tr
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
-| `ohttp` | [OHttp](#ohttp-ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
-| `rats_tls` | [RatsTlsArgs](#rats-tls-transport-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
+| `ohttp` | [OHttp](#ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
+| `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
@@ -474,13 +474,13 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 |---|---|---|---|
 | `egress_mode` | `mapping` \| `netfilter` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-rules)] | No | Direct forwarding (without decryption) rules |
-| `ohttp` | [OHttp](#ohttp-egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
-| `rats_tls` | [RatsTlsArgs](#rats-tls-transport-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
+| `ohttp` | [OHttp](#egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
+| `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
 
-> Transport layer fields like `rats_tls.multiplex` share the same definition as Ingress. See [RatsTlsArgs](#rats-tls-transport-configuration).
+> Transport layer fields like `rats_tls.multiplex` share the same definition as Ingress. See [RatsTlsArgs](#transport-layer-common-configuration).
 
 <a name="direct_forward-rules"></a>
 
@@ -628,7 +628,7 @@ flowchart TD
 > **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses (unless `capture_local_traffic: true`).
 
 > [!NOTE]
-> **Running in containers without `CAP_NET_ADMIN`:** See the [Ingress netfilter note](#ingress-netfilter-transparent-proxy) above for the same workaround using pasta.
+> **Running in containers without `CAP_NET_ADMIN`:** See the [Ingress netfilter note](#mode-netfilter-transparent-proxy) above for the same workaround using pasta.
 
 <details>
 <summary>Example: Capture inbound traffic destined for port 30001</summary>
@@ -1018,6 +1018,7 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 
 > It is recommended to set the API key via the `ITA_API_KEY` environment variable rather than writing it in the configuration file.
 
+<a name="builtin-as-configuration"></a>
 **Builtin AS (`as_type` = `"builtin"`):**
 
 When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locally without connecting to an external AS. This is suitable for network-isolated, latency-sensitive, or simplified deployment scenarios.
@@ -1382,7 +1383,7 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `cors` | [CorsConfig](#corsconfig) | None | CORS configuration for browser access to OHTTP endpoints |
-| `key` | [KeyConfig](#ohttp-key-management) | None | Key management configuration (see [Key Management](#ohttp-key-management) below) |
+| `key` | [KeyConfig](#key-management) | None | Key management configuration (see [Key Management](#key-management) below) |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` is deprecated since 2.2.4; use `direct_forward` instead.

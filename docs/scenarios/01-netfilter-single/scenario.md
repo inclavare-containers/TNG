@@ -1,6 +1,6 @@
 ## Use Case 2: Client Accessing Single Confidential Computing Node via Transparent Proxy
 
-[中文文档](scenario_netfilter_single_zh.md)
+[中文文档](scenario_zh.md)
 
 ### Scenario Overview
 

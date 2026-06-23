@@ -28,7 +28,7 @@ Each TNG instance runs a Serf client at startup, forming a decentralized cluster
 
 > The `peers` list requires only one known peer address (IP or domain + port). The new instance joins the cluster through this address and subsequently connects to all other nodes.
 
-For detailed configuration options, refer to [configuration.md — peer_shared Mode](./configuration.md#ohttp-key-configuration-peer_shared-mode).
+For detailed configuration options, refer to [configuration.md — peer_shared Mode](./configuration.md#ohttp-key-peer_shared).
 
 #### TNG Server Configuration
 
@@ -95,7 +95,7 @@ The client side uses standard `add_ingress` configuration to send encrypted traf
 }
 ```
 
-> **Note**: The examples above use external Attestation Agent and Attestation Service addresses for `attest` and `verify`. TNG also supports a **builtin** remote attestation mode that does not require deploying external services. In builtin mode, TNG verifies TEE evidence (e.g., TDX quotes) locally, which is suitable for single-machine deployments or simplified architectures. For details, see [configuration.md — Builtin AS Configuration](./configuration.md#builtin-as-configuration).
+> **Note**: The examples above use external Attestation Agent and Attestation Service addresses for `attest` and `verify`. TNG also supports a **builtin** remote attestation mode that does not require deploying external services. In builtin mode, TNG verifies TEE evidence (e.g., TDX quotes) locally, which is suitable for single-machine deployments or simplified architectures. For details, see [configuration.md — Builtin AS Configuration](./configuration.md#background-check-mode).
 
 ## Key Definitions
 
