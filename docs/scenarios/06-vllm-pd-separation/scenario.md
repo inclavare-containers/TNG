@@ -20,7 +20,7 @@
 
 ### Topology Diagram
 
-![Topology Diagram](../diagrams/scenario_vllm_pd_separation.drawio.svg)
+![Topology Diagram](diagram.drawio.svg)
 
 ### Node Address Assignment
 

@@ -20,7 +20,7 @@
 
 ### 拓扑图
 
-![Topology Diagram](../diagrams/scenario_vllm_pd_separation.drawio.svg)
+![Topology Diagram](diagram.drawio.svg)
 
 ### 节点地址分配
 

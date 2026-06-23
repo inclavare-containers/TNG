@@ -15,7 +15,7 @@
 
 ### 拓扑示意图
 
-![拓扑示意图](../diagrams/scenario_vllm_ohttp_cluster_zh.drawio.svg)
+![拓扑示意图](diagram.drawio.svg)
 
 ### 客户端侧 TNG（Ingress）配置示例
 

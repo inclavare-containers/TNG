@@ -13,7 +13,7 @@
 
 ### 拓扑示意图
 
-![拓扑示意图](../diagrams/scenario_mesh_two_way_ra_zh.drawio.svg)
+![拓扑示意图](diagram.drawio.svg)
 
 ### 单个节点上的 TNG 配置示例
 

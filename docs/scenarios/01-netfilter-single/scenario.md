@@ -15,7 +15,7 @@
 
 ### Topology Diagram
 
-![Topology Diagram](../diagrams/scenario_netfilter_single.drawio.svg)
+![Topology Diagram](diagram.drawio.svg)
 
 ### Client-side TNG (Ingress) Configuration Example
 

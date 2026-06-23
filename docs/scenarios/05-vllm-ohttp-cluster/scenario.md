@@ -17,7 +17,7 @@
 
 ### Topology Diagram
 
-![Topology Diagram](../diagrams/scenario_vllm_ohttp_cluster.drawio.svg)
+![Topology Diagram](diagram.drawio.svg)
 
 ### Client-side TNG (Ingress) Configuration Example
 

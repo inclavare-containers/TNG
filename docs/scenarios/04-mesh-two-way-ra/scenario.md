@@ -15,7 +15,7 @@
 
 ### Topology Diagram
 
-![Topology Diagram](../diagrams/scenario_mesh_two_way_ra.drawio.svg)
+![Topology Diagram](diagram.drawio.svg)
 
 ### TNG Configuration Example on a Single Node
 
