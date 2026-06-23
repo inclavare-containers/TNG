@@ -4138,8 +4138,9 @@ dependencies = [
 
 [[package]]
 name = "memberlist"
-version = "0.8.2"
-source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23235c0b160db6da8a0069c8977f976d6041d9628e01eda2aa98e9950987da11"
 dependencies = [
  "agnostic",
  "agnostic-lite",
@@ -4153,8 +4154,9 @@ dependencies = [
 
 [[package]]
 name = "memberlist-core"
-version = "0.8.3"
-source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4da11ffe4e3f5187cf308c6547512714aace0236d935177e30e5f73784c035"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4198,8 +4200,9 @@ dependencies = [
 
 [[package]]
 name = "memberlist-net"
-version = "0.8.3"
-source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47c9c2a85c5ecd9bb3438429988f35b49d935c0f5bd26d142795043f9a475f97"
 dependencies = [
  "agnostic",
  "async-channel",
@@ -4227,8 +4230,9 @@ dependencies = [
 
 [[package]]
 name = "memberlist-proto"
-version = "0.3.3"
-source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e56e1dcf492ecadac33cbe944e9f628846c627470e8144dbc3c479f80943e201"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -4262,8 +4266,9 @@ dependencies = [
 
 [[package]]
 name = "memberlist-quic"
-version = "0.8.3"
-source = "git+https://github.com/al8n/memberlist?rev=ac5a2798655c066f065aaa231702240776b32b7a#ac5a2798655c066f065aaa231702240776b32b7a"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8421f7af3d0b418d5aef32210d06f8ab9b92faecff98335f73763c6970adda43"
 dependencies = [
  "agnostic",
  "agnostic-lite",
@@ -6904,9 +6909,9 @@ dependencies = [
 
 [[package]]
 name = "serf"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d714281dc214f6f46c274b2b1b008445949f5105fca5324b40a65f4f84f97346"
+checksum = "2baeb96c2d424e0a7e1a127def9f1ffccf50f08f5b239e52d924b53defc1bf2f"
 dependencies = [
  "memberlist",
  "serf-core",
