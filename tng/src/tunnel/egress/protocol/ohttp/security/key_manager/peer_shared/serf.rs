@@ -2236,6 +2236,9 @@ mod tests {
 
             // --- Phase 3: Verify cross-node key accessibility ---
 
+            // Wait some time for membership propagation. Or we will get "membership check failed: A does not see B (1a607ea0-7e86-4d4e-b635-b63ca34ac1e9) in its member list"
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
             verify_all_keys_reachable(&[("A", &manager_a), ("B", &manager_b), ("C", &manager_c)])
                 .await?;
 
