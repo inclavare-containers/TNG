@@ -872,15 +872,15 @@ impl PeerSharedKeyManager {
 
     /// Join a set of peers after construction.
     ///
-    /// This mirrors the file watcher scenario: when new peers are discovered,
-    /// only `join_serf_cluster` is called — no `QueryClusterKeySetRequest` is sent.
-    /// Key synchronization must happen through subsequent Serf queries.
+    /// Each peer is joined via `retry_join_peer` (exponential backoff until
+    /// success). No `QueryClusterKeySetRequest` is sent — key synchronization
+    /// must happen through subsequent Serf queries.
     #[cfg(test)]
     pub(crate) async fn join_peers(&self, peers: &[String]) -> Result<(), TngError> {
-        if peers.is_empty() {
-            return Ok(());
+        for peer in peers {
+            retry_join_peer(&self.serf, peer).await?;
         }
-        join_serf_cluster(&self.serf, peers).await
+        Ok(())
     }
 }
 
