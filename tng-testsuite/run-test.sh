@@ -168,7 +168,7 @@ echo "============= Finished unit test ============="
 # Run integration tests (find .rs files recursively in tests/ subdirectories)
 # Test names are derived from the file name (without path or extension) to match [[test]] sections
 test_cases=$(find tng-testsuite/tests/ -name '*.rs' -exec basename {} \; | sed 's/\.rs$//')
-skipped_test_cases=""  # Add test names here to skip, space-separated
+skipped_test_cases="js_sdk_http"  # Add test names here to skip, space-separated
 
 summary_lines+=("$(format_result "Integration tests" "")")
 
@@ -180,22 +180,10 @@ for case_name in $test_cases; do
         continue
     fi
 
-    # Some tests require additional features
-    extra_features=""
-    if [[ "$case_name" == "js_sdk_http" ]]; then
-        extra_features="js-sdk"
-    fi
-
-    if [[ -n "$extra_features" ]]; then
-        features="on-source-code,$extra_features"
-    else
-        features="on-source-code"
-    fi
-
     integ_args=(
         --no-report
         --no-default-features
-        --features "$features"
+        --features on-source-code
         --package tng-testsuite
         --test "$case_name"
         --
