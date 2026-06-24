@@ -1,0 +1,39 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - typecheck
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - revive
+
+linters-settings:
+  govet:
+    check-shadowing: true
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: blank-imports
+        severity: warning
+      - name: context-as-argument
+        severity: warning
+      - name: error-return
+        severity: warning
+      - name: var-declaration
+        severity: warning
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 50
+  max-same-issues: 10

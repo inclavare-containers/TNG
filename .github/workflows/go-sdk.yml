@@ -1,0 +1,173 @@
+name: Go SDK Tests
+
+on:
+  push:
+    branches:
+      - "master"
+      - "native"
+      - "sdk-go"
+    paths:
+      - "tng-go/**"
+      - "tng/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go-sdk.yml"
+  pull_request:
+    branches:
+      - "master"
+      - "native"
+      - "sdk-go"
+    paths:
+      - "tng-go/**"
+      - "tng/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go-sdk.yml"
+
+jobs:
+  go-unit-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      options: --privileged
+
+    steps:
+      - name: Install git and tar (required for checkout with submodules and setup-go)
+        run: yum install -y git tar
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: "true"
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Run Go unit tests
+        run: cd tng-go && go test -v ./...
+
+      - name: Run go vet
+        run: cd tng-go && go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1
+          working-directory: tng-go
+          args: --timeout=5m
+
+  go-integration-test:
+    runs-on: oracle-vm-16cpu-64gb-x86-64
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      options: --privileged
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+          yum install -y git make tar clang protobuf-devel jq
+
+      - uses: dtolnay/rust-toolchain@1.89.0
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: "true"
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build TNG binary
+        run: cargo build --release -p tng
+
+      - name: Start Attestation Agent and Attestation Service
+        run: |
+          nohup make test-dep-aa > /tmp/aa.log 2>&1 &
+          AA_PID=$!
+          nohup make test-dep-as > /tmp/as.log 2>&1 &
+          AS_PID=$!
+
+          # Wait for ASR (max 5 minutes)
+          echo "Waiting for ASR..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "AA process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if (echo > /dev/tcp/127.0.0.1/8006) 2>/dev/null; then
+              echo "ASR is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for ASR"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for AA socket
+          echo "Waiting for AA socket..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "AA process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then
+              echo "AA is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for AA"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for AS
+          echo "Waiting for AS..."
+          for i in $(seq 1 300); do
+            if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then
+              echo "AS is ready"
+              break
+            fi
+            if [ $i -gt 60 ] && ! kill -0 $AS_PID 2>/dev/null; then
+              echo "AS process exited unexpectedly"
+              cat /tmp/as.log
+              exit 1
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for AS"
+              cat /tmp/as.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run Go integration tests
+        run: cd tng-go && go test -tags=integration -v ./...
+        env:
+          TNG_BINARY: "${{ github.workspace }}/target/release/tng"
+
+      - name: Print background service logs
+        if: always()
+        run: |
+          echo "=== Attestation Agent Log ==="
+          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
+          echo "=== Attestation Service Log ==="
+          cat /tmp/as.log 2>/dev/null || echo "(no log file)"

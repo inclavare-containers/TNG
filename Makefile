@@ -546,3 +546,16 @@ python-test:
 	cd tng-python && python -m pytest tests/test_unit.py -v
 	@echo ">> Running Python integration tests (requires TNG binary)..."
 	cd tng-python && python -m pytest tests/test_integration.py -v -m e2e
+
+
+# Go SDK — no CGO, pure Go build
+.PHONY: go-build go-test go-test-integration
+
+go-build:
+	cd tng-go && go build ./...
+
+go-test:
+	cd tng-go && go test -v ./...
+
+go-test-integration:
+	cd tng-go && go test -tags=integration -v ./...
