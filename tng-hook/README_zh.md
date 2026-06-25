@@ -105,6 +105,23 @@ cargo test -p tng-hook-types
 
 产物为 `target/debug/libtng_hook.so`（或 `target/release/libtng_hook.so`）。
 
+## 打包说明
+
+`libtng_hook.so` 仅被 `tng exec` 子命令使用，且**仅支持 Linux**（依赖 Linux glibc 进行 LD_PRELOAD 系统调用拦截）。以下 TNG 发行制品包含此库：
+
+| 制品类型 | 包含 | 安装路径 |
+|---|---|---|
+| RPM 包 | ✅ | `/usr/lib/tng/libtng_hook.so` |
+| Docker 镜像 | ✅ | `/usr/lib/tng/libtng_hook.so` |
+| 二进制发布包（Linux） | ✅ | 与 `tng` 一同打包在 `.tar.gz` 中 |
+| Python SDK | ❌ 不需要 — `tng exec` 是 CLI 工具 |
+| WASM SDK | ❌ 不适用 — 浏览器环境 |
+
+二进制发布版中，`tng` 按以下顺序搜索该库：
+1. `$TNG_HOOK_LIB` 环境变量
+2. `tng` 二进制同目录
+3. `/usr/lib/tng/libtng_hook.so`
+
 ## 使用
 
 通过 `tng exec` 运行：

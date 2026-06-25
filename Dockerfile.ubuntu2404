@@ -45,6 +45,9 @@ COPY . .
 
 RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --features 'builtin-as-tdx' --path ./tng/ --root /usr/local/cargo/
 
+# Build libtng_hook.so (LD_PRELOAD hook for tng exec)
+RUN . "$HOME/.cargo/env" && cargo build --release -p tng-hook-cdylib
+
 
 FROM ubuntu:24.04 AS release
 
@@ -73,5 +76,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
+
+# Install libtng_hook.so (LD_PRELOAD hook for tng exec transparent port interception)
+RUN mkdir -p /usr/lib/tng/
+COPY --from=builder /code/target/release/libtng_hook.so /usr/lib/tng/libtng_hook.so
 
 CMD ["tng"]

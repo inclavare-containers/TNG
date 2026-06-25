@@ -144,6 +144,7 @@ pip install tng-python
 ```
 tng/             核心网关二进制（CLI）— 主要入口
 rats-cert/       证书生成与管理库
+tng-hook/        LD_PRELOAD 钩子库（libtng_hook.so），用于 `tng exec` 透明端口拦截
 tng-wasm/        WebAssembly 模块 + 浏览器 JavaScript SDK
 tng-python/      Python SDK，用于程序化集成
 tng-testsuite/   集成测试和端到端测试用例

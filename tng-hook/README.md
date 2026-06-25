@@ -105,6 +105,23 @@ cargo test -p tng-hook-types
 
 The output is `target/debug/libtng_hook.so` (or `target/release/libtng_hook.so`).
 
+## Packaging
+
+`libtng_hook.so` is exclusively used by the `tng exec` subcommand and is **Linux-only** (it depends on Linux glibc for LD_PRELOAD syscall interception). It is included in the following TNG distribution artifacts:
+
+| Artifact | Included | Install Path |
+|---|---|---|
+| RPM package | ✅ | `/usr/lib/tng/libtng_hook.so` |
+| Docker image | ✅ | `/usr/lib/tng/libtng_hook.so` |
+| Binary release (Linux) | ✅ | alongside `tng` in the `.tar.gz` |
+| Python SDK | ❌ | not needed — `tng exec` is a CLI tool |
+| WASM SDK | ❌ | not applicable — browser environment |
+
+For binary releases, `tng` searches for the library in this order:
+1. `$TNG_HOOK_LIB` environment variable
+2. Same directory as the `tng` binary
+3. `/usr/lib/tng/libtng_hook.so`
+
 ## Usage
 
 Run through `tng exec`:

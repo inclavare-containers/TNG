@@ -57,3 +57,15 @@ jobs:
           name: ${{ inputs.target }}
           path: target/${{ inputs.target }}/release/${{ env.exe_name }}
           if-no-files-found: error
+
+      - name: Build libtng_hook.so (Linux only)
+        if: contains( inputs.target, 'linux' )
+        run: |
+          cargo zigbuild --target ${{ inputs.target }} --release -p tng-hook-cdylib
+      - name: Upload hook artifact (Linux only)
+        if: contains( inputs.target, 'linux' )
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.target }}-libtng-hook
+          path: target/${{ inputs.target }}/release/libtng_hook.so
+          if-no-files-found: error

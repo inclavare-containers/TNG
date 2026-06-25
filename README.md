@@ -144,6 +144,7 @@ Full SDK docs: [tng-python/README.md](tng-python/README.md)
 ```
 tng/             Core gateway binary (CLI) — the main entry point
 rats-cert/       Certificate generation and management library
+tng-hook/        LD_PRELOAD hook library (libtng_hook.so) for `tng exec` transparent port interception
 tng-wasm/        WebAssembly module + JavaScript SDK for browsers
 tng-python/      Python SDK for programmatic integration
 tng-testsuite/   Integration and e2e test cases

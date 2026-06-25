@@ -25,6 +25,9 @@ COPY . .
 
 RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --features 'builtin-as-tdx' --path ./tng/ --root /usr/local/cargo/
 
+# Build libtng_hook.so (LD_PRELOAD hook for tng exec)
+RUN . "$HOME/.cargo/env" && cargo build --release -p tng-hook-cdylib
+
 
 FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest AS release
 
@@ -39,6 +42,10 @@ RUN yum install -y tpm2-tss tpm2-tss-devel curl openssl libsgx-dcap-default-qpl 
 RUN yum reinstall -y ca-certificates
 
 COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
+
+# Install libtng_hook.so (LD_PRELOAD hook for tng exec transparent port interception)
+RUN mkdir -p /usr/lib/tng/
+COPY --from=builder /code/target/release/libtng_hook.so /usr/lib/tng/libtng_hook.so
 
 # Install vendor config setup tool
 COPY scripts/setup-vendor-config /usr/local/bin/setup-vendor-config

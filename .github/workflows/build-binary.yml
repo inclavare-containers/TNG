@@ -65,7 +65,16 @@ jobs:
               if [[ $dirname == *"windows"* ]]; then
                   (cd ${dirname} && zip -r - tng.exe) > tng-${version}.${dirname}.zip
               else
-                  tar czvf tng-${version}.${dirname}.tar.gz -C ${dirname} tng
+                  # Include libtng_hook.so if present (Linux builds only)
+                  hook_file=""
+                  if [ -f "${dirname}/libtng_hook.so" ]; then
+                      hook_file="${dirname}/libtng_hook.so"
+                  fi
+                  if [ -n "$hook_file" ]; then
+                      tar czvf tng-${version}.${dirname}.tar.gz -C ${dirname} tng libtng_hook.so
+                  else
+                      tar czvf tng-${version}.${dirname}.tar.gz -C ${dirname} tng
+                  fi
               fi
           done
       - name: List Directory
