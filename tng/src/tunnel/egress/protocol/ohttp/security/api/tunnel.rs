@@ -110,7 +110,9 @@ impl OhttpServerApi {
 
         // Extract client public key before validation moves client_auth
         let client_pk_bytes = match &metadata.client_auth {
-            Some(ClientAuth::AttestedPublicKey(AttestedPublicKey { pk_s, .. })) => Some(pk_s.clone()),
+            Some(ClientAuth::AttestedPublicKey(AttestedPublicKey { pk_s, .. })) => {
+                Some(pk_s.clone())
+            }
             _ => None,
         };
 
@@ -132,10 +134,12 @@ impl OhttpServerApi {
         let plain_text = match client_pk_bytes {
             Some(pk_s) => {
                 // Use Auth mode: server verifies client identity via HPKE Auth
-                let client_pk = ohttp::PublicKey::from_x25519_bytes(&pk_s)
-                    .map_err(|e| TngError::ClientRequestKeyConfigFailed(anyhow!(
-                        "Failed to construct client public key: {}", e
-                    )))?;
+                let client_pk = ohttp::PublicKey::from_x25519_bytes(&pk_s).map_err(|e| {
+                    TngError::ClientRequestKeyConfigFailed(anyhow!(
+                        "Failed to construct client public key: {}",
+                        e
+                    ))
+                })?;
                 header_decoded.into_server_request_with_client_pk(key_info.key_config, client_pk)
             }
             None => {

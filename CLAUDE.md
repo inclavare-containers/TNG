@@ -159,3 +159,8 @@ When implementing a new feature or modifying existing behavior:
    - New ingress/egress modes or modifiers
    - Changes to protocol behavior or tunnel establishment
    - Changes that could break existing configs (regression testing)
+
+## Testing Discipline
+
+- **Never remove a failing test to make CI pass.** When a test fails, investigate the root cause — it's either a bug in the test (fix the test), a bug in the code (fix the code), or an infrastructure issue (document and work around). Deleting a failing test hides real problems.
+- **Never hide a failing test behind `#[ignore]` to make CI green.** This is dishonest — CI reports "passed" but the test never ran. If stuck, leave the test as-is and tell the user explicitly: "Test X fails because of Y, I cannot fix it because Z."

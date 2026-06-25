@@ -149,6 +149,10 @@ name = "ohttp"
 path = "tests/ohttp/ohttp.rs"
 
 [[test]]
+name = "client_auth_mode"
+path = "tests/ohttp/client_auth_mode.rs"
+
+[[test]]
 name = "header_passthrough"
 path = "tests/ohttp/header_passthrough.rs"
 
