@@ -167,7 +167,8 @@ echo "============= Finished unit test ============="
 
 # Run integration tests (find .rs files recursively in tests/ subdirectories)
 # Test names are derived from the file name (without path or extension) to match [[test]] sections
-test_cases=$(find tng-testsuite/tests/ -name '*.rs' -exec basename {} \; | sed 's/\.rs$//')
+# Discover test names from Cargo.toml [[test]] sections
+test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | grep -v '^tng-testsuite$')
 skipped_test_cases="js_sdk_http"  # Add test names here to skip, space-separated
 
 summary_lines+=("$(format_result "Integration tests" "")")
