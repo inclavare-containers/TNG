@@ -69,8 +69,9 @@ mkdir -p %{buildroot}/usr/lib/systemd/system/
 install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/systemd/system/trusted-network-gateway.service
 
 # Install libtng_hook.so (LD_PRELOAD hook for transparent TNG tunneling)
+# Built from src/ directory in %build, so target is under src/target/
 mkdir -p %{buildroot}/usr/lib/tng/
-install -p -m 755 %{_builddir}/%{name}-%{version}/target/release/libtng_hook.so %{buildroot}/usr/lib/tng/libtng_hook.so
+install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook.so %{buildroot}/usr/lib/tng/libtng_hook.so
 
 %define __requires_exclude librats_rs.so
 
