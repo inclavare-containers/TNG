@@ -21,7 +21,7 @@ use tower::ServiceBuilder;
 use tracing::Instrument;
 
 use crate::config::ingress::IngressHttpProxyArgs;
-use crate::tunnel::access_log::IngressMode;
+use crate::tunnel::access_log::{AccessAccepted, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
@@ -147,6 +147,11 @@ impl RequestHelper {
                         .context("Failed during http connect upgrade")?;
 
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
+                    let access_accepted = AccessAccepted::new_ingress(
+                        peer_addr,
+                        listener_addr,
+                        IngressMode::HttpProxy,
+                    );
                     sender
                         .send(AcceptedStream {
                             stream: Box::new(crate::ContextualStream::new(
@@ -158,6 +163,7 @@ impl RequestHelper {
                             via_tunnel,
                             listener_addr,
                             ingress_mode: IngressMode::HttpProxy,
+                            access_accepted,
                         })
                         .map_err(|e| anyhow!("{e:?}"))?;
 
@@ -188,7 +194,12 @@ impl RequestHelper {
 
                 let send_accepted_stream = async {
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
-                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy })
+                    let access_accepted = AccessAccepted::new_ingress(
+                        peer_addr,
+                        listener_addr,
+                        IngressMode::HttpProxy,
+                    );
+                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy, access_accepted })
                 };
 
                 let send_task = async {

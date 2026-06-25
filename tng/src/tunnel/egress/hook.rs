@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
 use crate::config::HookMappingEntry;
-use crate::tunnel::access_log::EgressMode;
+use crate::tunnel::access_log::{AccessAccepted, EgressMode};
 use crate::tunnel::egress::flow::AcceptedStream;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -111,20 +111,20 @@ impl EgressTrait for HookEgress {
                                 } else {
                                     local.ip().to_string()
                                 };
-                                let upstream_addr = format!("{}:{}", upstream_host, info.real_port);
                                 let dst = Arc::new(TngEndpoint::new(upstream_host, info.real_port));
 
-                                tracing::info!(
-                                    "hook chain: client={} → listener={} → upstream={} OK",
-                                    peer_addr, info.local_addr, upstream_addr
+                                let access_accepted = AccessAccepted::new_egress(
+                                    peer_addr,
+                                    info.local_addr,
+                                    EgressMode::Hook,
                                 );
-
                                 yield Ok(AcceptedStream {
                                     stream: Box::new(crate::ContextualStream::new(stream, "egress-hook")),
                                     src: peer_addr,
                                     dst,
                                     listener_addr: info.local_addr,
                                     egress_mode: EgressMode::Hook,
+                                    access_accepted,
                                 })
                             }
                             Err(e) => yield Err(anyhow!(e)),

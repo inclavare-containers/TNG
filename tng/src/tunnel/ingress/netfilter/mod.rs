@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::ingress::IngressNetfilterCaptureDst;
-use crate::tunnel::access_log::IngressMode;
+use crate::tunnel::access_log::{AccessAccepted, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::iptables::IptablesExecutor;
@@ -123,6 +123,11 @@ impl IngressTrait for NetfilterIngress {
 
                 let orig_dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
 
+                let access_accepted = AccessAccepted::new_ingress(
+                    peer_addr,
+                    listen_addr,
+                    IngressMode::Netfilter,
+                );
                 Ok::<_, anyhow::Error>(AcceptedStream{
                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
                     src: peer_addr,
@@ -130,6 +135,7 @@ impl IngressTrait for NetfilterIngress {
                     via_tunnel: true,
                     listener_addr: listen_addr,
                     ingress_mode: IngressMode::Netfilter,
+                    access_accepted,
                 })
             })
         ))

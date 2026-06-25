@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 use crate::config::ingress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::access_log::{AccessLog, IngressMode};
+use crate::tunnel::access_log::{AccessAccepted, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -50,6 +49,7 @@ pub(super) trait IngressTrait: Sync + Send {
 
 pub(super) type Incomming<'a> = Pin<Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>>;
 
+#[allow(dead_code)]
 pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Send>,
     pub src: SocketAddr,
@@ -57,6 +57,7 @@ pub(super) struct AcceptedStream {
     pub via_tunnel: bool,
     pub listener_addr: SocketAddr,
     pub ingress_mode: IngressMode,
+    pub access_accepted: AccessAccepted,
 }
 
 impl IngressFlow {
@@ -142,8 +143,9 @@ impl IngressFlow {
             src,
             dst,
             via_tunnel,
-            listener_addr,
-            ingress_mode,
+            listener_addr: _,
+            ingress_mode: _,
+            access_accepted,
         } = accepted_stream;
 
         let trusted_stream_manager = self.trusted_stream_manager.clone();
@@ -161,6 +163,9 @@ impl IngressFlow {
                     // TODO: merge .new_cx() and .new_wrapped_stream()
                     let active_cx = metrics.new_cx();
                     let stream = metrics.new_wrapped_stream(stream);
+
+                    // Transition to AccessRouted: dst and via_tunnel are known here
+                    let access_routed = access_accepted.into_routed(&dst, via_tunnel);
 
                     let attestation_result;
                     let upstream_local;
@@ -190,17 +195,8 @@ impl IngressFlow {
                         forward_stream_task
                     };
 
-                    // Print access log
-                    let access_log = AccessLog::Ingress {
-                        downstream_remote: src,
-                        upstream_remote: &dst,
-                        to_trusted_tunnel: via_tunnel,
-                        attestation_result: attestation_result.map(Cow::Owned),
-                        downstream_local: listener_addr,
-                        ingress_mode,
-                        upstream_local,
-                    };
-                    tracing::info!(%access_log);
+                    // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
+                    access_routed.into_established(upstream_local, attestation_result.is_some());
 
                     // let forward_stream_task = pin!(forward_stream_task);
                     match forward_stream_task.await {

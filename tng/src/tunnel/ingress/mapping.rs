@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressMappingArgs;
-use crate::tunnel::access_log::IngressMode;
+use crate::tunnel::access_log::{AccessAccepted, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -125,14 +125,22 @@ impl IngressTrait for MappingIngress {
                 Box::pin(stream! {
                     loop {
                         match target.listener.accept_with_common_sock_opts().await {
-                            Ok((stream, peer_addr)) => yield Ok(AcceptedStream {
-                                stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
-                                src: peer_addr,
-                                dst: Arc::clone(&target.out_ep),
-                                via_tunnel: true,
-                                listener_addr: target.local_addr,
-                                ingress_mode: IngressMode::Mapping,
-                            }),
+                            Ok((stream, peer_addr)) => {
+                                let access_accepted = AccessAccepted::new_ingress(
+                                    peer_addr,
+                                    target.local_addr,
+                                    IngressMode::Mapping,
+                                );
+                                yield Ok(AcceptedStream {
+                                    stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
+                                    src: peer_addr,
+                                    dst: Arc::clone(&target.out_ep),
+                                    via_tunnel: true,
+                                    listener_addr: target.local_addr,
+                                    ingress_mode: IngressMode::Mapping,
+                                    access_accepted,
+                                })
+                            }
                             Err(e) => yield Err(anyhow!(e)),
                         }
                     }

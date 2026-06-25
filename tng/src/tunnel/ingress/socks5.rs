@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::config::ingress::{IngressSocks5Args, Socks5AuthArgs};
-use crate::tunnel::access_log::IngressMode;
+use crate::tunnel::access_log::{AccessAccepted, IngressMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
@@ -161,6 +161,8 @@ impl IngressTrait for Socks5Ingress {
 
                     let via_tunnel = self.stream_router.should_forward_via_tunnel(&dst);
 
+                    let access_accepted =
+                        AccessAccepted::new_ingress(peer_addr, listener_addr, IngressMode::Socks5);
                     Ok(AcceptedStream {
                         stream: Box::new(crate::ContextualStream::new(stream, "ingress-socks5")),
                         src: peer_addr,
@@ -168,6 +170,7 @@ impl IngressTrait for Socks5Ingress {
                         via_tunnel,
                         listener_addr,
                         ingress_mode: IngressMode::Socks5,
+                        access_accepted,
                     })
                 }
             })

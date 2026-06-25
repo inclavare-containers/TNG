@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -13,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 use crate::config::egress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::access_log::{AccessLog, EgressMode};
+use crate::tunnel::access_log::{AccessAccepted, EgressMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
@@ -47,12 +46,14 @@ pub(super) trait EgressTrait: Sync + Send {
 
 pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
 
+#[allow(dead_code)]
 pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Sync>,
     pub src: SocketAddr,
     pub dst: Arc<TngEndpoint>,
     pub listener_addr: SocketAddr,
     pub egress_mode: EgressMode,
+    pub access_accepted: AccessAccepted,
 }
 
 impl EgressFlow {
@@ -133,9 +134,19 @@ impl EgressFlow {
             stream,
             src,
             dst,
-            listener_addr,
-            egress_mode,
+            listener_addr: _,
+            egress_mode: _,
+            access_accepted,
         } = accepted_stream;
+
+        // Egress processes multiple upstream connections per accepted downstream.
+        // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
+        let access_src = access_accepted.downstream_remote_addr();
+        let access_local = access_accepted.downstream_local_addr();
+        let access_egress_mode = match access_accepted.egress_mode() {
+            Some(mode) => mode,
+            None => panic!("egress flow: AccessAccepted must have egress mode"),
+        };
 
         let trusted_stream_manager = self.trusted_stream_manager.clone();
         let metrics = self.metrics.clone();
@@ -176,9 +187,17 @@ impl EgressFlow {
                             let active_cx = metrics.new_cx();
 
                             let from_trusted_tunnel = next_stream.is_secured();
-                            let attestation_info =
-                                next_stream.attestation_result().cloned().map(Cow::Owned);
+                            let attested = next_stream.attestation_result().is_some();
                             let downstream = next_stream.into_stream();
+
+                            // Transition to AccessRouted: dst and from_trusted_tunnel are known
+                            let access_accepted = AccessAccepted::new_egress(
+                                access_src,
+                                access_local,
+                                access_egress_mode,
+                            );
+                            let access_routed =
+                                access_accepted.into_routed(&dst, from_trusted_tunnel);
 
                             let upstream = tcp_connect(
                                 (dst.host(), dst.port()),
@@ -194,17 +213,8 @@ impl EgressFlow {
                             let egress_local = upstream.local_addr().ok();
                             let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
 
-                            // Print access log
-                            let access_log = AccessLog::Egress {
-                                downstream_remote: src,
-                                upstream_remote: &dst,
-                                from_trusted_tunnel,
-                                attestation_info,
-                                downstream_local: listener_addr,
-                                egress_mode,
-                                upstream_local: egress_local,
-                            };
-                            tracing::info!(%access_log);
+                            // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
+                            access_routed.into_established(egress_local, attested);
 
                             let downstream = metrics.new_wrapped_stream(downstream);
 
