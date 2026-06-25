@@ -1,14 +1,11 @@
-use anyhow::bail;
-use anyhow::Context;
-use anyhow::Result;
-use serde_json::json;
-use std::time::Duration;
+use anyhow::{bail, Context, Result};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::task::tagged_spawn::spawn_with_span_output;
 
+use super::readyz::{patch_config_with_control_interface, wait_for_readyz, ProcessStatus};
 use super::TngInstance;
 
 #[cfg(feature = "on-bin")]
@@ -18,28 +15,6 @@ mod bin;
 mod podman;
 
 impl TngInstance {
-    pub fn patch_config_with_control_interface(config_json: &str, port: u16) -> Result<String> {
-        // Patch the config json to add the control_interface config.
-        let mut tng_config: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(config_json)
-                .with_context(|| format!("Failed to parse config json: {config_json}"))?;
-        if let Some(value) = tng_config.get("control_interface") {
-            bail!("control_interface config already exists in the config json: {value}")
-        }
-        tng_config.insert(
-            "control_interface".to_string(),
-            json!(
-                {
-                    "restful": {
-                        "host": "127.0.0.1",
-                        "port": port
-                    }
-                }
-            ),
-        );
-        Ok(serde_json::to_string(&tng_config)?)
-    }
-
     pub(super) async fn launch_inner(
         &self,
         token: CancellationToken,
@@ -53,7 +28,7 @@ impl TngInstance {
 
         let free_port = portpicker::pick_unused_port().context("Failed to pick a free port")?;
 
-        let config_json = Self::patch_config_with_control_interface(&config_json, free_port)?;
+        let config_json = patch_config_with_control_interface(&config_json, free_port)?;
 
         tracing::info!("Run tng with {config_json}");
 
@@ -67,31 +42,22 @@ impl TngInstance {
                 .context("Failed to spawn tng process")?
         };
 
-        // Wait for the tng process to be ready by polling the ready signal from 127.0.0.1:50000/readyz.
-        loop {
-            if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{free_port}/readyz")).await {
-                if resp.status() == reqwest::StatusCode::OK {
-                    break;
-                }
+        // Wait for the tng process to be ready by polling /readyz.
+        wait_for_readyz(free_port, || match process.try_wait() {
+            Ok(Some(status)) => ProcessStatus::Exited(status.code()),
+            Ok(None) => ProcessStatus::Running,
+            Err(e) => {
+                tracing::error!(?e, "Failed to get status of tng process");
+                ProcessStatus::Exited(None)
             }
-            if let Some(status) = process
-                .try_wait()
-                .context("Failed to get status of tng process")?
-            {
-                bail!(
-                    "tng process has exited unexpectedly, exit code: {:?}",
-                    status.code(),
-                );
-            }
-
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
+        })
+        .await?;
 
         let parent_span = tracing::Span::current();
         let join_handle = tokio::task::spawn(async move {
             tokio::select! {
                 status = process.wait() => {
-                    let status = status.context("faile to get output of the tng process")?;
+                    let status = status.context("failed to get output of the tng process")?;
                     if !status.success() {
                         bail!("exit code: {:?}", status.code())
                     }

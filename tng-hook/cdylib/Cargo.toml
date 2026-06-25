@@ -1,0 +1,18 @@
+[package]
+name = "tng-hook-cdylib"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "tng_hook"
+crate-type = ["cdylib"]
+
+[dependencies]
+ctor = "=0.4.1"
+libc = "0.2"
+serde_json = { workspace = true }
+tng-hook-types = { path = "../types" }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -19,6 +19,7 @@
   - [direct_forward 规则](#direct_forward-规则)
   - [模式：mapping（端口映射）](#mapping端口映射)
   - [模式：netfilter（端口劫持）](#netfilter端口劫持)
+  - [模式：hook（LD_PRELOAD）](#egress-hookld_preload)
 - [远程证明（公共配置）](#远程证明公共配置)
   - [Provider 选择](#provider-选择)
   - [Attester 配置](#attester-配置)
@@ -472,7 +473,7 @@ flowchart TD
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-规则)] | 否 | 直接转发（不解密）规则 |
 | `ohttp` | [OHttp](#egress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
@@ -744,6 +745,62 @@ flowchart TD
 ```
 </details>
 
+---
+
+<a name="egress-hookld_preload"></a>
+
+### 模式：hook（LD_PRELOAD）
+
+`hook` 模式使用 LD_PRELOAD 拦截服务端应用的 `bind()` 和 `getsockname()` 系统调用，透明地将监听 socket 重定向到 TNG 隧道。
+
+该模式仅在使用 `tng exec` 时可用，它会启动一个预加载了 hook 库的子进程。
+
+**用法：**
+
+```bash
+tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
+```
+
+**配置：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|-------|------|------|------|
+| `hook` | object | 是 | Hook egress 配置对象 |
+| `hook.capture_listen` | array | 是 | 要拦截的端口列表 |
+| `hook.capture_listen[].port` | number | 是 | 要拦截的端口 |
+| `hook.capture_listen[].host` | string | 否 | 要匹配的 IPv4 地址（默认：任意） |
+| `hook.capture_listen[].port_end` | number | 否 | 范围匹配的结束端口 |
+| `hook.capture_listen[].redirect_to_port` | number | 否 | 重定向到的真实端口（未设置时自动分配） |
+| `hook.capture_listen[].redirect_to_port_end` | number | 否 | 重定向范围的结束端口 |
+
+**规则：**
+- `port_end` 和 `redirect_to_port_end` 必须同时存在或同时缺失
+- 范围长度必须匹配：`port_end - port == redirect_to_port_end - redirect_to_port`
+- 未指定 `redirect_to_port` 时，TNG 自动分配可用端口
+
+**示例：**
+
+```json
+{
+    "add_egress": [
+        {
+            "hook": {
+                "capture_listen": [
+                    { "port": 8080 },
+                    { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 },
+                    { "host": "192.168.1.1", "port": 30002, "redirect_to_port": 45002 }
+                ]
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+> [!NOTE]
+> `hook` 模式与其他 egress 模式互斥。使用 `tng exec` 时，仅允许使用 `hook` 模式。
 
 ---
 

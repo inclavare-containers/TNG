@@ -19,6 +19,7 @@
   - [direct_forward Rules](#direct_forward-rules)
   - [Mode: mapping (Port Mapping)](#mode-mapping-port-mapping)
   - [Mode: netfilter (Port Hijacking)](#mode-netfilter-port-hijacking)
+  - [Mode: hook (LD_PRELOAD)](#egress-hook-ld-preload)
 - [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration)
   - [Provider Selection](#provider-selection)
   - [Attester Configuration](#attester-configuration)
@@ -472,7 +473,7 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-rules)] | No | Direct forwarding (without decryption) rules |
 | `ohttp` | [OHttp](#egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
@@ -744,6 +745,62 @@ flowchart TD
 ```
 </details>
 
+---
+
+<a name="egress-hook-ld-preload"></a>
+
+### Mode: hook (LD_PRELOAD)
+
+The `hook` mode uses LD_PRELOAD to intercept the server application's `bind()` and `getsockname()` syscalls, transparently redirecting listening sockets through the TNG tunnel.
+
+This mode is only available with `tng exec`, which launches a child process with the hook library preloaded.
+
+**Usage:**
+
+```bash
+tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
+```
+
+**Configuration:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `hook` | object | Yes | Hook egress configuration object |
+| `hook.capture_listen` | array | Yes | List of ports to intercept |
+| `hook.capture_listen[].port` | number | Yes | Port to intercept |
+| `hook.capture_listen[].host` | string | No | IPv4 address to match (default: any) |
+| `hook.capture_listen[].port_end` | number | No | End port for range matching |
+| `hook.capture_listen[].redirect_to_port` | number | No | Real port to redirect to (auto-allocated if not set) |
+| `hook.capture_listen[].redirect_to_port_end` | number | No | End port for redirect range |
+
+**Rules:**
+- `port_end` and `redirect_to_port_end` must both be present or both absent
+- Range lengths must match: `port_end - port == redirect_to_port_end - redirect_to_port`
+- When `redirect_to_port` is not specified, TNG auto-allocates available ports
+
+**Example:**
+
+```json
+{
+    "add_egress": [
+        {
+            "hook": {
+                "capture_listen": [
+                    { "port": 8080 },
+                    { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 },
+                    { "host": "192.168.1.1", "port": 30002, "redirect_to_port": 45002 }
+                ]
+            },
+            "attest": {
+                "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+            }
+        }
+    ]
+}
+```
+
+> [!NOTE]
+> The `hook` mode is mutually exclusive with other egress modes. When using `tng exec`, only `hook` mode is allowed.
 
 ---
 

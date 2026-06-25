@@ -11,6 +11,11 @@ mod source_code;
 #[cfg(any(feature = "on-bin", feature = "on-podman"))]
 mod external;
 
+mod binary_locator;
+mod exec;
+pub use exec::TngExecTask;
+mod readyz;
+
 #[derive(Debug, Clone, Copy)]
 pub enum TngInstance {
     #[allow(unused)]

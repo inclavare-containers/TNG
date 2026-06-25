@@ -110,6 +110,31 @@ async fn main() {
 
                 tracing::info!("Exited gracefully");
             }
+            GlobalSubcommand::Exec(options) => {
+                use tng::exec::TngExec;
+
+                let config: TngConfig = {
+                    match (options.config_file, options.config_content) {
+                        (Some(_), Some(_)) => {
+                            bail!("Cannot set both --config-file and --config-content at the same time")
+                        }
+                        (None, None) => {
+                            bail!("Either --config-file or --config-content should be set")
+                        }
+                        (None, Some(s)) => serde_json::from_str(&s)?,
+                        (Some(path), None) => {
+                            tracing::info!(?path, "Loading config from");
+                            let file = File::open(path)?;
+                            let reader = BufReader::new(file);
+                            serde_json::from_reader(reader)?
+                        }
+                    }
+                };
+
+                TngExec::run(config, options.command, &reload_handle).await?;
+
+                tracing::info!("Exec session ended");
+            }
         }
 
         Ok::<_, anyhow::Error>(())

@@ -5,6 +5,7 @@ use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
 use super::mapping_rule::MappingDe;
 use super::ra::RaArgsUnchecked;
+use crate::config::egress_hook::EgressHookArgs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddEgressArgs {
@@ -183,6 +184,9 @@ pub enum EgressMode {
 
     #[serde(rename = "netfilter")]
     Netfilter(EgressNetfilterArgs),
+
+    #[serde(rename = "hook")]
+    Hook(EgressHookArgs),
 }
 
 /// Configuration for OHTTP (Oblivious HTTP) support in TNG.
@@ -685,5 +689,88 @@ mod tests {
             err.contains("overlapping"),
             "error should mention overlapping: {err}"
         );
+    }
+
+    #[test]
+    fn test_deserialize_egress_hook() -> Result<()> {
+        use serde_json::json;
+
+        let value = json!({
+            "add_egress": [
+                {
+                    "hook": {
+                        "capture_listen": [
+                            { "port": 30001 },
+                            { "host": "192.168.1.1", "port": 30002, "redirect_to_port": 45002 }
+                        ]
+                    },
+                    "attest": {
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                    }
+                }
+            ]
+        });
+
+        let config: TngConfig = serde_json::from_value(value.clone())?;
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(&config)?,
+            serde_json::to_value(config2)?
+        );
+
+        // Verify the hook config was parsed correctly
+        let hook = match &config.add_egress[0].egress_mode {
+            EgressMode::Hook(args) => args,
+            _ => panic!("expected hook mode"),
+        };
+        assert_eq!(hook.capture_listen.len(), 2);
+        assert_eq!(hook.capture_listen[0].port, Some(30001));
+        assert_eq!(hook.capture_listen[1].redirect_to_port, Some(45002));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_hook_port_range() -> Result<()> {
+        use serde_json::json;
+
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_egress": [
+                {
+                    "hook": {
+                        "capture_listen": [
+                            { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 }
+                        ]
+                    },
+                    "attest": {
+                        "no_ra": true,
+                        "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                    }
+                }
+            ]
+        }))?;
+
+        let hook = match &config.add_egress[0].egress_mode {
+            EgressMode::Hook(args) => args,
+            _ => panic!("expected hook mode"),
+        };
+        assert_eq!(hook.capture_listen.len(), 1);
+        let entry = &hook.capture_listen[0];
+        assert_eq!(entry.port, Some(8080));
+        assert_eq!(entry.port_end, Some(8090));
+        assert_eq!(entry.redirect_to_port, Some(48080));
+        assert_eq!(entry.redirect_to_port_end, Some(48090));
+        assert!(entry.host.is_none());
+
+        // Round-trip
+        let config_json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&config_json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
+
+        Ok(())
     }
 }

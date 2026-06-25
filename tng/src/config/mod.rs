@@ -6,10 +6,14 @@ use serde::{Deserialize, Serialize};
 
 pub mod control_interface;
 pub mod egress;
+pub mod egress_hook;
 pub mod ingress;
 pub mod mapping_rule;
 pub mod observability;
 pub mod ra;
+
+// Shared types used by both tng and tng-hook
+pub use tng_hook_types::{HookMappingEntry, HookMappingTable};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

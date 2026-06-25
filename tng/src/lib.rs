@@ -8,6 +8,8 @@ pub mod config;
 mod control_interface;
 pub mod error;
 #[cfg(not(wasm))]
+pub mod exec;
+#[cfg(not(wasm))]
 mod observability;
 #[cfg(not(wasm))]
 pub mod runtime;

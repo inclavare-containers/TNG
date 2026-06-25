@@ -198,6 +198,10 @@ create-tarball:
 bin-build:
 	RUSTFLAGS="--cfg tokio_unstable" cargo build --release
 
+.PHONE: tng-hook-build
+tng-hook-build:
+	cargo build --release -p tng-hook-cdylib
+
 .PHONE: rpm-build
 rpm-build:
 	# setup build tree rpmdevtools

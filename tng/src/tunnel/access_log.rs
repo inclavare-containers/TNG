@@ -34,6 +34,7 @@ pub enum EgressMode {
     Mapping,
     #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
     Netfilter,
+    Hook,
 }
 
 impl Display for EgressMode {
@@ -42,6 +43,7 @@ impl Display for EgressMode {
             EgressMode::Mapping => write!(f, "mapping"),
             #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
             EgressMode::Netfilter => write!(f, "netfilter"),
+            EgressMode::Hook => write!(f, "hook"),
         }
     }
 }

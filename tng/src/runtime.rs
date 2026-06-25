@@ -171,16 +171,16 @@ impl TngRuntime {
             let add_egress = add_egress.clone();
             let span = tracing::info_span!("egress", id);
 
-            let service = async {
-                let flow = match &add_egress.egress_mode {
+            let services_for_entry = async {
+                let flows: Vec<EgressFlow> = match &add_egress.egress_mode {
                     EgressMode::Mapping(mapping_args) => {
-                        EgressFlow::new(
+                        vec![EgressFlow::new(
                             MappingEgress::new(id, mapping_args).await?,
                             &add_egress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?
+                        .await?]
                     }
                     EgressMode::Netfilter(netfilter_args) => {
                         #[cfg(not(target_os = "linux"))]
@@ -192,27 +192,39 @@ impl TngRuntime {
                         #[cfg(target_os = "linux")]
                         {
                             use crate::tunnel::egress::netfilter::NetfilterEgress;
-                            EgressFlow::new(
+                            vec![EgressFlow::new(
                                 NetfilterEgress::new(id, netfilter_args).await?,
                                 &add_egress.common,
                                 &service_metrics_creator,
                                 runtime.clone(),
                             )
-                            .await?
+                            .await?]
                         }
                     }
+                    EgressMode::Hook(hook_args) => {
+                        use crate::tunnel::egress::hook::HookEgress;
+                        vec![EgressFlow::new(
+                            HookEgress::new(id, &hook_args.resolved_entries),
+                            &add_egress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
+                        )
+                        .await?]
+                    }
                 };
-                Ok::<EgressFlow, anyhow::Error>(flow)
+                Ok::<Vec<EgressFlow>, anyhow::Error>(flows)
             }.instrument(span.clone()).await?;
 
-            let flow = Arc::new(service);
-            state.add_egress(EgressStatusHandle {
-                flow: Arc::downgrade(&flow),
-            });
-            services.push((
-                Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
-                span,
-            ));
+            for flow in services_for_entry {
+                let flow = Arc::new(flow);
+                state.add_egress(EgressStatusHandle {
+                    flow: Arc::downgrade(&flow),
+                });
+                services.push((
+                    Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
+                    span.clone(),
+                ));
+            }
         }
 
         let state = Arc::new(state);

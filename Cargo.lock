@@ -7740,6 +7740,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "time",
+ "tng-hook-types",
  "tokio",
  "tokio-graceful",
  "tokio-rustls",
@@ -7760,6 +7761,26 @@ dependencies = [
  "ws_stream_tungstenite",
  "ws_stream_wasm",
  "x509-cert",
+]
+
+[[package]]
+name = "tng-hook-cdylib"
+version = "2.6.0"
+dependencies = [
+ "ctor",
+ "libc",
+ "serde_json",
+ "tng-hook-types",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tng-hook-types"
+version = "2.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7798,6 +7819,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "which 7.0.3",
 ]
 
 [[package]]

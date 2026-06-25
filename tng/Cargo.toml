@@ -67,7 +67,7 @@ peekable = {workspace = true, optional = true}
 pin-project = {workspace = true}
 pin-project-lite = {workspace = true}
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }
-portpicker = {workspace = true, optional = true}
+portpicker = {workspace = true}
 prost = {workspace = true}
 prost-types = {workspace = true}
 rand = {workspace = true}
@@ -91,6 +91,7 @@ strum = {workspace = true}
 strum_macros = {workspace = true}
 tempfile = {workspace = true}
 thiserror = {workspace = true}
+tng-hook-types = { path = "../tng-hook/types" }
 time = {workspace = true}
 tokio-graceful = {workspace = true}
 # rustls crypto provider: aws-lc-rs for native, ring for wasm
@@ -168,7 +169,7 @@ __ingress-common = ["dep:async-tungstenite"]
 ingress-all = ["ingress-http-proxy", "ingress-mapping", "ingress-netfilter", "ingress-socks5"]
 ingress-http-proxy = ["__ingress-common", "hyper/client"]
 ingress-mapping = ["__ingress-common"]
-ingress-netfilter = ["__ingress-common", "dep:portpicker", "dep:which"]
+ingress-netfilter = ["__ingress-common", "dep:which"]
 ingress-socks5 = ["__ingress-common", "dep:fast-socks5"]
 
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
