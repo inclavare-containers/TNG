@@ -17,18 +17,28 @@ var (
 	ErrClosedTransport = errors.New("tng: transport is closed")
 )
 
-// Error wraps an FFI-level error with additional context.
+// Error wraps an SDK-level error with additional context.
 type Error struct {
-	Op   string // operation that failed ("NewClient", "RoundTrip")
-	Msg  string // error message from Rust FFI
+	Op   string // operation that failed ("NewRoundTripper", "RoundTrip")
+	Msg  string // error message
 	Code int    // HTTP status code (0 if not an HTTP error)
+	Err  error  // underlying error, if any
 }
 
 func (e *Error) Error() string {
-	if e.Code > 0 {
-		return fmt.Sprintf("tng: %s: %s (HTTP %d)", e.Op, e.Msg, e.Code)
+	msg := e.Msg
+	if msg == "" && e.Err != nil {
+		msg = e.Err.Error()
 	}
-	return fmt.Sprintf("tng: %s: %s", e.Op, e.Msg)
+	if e.Code > 0 {
+		return fmt.Sprintf("tng: %s: %s (HTTP %d)", e.Op, msg, e.Code)
+	}
+	return fmt.Sprintf("tng: %s: %s", e.Op, msg)
+}
+
+// Unwrap returns the underlying error for errors.Is/As support.
+func (e *Error) Unwrap() error {
+	return e.Err
 }
 
 // Is implements errors.Is for Error.

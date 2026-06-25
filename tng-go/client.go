@@ -84,7 +84,7 @@ func NewRoundTripper(cfg *Config, opts ...RoundTripperOption) (*TngRoundTripper,
 
 	proc, err := tngproc.New(ingressCfg)
 	if err != nil {
-		return nil, &Error{Op: "NewRoundTripper", Msg: err.Error()}
+		return nil, &Error{Op: "NewRoundTripper", Err: err}
 	}
 
 	// Create transport pointing to the local proxy
@@ -116,14 +116,14 @@ func (t *TngRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(req.Body)
 		req.Body.Close()
 		if err != nil {
-			return nil, &Error{Op: "RoundTrip", Msg: "failed to read body: " + err.Error()}
+			return nil, &Error{Op: "RoundTrip", Msg: "failed to read body", Err: err}
 		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
 	resp, err := t.transport.RoundTrip(req)
 	if err != nil {
-		return nil, &Error{Op: "RoundTrip", Msg: err.Error()}
+		return nil, &Error{Op: "RoundTrip", Err: err}
 	}
 
 	// Parse attestation info from response headers if present

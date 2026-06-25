@@ -11,6 +11,11 @@ import (
 
 func main() {
 	// Example: verify-only configuration
+	//
+	// Prerequisites:
+	// 1. TNG binary available (TNG_BINARY env or PATH)
+	// 2. Attestation Service running on http://127.0.0.1:8080/
+	// 3. A TNG egress server running at target:30001 with matching OHTTP config
 	cfg := &tng.Config{
 		Verify: map[string]any{
 			"model":       "background_check",

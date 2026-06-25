@@ -115,11 +115,20 @@ func startEgressAndBackends(t *testing.T) {
 	cleanupIptables(t)
 
 	// Start egress
-	tngBinary := workspaceDir + "/target/release/tng"
+	// Determine TNG binary path
+	tngBinary := os.Getenv("TNG_BINARY")
+	if tngBinary == "" {
+		tngBinary = workspaceDir + "/target/release/tng"
+		if _, err := os.Stat(tngBinary); os.IsNotExist(err) {
+			t.Fatalf("TNG_BINARY not set and release binary not found at %s.\nBuild with: cargo build --release -p tng", tngBinary)
+		}
+	}
+
 	var cmd *exec.Cmd
 	if _, err := os.Stat(tngBinary); err == nil {
 		cmd = exec.Command(tngBinary, "launch", "--config-content", string(configJSON))
 	} else {
+		// Fallback to cargo run for development
 		cmd = exec.Command("cargo", "run", "-p", "tng", "--", "launch", "--config-content", string(configJSON))
 		cmd.Dir = workspaceDir
 	}

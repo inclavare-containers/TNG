@@ -36,10 +36,19 @@ import "encoding/json"
 //		},
 //	}
 type Config struct {
-	OHttp  map[string]any `json:"ohttp,omitempty"`
+	// OHttp customizes OHTTP encryption settings (optional).
+	// Mutually exclusive with RatsTls (not exposed on Config directly,
+	// set via IngressConfig if needed).
+	OHttp map[string]any `json:"ohttp,omitempty"`
+	// Attest configures client-side attestation (optional).
+	// Used when the client needs to provide attestation to the server.
 	Attest map[string]any `json:"attest,omitempty"`
+	// Verify configures server-side attestation verification (optional).
+	// Used to validate the server's attestation token.
 	Verify map[string]any `json:"verify,omitempty"`
-	NoRA   bool           `json:"no_ra,omitempty"`
+	// NoRA disables remote attestation (debugging only, insecure).
+	// Use only for local development.
+	NoRA bool `json:"no_ra,omitempty"`
 }
 
 // FromJSON parses a JSON string into a Config.

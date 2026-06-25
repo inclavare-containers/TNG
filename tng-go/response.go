@@ -6,8 +6,11 @@ import (
 	"net/http"
 )
 
-// contextKey is the context key for storing attestation info.
-type contextKey struct{}
+// contextKey is the context key type for storing attestation info.
+// Using an unexported named type prevents key collisions.
+type contextKey string
+
+const attestationInfoKey contextKey = "tng-attestation-info"
 
 // AttestationInfo contains the attestation result from the server.
 // This is the Go equivalent of the `attest_info` property on WASM responses.
@@ -23,7 +26,7 @@ type AttestationInfo struct {
 }
 
 func withAttestationInfo(ctx context.Context, info *AttestationInfo) context.Context {
-	return context.WithValue(ctx, contextKey{}, info)
+	return context.WithValue(ctx, attestationInfoKey, info)
 }
 
 // GetAttestationInfo retrieves attestation info from an http.Response returned
@@ -32,7 +35,7 @@ func GetAttestationInfo(resp *http.Response) *AttestationInfo {
 	if resp == nil || resp.Request == nil {
 		return nil
 	}
-	info, _ := resp.Request.Context().Value(contextKey{}).(*AttestationInfo)
+	info, _ := resp.Request.Context().Value(attestationInfoKey).(*AttestationInfo)
 	return info
 }
 

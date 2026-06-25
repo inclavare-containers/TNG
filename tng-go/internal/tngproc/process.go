@@ -127,15 +127,18 @@ func (p *Process) cleanup() error {
 		go func() { done <- p.cmd.Wait() }()
 		select {
 		case <-done:
+			// Process exited gracefully
 		case <-time.After(5 * time.Second):
 			_ = p.cmd.Process.Kill()
-			p.cmd.Wait()
+			<-done // Wait for kill to complete
 		}
 	}
 
-	// Close log file
+	// Close and remove temp log file
 	if p.logFile != nil {
+		logPath := p.logFile.Name()
 		p.logFile.Close()
+		os.Remove(logPath)
 	}
 
 	// Remove temp config

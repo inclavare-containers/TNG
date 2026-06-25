@@ -156,3 +156,17 @@ func TestBuildIngressConfig_RatsTls(t *testing.T) {
 		t.Error("did not expect ohttp when rats_tls is set")
 	}
 }
+
+func TestBuildIngressConfig_OHttpAndRatsTlsMutualExclusivity(t *testing.T) {
+	cfg := &IngressConfig{
+		OHttp:   map[string]any{"key": "test"},
+		RatsTls: map[string]any{"cert": "test.crt"},
+	}
+	_, err := BuildIngressConfig(8080, cfg)
+	if err == nil {
+		t.Fatal("expected error when both OHttp and RatsTls are set")
+	}
+	if err.Error() != "OHttp and RatsTls are mutually exclusive" {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}

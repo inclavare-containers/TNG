@@ -2,6 +2,7 @@ package tngproc
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 // IngressConfig holds the TNG client-side ingress configuration.
@@ -24,6 +25,11 @@ type IngressConfig struct {
 //
 // This mirrors _build_tng_config() in the Python SDK (tng-python/tng/_tng.py).
 func BuildIngressConfig(proxyPort int, cfg *IngressConfig) ([]byte, error) {
+	// OHttp and RatsTls are mutually exclusive
+	if cfg.OHttp != nil && cfg.RatsTls != nil {
+		return nil, fmt.Errorf("OHttp and RatsTls are mutually exclusive")
+	}
+
 	ingress := map[string]any{
 		"http_proxy": map[string]any{
 			"proxy_listen": map[string]any{
