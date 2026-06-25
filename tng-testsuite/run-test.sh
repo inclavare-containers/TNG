@@ -169,7 +169,10 @@ echo "============= Finished unit test ============="
 # Test names are derived from the file name (without path or extension) to match [[test]] sections
 # Discover test names from Cargo.toml [[test]] sections
 test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | grep -v '^tng-testsuite$')
-skipped_test_cases="js_sdk_http"  # Add test names here to skip, space-separated
+# Skip tests that require specific features not enabled in this run
+# hook_single_port_intercept requires on-bin (libtng_hook.so must be installed)
+# js_sdk_http requires wasm browser environment
+skipped_test_cases="hook_single_port_intercept js_sdk_http"
 
 summary_lines+=("$(format_result "Integration tests" "")")
 

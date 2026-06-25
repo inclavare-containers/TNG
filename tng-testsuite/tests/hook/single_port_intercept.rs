@@ -20,6 +20,9 @@ use tng_testsuite::{
 ///
 /// This verifies the full hook egress flow: tunnel establishment, port
 /// interception, data forwarding, and echo response.
+///
+/// This test requires `libtng_hook.so` to be installed alongside the `tng`
+/// binary, so it only runs in `on-bin` mode (via `required-features`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {
     run_test!(vec![
