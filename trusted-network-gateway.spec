@@ -54,6 +54,8 @@ A tool for establishing secure communication tunnels in confidential computing.
 # Build tng
 pushd src/
 RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root %{_builddir}/%{name}-%{version}/install/tng/
+# Build libtng_hook.so (LD_PRELOAD hook for transparent TNG tunneling)
+cargo build -p tng-hook-cdylib --release
 popd
 
 
@@ -66,18 +68,24 @@ install -p -m 755 src/dist/config.json %{buildroot}/etc/tng/config.json
 mkdir -p %{buildroot}/usr/lib/systemd/system/
 install -p -m 755 src/dist/trusted-network-gateway.service %{buildroot}/usr/lib/systemd/system/trusted-network-gateway.service
 
+# Install libtng_hook.so (LD_PRELOAD hook for transparent TNG tunneling)
+mkdir -p %{buildroot}/usr/lib/tng/
+install -p -m 755 %{_builddir}/%{name}-%{version}/target/release/libtng_hook.so %{buildroot}/usr/lib/tng/libtng_hook.so
+
 %define __requires_exclude librats_rs.so
 
 %files
 %license src/LICENSE
 /usr/bin/tng
 /usr/lib/systemd/system/trusted-network-gateway.service
+/usr/lib/tng/libtng_hook.so
 %dir /etc/tng/
 /etc/tng/config.json
 
 
 %changelog
 * Wed Apr 22 2026 Kun Lai <laikun@linux.alibaba.com> - 2.6.0-1
+- build(rpm): add libtng_hook.so LD_PRELOAD hook library to RPM package
 - fix(build): use --locked flag for cargo install commands
 - Revert "fix(build): update nightly toolchain from 2025-07-07 to 2025-12-01"
 - refactor: improve error messages for hyper serve_connection call sites
