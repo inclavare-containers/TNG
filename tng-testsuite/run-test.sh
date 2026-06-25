@@ -169,17 +169,66 @@ echo "============= Finished unit test ============="
 # Test names are derived from the file name (without path or extension) to match [[test]] sections
 # Discover test names from Cargo.toml [[test]] sections
 test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | grep -v '^tng-testsuite$')
-# Skip tests that require specific features not enabled in this run
-# hook_single_port_intercept requires on-bin (libtng_hook.so must be installed)
-# js_sdk_http requires wasm browser environment
-skipped_test_cases="hook_single_port_intercept js_sdk_http"
+
+# The active feature set for this run (matches the --features flag used below)
+active_features="on-source-code"
+
+# Check if a test's required-features are satisfied by the active feature set.
+# Returns 0 (skip) if the test has required-features not in the active set.
+# Returns 1 (run) if the test has no required-features or all are satisfied.
+should_skip_test() {
+    local test_name="$1"
+    local cargo_toml="tng-testsuite/Cargo.toml"
+
+    # Parse the [[test]] section for this test and extract required-features
+    local required
+    required=$(awk -v name="$test_name" '
+        /^\[\[test\]\]/{
+            if (in_block && found_name && required != "") {
+                print required
+            }
+            in_block=1; found_name=0; required=""
+        }
+        in_block && /^name = /{
+            match($0, /"([^"]+)"/, arr)
+            last_name=arr[1]
+            found_name=1
+            if (last_name == name && in_block) exit_found=1
+        }
+        exit_found && in_block && /^required-features = /{
+            match($0, /\[([^\]]+)\]/, arr)
+            required=arr[1]
+            gsub(/"/, "", required)
+            gsub(/ /, "", required)
+            print required
+            exit
+        }
+        exit_found && ( /^\[\[/ || /^\[/ ) { exit }
+        END { }
+    ' "$cargo_toml")
+
+    # No required-features means run it
+    if [[ -z "$required" ]]; then
+        return 1
+    fi
+
+    # Check each required feature against the active set
+    IFS=',' read -ra req_features <<< "$required"
+    for feat in "${req_features[@]}"; do
+        if [[ ! " $active_features " =~ " $feat " ]]; then
+            return 0  # Skip: required feature not in active set
+        fi
+    done
+
+    return 1  # Run: all required features are satisfied
+}
 
 summary_lines+=("$(format_result "Integration tests" "")")
 
 for case_name in $test_cases; do
     echo "============= Starting integration test case: $case_name ============="
 
-    if [[ " $skipped_test_cases " =~ " $case_name " ]]; then
+    if should_skip_test "$case_name"; then
         summary_lines+=("$(format_result "  $case_name" "SKIP")")
         continue
     fi

@@ -1,8 +1,11 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::os::raw::c_void;
 use std::sync::OnceLock;
 
 use libc::{c_int, sockaddr, socklen_t};
-use tng_hook_types::{HookMappingLookup, HookMappingTable};
+use tng_hook_types::{
+    EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup, IngressHookMappingTable,
+};
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// Resolved real `bind` function pointer.
@@ -14,8 +17,14 @@ type GetsocknameFn = unsafe extern "C" fn(c_int, *mut sockaddr, *mut socklen_t) 
 static REAL_BIND: OnceLock<BindFn> = OnceLock::new();
 static REAL_GETSOCKNAME: OnceLock<GetsocknameFn> = OnceLock::new();
 
+/// Resolved real `connect` function pointer.
+type ConnectFn = unsafe extern "C" fn(c_int, *const sockaddr, socklen_t) -> c_int;
+
+static REAL_CONNECT: OnceLock<ConnectFn> = OnceLock::new();
+static INGRESS_LOOKUP: OnceLock<IngressHookLookup> = OnceLock::new();
+
 /// Global mapping lookup table, initialized once from env var at library load.
-static LOOKUP: OnceLock<HookMappingLookup> = OnceLock::new();
+static LOOKUP: OnceLock<EgressHookMappingLookup> = OnceLock::new();
 
 /// Resolve a function pointer from libc via dlsym.
 ///
@@ -45,7 +54,7 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
 ///
 /// This is called once when the `.so` is loaded (before main).
 /// It resolves the real `bind`/`getsockname` via dlsym and builds
-/// the mapping lookup table from the `TNG_HOOK_MAPPINGS` env var.
+/// the mapping lookup table from the `TNG_HOOK_EGRESS_MAPPINGS` env var.
 #[ctor::ctor]
 fn init() {
     // Initialize tracing subscriber writing to stderr.
@@ -65,23 +74,85 @@ fn init() {
 
     // Resolve real functions directly from libc
     unsafe {
-        if let Some(f) = resolve_libc_symbol::<BindFn>("bind") {
-            let _ = REAL_BIND.set(f);
+        let real_bind = resolve_libc_symbol::<BindFn>("bind").expect("Failed to resolve libc bind");
+        tracing::debug!("init: resolved libc bind");
+        let _ = REAL_BIND.set(real_bind);
+
+        let real_getsockname = resolve_libc_symbol::<GetsocknameFn>("getsockname")
+            .expect("Failed to resolve libc getsockname");
+        tracing::debug!("init: resolved libc getsockname");
+        let _ = REAL_GETSOCKNAME.set(real_getsockname);
+
+        let real_connect =
+            resolve_libc_symbol::<ConnectFn>("connect").expect("Failed to resolve libc connect");
+        tracing::debug!("init: resolved libc connect");
+        let _ = REAL_CONNECT.set(real_connect);
+    }
+
+    // Build egress lookup from env var
+    match std::env::var("TNG_HOOK_EGRESS_MAPPINGS") {
+        Ok(json) if !json.is_empty() => {
+            let truncated = if json.len() > 512 {
+                format!("{}...<{} bytes total>", &json[..512], json.len())
+            } else {
+                json.clone()
+            };
+            tracing::debug!("init: TNG_HOOK_EGRESS_MAPPINGS={}", truncated);
+            match serde_json::from_str::<EgressHookMappingTable>(&json) {
+                Ok(table) => {
+                    let entries = table.entries.len();
+                    let lookup = EgressHookMappingLookup::from_table(&table);
+                    let _ = LOOKUP.set(lookup);
+                    tracing::debug!("init: egress mapping loaded with {} entries", entries);
+                    tracing::trace!("init: egress mapping table: {:#?}", table);
+                }
+                Err(e) => {
+                    tracing::warn!("init: failed to parse TNG_HOOK_EGRESS_MAPPINGS JSON: {}", e);
+                }
+            }
         }
-        if let Some(f) = resolve_libc_symbol::<GetsocknameFn>("getsockname") {
-            let _ = REAL_GETSOCKNAME.set(f);
+        Ok(_) => {
+            tracing::warn!("init: TNG_HOOK_EGRESS_MAPPINGS is set but empty");
+        }
+        Err(_) => {
+            tracing::debug!("init: TNG_HOOK_EGRESS_MAPPINGS not set (egress hook disabled)");
         }
     }
 
-    // Build lookup from env var
-    if let Ok(json) = std::env::var("TNG_HOOK_MAPPINGS") {
-        if !json.is_empty() {
-            if let Ok(table) = serde_json::from_str::<HookMappingTable>(&json) {
-                let lookup = HookMappingLookup::from_table(&table);
-                let _ = LOOKUP.set(lookup);
+    // Build ingress lookup from env var
+    match std::env::var("TNG_HOOK_INGRESS_MAPPINGS") {
+        Ok(json) if !json.is_empty() => {
+            let truncated = if json.len() > 512 {
+                format!("{}...<{} bytes total>", &json[..512], json.len())
+            } else {
+                json.clone()
+            };
+            tracing::debug!("init: TNG_HOOK_INGRESS_MAPPINGS={}", truncated);
+            match serde_json::from_str::<IngressHookMappingTable>(&json) {
+                Ok(table) => {
+                    let entries: usize = table.proxies.iter().map(|p| p.capture_rules.len()).sum();
+                    let lookup = IngressHookLookup::from_table(&table);
+                    let _ = INGRESS_LOOKUP.set(lookup);
+                    tracing::debug!("init: ingress mapping loaded with {} entries", entries);
+                    tracing::trace!("init: ingress mapping table: {:#?}", table);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "init: failed to parse TNG_HOOK_INGRESS_MAPPINGS JSON: {}",
+                        e
+                    );
+                }
             }
         }
+        Ok(_) => {
+            tracing::warn!("init: TNG_HOOK_INGRESS_MAPPINGS is set but empty");
+        }
+        Err(_) => {
+            tracing::debug!("init: TNG_HOOK_INGRESS_MAPPINGS not set (ingress hook disabled)");
+        }
     }
+
+    tracing::info!("tng-hook: initialized");
 }
 
 /// Convert a sockaddr pointer to SocketAddrV4 if it's AF_INET.
@@ -90,16 +161,28 @@ fn init() {
 /// Caller must ensure `addr` points to a valid sockaddr of at least `addrlen` bytes.
 unsafe fn sockaddr_to_v4(addr: *const sockaddr) -> Option<SocketAddrV4> {
     if addr.is_null() {
+        tracing::trace!("sockaddr_to_v4: null address");
         return None;
     }
     let sa = &*addr;
     if sa.sa_family != libc::AF_INET as u16 {
+        tracing::trace!(
+            "sockaddr_to_v4: family={:#x} (not AF_INET={:#x})",
+            sa.sa_family,
+            libc::AF_INET
+        );
         return None;
     }
     let sin = &*(addr as *const libc::sockaddr_in);
     let port = u16::from_be(sin.sin_port);
     let addr_bytes = sin.sin_addr.s_addr.to_ne_bytes();
     let ip = Ipv4Addr::new(addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3]);
+    tracing::trace!(
+        "sockaddr_to_v4: parsed {}:{} (family={:#x})",
+        ip,
+        port,
+        sa.sa_family
+    );
     Some(SocketAddrV4::new(ip, port))
 }
 
@@ -107,15 +190,7 @@ unsafe fn sockaddr_to_v4(addr: *const sockaddr) -> Option<SocketAddrV4> {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[no_mangle]
 pub extern "C" fn bind(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int {
-    let real_bind = match REAL_BIND.get() {
-        Some(f) => f,
-        None => {
-            unsafe {
-                *libc::__errno_location() = libc::EINVAL;
-            }
-            return -1;
-        }
-    };
+    let real_bind = REAL_BIND.get().expect("REAL_BIND not initialized");
 
     // Only intercept AF_INET (IPv4)
     if let Some(origin_addr) = unsafe { sockaddr_to_v4(addr) } {
@@ -145,9 +220,17 @@ pub extern "C" fn bind(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t)
                 };
             }
         }
+    } else if !addr.is_null() {
+        let sa = unsafe { &*addr };
+        tracing::warn!(
+            "bind: non-IPv4 socket, family={:#x}, fd={}",
+            sa.sa_family,
+            sockfd
+        );
     }
 
     // No match — pass through to real bind
+    tracing::debug!("bind: passthrough fd={}", sockfd);
     unsafe { real_bind(sockfd, addr, addrlen) }
 }
 
@@ -159,15 +242,9 @@ pub extern "C" fn getsockname(
     addr: *mut sockaddr,
     addrlen: *mut socklen_t,
 ) -> c_int {
-    let real_getsockname = match REAL_GETSOCKNAME.get() {
-        Some(f) => f,
-        None => {
-            unsafe {
-                *libc::__errno_location() = libc::EINVAL;
-            }
-            return -1;
-        }
-    };
+    let real_getsockname = REAL_GETSOCKNAME
+        .get()
+        .expect("REAL_GETSOCKNAME not initialized");
 
     // Call the real getsockname first
     let result = unsafe { real_getsockname(sockfd, addr, addrlen) };
@@ -185,9 +262,307 @@ pub extern "C" fn getsockname(
                 unsafe {
                     std::ptr::write(addr as *mut libc::sockaddr_in, new_addr);
                 }
+                tracing::debug!(
+                    "getsockname: rewrote port {} → {} on fd={}",
+                    real_addr.port(),
+                    origin_port,
+                    sockfd
+                );
+                return result;
             }
         }
     }
 
+    tracing::trace!("getsockname: no rewrite needed, fd={}", sockfd);
     result
+}
+
+/// Intercepted `connect()` — route matched destinations through HTTP CONNECT proxy.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[no_mangle]
+pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int {
+    let real_connect = REAL_CONNECT.get().expect("REAL_CONNECT not initialized");
+
+    // Only handle AF_INET (IPv4)
+    let Some(dst_addr) = (unsafe { sockaddr_to_v4(addr) }) else {
+        if !addr.is_null() {
+            let sa = unsafe { &*addr };
+            tracing::warn!(
+                "connect: non-IPv4 destination, family={:#x}, fd={}",
+                sa.sa_family,
+                sockfd
+            );
+        }
+        return unsafe { real_connect(sockfd, addr, addrlen) };
+    };
+
+    tracing::debug!(
+        "connect: fd={} dst={}:{}",
+        sockfd,
+        dst_addr.ip(),
+        dst_addr.port()
+    );
+
+    // Check if this destination matches any ingress capture rule
+    let Some(lookup) = INGRESS_LOOKUP.get() else {
+        tracing::debug!(
+            "connect: no ingress mapping, passthrough {}:{}",
+            dst_addr.ip(),
+            dst_addr.port()
+        );
+        return unsafe { real_connect(sockfd, addr, addrlen) };
+    };
+
+    let Some(proxy_port) = lookup.find_proxy_port(dst_addr) else {
+        // No match — pass through to real connect()
+        tracing::debug!(
+            "connect: no capture rule for {}:{}, passthrough",
+            dst_addr.ip(),
+            dst_addr.port()
+        );
+        return unsafe { real_connect(sockfd, addr, addrlen) };
+    };
+
+    tracing::info!(
+        "connect hijacked: {}:{} → proxy 127.0.0.1:{}",
+        dst_addr.ip(),
+        dst_addr.port(),
+        proxy_port
+    );
+
+    // Connect to the internal HTTP proxy instead
+    let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port);
+    let proxy_sockaddr = make_sockaddr_v4(&proxy_addr);
+
+    let ret = unsafe {
+        real_connect(
+            sockfd,
+            &proxy_sockaddr as *const _ as *const sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
+        )
+    };
+    if ret != 0 {
+        tracing::error!(
+            "connect hijacked: failed to connect to proxy 127.0.0.1:{}: {}",
+            proxy_port,
+            std::io::Error::last_os_error()
+        );
+        return ret;
+    }
+
+    tracing::debug!("connect: connected to proxy 127.0.0.1:{}", proxy_port);
+
+    // Set a receive timeout for the HTTP CONNECT handshake so that
+    // a proxy that accepts the TCP connection but never responds
+    // cannot block this thread indefinitely.
+    // Save the original timeout first so we can restore it afterward.
+    let mut orig_timeout = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut orig_len = std::mem::size_of::<libc::timeval>() as libc::socklen_t;
+    unsafe {
+        libc::getsockopt(
+            sockfd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &mut orig_timeout as *mut _ as *mut libc::c_void,
+            &mut orig_len,
+        );
+    }
+
+    // Restore the original timeout on every exit path from this point.
+    // Using scopeguard::defer! ensures the restore happens regardless of
+    // which branch returns, eliminating duplicate setsockopt calls.
+    let restore_timeout = orig_timeout;
+    scopeguard::defer! {
+        unsafe {
+            libc::setsockopt(
+                sockfd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                &restore_timeout as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            );
+        }
+    }
+
+    let timeout = libc::timeval {
+        tv_sec: 10,
+        tv_usec: 0,
+    };
+    unsafe {
+        libc::setsockopt(
+            sockfd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &timeout as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+
+    // Send HTTP CONNECT request
+    let connect_req = format!(
+        "CONNECT {}:{} HTTP/1.1\r\nHost:{}:{}\r\n\r\n",
+        dst_addr.ip(),
+        dst_addr.port(),
+        dst_addr.ip(),
+        dst_addr.port()
+    );
+
+    tracing::debug!(
+        "connect: sending CONNECT for {}:{}",
+        dst_addr.ip(),
+        dst_addr.port()
+    );
+
+    if let Err(e) = send_all(sockfd, connect_req.as_bytes()) {
+        tracing::error!(
+            "connect hijacked: failed to send CONNECT request for {}:{}: {}",
+            dst_addr.ip(),
+            dst_addr.port(),
+            e
+        );
+        unsafe {
+            *libc::__errno_location() = libc::ECONNREFUSED;
+        }
+        return -1;
+    }
+
+    // Read HTTP response
+    match read_http_response_line(sockfd) {
+        Ok(line) => {
+            tracing::debug!("connect: received CONNECT response: {}", line.trim());
+            if line.starts_with("HTTP/1.1 200") || line.starts_with("HTTP/1.0 200") {
+                // Drain response headers until empty line
+                loop {
+                    match read_http_response_line(sockfd) {
+                        Ok(h) if h.is_empty() => break,
+                        Ok(h) => {
+                            tracing::trace!("connect: response header: {}", h.trim());
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "connect hijacked: failed to read response headers: {}",
+                                e
+                            );
+                            unsafe {
+                                *libc::__errno_location() = libc::ECONNREFUSED;
+                            }
+                            return -1;
+                        }
+                    }
+                }
+
+                tracing::info!(
+                    "connect hijacked: {}:{} → proxy 127.0.0.1:{} (tunnel established)",
+                    dst_addr.ip(),
+                    dst_addr.port(),
+                    proxy_port
+                );
+                return 0;
+            } else {
+                tracing::warn!(
+                    "connect hijacked: {}:{} — proxy returned {}: {}",
+                    dst_addr.ip(),
+                    dst_addr.port(),
+                    line.split_whitespace().nth(1).unwrap_or("?"),
+                    line
+                );
+                unsafe {
+                    *libc::__errno_location() = libc::ECONNREFUSED;
+                }
+                return -1;
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                "connect hijacked: failed to read CONNECT response for {}:{}: {}",
+                dst_addr.ip(),
+                dst_addr.port(),
+                e
+            );
+            unsafe {
+                *libc::__errno_location() = libc::ECONNREFUSED;
+            }
+            return -1;
+        }
+    }
+}
+
+/// Build a sockaddr_in for the given SocketAddrV4.
+fn make_sockaddr_v4(addr: &SocketAddrV4) -> libc::sockaddr_in {
+    let mut sin = unsafe { std::mem::zeroed::<libc::sockaddr_in>() };
+    sin.sin_family = libc::AF_INET as u16;
+    sin.sin_port = addr.port().to_be();
+    let octets = addr.ip().octets();
+    sin.sin_addr.s_addr = u32::from_ne_bytes(octets);
+    sin
+}
+
+/// Send all bytes on a socket, retrying on partial writes.
+fn send_all(sockfd: c_int, data: &[u8]) -> std::io::Result<()> {
+    let mut sent = 0;
+    while sent < data.len() {
+        let n = unsafe {
+            libc::send(
+                sockfd,
+                data.as_ptr().add(sent) as *const c_void,
+                data.len() - sent,
+                0,
+            )
+        };
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "socket closed during send",
+            ));
+        }
+        sent += n as usize;
+    }
+    Ok(())
+}
+
+/// Read a single HTTP response line (up to \r\n) from a socket.
+fn read_http_response_line(sockfd: c_int) -> std::io::Result<String> {
+    let mut buf = Vec::new();
+    let mut prev_was_cr = false;
+    loop {
+        let mut byte = 0u8;
+        let n = unsafe { libc::recv(sockfd, &mut byte as *mut u8 as *mut c_void, 1, 0) };
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "socket closed during response read",
+            ));
+        }
+        if byte == b'\r' {
+            prev_was_cr = true;
+            continue;
+        }
+        if byte == b'\n' {
+            if prev_was_cr {
+                break;
+            }
+            // bare \n — treat as line end
+            break;
+        }
+        prev_was_cr = false;
+        buf.push(byte);
+        // Guard against maliciously long lines
+        if buf.len() > 8192 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "HTTP response line too long",
+            ));
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }

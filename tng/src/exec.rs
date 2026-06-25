@@ -5,23 +5,32 @@ use anyhow::{bail, Context as _, Result};
 
 use crate::config::egress::EgressMode;
 use crate::config::egress_hook::EgressHookArgs;
-use crate::config::{HookMappingEntry, HookMappingTable, TngConfig};
+use crate::config::ingress::IngressHookArgs;
+use crate::config::ingress::IngressMode as IngressHookMode;
+use crate::config::{
+    EgressHookMappingEntry, EgressHookMappingTable, IngressHookCaptureRule,
+    IngressHookMappingTable, IngressHookProxy, TngConfig,
+};
+use crate::tunnel::access_log::EgressAccessMode;
+use crate::tunnel::access_log::IngressAccessMode;
 
 /// Execute a command with LD_PRELOAD-based port interception.
 pub struct TngExec;
 
 impl TngExec {
-    /// Validate config, build mappings, and run the child process with TNG tunnel.
+    /// Validate all hook-mode entries, build mappings, and run the child
+    /// process with TNG tunnel. Supports both egress and ingress hooks
+    /// simultaneously.
     pub async fn run(
         mut config: TngConfig,
         command: Vec<String>,
         reload_handle: &crate::runtime::TracingReloadHandle,
     ) -> Result<()> {
-        // 1. Validate all egress entries are Hook mode
+        // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
 
-        // 2. Build resolved entries for each hook add_egress entry
-        let mut all_entries: Vec<HookMappingEntry> = Vec::new();
+        // 2. Build egress resolved entries
+        let mut all_egress_entries: Vec<EgressHookMappingEntry> = Vec::new();
         let mut next_auto_port: u16 = 49152;
 
         for egress in &mut config.add_egress {
@@ -29,26 +38,31 @@ impl TngExec {
                 let (entries, next_port) = Self::build_resolved_entries(args, next_auto_port)?;
                 args.resolved_entries = entries;
                 next_auto_port = next_port;
-                all_entries.extend(args.resolved_entries.clone());
+                all_egress_entries.extend(args.resolved_entries.clone());
             }
         }
 
-        if all_entries.is_empty() {
-            bail!("No capture_listen entries found in config. At least one is required.");
+        let egress_json = if !all_egress_entries.is_empty() {
+            Self::check_conflicts(&all_egress_entries)?;
+            let table = Self::build_mapping_table_for_so(&all_egress_entries);
+            Some(
+                serde_json::to_string(&table)
+                    .context("Failed to serialize egress mapping table")?,
+            )
+        } else {
+            None
+        };
+
+        // 3. Build ingress mapping table and serialize
+        let ingress_table = Self::build_ingress_mapping_table(&mut config)?;
+        let has_ingress_hooks = !ingress_table.proxies.is_empty();
+        let ingress_json = serde_json::to_string(&ingress_table)
+            .context("Failed to serialize ingress mapping table")?;
+
+        // 4. If no hook entries at all, bail
+        if egress_json.is_none() && !has_ingress_hooks {
+            bail!("tng exec requires at least one hook-mode entry (egress or ingress)");
         }
-
-        // 3. Global conflict check
-        Self::check_conflicts(&all_entries)?;
-
-        // 4. Combined mapping table for .so
-        let mapping_table = Self::build_mapping_table_for_so(&all_entries);
-        let mappings_json =
-            serde_json::to_string(&mapping_table).context("Failed to serialize mapping table")?;
-
-        tracing::info!(
-            entries = mapping_table.entries.len(),
-            "Built port mapping table"
-        );
 
         // 5. Resolve lib path
         let lib_path = Self::resolve_lib_path().context("Failed to resolve libtng_hook.so path")?;
@@ -87,15 +101,19 @@ impl TngExec {
             .await
             .context("TNG runtime readiness signal was dropped")?;
 
-        // 7. Spawn child process with LD_PRELOAD
+        // 7. Spawn child process with LD_PRELOAD and mapping env vars
         let (cmd, args) = command.split_first().context("Command is empty")?;
 
-        let mut child = tokio::process::Command::new(cmd)
-            .args(args)
-            .env("LD_PRELOAD", &lib_path)
-            .env("TNG_HOOK_MAPPINGS", &mappings_json)
-            .spawn()
-            .context("Failed to spawn child command")?;
+        let mut child_cmd = tokio::process::Command::new(cmd);
+        child_cmd.args(args).env("LD_PRELOAD", &lib_path);
+
+        if let Some(ref json) = egress_json {
+            child_cmd.env("TNG_HOOK_EGRESS_MAPPINGS", json);
+        }
+        // Always set ingress mapping (even if empty proxies, for consistency)
+        child_cmd.env("TNG_HOOK_INGRESS_MAPPINGS", &ingress_json);
+
+        let mut child = child_cmd.spawn().context("Failed to spawn child command")?;
 
         let child_id = child.id();
         tracing::info!(pid = child_id, ?command, "Spawned child process");
@@ -117,27 +135,59 @@ impl TngExec {
         Ok(())
     }
 
-    /// Validate that all add_egress entries use Hook mode.
+    /// Validate hook-mode configuration.
+    ///
+    /// `tng exec` only supports hook modes (IngressMode::Hook, EgressMode::Hook).
+    /// Non-hook modes (mapping, netfilter, http_proxy, socks5) are only allowed
+    /// via `tng launch`.
     fn validate_config(config: &TngConfig) -> Result<()> {
-        if config.add_egress.is_empty() {
-            bail!("tng exec requires at least one add_egress entry");
+        if config.add_ingress.is_empty() && config.add_egress.is_empty() {
+            bail!("tng exec requires at least one add_ingress or add_egress entry");
         }
 
-        for (i, egress) in config.add_egress.iter().enumerate() {
-            match &egress.egress_mode {
-                EgressMode::Hook(args) => {
-                    if args.capture_listen.is_empty() {
+        // Validate all add_ingress entries: only hook mode allowed
+        for (i, ingress) in config.add_ingress.iter().enumerate() {
+            match &ingress.ingress_mode {
+                IngressHookMode::Hook(args) => {
+                    if args.capture_dst.is_empty() {
                         bail!(
-                            "Egress entry {} has hook mode but no capture_listen entries",
-                            i
+                            "Ingress entry {} has '{}' mode but no capture_dst entries",
+                            i,
+                            ingress.ingress_mode.access_mode()
                         );
                     }
                 }
                 _ => {
                     bail!(
-                        "tng exec only supports 'hook' mode, but egress entry {} uses a different mode. \
-                         Hook mode is mutually exclusive with other egress modes.",
-                        i
+                        "tng exec only supports '{}' mode ingress, but ingress entry {} uses a '{}' mode. \
+                         Use `tng launch` for non-hook modes.",
+                        IngressAccessMode::Hook,
+                        i,
+                        ingress.ingress_mode.access_mode()
+                    );
+                }
+            }
+        }
+
+        // Validate all add_egress entries: only hook mode allowed
+        for (i, egress) in config.add_egress.iter().enumerate() {
+            match &egress.egress_mode {
+                EgressMode::Hook(args) => {
+                    if args.capture_listen.is_empty() {
+                        bail!(
+                            "Egress entry {} has '{}' mode but no capture_listen entries",
+                            i,
+                            egress.egress_mode.access_mode()
+                        );
+                    }
+                }
+                _ => {
+                    bail!(
+                        "tng exec only supports '{}' mode egress, but egress entry {} uses a '{}' mode. \
+                         Use `tng launch` for non-hook modes.",
+                        EgressAccessMode::Hook,
+                        i,
+                        egress.egress_mode.access_mode()
                     );
                 }
             }
@@ -153,7 +203,7 @@ impl TngExec {
     fn build_resolved_entries(
         args: &EgressHookArgs,
         start_auto_port: u16,
-    ) -> Result<(Vec<HookMappingEntry>, u16)> {
+    ) -> Result<(Vec<EgressHookMappingEntry>, u16)> {
         let mut entries = Vec::new();
         let mut next_auto_port = start_auto_port;
 
@@ -186,7 +236,7 @@ impl TngExec {
     /// Check for conflicts across all resolved entries from all egress entries.
     /// Two entries conflict if they map the same (host, origin_port) to different real_ports,
     /// or if two entries claim the same real_port.
-    fn check_conflicts(all_entries: &[HookMappingEntry]) -> Result<()> {
+    fn check_conflicts(all_entries: &[EgressHookMappingEntry]) -> Result<()> {
         let mut origin_map: HashMap<(std::net::Ipv4Addr, u16), u16> = HashMap::new();
         let mut real_port_map: HashMap<u16, (std::net::Ipv4Addr, u16)> = HashMap::new();
 
@@ -229,8 +279,10 @@ impl TngExec {
         Ok(())
     }
 
-    /// Build combined HookMappingTable for .so env var.
-    fn build_mapping_table_for_so(all_entries: &[HookMappingEntry]) -> HookMappingTable {
+    /// Build combined EgressHookMappingTable for .so env var.
+    fn build_mapping_table_for_so(
+        all_entries: &[EgressHookMappingEntry],
+    ) -> EgressHookMappingTable {
         // Deduplicate: if multiple entries map the same (host, origin_port), first wins
         let mut seen = std::collections::HashSet::new();
         let mut deduped = Vec::new();
@@ -241,7 +293,69 @@ impl TngExec {
             }
         }
 
-        HookMappingTable { entries: deduped }
+        EgressHookMappingTable { entries: deduped }
+    }
+
+    /// Build the ingress hook mapping table from all hook-mode ingress entries.
+    fn build_ingress_mapping_table(config: &mut TngConfig) -> Result<IngressHookMappingTable> {
+        let mut mapping_table = IngressHookMappingTable::default();
+
+        for (i, ingress) in config.add_ingress.iter_mut().enumerate() {
+            if let IngressHookMode::Hook(args) = &mut ingress.ingress_mode {
+                let proxy = Self::build_ingress_proxy(i, args)?;
+                mapping_table.proxies.push(proxy);
+            }
+        }
+
+        if !mapping_table.proxies.is_empty() {
+            tracing::info!(
+                proxies = mapping_table.proxies.len(),
+                "Built ingress hook mapping table"
+            );
+        }
+
+        Ok(mapping_table)
+    }
+
+    /// Build a single IngressHookProxy from an IngressHookArgs.
+    ///
+    /// If `args.proxy_port` is not set, a port is auto-allocated and written
+    /// back to `args.proxy_port` so the runtime uses the same port.
+    fn build_ingress_proxy(
+        _entry_index: usize,
+        args: &mut IngressHookArgs,
+    ) -> Result<IngressHookProxy> {
+        let proxy_port = match args.proxy_port {
+            Some(port) => port,
+            None => {
+                let port = portpicker::pick_unused_port()
+                    .context("Failed to pick unused port for ingress hook proxy")?;
+                args.proxy_port = Some(port);
+                port
+            }
+        };
+
+        let capture_rules: Vec<IngressHookCaptureRule> = args
+            .capture_dst
+            .iter()
+            .map(|dst| IngressHookCaptureRule {
+                host_cidr: dst
+                    .host
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "*".to_string()),
+                port: dst.port,
+                port_end: dst.port_end,
+            })
+            .collect();
+
+        if capture_rules.is_empty() {
+            bail!("Ingress hook entry has no capture_dst rules. At least one is required.");
+        }
+
+        Ok(IngressHookProxy {
+            proxy_port,
+            capture_rules,
+        })
     }
 
     /// Resolve the path to `libtng_hook.so`.
@@ -394,12 +508,12 @@ mod tests {
     #[test]
     fn test_check_conflicts_no_conflict() {
         let entries = vec![
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8080,
                 real_port: 48080,
             },
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8081,
                 real_port: 48081,
@@ -411,12 +525,12 @@ mod tests {
     #[test]
     fn test_check_conflicts_duplicate_origin() {
         let entries = vec![
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8080,
                 real_port: 48080,
             },
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8080,
                 real_port: 48080, // same origin, same real → no conflict
@@ -428,12 +542,12 @@ mod tests {
     #[test]
     fn test_check_conflicts_real_port_collision() {
         let entries = vec![
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8080,
                 real_port: 48080,
             },
-            HookMappingEntry {
+            EgressHookMappingEntry {
                 host: std::net::Ipv4Addr::UNSPECIFIED,
                 origin_port: 8081,
                 real_port: 48080, // different origin, same real → conflict
@@ -442,5 +556,75 @@ mod tests {
         let result = TngExec::check_conflicts(&entries);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Conflict"));
+    }
+
+    #[test]
+    fn test_validate_ingress_hook_only() {
+        // Config with only ingress hook mode (no egress) should pass validation
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [{
+                "hook": {
+                    "capture_dst": [{ "port": 80 }]
+                },
+                "attest": {
+                    "no_ra": true,
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
+            }]
+        }))
+        .unwrap();
+        let result = TngExec::validate_config(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ingress_hook_empty_capture_dst() {
+        // Ingress hook with empty capture_dst should fail validation
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [{
+                "hook": {
+                    "capture_dst": []
+                },
+                "attest": {
+                    "no_ra": true,
+                    "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                }
+            }]
+        }))
+        .unwrap();
+        let result = TngExec::validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("capture_dst"));
+    }
+
+    #[test]
+    fn test_build_ingress_proxy_auto_alloc() {
+        let mut args: IngressHookArgs = serde_json::from_value(json!({
+            "capture_dst": [
+                { "host": "10.0.0.0/24", "port": 80 },
+                { "host": "10.0.0.0/24", "port": 443 }
+            ]
+        }))
+        .unwrap();
+        let proxy = TngExec::build_ingress_proxy(0, &mut args).unwrap();
+        assert!(proxy.proxy_port > 0);
+        assert_eq!(proxy.capture_rules.len(), 2);
+        assert_eq!(proxy.capture_rules[0].host_cidr, "10.0.0.0/24");
+        assert_eq!(proxy.capture_rules[0].port, 80);
+        assert_eq!(proxy.capture_rules[1].port, 443);
+        // Verify the port was written back to args
+        assert_eq!(args.proxy_port, Some(proxy.proxy_port));
+    }
+
+    #[test]
+    fn test_build_ingress_proxy_explicit_port() {
+        let mut args: IngressHookArgs = serde_json::from_value(json!({
+            "capture_dst": [{ "port": 80 }],
+            "proxy_port": 49001
+        }))
+        .unwrap();
+        let proxy = TngExec::build_ingress_proxy(0, &mut args).unwrap();
+        assert_eq!(proxy.proxy_port, 49001);
+        assert_eq!(proxy.capture_rules.len(), 1);
     }
 }

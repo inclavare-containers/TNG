@@ -7,8 +7,8 @@ use futures::stream::select_all;
 use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
-use crate::config::HookMappingEntry;
-use crate::tunnel::access_log::{AccessAccepted, EgressMode};
+use crate::config::EgressHookMappingEntry;
+use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::egress::flow::AcceptedStream;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -23,12 +23,12 @@ use super::flow::{EgressTrait, Incomming};
 /// (expanded from capture_listen entries by `tng exec`).
 pub struct HookEgress {
     id: usize,
-    entries: Vec<HookMappingEntry>,
+    entries: Vec<EgressHookMappingEntry>,
 }
 
 impl HookEgress {
     /// Create a new HookEgress from resolved mapping entries.
-    pub fn new(id: usize, entries: &[HookMappingEntry]) -> Self {
+    pub fn new(id: usize, entries: &[EgressHookMappingEntry]) -> Self {
         Self {
             id,
             entries: entries.to_vec(),
@@ -116,14 +116,14 @@ impl EgressTrait for HookEgress {
                                 let access_accepted = AccessAccepted::new_egress(
                                     peer_addr,
                                     info.local_addr,
-                                    EgressMode::Hook,
+                                    EgressAccessMode::Hook,
                                 );
                                 yield Ok(AcceptedStream {
                                     stream: Box::new(crate::ContextualStream::new(stream, "egress-hook")),
                                     src: peer_addr,
                                     dst,
                                     listener_addr: info.local_addr,
-                                    egress_mode: EgressMode::Hook,
+                                    egress_mode: EgressAccessMode::Hook,
                                     access_accepted,
                                 })
                             }

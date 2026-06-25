@@ -13,7 +13,10 @@ pub mod observability;
 pub mod ra;
 
 // Shared types used by both tng and tng-hook
-pub use tng_hook_types::{HookMappingEntry, HookMappingTable};
+pub use tng_hook_types::{
+    EgressHookMappingEntry, EgressHookMappingTable, IngressHookCaptureRule,
+    IngressHookMappingTable, IngressHookProxy,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

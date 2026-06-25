@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressNetfilterArgs;
 use crate::config::ingress::IngressNetfilterCaptureDst;
-use crate::tunnel::access_log::{AccessAccepted, IngressMode};
+use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::iptables::IptablesExecutor;
@@ -80,6 +80,10 @@ impl IngressTrait for NetfilterIngress {
         .into()
     }
 
+    fn ingress_mode(&self) -> IngressAccessMode {
+        IngressAccessMode::Netfilter
+    }
+
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32> {
         Some(self.so_mark)
@@ -126,7 +130,7 @@ impl IngressTrait for NetfilterIngress {
                 let access_accepted = AccessAccepted::new_ingress(
                     peer_addr,
                     listen_addr,
-                    IngressMode::Netfilter,
+                    IngressAccessMode::Netfilter,
                 );
                 Ok::<_, anyhow::Error>(AcceptedStream{
                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
@@ -134,7 +138,7 @@ impl IngressTrait for NetfilterIngress {
                     dst: Arc::new(orig_dst),
                     via_tunnel: true,
                     listener_addr: listen_addr,
-                    ingress_mode: IngressMode::Netfilter,
+                    ingress_mode: IngressAccessMode::Netfilter,
                     access_accepted,
                 })
             })

@@ -14,6 +14,7 @@
   - [模式：http_proxy（HTTP 代理）](#http_proxyhttp-代理)
   - [模式：socks5（Socks5 代理）](#socks5socks5-代理)
   - [模式：netfilter（透明代理）](#netfilter透明代理)
+  - [模式：hook（LD_PRELOAD）](#ingress-hook-ld_preload)
 - [Egress（隧道出口）](#egress隧道出口)
   - [通用字段](#egress通用字段)
   - [direct_forward 规则](#direct_forward-规则)
@@ -71,7 +72,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5 | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `ohttp` | [OHttp](#ingress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
@@ -460,6 +461,45 @@ flowchart TD
 ```
 </details>
 
+
+---
+
+<a name="ingress-hook-ld_preload"></a>
+
+### Ingress Hook 模式 (`"hook"`)
+
+> **需要：** `tng exec` — 子进程通过 `LD_PRELOAD=libtng_hook.so` 加载。
+
+通过 LD_PRELOAD 拦截子进程的出站 TCP 连接，使用 HTTP CONNECT 协议将其路由到 TNG 加密隧道中。
+
+| 字段 | 类型 | 必需 | 描述 |
+|---|---|---|---|
+| `capture_dst` | 数组 | 是 | 需要拦截的目标 IP+端口规则。 |
+| `capture_dst[].host` | CIDR 或 IP | 否 | IPv4 地址或 CIDR 前缀。省略表示匹配任意 IP（`*`）。 |
+| `capture_dst[].port` | 整数 | 是 | 需要拦截的目标端口。 |
+| `capture_dst[].port_end` | 整数 | 否 | 端口范围结束（包含）。省略时为单端口匹配。 |
+| `proxy_port` | 整数 | 否 | 内部 HTTP 代理端口。省略时自动分配。 |
+| `proxy_listen` | 字符串 | 否 | 内部代理的绑定地址。默认：`127.0.0.1`。 |
+
+**示例：**
+
+```json
+{
+  "add_ingress": [
+    {
+      "hook": {
+        "capture_dst": [
+          { "host": "10.0.0.0/24", "port": 80 },
+          { "host": "10.0.0.0/24", "port": 443 },
+          { "port": 8080, "port_end": 8090 }
+        ],
+        "proxy_port": 49001
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
 
 ---
 

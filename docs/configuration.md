@@ -14,6 +14,7 @@
   - [Mode: http_proxy (HTTP Proxy)](#mode-http_proxy-http-proxy)
   - [Mode: socks5 (Socks5 Proxy)](#mode-socks5-socks5-proxy)
   - [Mode: netfilter (Transparent Proxy)](#mode-netfilter-transparent-proxy)
+  - [Mode: hook (LD_PRELOAD)](#mode-ingress-hook-ld-preload)
 - [Egress (Tunnel Exit)](#egress-tunnel-exit)
   - [Common Fields](#common-fields)
   - [direct_forward Rules](#direct_forward-rules)
@@ -71,7 +72,7 @@ The `Ingress` object configures the tunnel's entry endpoints, controlling how tr
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `ohttp` | [OHttp](#ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
@@ -460,6 +461,45 @@ flowchart TD
 ```
 </details>
 
+
+---
+
+<a name="mode-ingress-hook-ld-preload"></a>
+
+### Ingress Hook Mode (`"hook"`)
+
+> **Requires:** `tng exec` — the child process is loaded with `LD_PRELOAD=libtng_hook.so`.
+
+Intercepts outgoing TCP connections from the child process via LD_PRELOAD and routes them through TNG's encrypted tunnel using HTTP CONNECT protocol.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `capture_dst` | array | Yes | Destination IP+port rules to intercept. |
+| `capture_dst[].host` | CIDR or IP | No | IPv4 address or CIDR prefix. Omit to match any IP (`*`). |
+| `capture_dst[].port` | integer | Yes | Destination port to intercept. |
+| `capture_dst[].port_end` | integer | No | End of port range (inclusive). Without this, single port match. |
+| `proxy_port` | integer | No | Internal HTTP proxy port. Auto-allocated if omitted. |
+| `proxy_listen` | string | No | Bind address for internal proxy. Default: `127.0.0.1`. |
+
+**Example:**
+
+```json
+{
+  "add_ingress": [
+    {
+      "hook": {
+        "capture_dst": [
+          { "host": "10.0.0.0/24", "port": 80 },
+          { "host": "10.0.0.0/24", "port": 443 },
+          { "port": 8080, "port_end": 8090 }
+        ],
+        "proxy_port": 49001
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
 
 ---
 

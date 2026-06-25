@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     config::egress::EgressMappingArgs,
-    tunnel::access_log::{AccessAccepted, EgressMode},
+    tunnel::access_log::{AccessAccepted, EgressAccessMode},
     tunnel::{
         egress::flow::AcceptedStream, endpoint::TngEndpoint, utils::runtime::TokioRuntime,
         utils::socket::SetListenerSockOpts,
@@ -129,14 +129,14 @@ impl EgressTrait for MappingEgress {
                                 let access_accepted = AccessAccepted::new_egress(
                                     peer_addr,
                                     target.local_addr,
-                                    EgressMode::Mapping,
+                                    EgressAccessMode::Mapping,
                                 );
                                 yield Ok(AcceptedStream {
                                     stream: Box::new(crate::ContextualStream::new(stream, "egress-mapping")),
                                     src: peer_addr,
                                     dst: Arc::clone(&target.out_ep),
                                     listener_addr: target.local_addr,
-                                    egress_mode: EgressMode::Mapping,
+                                    egress_mode: EgressAccessMode::Mapping,
                                     access_accepted,
                                 })
                             }

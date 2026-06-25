@@ -7769,6 +7769,7 @@ version = "2.6.0"
 dependencies = [
  "ctor",
  "libc",
+ "scopeguard",
  "serde_json",
  "tng-hook-types",
  "tracing",
@@ -7779,6 +7780,7 @@ dependencies = [
 name = "tng-hook-types"
 version = "2.6.0"
 dependencies = [
+ "cidr",
  "serde",
  "serde_json",
 ]

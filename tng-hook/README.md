@@ -1,6 +1,6 @@
 # tng-hook
 
-LD_PRELOAD-based egress hook library for TNG. Intercepts server application `bind()` and `getsockname()` syscalls to transparently redirect listening ports through encrypted tunnels — zero application modification required.
+LD_PRELOAD-based hook library for TNG. Supports egress mode (intercepts `bind()`/`getsockname()` to transparently redirect listening ports) and ingress mode (intercepts `connect()` to route outgoing connections through encrypted tunnels) — zero application modification required.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ LD_PRELOAD-based egress hook library for TNG. Intercepts server application `bin
 │  Child process                                               │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │  LD_PRELOAD=libtng_hook.so                             │  │
-│  │  TNG_HOOK_MAPPINGS=<json>                              │  │
+│  │  TNG_HOOK_EGRESS_MAPPINGS=<json>                              │  │
 │  │                                                        │  │
 │  │  Application calls bind(0.0.0.0:8080)                  │  │
 │  │       ↓                                                 │  │
@@ -33,7 +33,7 @@ LD_PRELOAD-based egress hook library for TNG. Intercepts server application `bin
 
 ### Mapping Distribution
 
-TNG serializes a port mapping table to JSON and passes it via the `TNG_HOOK_MAPPINGS` environment variable:
+TNG serializes a port mapping table to JSON and passes it via the `TNG_HOOK_EGRESS_MAPPINGS` environment variable:
 
 ```json
 {"entries":[{"host":"0.0.0.0","origin_port":8080,"real_port":48080}]}
@@ -134,15 +134,95 @@ tng exec --config-file=/etc/tng.json -- your-server --port 8080
 1. Parses config, validates hook mode
 2. Builds mapping table, auto-allocates real ports
 3. Starts TNG tunnel listeners on origin ports
-4. Spawns child with `LD_PRELOAD` and `TNG_HOOK_MAPPINGS` set
+4. Spawns child with `LD_PRELOAD` and `TNG_HOOK_EGRESS_MAPPINGS` set
 
 ### Manual invocation (for debugging)
 
 ```bash
 LD_PRELOAD=/path/to/libtng_hook.so \
-TNG_HOOK_MAPPINGS='{"entries":[{"host":"0.0.0.0","origin_port":8080,"real_port":48080}]}' \
+TNG_HOOK_EGRESS_MAPPINGS='{"entries":[{"host":"0.0.0.0","origin_port":8080,"real_port":48080}]}' \
 your-server --port 8080
 ```
+
+## Ingress Hook Mode
+
+In addition to egress hook mode (intercepting `bind()`/`getsockname()`), `libtng_hook.so` also supports **ingress hook mode** — intercepting outgoing `connect()` calls from the child process and routing them through TNG's encrypted tunnel via HTTP CONNECT protocol.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  tng exec --config-file=/etc/tng.json -- curl http://...      │
+│                                                              │
+│  Child process                                               │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  LD_PRELOAD=libtng_hook.so                             │  │
+│  │  TNG_HOOK_INGRESS_MAPPINGS=<json>                      │  │
+│  │                                                        │  │
+│  │  Application calls connect(10.0.0.1:80)                │  │
+│  │       ↓                                                 │  │
+│  │  libtng_hook.so intercepts connect()                   │  │
+│  │  Looks up 10.0.0.1:80 → matched                        │  │
+│  │  Connects to internal proxy 127.0.0.1:49001 instead    │  │
+│  │  Sends HTTP CONNECT to proxy → tunnel to target        │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  Internal HTTP proxy on 127.0.0.1:49001                       │
+│  Routes via TNG encrypted tunnel to egress                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+**Mapping Distribution**
+
+TNG serializes an ingress mapping table to JSON and passes it via the `TNG_HOOK_INGRESS_MAPPINGS` environment variable:
+
+```json
+{"proxies":[{"proxy_port":49001,"capture_rules":[{"host_cidr":"10.0.0.0/24","port":80},{"host_cidr":"10.0.0.0/24","port":443}]}]}
+```
+
+Each proxy entry specifies a `proxy_port` and a list of `capture_rules` that should be routed through it. When the application calls `connect(host:port)` matching a capture rule, the connection is redirected to the internal HTTP proxy.
+
+The `.so` deserializes this at `#[ctor]` init time (before `main()`) and builds a lookup table.
+
+**`connect(sockfd, addr, addrlen)` interception**
+
+1. Checks if the address is `AF_INET` (IPv4 only)
+2. Looks up `(ip, port)` in the capture table (CIDR match, then wildcard fallback)
+3. If matched: connects to the internal proxy instead, issues HTTP CONNECT
+4. If not matched: passes through to real `connect()` unchanged
+
+### Configuration
+
+Ingress hook mode is configured via `add_ingress` with `"hook"` mode:
+
+```json
+{
+  "add_ingress": [
+    {
+      "hook": {
+        "capture_dst": [
+          { "host": "10.0.0.0/24", "port": 80 },
+          { "host": "10.0.0.0/24", "port": 443 },
+          { "port": 8080, "port_end": 8090 }
+        ],
+        "proxy_port": 49001
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `capture_dst` | array | Yes | Destination IP+port rules to intercept. |
+| `capture_dst[].host` | CIDR or IP | No | IPv4 address or CIDR prefix. Omit to match any IP (`*`). |
+| `capture_dst[].port` | integer | Yes | Destination port to intercept. |
+| `capture_dst[].port_end` | integer | No | End of port range (inclusive). Without this, single port match. |
+| `proxy_port` | integer | No | Internal HTTP proxy port. Auto-allocated if omitted. |
+| `proxy_listen` | string | No | Bind address for internal proxy. Default: `127.0.0.1`. |
 
 ## Logging
 
@@ -184,11 +264,19 @@ TNG tunnel listener failed to bind the origin port. Check if another process is 
 
 ### getsockname returns wrong port
 
-The reverse mapping may not cover the address returned by `getsockname()`. Check the `TNG_HOOK_MAPPINGS` env var:
+The reverse mapping may not cover the address returned by `getsockname()`. Check the `TNG_HOOK_EGRESS_MAPPINGS` env var:
 ```bash
-echo $TNG_HOOK_MAPPINGS | python3 -m json.tool
+echo $TNG_HOOK_EGRESS_MAPPINGS | python3 -m json.tool
 ```
 Ensure `host` and `real_port` match what the application is actually binding to.
+
+### connect() not intercepted
+
+The capture rules may not match the target address. Check the `TNG_HOOK_INGRESS_MAPPINGS` env var:
+```bash
+echo $TNG_HOOK_INGRESS_MAPPINGS | python3 -m json.tool
+```
+Ensure `host` (or CIDR) and `port` match what the application is connecting to.
 
 ### Application crashes after bind intercept
 

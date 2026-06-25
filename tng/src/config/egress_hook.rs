@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 use std::net::Ipv4Addr;
 
-use super::HookMappingEntry;
+use super::EgressHookMappingEntry;
 
 /// Configuration for the hook-based egress mode.
 ///
@@ -20,11 +20,11 @@ pub struct EgressHookArgs {
     pub capture_listen: Vec<EgressHookInterceptEntry>,
 
     /// Resolved port mappings, built by `tng exec` at runtime.
-    /// Each capture_listen entry is expanded into one or more HookMappingEntry
+    /// Each capture_listen entry is expanded into one or more EgressHookMappingEntry
     /// (ranges → individual ports, auto-allocated real ports resolved).
     /// This field is not serialized — it's a runtime-only data channel from exec to runtime.
     #[serde(skip, default)]
-    pub resolved_entries: Vec<HookMappingEntry>,
+    pub resolved_entries: Vec<EgressHookMappingEntry>,
 }
 
 /// A single intercept rule for the hook egress mode.
@@ -68,7 +68,7 @@ impl EgressHookInterceptEntry {
     pub fn expand_mappings(
         &self,
         next_auto_port: u16,
-    ) -> anyhow::Result<(Vec<HookMappingEntry>, u16)> {
+    ) -> anyhow::Result<(Vec<EgressHookMappingEntry>, u16)> {
         let port = self
             .port
             .ok_or_else(|| anyhow::anyhow!("'port' is required"))?;
@@ -90,7 +90,7 @@ impl EgressHookInterceptEntry {
                 let mut current_real = next_auto_port;
 
                 for i in 0..range_len {
-                    entries.push(HookMappingEntry {
+                    entries.push(EgressHookMappingEntry {
                         host: self
                             .host
                             .map(|c| c.first_address())
@@ -126,7 +126,7 @@ impl EgressHookInterceptEntry {
                 let mut entries = Vec::with_capacity(count as usize);
 
                 for i in 0..count {
-                    entries.push(HookMappingEntry {
+                    entries.push(EgressHookMappingEntry {
                         host: self
                             .host
                             .map(|c| c.first_address())
@@ -143,7 +143,7 @@ impl EgressHookInterceptEntry {
                 if self.port_end.is_some() {
                     bail!("'redirect_to_port_end' must be set when 'redirect_to_port' is set with a port range (port_end is present)");
                 }
-                let entries = vec![HookMappingEntry {
+                let entries = vec![EgressHookMappingEntry {
                     host: self
                         .host
                         .map(|c| c.first_address())
@@ -160,7 +160,7 @@ impl EgressHookInterceptEntry {
     }
 }
 
-impl TryFrom<EgressHookInterceptEntry> for Vec<HookMappingEntry> {
+impl TryFrom<EgressHookInterceptEntry> for Vec<EgressHookMappingEntry> {
     type Error = anyhow::Error;
 
     fn try_from(value: EgressHookInterceptEntry) -> Result<Self, Self::Error> {

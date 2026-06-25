@@ -181,6 +181,11 @@ name = "tcp_two_way_ra_ingress_httpproxy_egress_netfilter"
 path = "tests/basic/tcp_two_way_ra_ingress_httpproxy_egress_netfilter.rs"
 
 [[test]]
-name = "hook_single_port_intercept"
-path = "tests/hook/single_port_intercept.rs"
+name = "egress_hook_basic"
+path = "tests/hook/egress_hook_basic.rs"
+required-features = ["on-bin"]
+
+[[test]]
+name = "ingress_hook_basic"
+path = "tests/hook/ingress_hook_basic.rs"
 required-features = ["on-bin"]

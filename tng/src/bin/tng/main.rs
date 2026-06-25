@@ -7,12 +7,36 @@ use anyhow::{bail, Context};
 use clap::Parser as _;
 use cli::{Cli, GlobalSubcommand};
 use tng::build;
+use tng::config::egress::EgressMode;
+use tng::config::ingress::IngressMode;
 use tng::config::TngConfig;
 use tng::runtime::TngRuntime;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cli;
+
+/// Reject hook modes when running via `tng launch`.
+/// Hook modes (IngressMode::Hook, EgressMode::Hook) are only allowed via `tng exec`.
+fn reject_hook_modes(config: &TngConfig) -> anyhow::Result<()> {
+    for (i, ingress) in config.add_ingress.iter().enumerate() {
+        if matches!(ingress.ingress_mode, IngressMode::Hook(_)) {
+            anyhow::bail!(
+                "Ingress entry {} uses 'hook' mode, which is only allowed via `tng exec`, not `tng launch`",
+                i
+            );
+        }
+    }
+    for (i, egress) in config.add_egress.iter().enumerate() {
+        if matches!(egress.egress_mode, EgressMode::Hook(_)) {
+            anyhow::bail!(
+                "Egress entry {} uses 'hook' mode, which is only allowed via `tng exec`, not `tng launch`",
+                i
+            );
+        }
+    }
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() {
@@ -101,6 +125,9 @@ async fn main() {
                 .context("Failed to load config")?;
 
                 tracing::debug!(?config, "TNG config");
+
+                // Hook modes are only allowed via `tng exec`, not `tng launch`.
+                reject_hook_modes(&config)?;
 
                 tracing::info!("Starting tng instance now");
                 TngRuntime::from_config_with_reload_handle(config, &reload_handle)

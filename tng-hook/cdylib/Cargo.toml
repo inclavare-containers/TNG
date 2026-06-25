@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ctor = "=0.4.1"
 libc = "0.2"
+scopeguard = "1.2"
 serde_json = { workspace = true }
 tng-hook-types = { path = "../types" }
 tracing = { workspace = true }

@@ -3,6 +3,8 @@ use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
+use crate::tunnel::access_log::IngressAccessMode;
+
 use super::mapping_rule::MappingDe;
 use super::{ra::RaArgsUnchecked, Endpoint};
 
@@ -62,6 +64,21 @@ pub enum IngressMode {
 
     #[serde(rename = "socks5")]
     Socks5(IngressSocks5Args),
+
+    #[serde(rename = "hook")]
+    Hook(IngressHookArgs),
+}
+
+impl IngressMode {
+    pub fn access_mode(&self) -> IngressAccessMode {
+        match self {
+            IngressMode::Mapping(_) => IngressAccessMode::Mapping,
+            IngressMode::HttpProxy(_) => IngressAccessMode::HttpProxy,
+            IngressMode::Netfilter(_) => IngressAccessMode::Netfilter,
+            IngressMode::Socks5(_) => IngressAccessMode::Socks5,
+            IngressMode::Hook(_) => IngressAccessMode::Hook,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +135,49 @@ pub struct IngressNetfilterArgs {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub so_mark: Option<u32>,
+}
+
+/// Configuration for ingress hook mode.
+///
+/// Uses LD_PRELOAD to intercept the client application's connect() syscalls,
+/// routing matched connections through an internal HTTP CONNECT proxy into the TNG tunnel.
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IngressHookArgs {
+    /// Filter rules: which destination IP+port pairs should be intercepted.
+    /// Modeled after IngressNetfilterArgs.capture_dst for consistency.
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "capture_dst")]
+    pub capture_dst: Vec<IngressHookCaptureDst>,
+
+    /// Optional explicit internal HTTP proxy port. If None, auto-allocated via portpicker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_port: Option<u16>,
+
+    /// Optional bind address for the internal HTTP proxy (default: 127.0.0.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_listen: Option<String>,
+}
+
+/// A single capture destination rule for ingress hook mode.
+///
+/// Mirrors `IngressNetfilterCaptureDstArgs` structure for consistency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IngressHookCaptureDst {
+    /// IPv4 address or CIDR prefix (e.g. "10.0.0.0/24" or "192.168.1.1").
+    /// None = match any destination IP.
+    pub host: Option<Ipv4Cidr>,
+
+    /// Destination port to intercept.
+    pub port: u16,
+
+    /// End port for range matching [port, port_end]. None = exact port match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_end: Option<u16>,
 }
 
 /// Instead of using the IngressNetfilterCaptureDst directly, here we define a common struct for json parsing to get better deserialization error message.
@@ -271,7 +331,9 @@ mod tests {
 
     use crate::config::TngConfig;
 
-    use super::{IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs};
+    use super::{
+        AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
+    };
 
     fn test_deserialize_netfilter_common(value: serde_json::Value) -> Result<()> {
         // Check deserialize
@@ -778,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mapping_validation_out_host_missing() {
+    fn test_mapping_validation_out_host_missing() -> Result<()> {
         let result = serde_json::from_value::<TngConfig>(json!(
             {
                 "add_ingress": [
@@ -799,5 +861,50 @@ mod tests {
             err.contains("out.host"),
             "error should mention out.host: {err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_hook_args() -> Result<()> {
+        let args: AddIngressArgs = serde_json::from_value(json!({
+            "hook": {
+                "capture_dst": [
+                    { "host": "10.0.0.0/24", "port": 80 },
+                    { "host": "10.0.0.0/24", "port": 443 },
+                    { "port": 8080, "port_end": 8090 }
+                ],
+                "proxy_port": 49001
+            },
+            "no_ra": true
+        }))?;
+        match args.ingress_mode {
+            IngressMode::Hook(hook_args) => {
+                assert_eq!(hook_args.capture_dst.len(), 3);
+                assert_eq!(hook_args.proxy_port, Some(49001));
+                assert_eq!(hook_args.capture_dst[0].port, 80);
+                assert_eq!(hook_args.capture_dst[2].port_end, Some(8090));
+                assert!(hook_args.capture_dst[2].host.is_none());
+            }
+            _ => panic!("expected hook mode"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_hook_args_defaults() -> Result<()> {
+        let args: AddIngressArgs = serde_json::from_value(json!({
+            "hook": {
+                "capture_dst": [{ "port": 80 }]
+            },
+            "no_ra": true
+        }))?;
+        match args.ingress_mode {
+            IngressMode::Hook(hook_args) => {
+                assert!(hook_args.proxy_port.is_none());
+                assert!(hook_args.proxy_listen.is_none());
+            }
+            _ => panic!("expected hook mode"),
+        }
+        Ok(())
     }
 }

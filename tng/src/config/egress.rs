@@ -6,6 +6,7 @@ use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 use super::mapping_rule::MappingDe;
 use super::ra::RaArgsUnchecked;
 use crate::config::egress_hook::EgressHookArgs;
+use crate::tunnel::access_log::EgressAccessMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddEgressArgs {
@@ -187,6 +188,16 @@ pub enum EgressMode {
 
     #[serde(rename = "hook")]
     Hook(EgressHookArgs),
+}
+
+impl EgressMode {
+    pub fn access_mode(&self) -> EgressAccessMode {
+        match self {
+            EgressMode::Mapping(_) => EgressAccessMode::Mapping,
+            EgressMode::Netfilter(_) => EgressAccessMode::Netfilter,
+            EgressMode::Hook(_) => EgressAccessMode::Hook,
+        }
+    }
 }
 
 /// Configuration for OHTTP (Oblivious HTTP) support in TNG.

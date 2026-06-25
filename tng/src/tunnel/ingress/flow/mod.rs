@@ -12,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 use crate::config::ingress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::access_log::{AccessAccepted, IngressMode};
+use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -38,6 +38,10 @@ pub(super) trait IngressTrait: Sync + Send {
     /// Return the metric attributes of this ingress.
     fn metric_attributes(&self) -> IndexMap<String, String>;
 
+    /// Return the access-log mode of this ingress.
+    #[allow(dead_code)]
+    fn ingress_mode(&self) -> IngressAccessMode;
+
     /// Return the so_mark which should be used for creating new tcp stream to upstream.
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     fn transport_so_mark(&self) -> Option<u32>;
@@ -56,7 +60,7 @@ pub(super) struct AcceptedStream {
     pub dst: Arc<TngEndpoint>,
     pub via_tunnel: bool,
     pub listener_addr: SocketAddr,
-    pub ingress_mode: IngressMode,
+    pub ingress_mode: IngressAccessMode,
     pub access_accepted: AccessAccepted,
 }
 

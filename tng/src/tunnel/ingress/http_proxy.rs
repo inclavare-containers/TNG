@@ -21,7 +21,7 @@ use tower::ServiceBuilder;
 use tracing::Instrument;
 
 use crate::config::ingress::IngressHttpProxyArgs;
-use crate::tunnel::access_log::{AccessAccepted, IngressMode};
+use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::stream_router::StreamRouter;
 use crate::tunnel::utils::endpoint_matcher::EndpointMatcher;
@@ -125,6 +125,7 @@ impl RequestHelper {
         peer_addr: SocketAddr,
         sender: UnboundedSender<AcceptedStream>,
         listener_addr: SocketAddr,
+        mode: IngressAccessMode,
     ) -> RouteResult {
         let dst = match self.get_dst() {
             Ok(dst) => dst,
@@ -147,11 +148,8 @@ impl RequestHelper {
                         .context("Failed during http connect upgrade")?;
 
                     let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
-                    let access_accepted = AccessAccepted::new_ingress(
-                        peer_addr,
-                        listener_addr,
-                        IngressMode::HttpProxy,
-                    );
+                    let access_accepted =
+                        AccessAccepted::new_ingress(peer_addr, listener_addr, mode);
                     sender
                         .send(AcceptedStream {
                             stream: Box::new(crate::ContextualStream::new(
@@ -162,7 +160,7 @@ impl RequestHelper {
                             dst: Arc::new(dst),
                             via_tunnel,
                             listener_addr,
-                            ingress_mode: IngressMode::HttpProxy,
+                            ingress_mode: mode,
                             access_accepted,
                         })
                         .map_err(|e| anyhow!("{e:?}"))?;
@@ -197,9 +195,9 @@ impl RequestHelper {
                     let access_accepted = AccessAccepted::new_ingress(
                         peer_addr,
                         listener_addr,
-                        IngressMode::HttpProxy,
+                        mode,
                     );
-                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: IngressMode::HttpProxy, access_accepted })
+                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: mode, access_accepted })
                 };
 
                 let send_task = async {
@@ -258,13 +256,20 @@ impl RequestHelper {
 
 pub struct HttpProxyIngress {
     id: usize,
+    mode: IngressAccessMode,
     listen_addr: String,
     listen_port: u16,
+    listener: TcpListener,
+    listener_addr: SocketAddr,
     stream_router: Arc<StreamRouter>,
 }
 
 impl HttpProxyIngress {
-    pub async fn new(id: usize, http_proxy_args: &IngressHttpProxyArgs) -> Result<Self> {
+    pub async fn new(
+        id: usize,
+        http_proxy_args: &IngressHttpProxyArgs,
+        mode: IngressAccessMode,
+    ) -> Result<Self> {
         let listen_addr = http_proxy_args
             .proxy_listen
             .host
@@ -277,10 +282,27 @@ impl HttpProxyIngress {
             &http_proxy_args.dst_filters,
         )?));
 
+        // For non-hook http_proxy mode, bind synchronously via std::net
+        // (avoids the original pattern of binding inside accept() which
+        // conflicts with Rust's borrow checker + async stream closures).
+        // The port is bound here at construction time.
+        let listen_addr_full = format!("{}:{}", listen_addr, listen_port);
+        tracing::debug!(%listen_addr_full, "Add TCP listener");
+        let std_listener = std::net::TcpListener::bind(&listen_addr_full)?;
+        std_listener
+            .set_nonblocking(true)
+            .context("Failed to set nonblocking on listener")?;
+        let listener = TcpListener::from_std(std_listener)?;
+        listener.set_listener_common_sock_opts()?;
+        let listener_addr = listener.local_addr()?;
+
         Ok(Self {
             id,
+            mode,
             listen_addr,
             listen_port,
+            listener,
+            listener_addr,
             stream_router,
         })
     }
@@ -306,19 +328,18 @@ impl IngressTrait for HttpProxyIngress {
         None
     }
 
+    fn ingress_mode(&self) -> IngressAccessMode {
+        self.mode
+    }
+
     async fn accept(&self, runtime: TokioRuntime) -> Result<Incomming> {
-        let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        tracing::debug!(%listen_addr, "Add TCP listener");
-
-        let listener = TcpListener::bind(listen_addr).await?;
-        listener.set_listener_common_sock_opts()?;
-
-        let listener_addr = listener.local_addr()?;
+        let listener_addr = self.listener_addr;
+        let mode = self.mode;
 
         Ok(Box::pin(
             stream! {
                 loop {
-                    yield listener.accept_with_common_sock_opts().await
+                    yield self.listener.accept_with_common_sock_opts().await
                 }
             }.flat_map_unordered(
                 None, // Unlimited concurrency of http proxy session
@@ -333,7 +354,7 @@ impl IngressTrait for HttpProxyIngress {
                                 let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
                                 runtime.spawn_supervised_task_fn_current_span(move |runtime| async move {
-                                    serve_http_proxy_no_throw_error(stream, stream_router, runtime, peer_addr, sender, listener_addr)
+                                    serve_http_proxy_no_throw_error(stream, stream_router, runtime, peer_addr, sender, listener_addr, mode)
                                         .await
                                 });
 
@@ -350,13 +371,14 @@ impl IngressTrait for HttpProxyIngress {
     }
 }
 
-async fn serve_http_proxy_no_throw_error(
+pub(super) async fn serve_http_proxy_no_throw_error(
     in_stream: TcpStream,
     stream_router: Arc<StreamRouter>,
     runtime: TokioRuntime,
     peer_addr: SocketAddr,
     sender: UnboundedSender<AcceptedStream>,
     listener_addr: SocketAddr,
+    mode: IngressAccessMode,
 ) {
     let runtime_cloned = runtime.clone();
 
@@ -368,7 +390,14 @@ async fn serve_http_proxy_no_throw_error(
 
             async move {
                 let route_result = RequestHelper::from_request(req)
-                    .handle(stream_router, runtime, peer_addr, sender, listener_addr)
+                    .handle(
+                        stream_router,
+                        runtime,
+                        peer_addr,
+                        sender,
+                        listener_addr,
+                        mode,
+                    )
                     .await;
 
                 let mut response: axum::response::Response = route_result.into();

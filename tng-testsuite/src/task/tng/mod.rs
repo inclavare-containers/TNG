@@ -5,7 +5,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{NodeType, Task};
 
-#[cfg(feature = "on-source-code")]
+#[cfg(all(
+    feature = "on-source-code",
+    not(any(feature = "on-bin", feature = "on-podman"))
+))]
 mod source_code;
 
 #[cfg(any(feature = "on-bin", feature = "on-podman"))]

@@ -3,9 +3,11 @@ use std::sync::Arc;
 use crate::observability::metric::simple_exporter::noop::NoopMeterProvider;
 use crate::service::RegistedService;
 use crate::state::{EgressStatusHandle, IngressStatusHandle, TngState};
+use crate::tunnel::access_log::IngressAccessMode as AccessIngressMode;
 use crate::tunnel::egress::flow::EgressFlow;
 use crate::tunnel::egress::mapping::MappingEgress;
 use crate::tunnel::ingress::flow::IngressFlow;
+use crate::tunnel::ingress::hook::HookIngress;
 use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -118,7 +120,12 @@ impl TngRuntime {
                     }
                     IngressMode::HttpProxy(http_proxy_args) => {
                         IngressFlow::new(
-                            HttpProxyIngress::new(id, http_proxy_args).await?,
+                            HttpProxyIngress::new(
+                                id,
+                                http_proxy_args,
+                                AccessIngressMode::HttpProxy,
+                            )
+                            .await?,
                             &add_ingress.common,
                             &service_metrics_creator,
                             runtime.clone(),
@@ -147,6 +154,15 @@ impl TngRuntime {
                     IngressMode::Socks5(socks5_args) => {
                         IngressFlow::new(
                             Socks5Ingress::new(id, socks5_args).await?,
+                            &add_ingress.common,
+                            &service_metrics_creator,
+                            runtime.clone(),
+                        )
+                        .await?
+                    }
+                    IngressMode::Hook(hook_args) => {
+                        IngressFlow::new(
+                            HookIngress::new(id, hook_args).await?,
                             &add_ingress.common,
                             &service_metrics_creator,
                             runtime.clone(),

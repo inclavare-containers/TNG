@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     config::egress::{EgressNetfilterArgs, EgressNetfilterCaptureDst},
-    tunnel::access_log::{AccessAccepted, EgressMode},
+    tunnel::access_log::{AccessAccepted, EgressAccessMode},
     tunnel::{
         egress::flow::AcceptedStream,
         endpoint::TngEndpoint,
@@ -133,14 +133,14 @@ impl EgressTrait for NetfilterEgress {
                 let access_accepted = AccessAccepted::new_egress(
                     peer_addr,
                     listen_addr,
-                    EgressMode::Netfilter,
+                    EgressAccessMode::Netfilter,
                 );
                 Ok(AcceptedStream {
                     stream: Box::new(crate::ContextualStream::new(stream, "egress-netfilter")),
                     src: peer_addr,
                     dst,
                     listener_addr: listen_addr,
-                    egress_mode: EgressMode::Netfilter,
+                    egress_mode: EgressAccessMode::Netfilter,
                     access_accepted,
                 })
             }),

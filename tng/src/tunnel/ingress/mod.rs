@@ -6,6 +6,8 @@ pub mod stream_manager;
 #[cfg(not(wasm))]
 pub mod flow;
 #[cfg(feature = "ingress-http-proxy")]
+pub mod hook;
+#[cfg(feature = "ingress-http-proxy")]
 pub mod http_proxy;
 #[cfg(feature = "ingress-mapping")]
 pub mod mapping;

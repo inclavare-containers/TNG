@@ -12,7 +12,7 @@ use tokio::sync::mpsc::Sender;
 use crate::config::egress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::access_log::{AccessAccepted, EgressMode};
+use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
@@ -52,7 +52,7 @@ pub(super) struct AcceptedStream {
     pub src: SocketAddr,
     pub dst: Arc<TngEndpoint>,
     pub listener_addr: SocketAddr,
-    pub egress_mode: EgressMode,
+    pub egress_mode: EgressAccessMode,
     pub access_accepted: AccessAccepted,
 }
 

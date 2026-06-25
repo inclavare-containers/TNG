@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
 use crate::config::ingress::IngressMappingArgs;
-use crate::tunnel::access_log::{AccessAccepted, IngressMode};
+use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::ingress::flow::AcceptedStream;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -63,6 +63,10 @@ impl IngressTrait for MappingIngress {
             ("ingress_out".to_owned(), out_desc),
         ]
         .into()
+    }
+
+    fn ingress_mode(&self) -> IngressAccessMode {
+        IngressAccessMode::Mapping
     }
 
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -129,7 +133,7 @@ impl IngressTrait for MappingIngress {
                                 let access_accepted = AccessAccepted::new_ingress(
                                     peer_addr,
                                     target.local_addr,
-                                    IngressMode::Mapping,
+                                    IngressAccessMode::Mapping,
                                 );
                                 yield Ok(AcceptedStream {
                                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
@@ -137,7 +141,7 @@ impl IngressTrait for MappingIngress {
                                     dst: Arc::clone(&target.out_ep),
                                     via_tunnel: true,
                                     listener_addr: target.local_addr,
-                                    ingress_mode: IngressMode::Mapping,
+                                    ingress_mode: IngressAccessMode::Mapping,
                                     access_accepted,
                                 })
                             }

@@ -1,46 +1,46 @@
 use std::fmt::Display;
 use std::net::SocketAddr;
 
-// --- Mode enums (kept as-is, re-exported alongside new structs) ---
-
 /// The type of ingress that accepted the downstream connection.
 #[derive(Debug, Clone, Copy)]
-pub enum IngressMode {
+pub enum IngressAccessMode {
     Mapping,
     #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
     Netfilter,
     Socks5,
     HttpProxy,
+    Hook,
 }
 
-impl Display for IngressMode {
+impl Display for IngressAccessMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IngressMode::Mapping => write!(f, "mapping"),
+            IngressAccessMode::Mapping => write!(f, "mapping"),
             #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
-            IngressMode::Netfilter => write!(f, "netfilter"),
-            IngressMode::Socks5 => write!(f, "socks5"),
-            IngressMode::HttpProxy => write!(f, "http_proxy"),
+            IngressAccessMode::Netfilter => write!(f, "netfilter"),
+            IngressAccessMode::Socks5 => write!(f, "socks5"),
+            IngressAccessMode::HttpProxy => write!(f, "http_proxy"),
+            IngressAccessMode::Hook => write!(f, "hook"),
         }
     }
 }
 
 /// The type of egress that accepted the downstream connection.
 #[derive(Debug, Clone, Copy)]
-pub enum EgressMode {
+pub enum EgressAccessMode {
     Mapping,
     #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
     Netfilter,
     Hook,
 }
 
-impl Display for EgressMode {
+impl Display for EgressAccessMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EgressMode::Mapping => write!(f, "mapping"),
+            EgressAccessMode::Mapping => write!(f, "mapping"),
             #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
-            EgressMode::Netfilter => write!(f, "netfilter"),
-            EgressMode::Hook => write!(f, "hook"),
+            EgressAccessMode::Netfilter => write!(f, "netfilter"),
+            EgressAccessMode::Hook => write!(f, "hook"),
         }
     }
 }
@@ -49,8 +49,8 @@ impl Display for EgressMode {
 
 #[derive(Clone, Copy)]
 enum AccessMode {
-    Ingress(IngressMode),
-    Egress(EgressMode),
+    Ingress(IngressAccessMode),
+    Egress(EgressAccessMode),
 }
 
 impl Display for AccessMode {
@@ -76,7 +76,7 @@ impl AccessAccepted {
     pub fn new_ingress(
         downstream_remote: SocketAddr,
         downstream_local: SocketAddr,
-        mode: IngressMode,
+        mode: IngressAccessMode,
     ) -> Self {
         Self {
             downstream_remote,
@@ -88,7 +88,7 @@ impl AccessAccepted {
     pub fn new_egress(
         downstream_remote: SocketAddr,
         downstream_local: SocketAddr,
-        mode: EgressMode,
+        mode: EgressAccessMode,
     ) -> Self {
         Self {
             downstream_remote,
@@ -110,7 +110,7 @@ impl AccessAccepted {
     }
 
     /// Returns the egress mode, or None if this is an ingress AccessAccepted.
-    pub fn egress_mode(&self) -> Option<EgressMode> {
+    pub fn egress_mode(&self) -> Option<EgressAccessMode> {
         match self.mode {
             AccessMode::Egress(m) => Some(m),
             AccessMode::Ingress(_) => None,
@@ -243,7 +243,7 @@ mod tests {
         let accepted = AccessAccepted::new_egress(
             "10.0.0.1:54321".parse().unwrap(),
             "0.0.0.0:8080".parse().unwrap(),
-            EgressMode::Hook,
+            EgressAccessMode::Hook,
         );
         assert_eq!(
             format!("{accepted}"),
@@ -257,7 +257,7 @@ mod tests {
         let accepted = AccessAccepted::new_egress(
             "10.0.0.1:54321".parse().unwrap(),
             "0.0.0.0:8080".parse().unwrap(),
-            EgressMode::Hook,
+            EgressAccessMode::Hook,
         );
         let routed = accepted.into_routed("10.0.0.2:443", false);
         assert_eq!(
@@ -272,7 +272,7 @@ mod tests {
         let accepted = AccessAccepted::new_egress(
             "10.0.0.1:54321".parse().unwrap(),
             "0.0.0.0:8080".parse().unwrap(),
-            EgressMode::Hook,
+            EgressAccessMode::Hook,
         );
         let routed = accepted.into_routed("10.0.0.2:443", false);
         let established = routed.into_established(None, false);
@@ -288,7 +288,7 @@ mod tests {
         let accepted = AccessAccepted::new_ingress(
             "10.0.0.1:54321".parse().unwrap(),
             "0.0.0.0:8080".parse().unwrap(),
-            IngressMode::Mapping,
+            IngressAccessMode::Mapping,
         );
         let routed = accepted.into_routed("10.0.0.2:443", true);
         let established = routed.into_established(Some("10.0.0.1:54322".parse().unwrap()), true);
@@ -301,14 +301,14 @@ mod tests {
 
     #[test]
     fn test_ingress_mode_display() {
-        assert_eq!(format!("{}", IngressMode::Mapping), "mapping");
-        assert_eq!(format!("{}", IngressMode::Socks5), "socks5");
-        assert_eq!(format!("{}", IngressMode::HttpProxy), "http_proxy");
+        assert_eq!(format!("{}", IngressAccessMode::Mapping), "mapping");
+        assert_eq!(format!("{}", IngressAccessMode::Socks5), "socks5");
+        assert_eq!(format!("{}", IngressAccessMode::HttpProxy), "http_proxy");
     }
 
     #[test]
     fn test_egress_mode_display() {
-        assert_eq!(format!("{}", EgressMode::Mapping), "mapping");
-        assert_eq!(format!("{}", EgressMode::Hook), "hook");
+        assert_eq!(format!("{}", EgressAccessMode::Mapping), "mapping");
+        assert_eq!(format!("{}", EgressAccessMode::Hook), "hook");
     }
 }
