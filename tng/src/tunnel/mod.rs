@@ -1,4 +1,3 @@
-#[cfg(not(wasm))]
 pub(crate) mod access_log;
 pub(crate) mod attestation_result;
 #[cfg(feature = "__egress-common")]

@@ -44,6 +44,7 @@ impl Display for EgressAccessMode {
 // --- Unified mode wrapper for Display purposes ---
 
 #[derive(Clone, Copy)]
+#[cfg_attr(wasm, allow(dead_code))]
 enum AccessMode {
     Ingress(IngressAccessMode),
     Egress(EgressAccessMode),
@@ -62,12 +63,14 @@ impl Display for AccessMode {
 
 /// Downstream connection accepted, but routing to upstream not yet determined.
 /// Drop logs at ERROR level.
+#[cfg_attr(wasm, allow(dead_code))]
 pub struct AccessAccepted {
     downstream_remote: SocketAddr,
     downstream_local: SocketAddr,
     mode: AccessMode,
 }
 
+#[cfg_attr(wasm, allow(dead_code))]
 impl AccessAccepted {
     pub fn new_ingress(
         downstream_remote: SocketAddr,

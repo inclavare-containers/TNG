@@ -35,6 +35,7 @@ type OhttpClientCache = RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>;
 
 /// Root status response for /status/.../ohttp/keys.
 #[derive(Serialize)]
+#[cfg_attr(wasm, allow(dead_code))]
 struct ServersStatus {
     servers: Vec<ServerStatusEntry>,
 }
