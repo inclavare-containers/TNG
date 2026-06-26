@@ -68,6 +68,7 @@ pub struct AccessAccepted {
     downstream_remote: SocketAddr,
     downstream_local: SocketAddr,
     mode: AccessMode,
+    need_print: bool,
 }
 
 #[cfg_attr(wasm, allow(dead_code))]
@@ -81,6 +82,7 @@ impl AccessAccepted {
             downstream_remote,
             downstream_local,
             mode: AccessMode::Ingress(mode),
+            need_print: true,
         }
     }
 
@@ -93,6 +95,7 @@ impl AccessAccepted {
             downstream_remote,
             downstream_local,
             mode: AccessMode::Egress(mode),
+            need_print: true,
         }
     }
 
@@ -117,13 +120,15 @@ impl AccessAccepted {
     }
 
     /// Transition to AccessRouted. Consumes self.
-    pub fn into_routed(self, upstream_remote: impl Display, tunnel: bool) -> AccessRouted {
+    pub fn into_routed(mut self, upstream_remote: impl Display, tunnel: bool) -> AccessRouted {
+        self.need_print = false;
         AccessRouted {
             downstream_remote: self.downstream_remote,
             downstream_local: self.downstream_local,
             mode: self.mode,
             upstream_remote: upstream_remote.to_string(),
             tunnel,
+            need_print: true,
         }
     }
 }
@@ -140,7 +145,9 @@ impl Display for AccessAccepted {
 
 impl Drop for AccessAccepted {
     fn drop(&mut self) {
-        tracing::error!("{}", self);
+        if self.need_print {
+            tracing::error!("{}", self);
+        }
     }
 }
 
@@ -155,16 +162,18 @@ pub struct AccessRouted {
     mode: AccessMode,
     upstream_remote: String,
     tunnel: bool,
+    need_print: bool,
 }
 
 #[allow(dead_code)]
 impl AccessRouted {
     /// Transition to AccessEstablished. Consumes self.
     pub fn into_established(
-        self,
+        mut self,
         upstream_local: Option<SocketAddr>,
         attested: bool,
     ) -> AccessEstablished {
+        self.need_print = false;
         AccessEstablished {
             downstream_remote: self.downstream_remote,
             downstream_local: self.downstream_local,
@@ -173,6 +182,7 @@ impl AccessRouted {
             upstream_local,
             tunnel: self.tunnel,
             attested,
+            need_print: true,
         }
     }
 }
@@ -189,7 +199,9 @@ impl Display for AccessRouted {
 
 impl Drop for AccessRouted {
     fn drop(&mut self) {
-        tracing::error!("{}", self);
+        if self.need_print {
+            tracing::error!("{}", self);
+        }
     }
 }
 
@@ -205,6 +217,7 @@ pub struct AccessEstablished {
     upstream_local: Option<SocketAddr>,
     tunnel: bool,
     attested: bool,
+    need_print: bool,
 }
 
 impl AccessEstablished {}
@@ -229,7 +242,9 @@ impl Display for AccessEstablished {
 
 impl Drop for AccessEstablished {
     fn drop(&mut self) {
-        tracing::info!("{}", self);
+        if self.need_print {
+            tracing::info!("{}", self);
+        }
     }
 }
 
