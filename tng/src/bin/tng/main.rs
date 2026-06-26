@@ -6,11 +6,11 @@ use std::{fs::File, io::BufReader};
 use anyhow::{bail, Context};
 use clap::Parser as _;
 use cli::{Cli, GlobalSubcommand};
-use tng::build;
 use tng::config::egress::EgressMode;
 use tng::config::ingress::IngressMode;
 use tng::config::TngConfig;
 use tng::runtime::TngRuntime;
+use tng::{build, show_banner};
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -86,23 +86,11 @@ async fn main() {
         subscriber_init.init();
     }
 
-    tracing::info!(
-        r#"
-  _______   ________
- /_  __/ | / / ____/
-  / / /  |/ / / __
- / / / /|  / /_/ /  Welcome to the Trusted Network Gateway!
-/_/ /_/ |_/\____/   version: v{}  commit: {}  buildtime: {}"#,
-        build::PKG_VERSION,
-        build::COMMIT_HASH,
-        build::BUILD_TIME
-    );
-
-    tracing::info!(pid = std::process::id(), "Current process PID");
-
     let fut = async {
         match cli.command {
             GlobalSubcommand::Launch(options) => {
+                show_banner("daemon");
+
                 // Load config
                 let config: TngConfig = async {
                     Ok::<_, anyhow::Error>(match (options.config_file, options.config_content) {
@@ -138,6 +126,8 @@ async fn main() {
                 tracing::info!("Exited gracefully");
             }
             GlobalSubcommand::Exec(options) => {
+                show_banner("exec");
+
                 use tng::exec::TngExec;
 
                 let config: TngConfig = {

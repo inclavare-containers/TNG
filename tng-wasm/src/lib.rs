@@ -1,8 +1,6 @@
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 
-use tng::build;
-
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::Layer;
 use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
@@ -26,15 +24,5 @@ pub fn init_tng() {
     ))
     .expect("failed to set tng default global tracing subscriber");
 
-    tracing::info!(
-        r#"
-      _______   ________
-     /_  __/ | / / ____/
-      / / /  |/ / / __  
-     / / / /|  / /_/ /  Welcome to the Trusted Network Gateway!
-    /_/ /_/ |_/\____/   version: v{}  commit: {}  buildtime: {}"#,
-        build::PKG_VERSION,
-        build::COMMIT_HASH,
-        build::BUILD_TIME
-    );
+    tng::show_banner("wasm");
 }

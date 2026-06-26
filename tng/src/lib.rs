@@ -36,6 +36,26 @@ pub use crate::tunnel::stream::{CommonStreamTrait, ContextualStream};
 pub use crate::tunnel::utils::runtime::TokioRuntime;
 pub use crate::tunnel::utils::tokio::TokioIo;
 
+pub fn show_banner(mode: &str) {
+    #[cfg(not(wasm))]
+    let mode = format_args!("(mode: {}, pid: {})", mode, std::process::id());
+    #[cfg(wasm)]
+    let mode = format_args!("(mode: {})", mode);
+
+    tracing::info!(
+        r#"
+  _______   ________
+ /_  __/ | / / ____/
+  / / /  |/ / / __
+ / / / /|  / /_/ /  Welcome to the Trusted Network Gateway! {}
+/_/ /_/ |_/\____/   version: v{}  commit: {}  buildtime: {}"#,
+        mode,
+        build::PKG_VERSION,
+        build::COMMIT_HASH,
+        build::BUILD_TIME
+    );
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
 
