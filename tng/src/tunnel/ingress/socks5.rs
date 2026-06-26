@@ -165,8 +165,11 @@ impl IngressTrait for Socks5Ingress {
 
                     let via_tunnel = self.stream_router.should_forward_via_tunnel(&dst);
 
-                    let access_accepted =
-                        AccessAccepted::new_ingress(peer_addr, listener_addr, IngressAccessMode::Socks5);
+                    let access_accepted = AccessAccepted::new_ingress(
+                        peer_addr,
+                        listener_addr,
+                        IngressAccessMode::Socks5,
+                    );
                     Ok(AcceptedStream {
                         stream: Box::new(crate::ContextualStream::new(stream, "ingress-socks5")),
                         src: peer_addr,

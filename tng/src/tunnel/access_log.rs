@@ -5,7 +5,6 @@ use std::net::SocketAddr;
 #[derive(Debug, Clone, Copy)]
 pub enum IngressAccessMode {
     Mapping,
-    #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
     Netfilter,
     Socks5,
     HttpProxy,
@@ -16,7 +15,6 @@ impl Display for IngressAccessMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IngressAccessMode::Mapping => write!(f, "mapping"),
-            #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
             IngressAccessMode::Netfilter => write!(f, "netfilter"),
             IngressAccessMode::Socks5 => write!(f, "socks5"),
             IngressAccessMode::HttpProxy => write!(f, "http_proxy"),
@@ -29,7 +27,6 @@ impl Display for IngressAccessMode {
 #[derive(Debug, Clone, Copy)]
 pub enum EgressAccessMode {
     Mapping,
-    #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
     Netfilter,
     Hook,
 }
@@ -38,7 +35,6 @@ impl Display for EgressAccessMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EgressAccessMode::Mapping => write!(f, "mapping"),
-            #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
             EgressAccessMode::Netfilter => write!(f, "netfilter"),
             EgressAccessMode::Hook => write!(f, "hook"),
         }
