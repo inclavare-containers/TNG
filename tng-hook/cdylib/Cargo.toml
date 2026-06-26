@@ -1,19 +1,20 @@
 [package]
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 name = "tng-hook-cdylib"
 version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
 
 [lib]
-name = "tng_hook"
 crate-type = ["cdylib"]
+name = "tng_hook"
 
 [dependencies]
+atty = {workspace = true}
 ctor = "=0.4.1"
 libc = "0.2"
 scopeguard = "1.2"
-serde_json = { workspace = true }
-tng-hook-types = { path = "../types" }
-tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = {workspace = true}
+tng-hook-types = {path = "../types"}
+tracing = {workspace = true}
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}

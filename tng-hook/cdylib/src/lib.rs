@@ -6,7 +6,7 @@ use libc::{c_int, sockaddr, socklen_t};
 use tng_hook_types::{
     EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup, IngressHookMappingTable,
 };
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 /// Resolved real `bind` function pointer.
 type BindFn = unsafe extern "C" fn(c_int, *const sockaddr, socklen_t) -> c_int;
@@ -62,15 +62,16 @@ fn init() {
     // preloaded library where the host process has no tracing configured.
     // The log level can be controlled via `RUST_LOG` env var (default: info).
     // Uses `set_default` so it won't panic if the host already has a subscriber.
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .without_time()
-        .with_target(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(atty::is(atty::Stream::Stderr))
+                .with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                ),
         )
-        .set_default();
+        .init();
 
     // Resolve real functions directly from libc
     unsafe {
