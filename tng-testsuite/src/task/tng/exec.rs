@@ -6,7 +6,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::binary_locator::resolve_tng_binary;
-use super::readyz::{patch_config_with_control_interface, wait_for_readyz, ProcessStatus};
 use crate::task::tagged_spawn::spawn_with_span_output;
 use crate::task::NodeType;
 use crate::task::Task;
@@ -22,15 +21,17 @@ use crate::task::Task;
 pub struct TngExecTask {
     config_json: String,
     command: Vec<String>,
+    stop_after_exit: bool,
     #[allow(dead_code)]
     tag: String,
 }
 
 impl TngExecTask {
-    pub fn new(config_json: String, command: Vec<String>) -> Self {
+    pub fn new(config_json: String, command: Vec<String>, stop_after_exit: bool) -> Self {
         Self {
             config_json,
             command,
+            stop_after_exit,
             tag: "tng_exec".to_owned(),
         }
     }
@@ -47,6 +48,7 @@ impl Task for TngExecTask {
     }
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+        let stop_after_exit = self.stop_after_exit;
         let config_json = self.config_json.clone();
         let command = self.command.clone();
 
@@ -55,12 +57,6 @@ impl Task for TngExecTask {
         // Resolve tng binary path
         let tng_bin = resolve_tng_binary()?;
         tracing::info!(?tng_bin, "Resolved tng binary");
-
-        // Pick a free port for the control_interface
-        let control_port = portpicker::pick_unused_port().context("Failed to pick a free port")?;
-
-        // Patch config to inject control_interface for /readyz
-        let config_json = patch_config_with_control_interface(&config_json, control_port)?;
 
         // Build the command
         let mut cmd = Command::new(&tng_bin);
@@ -77,21 +73,9 @@ impl Task for TngExecTask {
             .context("Failed to spawn tng process")?;
 
         let child_id = child.id();
-        tracing::info!(pid = child_id, control_port, "tng exec child spawned");
+        tracing::info!(pid = child_id, "tng exec child spawned");
 
-        // Wait for /readyz to return 200 OK before returning the handle.
-        // This ensures the tunnel listeners are bound before the test proceeds.
-        wait_for_readyz(control_port, || match child.try_wait() {
-            Ok(Some(status)) => ProcessStatus::Exited(status.code()),
-            Ok(None) => ProcessStatus::Running,
-            Err(e) => {
-                tracing::error!(?e, "Failed to check child status");
-                ProcessStatus::Exited(None)
-            }
-        })
-        .await?;
-
-        tracing::info!(control_port, "tng exec is ready");
+        // Note: no need to patch_config_with_control_interface() and wait_for_readyz() here since the exec target may return soon before the wait_for_readyz return.
 
         let join_handle = tokio::task::spawn(
             async move {
@@ -104,10 +88,12 @@ impl Task for TngExecTask {
                         if !status.success() {
                             anyhow::bail!("tng exec exited with status: {:?}", status);
                         }
+                        if stop_after_exit {
+                            token.cancel();
+                        }
                         Ok::<_, anyhow::Error>(())
                     }
                     _ = token.cancelled() => {
-                        tracing::warn!("tng exec cancelled, killing child process");
                         let _ = child.start_kill();
                         let _ = child.wait().await;
                         Ok::<_, anyhow::Error>(())

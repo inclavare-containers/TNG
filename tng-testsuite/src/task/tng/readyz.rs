@@ -1,7 +1,9 @@
 //! Shared readiness helpers for external tng processes.
 //!
 //! Provides config patching for the control_interface and /readyz polling,
-//! used by both `TngInstance` (external) and `TngExecTask`.
+//! used by `TngInstance` (external).
+
+#![cfg(any(feature = "on-bin", feature = "on-podman"))]
 
 use std::time::Duration;
 

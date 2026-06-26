@@ -47,6 +47,7 @@ async fn test() -> Result<()> {
                 )
                 .to_string(),
             ],
+            false,
         )
         .boxed(),
         // Client side: TNG client with ingress mapping to server's hook port.
