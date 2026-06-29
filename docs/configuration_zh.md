@@ -15,12 +15,15 @@
   - [模式：socks5（Socks5 代理）](#socks5socks5-代理)
   - [模式：netfilter（透明代理）](#netfilter透明代理)
   - [模式：hook（LD_PRELOAD）](#ingress-hook-ld_preload)
+  - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
+    - [逐条目 QUIC 配置](#udp-over-quic-配置)
 - [Egress（隧道出口）](#egress隧道出口)
   - [通用字段](#egress通用字段)
   - [direct_forward 规则](#direct_forward-规则)
   - [模式：mapping（端口映射）](#mapping端口映射)
   - [模式：netfilter（端口劫持）](#netfilter端口劫持)
   - [模式：hook（LD_PRELOAD）](#egress-hookld_preload)
+  - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
 - [远程证明（公共配置）](#远程证明公共配置)
   - [Provider 选择](#provider-选择)
   - [Attester 配置](#attester-配置)
@@ -73,12 +76,13 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `ohttp` | [OHttp](#ingress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
 | `attest` | [Attest](#attester-配置) | 无 | 在本端点扮演 Attester |
 | `verify` | [Verify](#verifier-配置) | 无 | 在本端点扮演 Verifier |
+| `quic` | [UdpQuicArgs](#udp-over-quic-配置) | 无 | UDP 隧道的 QUIC Datagram 设置 |
 
 > [!WARNING]
 > `ohttp` 和 `rats_tls` 互斥。同一 Ingress/Egress 中同时指定两者将导致错误。
@@ -504,6 +508,89 @@ flowchart TD
 
 ---
 
+### 模式：mapping_udp（UDP over QUIC Datagram 隧道）
+
+> **需要：** QUIC Datagram 传输 —— UDP 流量通过 RA-TLS 认证的 QUIC 连接进行封装。
+
+将原始 UDP Datagram 封装在 QUIC 连接中。Ingress 侧监听本地 UDP socket，接收来自客户端的 Datagram，通过 QUIC Datagram 隧道转发到 Egress 侧，Egress 侧将其投递到后端 UDP 服务。
+
+#### Ingress 侧（`"mapping_udp"`）
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `in` | [Endpoint](#ratstlsargs) | 是 | 本地 UDP socket 地址，用于监听客户端 Datagram |
+| `out` | [Endpoint](#ratstlsargs) | 是 | Egress QUIC 监听地址（建立隧道连接的目标） |
+| `idle_timeout_secs` | 整数 | `30` | 双向空闲超时时间（秒）。如果两个方向在此时间内均无活动，则关闭 QUIC 连接。工作方式类似于 NAT UDP 会话超时 —— 双向活动会重置计时器 |
+
+**示例：**
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 10001 },
+        "out": { "host": "127.0.0.1", "port": 8443 },
+        "idle_timeout_secs": 60
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+#### Egress 侧（`"mapping_udp"`）
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `in` | [Endpoint](#ratstlsargs) | 是 | QUIC 监听地址，接受来自 Ingress 的隧道连接 |
+| `out` | [Endpoint](#ratstlsargs) | 是 | 后端 UDP 服务地址，用于投递 Datagram |
+| `idle_timeout_secs` | 整数 | `30` | 双向空闲超时时间（秒）。与 Ingress 侧语义相同 |
+
+**示例：**
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 8443 },
+        "out": { "host": "127.0.0.1", "port": 20001 }
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+#### 逐条目 QUIC 配置（`quic`）
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `max_datagram_size` | 整数 | quinn 默认值 | QUIC Datagram 最大载荷大小（字节）。控制可隧道的最大 UDP Datagram 大小 |
+
+**示例：**
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 10001 },
+        "out": { "host": "127.0.0.1", "port": 8443 }
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> `mapping_udp` 模式设计用于无状态的 UDP-over-QUIC 隧道，支持远程证明。QUIC Datagram 载荷携带原始 UDP 数据，不添加额外的元数据头或帧，仅使用 QUIC 自身的 Datagram 编码。
+
+---
+
 ## Egress（隧道出口）
 
 `Egress` 对象配置隧道的出口端点，控制流量如何从隧道流出。
@@ -514,13 +601,14 @@ flowchart TD
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` \| `hook` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-规则)] | 否 | 直接转发（不解密）规则 |
 | `ohttp` | [OHttp](#egress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
 | `attest` | [Attest](#attester-配置) | 无 | 在本端点扮演 Attester |
 | `verify` | [Verify](#verifier-配置) | 无 | 在本端点扮演 Verifier |
+| `quic` | [UdpQuicArgs](#udp-over-quic-配置) | 无 | UDP 隧道的 QUIC Datagram 设置 |
 
 > `rats_tls.multiplex` 等传输层字段与 Ingress 共用同一组定义，见 [RatsTlsArgs](#ratstlsargs)。
 
@@ -843,6 +931,35 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 
 > [!NOTE]
 > `hook` 模式与其他 egress 模式互斥。使用 `tng exec` 时，仅允许使用 `hook` 模式。
+
+---
+
+### 模式：mapping_udp（UDP over QUIC Datagram 隧道）
+
+`mapping_udp` 的 Egress 侧接受来自 Ingress 端的 QUIC Datagram 连接，并将封装的 UDP Datagram 转发到后端 UDP 服务。完整的特性描述和逐条目 `quic` 配置参见 [Ingress mapping_udp 章节](#模式mapping_udpudp-over-quic-datagram-隧道)。
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `in` | [Endpoint](#ratstlsargs) | 是 | QUIC 监听地址，接受来自 Ingress 的隧道连接 |
+| `out` | [Endpoint](#ratstlsargs) | 是 | 后端 UDP 服务地址，用于投递 Datagram |
+| `idle_timeout_secs` | 整数 | `30` | 双向空闲超时时间（秒）。如果两个方向在此时间内均无活动，则关闭 QUIC 连接 |
+
+**示例：**
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 8443 },
+        "out": { "host": "127.0.0.1", "port": 20001 },
+        "idle_timeout_secs": 60
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
 
 ---
 
@@ -1824,8 +1941,10 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
 |---|---|
 | ingress mapping | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
+| ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
+| egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 
 **支持的 Exporter：**
 

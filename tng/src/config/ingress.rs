@@ -6,7 +6,7 @@ use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 use crate::tunnel::access_log::IngressAccessMode;
 
 use super::mapping_rule::MappingDe;
-use super::{ra::RaArgsUnchecked, Endpoint};
+use super::{ra::RaArgsUnchecked, Endpoint, UdpQuicArgs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddIngressArgs {
@@ -29,6 +29,9 @@ pub struct CommonArgs {
 
     #[serde(default = "Option::default")]
     pub rats_tls: Option<RatsTlsArgs>,
+
+    #[serde(default = "Option::default")]
+    pub quic: Option<UdpQuicArgs>,
 
     #[serde(flatten)]
     pub ra_args: RaArgsUnchecked,
@@ -67,6 +70,10 @@ pub enum IngressMode {
 
     #[serde(rename = "hook")]
     Hook(IngressHookArgs),
+
+    #[cfg(feature = "ingress-mapping-udp")]
+    #[serde(rename = "mapping_udp")]
+    MappingUdp(IngressMappingUdpArgs),
 }
 
 impl IngressMode {
@@ -77,6 +84,8 @@ impl IngressMode {
             IngressMode::Netfilter(_) => IngressAccessMode::Netfilter,
             IngressMode::Socks5(_) => IngressAccessMode::Socks5,
             IngressMode::Hook(_) => IngressAccessMode::Hook,
+            #[cfg(feature = "ingress-mapping-udp")]
+            IngressMode::MappingUdp(_) => IngressAccessMode::MappingUdp,
         }
     }
 }
@@ -99,6 +108,34 @@ impl<'de> Deserialize<'de> for IngressMappingArgs {
             .map_err(serde::de::Error::custom)?;
         Ok(Self { rules })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IngressMappingUdpArgs {
+    /// Local UDP socket to listen on.
+    #[serde(rename = "in")]
+    pub r#in: Endpoint,
+
+    /// Egress QUIC listener address (where ingress connects to establish the tunnel).
+    pub out: Endpoint,
+
+    /// Idle timeout in seconds for the UDP session.
+    ///
+    /// This is a bidirectional timeout — both directions must be idle for the
+    /// timeout to trigger. Any activity in either direction resets the timer.
+    ///
+    /// On the ingress side, if no new datagram is received from the client AND
+    /// no response datagram is received from the QUIC connection for this
+    /// duration, the QUIC connection is closed and the entry is removed.
+    ///
+    /// On the egress side, if no datagram is sent from QUIC AND no response
+    /// datagram is received from the backend for this duration, the UDP socket
+    /// is closed and the corresponding QUIC connection is terminated.
+    ///
+    /// Similar to NAT UDP session timeout. Defaults to 30s if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u64>,
 }
 
 #[serde_as]

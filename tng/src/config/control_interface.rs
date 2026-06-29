@@ -95,6 +95,7 @@ mod tests {
                     web_page_inject: false,
                     ohttp: None,
                     rats_tls: None,
+                    quic: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,
@@ -169,6 +170,7 @@ mod tests {
                     web_page_inject: false,
                     ohttp: None,
                     rats_tls: None,
+                    quic: None,
                     ra_args: RaArgsUnchecked {
                         no_ra: true,
                         attest: None,

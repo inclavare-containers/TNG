@@ -15,6 +15,8 @@ pub enum Alpn {
     Http2,
     /// Serf gossip protocol for memberlist QUIC stream layer.
     Serf,
+    /// QUIC Datagram tunnel for UDP traffic encryption with RA.
+    RatsQuic,
 }
 
 impl Alpn {
@@ -23,6 +25,7 @@ impl Alpn {
             Alpn::RatsTls => b"rats-tls",
             Alpn::Http2 => b"h2",
             Alpn::Serf => b"serf",
+            Alpn::RatsQuic => b"rats-quic",
         }
     }
 }

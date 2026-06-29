@@ -15,12 +15,15 @@
   - [Mode: socks5 (Socks5 Proxy)](#mode-socks5-socks5-proxy)
   - [Mode: netfilter (Transparent Proxy)](#mode-netfilter-transparent-proxy)
   - [Mode: hook (LD_PRELOAD)](#mode-ingress-hook-ld-preload)
+  - [Mode: mapping_udp (UDP over QUIC)](#mode-mapping_udp-udp-over-quic-datagram-tunnel)
+    - [Per-Entry QUIC Configuration](#udp-over-quic-configuration)
 - [Egress (Tunnel Exit)](#egress-tunnel-exit)
   - [Common Fields](#common-fields)
   - [direct_forward Rules](#direct_forward-rules)
   - [Mode: mapping (Port Mapping)](#mode-mapping-port-mapping)
   - [Mode: netfilter (Port Hijacking)](#mode-netfilter-port-hijacking)
   - [Mode: hook (LD_PRELOAD)](#egress-hook-ld-preload)
+  - [Mode: mapping_udp (UDP over QUIC)](#mode-mapping_udp-udp-over-quic-datagram-tunnel)
 - [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration)
   - [Provider Selection](#provider-selection)
   - [Attester Configuration](#attester-configuration)
@@ -73,12 +76,13 @@ The `Ingress` object configures the tunnel's entry endpoints, controlling how tr
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `ohttp` | [OHttp](#ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
+| `quic` | [UdpQuicArgs](#udp-over-quic-configuration) | None | QUIC datagram settings for UDP tunneling |
 
 > [!WARNING]
 > `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same Ingress/Egress will result in an error.
@@ -504,6 +508,89 @@ Intercepts outgoing TCP connections from the child process via LD_PRELOAD and ro
 
 ---
 
+### Mode: mapping_udp (UDP over QUIC Datagram Tunnel)
+
+> **Requires:** QUIC datagram transport — UDP traffic is encapsulated in QUIC datagrams with RA-TLS authentication.
+
+Encapsulates raw UDP datagrams over a QUIC connection. The ingress side listens on a local UDP socket, receives datagrams from a client, and forwards them through a QUIC datagram tunnel to the egress side, which then delivers them to a backend UDP service.
+
+#### Ingress Side (`"mapping_udp"`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `in` | [Endpoint](#transport-layer-common-configuration) | Yes | Local UDP socket address to listen on for client datagrams |
+| `out` | [Endpoint](#transport-layer-common-configuration) | Yes | Egress QUIC listener address (where the tunnel connection is established) |
+| `idle_timeout_secs` | integer | `30` | Bidirectional idle timeout in seconds. If neither direction sees activity for this duration, the QUIC connection is closed. Works like a NAT UDP session timeout — bidirectional activity resets the timer |
+
+**Example:**
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 10001 },
+        "out": { "host": "127.0.0.1", "port": 8443 },
+        "idle_timeout_secs": 60
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+#### Egress Side (`"mapping_udp"`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `in` | [Endpoint](#transport-layer-common-configuration) | Yes | QUIC listener address to accept tunnel connections from ingress |
+| `out` | [Endpoint](#transport-layer-common-configuration) | Yes | Backend UDP service address to deliver datagrams to |
+| `idle_timeout_secs` | integer | `30` | Bidirectional idle timeout in seconds. Same semantics as the ingress side |
+
+**Example:**
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 8443 },
+        "out": { "host": "127.0.0.1", "port": 20001 }
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+#### Per-Entry QUIC Configuration (`quic`)
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_datagram_size` | integer | quinn default | Maximum QUIC datagram payload size in bytes. Controls the maximum UDP datagram size that can be tunneled |
+
+**Example:**
+
+```json
+{
+  "add_ingress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 10001 },
+        "out": { "host": "127.0.0.1", "port": 8443 }
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> The `mapping_udp` mode is designed for stateless UDP-over-QUIC tunneling with remote attestation. QUIC datagram payloads carry raw UDP data without additional metadata headers or framing beyond QUIC's own datagram encoding.
+
+---
+
 ## Egress (Tunnel Exit)
 
 The `Egress` object configures the tunnel's exit endpoints, controlling how traffic exits the tunnel.
@@ -514,13 +601,14 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` \| `hook` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-rules)] | No | Direct forwarding (without decryption) rules |
 | `ohttp` | [OHttp](#egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](#attester-configuration) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](#verifier-configuration) | None | Act as Verifier at this endpoint |
+| `quic` | [UdpQuicArgs](#udp-over-quic-configuration) | None | QUIC datagram settings for UDP tunneling |
 
 > Transport layer fields like `rats_tls.multiplex` share the same definition as Ingress. See [RatsTlsArgs](#transport-layer-common-configuration).
 
@@ -843,6 +931,35 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 
 > [!NOTE]
 > The `hook` mode is mutually exclusive with other egress modes. When using `tng exec`, only `hook` mode is allowed.
+
+---
+
+### Mode: mapping_udp (UDP over QUIC Datagram Tunnel)
+
+The egress side of `mapping_udp` accepts QUIC datagram connections from an ingress endpoint and forwards the encapsulated UDP datagrams to a backend UDP service. See the [ingress mapping_udp section](#mode-mapping_udp-udp-over-quic-datagram-tunnel) for the full feature description and the per-entry `quic` configuration.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `in` | [Endpoint](#transport-layer-common-configuration) | Yes | QUIC listener address to accept tunnel connections from ingress |
+| `out` | [Endpoint](#transport-layer-common-configuration) | Yes | Backend UDP service address to deliver datagrams to |
+| `idle_timeout_secs` | integer | `30` | Bidirectional idle timeout in seconds. If neither direction sees activity for this duration, the QUIC connection is closed |
+
+**Example:**
+
+```json
+{
+  "add_egress": [
+    {
+      "mapping_udp": {
+        "in": { "host": "0.0.0.0", "port": 8443 },
+        "out": { "host": "127.0.0.1", "port": 20001 },
+        "idle_timeout_secs": 60
+      },
+      "attest": { "no_ra": true }
+    }
+  ]
+}
+```
 
 ---
 
@@ -1822,8 +1939,10 @@ Logs are appended to existing files.
 |---|---|
 | ingress mapping | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
+| ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
+| egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 
 **Supported Exporters:**
 

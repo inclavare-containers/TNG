@@ -13,8 +13,11 @@ mod http_server;
 mod load_balancer;
 mod tcp_client;
 mod tcp_server;
+mod udp_client;
+mod udp_server;
 
 const TCP_PAYLOAD: &str = "Hello World TCP!";
+const UDP_PAYLOAD: &str = "Hello World UDP!";
 const HTTP_RESPONSE_BODY: &str = "Hello World HTTP!";
 
 pub enum AppType {
@@ -55,6 +58,10 @@ pub enum AppType {
         port: u16,
         http_proxy: Option<HttpProxy>,
     },
+    #[allow(dead_code)]
+    UdpServer { port: u16 },
+    #[allow(dead_code)]
+    UdpClient { host: &'static str, port: u16 },
 }
 
 #[async_trait]
@@ -62,6 +69,7 @@ impl Task for AppType {
     fn name(&self) -> String {
         match self {
             AppType::HttpServer { .. } | AppType::TcpServer { .. } => "app_server",
+            AppType::UdpServer { .. } | AppType::UdpClient { .. } => "app_udp",
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => "app_client",
@@ -75,9 +83,11 @@ impl Task for AppType {
     fn node_type(&self) -> NodeType {
         match self {
             AppType::HttpServer { .. } | AppType::TcpServer { .. } => NodeType::Server,
+            AppType::UdpServer { .. } => NodeType::Server,
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => NodeType::Client,
+            AppType::UdpClient { .. } => NodeType::Client,
             AppType::LoadBalancer { .. } => NodeType::Middleware,
             #[cfg(feature = "js-sdk")]
             AppType::BrowserClient { .. } => NodeType::Client,
@@ -137,6 +147,10 @@ impl Task for AppType {
                 port,
                 http_proxy,
             } => tcp_client::launch_tcp_client(token, host, *port, *http_proxy).await,
+            AppType::UdpServer { port } => udp_server::launch_udp_server(token, *port).await,
+            AppType::UdpClient { host, port } => {
+                udp_client::launch_udp_client(token, host, *port).await
+            }
             AppType::LoadBalancer {
                 listen_port,
                 upstream_servers,

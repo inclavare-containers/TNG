@@ -141,6 +141,10 @@ name = "mapping_port_range"
 path = "tests/http/mapping_port_range.rs"
 
 [[test]]
+name = "mapping_udp"
+path = "tests/mapping_udp.rs"
+
+[[test]]
 name = "mapping_multi_rule"
 path = "tests/http/mapping_multi_rule.rs"
 

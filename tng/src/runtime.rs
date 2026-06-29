@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span};
 
 pub struct TngRuntime {
-    services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)>,
+    services: Vec<(Arc<dyn RegistedService>, Span)>,
     state: Arc<TngState>,
     meter_provider: Arc<dyn MeterProvider + Send + Sync>,
     shutdown: Shutdown,
@@ -100,7 +100,7 @@ impl TngRuntime {
             .context("Failed to setup trace exporter")?;
 
         // Create all ingress and egress.
-        let mut services: Vec<(Box<dyn RegistedService + Send + Sync>, Span)> = vec![];
+        let mut services: Vec<(Arc<dyn RegistedService>, Span)> = vec![];
         let mut state = TngState::new();
 
         for (id, add_ingress) in tng_config.add_ingress.iter().enumerate() {
@@ -108,18 +108,18 @@ impl TngRuntime {
             let span = tracing::info_span!("ingress", id);
 
             let service = async {
-                let flow = match &add_ingress.ingress_mode {
+                Ok::<Arc<dyn RegistedService >, anyhow::Error>(match &add_ingress.ingress_mode {
                     IngressMode::Mapping(mapping_args) => {
-                        IngressFlow::new(
+                        Arc::new(IngressFlow::new(
                             MappingIngress::new(id, mapping_args).await?,
                             &add_ingress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?
+                        .await?) as Arc<_>
                     }
                     IngressMode::HttpProxy(http_proxy_args) => {
-                        IngressFlow::new(
+                        Arc::new(IngressFlow::new(
                             HttpProxyIngress::new(
                                 id,
                                 http_proxy_args,
@@ -130,7 +130,7 @@ impl TngRuntime {
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?
+                        .await?) as Arc<_>
                     }
                     IngressMode::Netfilter(netfilter_args) => {
                         #[cfg(not(target_os = "linux"))]
@@ -142,61 +142,74 @@ impl TngRuntime {
                         #[cfg(target_os = "linux")]
                         {
                             use crate::tunnel::ingress::netfilter::NetfilterIngress;
-                            IngressFlow::new(
+                            Arc::new(IngressFlow::new(
                                 NetfilterIngress::new(id, netfilter_args).await?,
                                 &add_ingress.common,
                                 &service_metrics_creator,
                                 runtime.clone(),
                             )
-                            .await?
+                            .await?) as Arc<_>
                         }
                     }
                     IngressMode::Socks5(socks5_args) => {
-                        IngressFlow::new(
+                        Arc::new(IngressFlow::new(
                             Socks5Ingress::new(id, socks5_args).await?,
                             &add_ingress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?
+                        .await?) as Arc<_>
                     }
                     IngressMode::Hook(hook_args) => {
-                        IngressFlow::new(
+                        Arc::new(IngressFlow::new(
                             HookIngress::new(id, hook_args).await?,
                             &add_ingress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?
+                        .await?) as Arc<_>
                     }
-                };
-                Ok::<IngressFlow, anyhow::Error>(flow)
+                    #[cfg(feature = "ingress-mapping-udp")]
+                    IngressMode::MappingUdp(mapping_udp_args) => {
+                        use crate::tunnel::ingress::datagram_flow::DatagramIngressFlow;
+                        use crate::tunnel::ingress::mapping_udp::MappingUdpIngress;
+
+                        let mut ingress = MappingUdpIngress::new(id, mapping_udp_args).await?;
+                        ingress.set_max_datagram_size(add_ingress.common.quic.as_ref().and_then(|q| q.max_datagram_size));
+
+                        Arc::new(
+                            DatagramIngressFlow::new(
+                                ingress,
+                                &add_ingress.common,
+                                &service_metrics_creator,
+                                runtime.clone(),
+                            )
+                            .await?,
+                        ) as Arc<_>
+                    }
+                })
             }.instrument(span.clone()).await?;
 
-            let flow = Arc::new(service);
             state.add_ingress(IngressStatusHandle {
-                flow: Arc::downgrade(&flow),
+                flow: Arc::downgrade(&service),
             });
-            services.push((
-                Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
-                span,
-            ));
+            services.push((service, span));
         }
 
         for (id, add_egress) in tng_config.add_egress.iter().enumerate() {
             let add_egress = add_egress.clone();
             let span = tracing::info_span!("egress", id);
 
-            let services_for_entry = async {
-                let flows: Vec<EgressFlow> = match &add_egress.egress_mode {
+            let service = async {
+                Ok::<Arc<dyn RegistedService >, anyhow::Error>(match &add_egress.egress_mode {
                     EgressMode::Mapping(mapping_args) => {
-                        vec![EgressFlow::new(
+                        Arc::new(EgressFlow::new(
                             MappingEgress::new(id, mapping_args).await?,
                             &add_egress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?]
+                        .await?) as Arc<_>
                     }
                     EgressMode::Netfilter(netfilter_args) => {
                         #[cfg(not(target_os = "linux"))]
@@ -208,40 +221,51 @@ impl TngRuntime {
                         #[cfg(target_os = "linux")]
                         {
                             use crate::tunnel::egress::netfilter::NetfilterEgress;
-                            vec![EgressFlow::new(
+                            Arc::new(EgressFlow::new(
                                 NetfilterEgress::new(id, netfilter_args).await?,
                                 &add_egress.common,
                                 &service_metrics_creator,
                                 runtime.clone(),
                             )
-                            .await?]
+                            .await?) as Arc<_>
                         }
                     }
                     EgressMode::Hook(hook_args) => {
                         use crate::tunnel::egress::hook::HookEgress;
 
-                        vec![EgressFlow::new(
+                        Arc::new(EgressFlow::new(
                             HookEgress::new(id, hook_args),
                             &add_egress.common,
                             &service_metrics_creator,
                             runtime.clone(),
                         )
-                        .await?]
+                        .await?) as Arc<_>
                     }
-                };
-                Ok::<Vec<EgressFlow>, anyhow::Error>(flows)
+                    #[cfg(feature = "egress-mapping-udp")]
+                    EgressMode::MappingUdp(mapping_udp_args) => {
+                        use crate::tunnel::egress::datagram_flow::DatagramEgressFlow;
+                        use crate::tunnel::egress::mapping_udp::MappingUdpEgress;
+
+                        let mut egress = MappingUdpEgress::new(id, mapping_udp_args).await?;
+                        egress.set_max_datagram_size(add_egress.common.quic.as_ref().and_then(|q| q.max_datagram_size));
+
+                        Arc::new(
+                            DatagramEgressFlow::new(
+                                egress,
+                                &add_egress.common,
+                                &service_metrics_creator,
+                                runtime.clone(),
+                            )
+                            .await?,
+                        ) as Arc<_>
+                    }
+                })
             }.instrument(span.clone()).await?;
 
-            for flow in services_for_entry {
-                let flow = Arc::new(flow);
-                state.add_egress(EgressStatusHandle {
-                    flow: Arc::downgrade(&flow),
-                });
-                services.push((
-                    Box::new(flow) as Box<dyn RegistedService + Send + Sync>,
-                    span.clone(),
-                ));
-            }
+            state.add_egress(EgressStatusHandle {
+                flow: Arc::downgrade(&service),
+            });
+            services.push((service, span));
         }
 
         let state = Arc::new(state);
@@ -252,7 +276,7 @@ impl TngRuntime {
                 .await
                 .context("Failed to init control interface")?;
             services.push((
-                Box::new(control_interface),
+                Arc::new(control_interface),
                 tracing::info_span!("control_interface"),
             ));
         }

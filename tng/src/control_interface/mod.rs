@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use crate::{
-    config::control_interface::ControlInterfaceArgs, service::RegistedService, state::TngState,
+    config::control_interface::ControlInterfaceArgs,
+    error::TngError,
+    service::RegistedService,
+    state::TngState,
+    status::{StatusProvider, StatusQueryResult},
     tunnel::utils::runtime::TokioRuntime,
 };
 use anyhow::{bail, Result};
@@ -75,6 +79,14 @@ impl RegistedService for ControlInterface {
         Ok(())
     }
 }
+
+#[async_trait]
+impl StatusProvider for ControlInterface {
+    async fn query_status(&self, _path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        Err(TngError::StatusPathNotFound)
+    }
+}
+
 pub struct ControlInterfaceCore {
     state: Arc<TngState>,
 }

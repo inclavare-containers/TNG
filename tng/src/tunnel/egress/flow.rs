@@ -117,13 +117,6 @@ impl RegistedService for EgressFlow {
     }
 }
 
-#[async_trait]
-impl RegistedService for Arc<EgressFlow> {
-    async fn serve(&self, ready: Sender<()>) -> Result<()> {
-        (**self).serve(ready).await
-    }
-}
-
 impl EgressFlow {
     #[auto_enum]
     async fn serve_in_async_task_no_throw_error(

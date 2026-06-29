@@ -163,16 +163,18 @@ default = [
 ]
 
 __egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid", "dep:pkcs8"]
-egress-all = ["egress-mapping", "egress-netfilter"]
+egress-all = ["egress-mapping", "egress-netfilter", "egress-mapping-udp"]
 egress-mapping = ["__egress-common"]
 egress-netfilter = ["__egress-common", "dep:which"]
+egress-mapping-udp = ["__egress-common"]
 
 __ingress-common = ["dep:async-tungstenite"]
-ingress-all = ["ingress-http-proxy", "ingress-mapping", "ingress-netfilter", "ingress-socks5"]
+ingress-all = ["ingress-http-proxy", "ingress-mapping", "ingress-netfilter", "ingress-socks5", "ingress-mapping-udp"]
 ingress-http-proxy = ["__ingress-common", "hyper/client"]
 ingress-mapping = ["__ingress-common"]
 ingress-netfilter = ["__ingress-common", "dep:which"]
 ingress-socks5 = ["__ingress-common", "dep:fast-socks5"]
+ingress-mapping-udp = ["__ingress-common"]
 
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 

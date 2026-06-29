@@ -2,14 +2,13 @@ use std::borrow::Cow;
 use std::sync::Weak;
 
 use crate::error::TngError;
+use crate::service::RegistedService;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::egress::flow::EgressFlow;
-use crate::tunnel::ingress::flow::IngressFlow;
 use async_trait::async_trait;
 
 /// Lightweight handle for querying an egress's status tree.
 pub struct EgressStatusHandle {
-    pub flow: Weak<EgressFlow>,
+    pub flow: Weak<dyn RegistedService>,
 }
 
 #[async_trait]
@@ -25,7 +24,7 @@ impl StatusProvider for EgressStatusHandle {
 
 /// Lightweight handle for querying an ingress's status tree.
 pub struct IngressStatusHandle {
-    pub flow: Weak<IngressFlow>,
+    pub flow: Weak<dyn RegistedService>,
 }
 
 #[async_trait]

@@ -129,13 +129,6 @@ impl RegistedService for IngressFlow {
     }
 }
 
-#[async_trait]
-impl RegistedService for Arc<IngressFlow> {
-    async fn serve(&self, ready: Sender<()>) -> Result<()> {
-        (**self).serve(ready).await
-    }
-}
-
 impl IngressFlow {
     async fn serve_in_async_task_no_throw_error(
         &self,
