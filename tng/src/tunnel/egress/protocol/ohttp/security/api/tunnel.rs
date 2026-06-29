@@ -135,10 +135,9 @@ impl OhttpServerApi {
             Some(pk_s) => {
                 // Use Auth mode: server verifies client identity via HPKE Auth
                 let client_pk = ohttp::PublicKey::from_x25519_bytes(&pk_s).map_err(|e| {
-                    TngError::ClientRequestKeyConfigFailed(anyhow!(
-                        "Failed to construct client public key: {}",
-                        e
-                    ))
+                    TngError::ClientRequestKeyConfigFailed(
+                        anyhow::Error::from(e).context("Failed to construct client public key"),
+                    )
                 })?;
                 header_decoded.into_server_request_with_client_pk(key_info.key_config, client_pk)
             }

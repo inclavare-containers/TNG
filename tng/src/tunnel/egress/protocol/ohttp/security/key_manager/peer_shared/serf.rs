@@ -383,15 +383,14 @@ impl PeerSharedKeyManager {
         }
 
         // Bootstrap: create initial active key
-        let initial_key = KeyInfo::generate(
-            0,
-            KeyStatus::Active,
-            SystemTime::now(),
-            rotation_interval,
-        )
-        .map_err(|e| {
-            TngError::KeyUpdateMessageDecodeError(anyhow!("Failed to generate initial key: {}", e))
-        })?;
+        let initial_key =
+            KeyInfo::generate(0, KeyStatus::Active, SystemTime::now(), rotation_interval).map_err(
+                |e| {
+                    TngError::KeyUpdateMessageDecodeError(
+                        anyhow::Error::from(e).context("Failed to generate initial key"),
+                    )
+                },
+            )?;
         let public_key = initial_key.key_config.public_key()?;
         tracing::info!(
             public_key_hex = %hex::encode(public_key.as_ref()),

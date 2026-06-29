@@ -107,8 +107,11 @@ fn init() {
                     tracing::debug!("init: egress mapping loaded with {} entries", entries);
                     tracing::trace!("init: egress mapping table: {:#?}", table);
                 }
-                Err(e) => {
-                    tracing::warn!("init: failed to parse TNG_HOOK_EGRESS_MAPPINGS JSON: {}", e);
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "init: failed to parse TNG_HOOK_EGRESS_MAPPINGS JSON"
+                    );
                 }
             }
         }
@@ -137,10 +140,10 @@ fn init() {
                     tracing::debug!("init: ingress mapping loaded with {} entries", entries);
                     tracing::trace!("init: ingress mapping table: {:#?}", table);
                 }
-                Err(e) => {
+                Err(error) => {
                     tracing::warn!(
-                        "init: failed to parse TNG_HOOK_INGRESS_MAPPINGS JSON: {}",
-                        e
+                        ?error,
+                        "init: failed to parse TNG_HOOK_INGRESS_MAPPINGS JSON"
                     );
                 }
             }

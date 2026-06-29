@@ -141,6 +141,16 @@ When a change breaks backward compatibility:
   .map_err(|e| anyhow::anyhow!("[source] {}", e))
   ```
 - When wrapping `io::Error` into `io::Error::other(anyhow::Error)`, convert with `anyhow::Error::from(e)` and use `.context()` for the label.
+- When logging errors with `tracing::error!`, `tracing::warn!`, etc., **use `?error` structured logging** — rename the error variable to `error` and use the `?` formatter, not `{}`:
+  ```rust
+  // Good — error is logged as structured data with Debug display
+  tracing::warn!(?error, "failed to parse config JSON");
+  tracing::error!(?error, "connection failed");
+
+  // Bad — error is formatted into the message string, losing error chain
+  tracing::warn!("failed to parse config JSON: {}", e);
+  tracing::error!("connection failed: {}", error);
+  ```
 
 ## Testing New Features
 
