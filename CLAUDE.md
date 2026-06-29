@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## Default Branch
+
+The default/main branch for this project is **`master`**, not `main`. When a branch is not specified (e.g., in git commands, PR targets, or CI references), assume `master`.
+
 ## Code Refactoring Rules
 
 When refactoring or modifying code:
