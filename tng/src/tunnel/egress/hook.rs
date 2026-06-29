@@ -105,6 +105,11 @@ impl EgressTrait for HookEgress {
                                 // local address (the actual IP the connection arrived on).
                                 // The hook only changes the port, not the IP, so we must
                                 // connect back to the same host on the real port.
+                                //
+                                // This is necessary: using local_addr() as the forwarding
+                                // target ensures we only reach the interface the listener
+                                // was bound to, avoiding accidentally exposing a
+                                // localhost-bound listener to the external network.
                                 let local = stream.local_addr().unwrap_or(info.local_addr);
                                 let upstream_host = if local.ip().is_unspecified() {
                                     "127.0.0.1".to_owned()
