@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{bail, Context as _, Result};
@@ -14,7 +14,73 @@ use crate::config::{
 use crate::tunnel::access_log::EgressAccessMode;
 use crate::tunnel::access_log::IngressAccessMode;
 
-/// Execute a command with LD_PRELOAD-based port interception.
+/// A centralized port allocator that ensures no two auto-allocated ports collide
+/// across all egress and ingress hook entries in exec mode.
+///
+/// portpicker::pick_unused_port() binds then drops the socket, so another call
+/// immediately after can get the same port (TOCTOU). By tracking all allocated
+/// ports in a single HashSet and checking before accept, we prevent collisions.
+struct PortAllocator {
+    used: HashSet<u16>,
+}
+
+impl PortAllocator {
+    fn new() -> Self {
+        Self {
+            used: HashSet::new(),
+        }
+    }
+
+    /// Pick a unique port that hasn't been allocated yet.
+    /// Tries portpicker first (up to 50 attempts), then asks the OS,
+    /// then falls back to sequential scan from 49152.
+    fn pick(&mut self) -> Option<u16> {
+        let mut attempts = 0;
+        while attempts < 50 {
+            if let Some(port) = portpicker::pick_unused_port() {
+                if self.used.insert(port) {
+                    return Some(port);
+                }
+                // Port already claimed, try again.
+            } else {
+                // portpicker exhausted, fall back to asking OS.
+                if let Some(port) = Self::ask_os_port() {
+                    if self.used.insert(port) {
+                        return Some(port);
+                    }
+                }
+            }
+            attempts += 1;
+        }
+        // Final fallback: sequential search from 49152.
+        (49152..=65535).find(|p| !self.used.contains(p))
+    }
+
+    /// Record a port as used (for explicit redirect_to_port / proxy_port).
+    /// Returns Err if the port was already claimed.
+    fn reserve(&mut self, port: u16) -> Result<()> {
+        if self.used.insert(port) {
+            Ok(())
+        } else {
+            bail!(
+                "Conflict: port {} is already claimed by another entry",
+                port
+            )
+        }
+    }
+
+    /// Ask the OS for an available TCP port (binds then drops).
+    fn ask_os_port() -> Option<u16> {
+        for _ in 0..10 {
+            let listener =
+                std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+            if let Ok(addr) = listener.local_addr() {
+                return Some(addr.port());
+            }
+        }
+        None
+    }
+}
 pub struct TngExec;
 
 impl TngExec {
@@ -29,13 +95,17 @@ impl TngExec {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
 
-        // 2. Build egress resolved entries
+        // 2. Build egress resolved entries, tracking used real ports to avoid
+        // portpicker TOCTOU collisions (pick_unused_port binds then drops, so
+        // another entry can pick the same port before conflict check runs).
         let mut all_egress_entries: Vec<EgressHookMappingEntry> = Vec::new();
         let mut next_auto_port: u16 = 49152;
+        let mut port_alloc = PortAllocator::new();
 
         for egress in &mut config.add_egress {
             if let EgressMode::Hook(args) = &mut egress.egress_mode {
-                let (entries, next_port) = Self::build_resolved_entries(args, next_auto_port)?;
+                let (entries, next_port) =
+                    Self::build_resolved_entries(args, next_auto_port, &mut port_alloc)?;
                 args.resolved_entries = entries;
                 next_auto_port = next_port;
                 all_egress_entries.extend(args.resolved_entries.clone());
@@ -54,7 +124,7 @@ impl TngExec {
         };
 
         // 3. Build ingress mapping table and serialize
-        let ingress_table = Self::build_ingress_mapping_table(&mut config)?;
+        let ingress_table = Self::build_ingress_mapping_table(&mut config, &mut port_alloc)?;
         let has_ingress_hooks = !ingress_table.proxies.is_empty();
         let ingress_json = serde_json::to_string(&ingress_table)
             .context("Failed to serialize ingress mapping table")?;
@@ -199,31 +269,41 @@ impl TngExec {
     /// Build resolved entries for a single EgressHookArgs.
     /// Expands port ranges, auto-allocates real ports for entries without redirect_to_port,
     /// and fills host defaults (unspecified → 0.0.0.0).
-    /// Returns (resolved_entries, next_auto_port).
+    ///
+    /// `port_alloc` tracks all real ports already claimed across all egress and ingress
+    /// entries. Each newly allocated port is registered immediately to prevent portpicker
+    /// TOCTOU races. Returns (resolved_entries, next_auto_port).
     fn build_resolved_entries(
         args: &EgressHookArgs,
         start_auto_port: u16,
+        port_alloc: &mut PortAllocator,
     ) -> Result<(Vec<EgressHookMappingEntry>, u16)> {
         let mut entries = Vec::new();
         let mut next_auto_port = start_auto_port;
 
         for entry in &args.capture_listen {
-            let (new_entries, next_port) = entry
+            let (mut new_entries, next_port) = entry
                 .expand_mappings(next_auto_port)
                 .context("Failed to expand intercept entry")?;
 
-            // For entries with explicit redirect_to_port, keep the ports as-is.
-            // For entries without redirect (auto-allocated), re-pick via portpicker.
+            // For entries with explicit redirect_to_port, verify no collision and reserve.
+            // For entries without redirect (auto-allocated), pick via the shared allocator
+            // until we find an unclaimed port.
             if entry.redirect_to_port.is_some() {
-                entries.extend(new_entries);
+                for e in &new_entries {
+                    port_alloc.reserve(e.real_port)?;
+                }
+                entries.append(&mut new_entries);
             } else {
-                for mut e in new_entries {
-                    if let Some(picked) = portpicker::pick_unused_port() {
-                        e.real_port = picked;
-                    } else {
-                        bail!("Failed to pick unused port for hook mapping");
-                    }
-                    entries.push(e);
+                for e in new_entries {
+                    let real_port = port_alloc
+                        .pick()
+                        .context("Failed to pick unused port for hook mapping")?;
+                    entries.push(EgressHookMappingEntry {
+                        host: e.host,
+                        origin_port: e.origin_port,
+                        real_port,
+                    });
                 }
             }
 
@@ -297,12 +377,18 @@ impl TngExec {
     }
 
     /// Build the ingress hook mapping table from all hook-mode ingress entries.
-    fn build_ingress_mapping_table(config: &mut TngConfig) -> Result<IngressHookMappingTable> {
+    ///
+    /// Uses the shared `port_alloc` to allocate proxy ports, preventing collisions
+    /// with egress real ports and other ingress proxy ports.
+    fn build_ingress_mapping_table(
+        config: &mut TngConfig,
+        port_alloc: &mut PortAllocator,
+    ) -> Result<IngressHookMappingTable> {
         let mut mapping_table = IngressHookMappingTable::default();
 
         for (i, ingress) in config.add_ingress.iter_mut().enumerate() {
             if let IngressHookMode::Hook(args) = &mut ingress.ingress_mode {
-                let proxy = Self::build_ingress_proxy(i, args)?;
+                let proxy = Self::build_ingress_proxy(i, args, port_alloc)?;
                 mapping_table.proxies.push(proxy);
             }
         }
@@ -319,16 +405,24 @@ impl TngExec {
 
     /// Build a single IngressHookProxy from an IngressHookArgs.
     ///
-    /// If `args.proxy_port` is not set, a port is auto-allocated and written
-    /// back to `args.proxy_port` so the runtime uses the same port.
+    /// If `args.proxy_port` is not set, a port is auto-allocated via the shared
+    /// allocator and written back to `args.proxy_port` so the runtime uses the
+    /// same port.
     fn build_ingress_proxy(
         _entry_index: usize,
         args: &mut IngressHookArgs,
+        port_alloc: &mut PortAllocator,
     ) -> Result<IngressHookProxy> {
         let proxy_port = match args.proxy_port {
-            Some(port) => port,
+            Some(port) => {
+                port_alloc
+                    .reserve(port)
+                    .with_context(|| format!("Failed to use ingress proxy port {port}"))?;
+                port
+            }
             None => {
-                let port = portpicker::pick_unused_port()
+                let port = port_alloc
+                    .pick()
                     .context("Failed to pick unused port for ingress hook proxy")?;
                 args.proxy_port = Some(port);
                 port
@@ -458,7 +552,9 @@ mod tests {
         } else {
             panic!("expected hook mode")
         };
-        let (entries, next_port) = TngExec::build_resolved_entries(&args, 49152).unwrap();
+        let mut alloc = PortAllocator::new();
+        let (entries, next_port) =
+            TngExec::build_resolved_entries(&args, 49152, &mut alloc).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].origin_port, 8080);
         assert_eq!(entries[1].origin_port, 8081);
@@ -467,6 +563,8 @@ mod tests {
         assert!(entries[1].real_port > 0);
         assert_ne!(entries[0].real_port, entries[1].real_port);
         assert_eq!(next_port, 49154); // next_auto_port incremented by expand_mappings
+                                      // Both ports tracked in allocator
+        assert_eq!(alloc.used.len(), 2);
     }
 
     #[test]
@@ -480,10 +578,13 @@ mod tests {
         } else {
             panic!("expected hook mode")
         };
-        let (entries, next_port) = TngExec::build_resolved_entries(&args, 49152).unwrap();
+        let mut alloc = PortAllocator::new();
+        let (entries, next_port) =
+            TngExec::build_resolved_entries(&args, 49152, &mut alloc).unwrap();
         assert_eq!(entries[0].real_port, 48080);
         assert_eq!(entries[1].real_port, 48081);
         assert_eq!(next_port, 49152); // auto port unchanged
+        assert_eq!(alloc.used.len(), 2);
     }
 
     #[test]
@@ -498,7 +599,8 @@ mod tests {
         } else {
             panic!("expected hook mode")
         };
-        let (entries, _) = TngExec::build_resolved_entries(&args, 49152).unwrap();
+        let mut alloc = PortAllocator::new();
+        let (entries, _) = TngExec::build_resolved_entries(&args, 49152, &mut alloc).unwrap();
         let table = TngExec::build_mapping_table_for_so(&entries);
         // First entry wins
         assert_eq!(table.entries.len(), 1);
@@ -559,6 +661,53 @@ mod tests {
     }
 
     #[test]
+    fn test_build_resolved_entries_explicit_redirect_collision() {
+        // Two entries with the same explicit redirect_to_port should error
+        // during build_resolved_entries (no longer waits for check_conflicts)
+        let config = make_hook_config(json!([
+            { "port": 8080, "redirect_to_port": 48080 },
+            { "port": 8081, "redirect_to_port": 48080 }
+        ]));
+        let args = if let EgressMode::Hook(args) = &config.add_egress[0].egress_mode {
+            args.clone()
+        } else {
+            panic!("expected hook mode")
+        };
+        let mut alloc = PortAllocator::new();
+        let result = TngExec::build_resolved_entries(&args, 49152, &mut alloc);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already claimed"));
+    }
+
+    #[test]
+    fn test_build_resolved_entries_reuses_used_set() {
+        // Simulate multiple egress entries sharing a PortAllocator.
+        // Second entry's auto-allocated ports should not collide with first's.
+        let config1 = make_hook_config(json!([{ "port": 8080 }]));
+        let args1 = if let EgressMode::Hook(args) = &config1.add_egress[0].egress_mode {
+            args.clone()
+        } else {
+            panic!("expected hook mode")
+        };
+        let mut alloc = PortAllocator::new();
+        let (entries1, _) = TngExec::build_resolved_entries(&args1, 49152, &mut alloc).unwrap();
+        assert_eq!(entries1.len(), 1);
+
+        let config2 = make_hook_config(json!([{ "port": 9090 }]));
+        let args2 = if let EgressMode::Hook(args) = &config2.add_egress[0].egress_mode {
+            args.clone()
+        } else {
+            panic!("expected hook mode")
+        };
+        let (entries2, _) = TngExec::build_resolved_entries(&args2, 49152, &mut alloc).unwrap();
+        assert_eq!(entries2.len(), 1);
+
+        // The second entry's real port must differ from the first's
+        assert_ne!(entries1[0].real_port, entries2[0].real_port);
+        assert_eq!(alloc.used.len(), 2);
+    }
+
+    #[test]
     fn test_validate_ingress_hook_only() {
         // Config with only ingress hook mode (no egress) should pass validation
         let config: TngConfig = serde_json::from_value(json!({
@@ -606,7 +755,8 @@ mod tests {
             ]
         }))
         .unwrap();
-        let proxy = TngExec::build_ingress_proxy(0, &mut args).unwrap();
+        let mut alloc = PortAllocator::new();
+        let proxy = TngExec::build_ingress_proxy(0, &mut args, &mut alloc).unwrap();
         assert!(proxy.proxy_port > 0);
         assert_eq!(proxy.capture_rules.len(), 2);
         assert_eq!(proxy.capture_rules[0].host_cidr, "10.0.0.0/24");
@@ -614,6 +764,7 @@ mod tests {
         assert_eq!(proxy.capture_rules[1].port, 443);
         // Verify the port was written back to args
         assert_eq!(args.proxy_port, Some(proxy.proxy_port));
+        assert_eq!(alloc.used.len(), 1);
     }
 
     #[test]
@@ -623,8 +774,58 @@ mod tests {
             "proxy_port": 49001
         }))
         .unwrap();
-        let proxy = TngExec::build_ingress_proxy(0, &mut args).unwrap();
+        let mut alloc = PortAllocator::new();
+        let proxy = TngExec::build_ingress_proxy(0, &mut args, &mut alloc).unwrap();
         assert_eq!(proxy.proxy_port, 49001);
         assert_eq!(proxy.capture_rules.len(), 1);
+    }
+
+    #[test]
+    fn test_egress_ingress_no_collision_shared_allocator() {
+        // Egress auto-allocates a port, then ingress auto-allocates.
+        // They must not collide because they share the same PortAllocator.
+        let config = make_hook_config(json!([{ "port": 8080 }]));
+        let args = if let EgressMode::Hook(args) = &config.add_egress[0].egress_mode {
+            args.clone()
+        } else {
+            panic!("expected hook mode")
+        };
+        let mut alloc = PortAllocator::new();
+        let (entries, _) = TngExec::build_resolved_entries(&args, 49152, &mut alloc).unwrap();
+        let egress_port = entries[0].real_port;
+
+        let mut ingress_args: IngressHookArgs = serde_json::from_value(json!({
+            "capture_dst": [{ "port": 5600 }]
+        }))
+        .unwrap();
+        let proxy = TngExec::build_ingress_proxy(0, &mut ingress_args, &mut alloc).unwrap();
+
+        assert_ne!(proxy.proxy_port, egress_port);
+        assert_eq!(alloc.used.len(), 2);
+    }
+
+    #[test]
+    fn test_explicit_ingress_proxy_port_collision() {
+        // If the user explicitly sets proxy_port to a value already claimed
+        // by egress, the collision should be detected at build time.
+        let config = make_hook_config(json!([{ "port": 8080 }]));
+        let args = if let EgressMode::Hook(args) = &config.add_egress[0].egress_mode {
+            args.clone()
+        } else {
+            panic!("expected hook mode")
+        };
+        let mut alloc = PortAllocator::new();
+        let (entries, _) = TngExec::build_resolved_entries(&args, 49152, &mut alloc).unwrap();
+        let claimed_port = entries[0].real_port;
+
+        let mut ingress_args: IngressHookArgs = serde_json::from_value(json!({
+            "capture_dst": [{ "port": 5600 }],
+            "proxy_port": claimed_port
+        }))
+        .unwrap();
+        let result = TngExec::build_ingress_proxy(0, &mut ingress_args, &mut alloc);
+        assert!(result.is_err(), "expected error, got: {:?}", result.ok());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("already claimed"));
     }
 }
