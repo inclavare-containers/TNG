@@ -151,6 +151,7 @@ unit_output=$(run_tests "${unit_args[@]}" 2>&1) || unit_failed=true || true
 echo "$unit_output"
 
 if [[ "${unit_failed:-false}" == "true" ]]; then
+    failed=1
     summary_lines+=("$(format_result "  unit test" "FAILED")")
     # Extract failed test names from cargo test output
     failed_unit_tests=$(echo "$unit_output" | grep -E '^test .* FAILED$' | sed 's/ --- FAILED$//' | sed 's/^test //')
