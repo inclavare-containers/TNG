@@ -234,3 +234,8 @@ name = "go_sdk_multi_request"
 path = "tests/go_sdk_http/go_sdk_multi_request.rs"
 required-features = ["go-sdk"]
 
+[[test]]
+name = "go_sdk_rats_tls"
+path = "tests/go_sdk_http/go_sdk_rats_tls.rs"
+required-features = ["go-sdk"]
+

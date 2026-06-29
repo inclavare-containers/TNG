@@ -173,6 +173,7 @@ jobs:
             --test go_sdk_streaming \
             --test go_sdk_attestation_info \
             --test go_sdk_multi_request \
+            --test go_sdk_rats_tls \
             -- --test-threads=1
         env:
           TNG_BINARY: "${{ github.workspace }}/target/release/tng"

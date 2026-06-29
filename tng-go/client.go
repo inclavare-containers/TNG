@@ -76,10 +76,11 @@ func NewRoundTripper(cfg *Config, opts ...RoundTripperOption) (*TngRoundTripper,
 
 	// Build subprocess config
 	ingressCfg := &tngproc.IngressConfig{
-		OHttp:  cfg.OHttp,
-		NoRA:   cfg.NoRA,
-		Verify: cfg.Verify,
-		Attest: cfg.Attest,
+		OHttp:   cfg.OHttp,
+		RatsTls: cfg.RatsTls,
+		NoRA:    cfg.NoRA,
+		Verify:  cfg.Verify,
+		Attest:  cfg.Attest,
 	}
 
 	proc, err := tngproc.New(ingressCfg)

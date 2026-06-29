@@ -95,6 +95,17 @@ cfg := &tng.Config{
 }
 ```
 
+### rats-TLS encryption
+
+```go
+cfg := &tng.Config{
+    RatsTls: map[string]any{}, // uses default rats-TLS settings
+    NoRA:    true,
+}
+```
+
+> **Note:** `OHttp` and `RatsTls` are mutually exclusive. Set only one.
+
 ### Bidirectional Attestation
 
 ```go

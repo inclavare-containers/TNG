@@ -37,9 +37,14 @@ import "encoding/json"
 //	}
 type Config struct {
 	// OHttp customizes OHTTP encryption settings (optional).
-	// Mutually exclusive with RatsTls (not exposed on Config directly,
-	// set via IngressConfig if needed).
+	// Mutually exclusive with RatsTls.
 	OHttp map[string]any `json:"ohttp,omitempty"`
+	// RatsTls customizes rats-TLS encryption settings (optional).
+	// Mutually exclusive with OHttp.
+	// When set, the TNG subprocess uses rats-TLS instead of OHTTP for
+	// transport encryption. Requires the server egress to also be
+	// configured with rats_tls.
+	RatsTls map[string]any `json:"rats_tls,omitempty"`
 	// Attest configures client-side attestation (optional).
 	// Used when the client needs to provide attestation to the server.
 	Attest map[string]any `json:"attest,omitempty"`
