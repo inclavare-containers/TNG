@@ -267,7 +267,7 @@ mod tests {
         let routed = accepted.into_routed("10.0.0.2:443", false);
         assert_eq!(
             format!("{routed}"),
-            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> upstream_remote=10.0.0.2:443 — not connected tunnel=false"
+            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> (..) -> upstream_remote=10.0.0.2:443 — not connected tunnel=false"
         );
         std::mem::forget(routed);
     }
@@ -299,7 +299,7 @@ mod tests {
         let established = routed.into_established(Some("10.0.0.1:54322".parse().unwrap()), true);
         assert_eq!(
             format!("{established}"),
-            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(mapping) -> upstream_remote=10.0.0.2:443 -> upstream_local=10.0.0.1:54322 — tunnel=true attested=true"
+            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(mapping) -> upstream_local=10.0.0.1:54322 -> upstream_remote=10.0.0.2:443 — tunnel=true attested=true"
         );
         std::mem::forget(established);
     }
