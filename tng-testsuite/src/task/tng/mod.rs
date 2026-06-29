@@ -14,7 +14,7 @@ mod source_code;
 #[cfg(any(feature = "on-bin", feature = "on-podman"))]
 mod external;
 
-mod binary_locator;
+pub mod binary_locator;
 mod exec;
 pub use exec::TngExecTask;
 mod readyz;
