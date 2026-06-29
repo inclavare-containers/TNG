@@ -164,6 +164,19 @@ jobs:
         env:
           TNG_BINARY: "${{ github.workspace }}/target/release/tng"
 
+      - name: Run Go SDK tng-testsuite tests
+        run: |
+          cargo test --package tng-testsuite \
+            --features on-source-code,go-sdk \
+            --test go_sdk_roundtrip \
+            --test go_sdk_post \
+            --test go_sdk_streaming \
+            --test go_sdk_attestation_info \
+            --test go_sdk_multi_request \
+            -- --test-threads=1
+        env:
+          TNG_BINARY: "${{ github.workspace }}/target/release/tng"
+
       - name: Print background service logs
         if: always()
         run: |
