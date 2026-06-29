@@ -210,11 +210,12 @@ impl EgressFlow {
                             )
                             .await
                             .context("Failed to connect to upstream")?;
-                            let egress_local = upstream.local_addr().ok();
+                            let egress_local =
+                                upstream.local_addr().context("Failed to get local addr")?;
                             let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
 
                             // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
-                            access_routed.into_established(egress_local, attested);
+                            access_routed.into_established(Some(egress_local), attested);
 
                             let downstream = metrics.new_wrapped_stream(downstream);
 

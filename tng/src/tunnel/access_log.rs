@@ -191,7 +191,7 @@ impl Display for AccessRouted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "downstream_remote={} -> downstream_local={}({}) -> upstream_remote={} — not connected tunnel={}",
+            "downstream_remote={} -> downstream_local={}({}) -> (..) -> upstream_remote={} — not connected tunnel={}",
             self.downstream_remote, self.downstream_local, self.mode, self.upstream_remote, self.tunnel
         )
     }
@@ -226,12 +226,13 @@ impl Display for AccessEstablished {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "downstream_remote={} -> downstream_local={}({}) -> upstream_remote={}",
-            self.downstream_remote, self.downstream_local, self.mode, self.upstream_remote
+            "downstream_remote={} -> downstream_local={}({})",
+            self.downstream_remote, self.downstream_local, self.mode
         )?;
         if let Some(local) = self.upstream_local {
             write!(f, " -> upstream_local={}", local)?;
         }
+        write!(f, " -> upstream_remote={}", self.upstream_remote)?;
         write!(f, " — tunnel={}", self.tunnel)?;
         // Only print attested if tunnel is true (meaningful only with tunnel)
         // Actually per spec, always print attested in established state

@@ -57,14 +57,14 @@ impl StreamManager for UnprotectedStreamManager {
         .with_context(|| {
             format!("Failed to establish TCP connection with upstream '{endpoint}'")
         })?;
-        let upstream_local = upstream.local_addr().ok();
+        let upstream_local = upstream.local_addr().context("Failed to get local addr")?;
         let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 
         Ok((
             Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })
                 as Pin<Box<_>>,
             None,
-            upstream_local,
+            Some(upstream_local),
         ))
     }
 }
