@@ -99,26 +99,6 @@ impl AccessAccepted {
         }
     }
 
-    /// Returns the downstream remote address for recreating AccessAccepted
-    /// in egress flow's inner loop.
-    pub fn downstream_remote_addr(&self) -> SocketAddr {
-        self.downstream_remote
-    }
-
-    /// Returns the downstream local address for recreating AccessAccepted
-    /// in egress flow's inner loop.
-    pub fn downstream_local_addr(&self) -> SocketAddr {
-        self.downstream_local
-    }
-
-    /// Returns the egress mode, or None if this is an ingress AccessAccepted.
-    pub fn egress_mode(&self) -> Option<EgressAccessMode> {
-        match self.mode {
-            AccessMode::Egress(m) => Some(m),
-            AccessMode::Ingress(_) => None,
-        }
-    }
-
     /// Transition to AccessRouted. Consumes self.
     pub fn into_routed(mut self, upstream_remote: impl Display, tunnel: bool) -> AccessRouted {
         self.need_print = false;
@@ -128,6 +108,16 @@ impl AccessAccepted {
             mode: self.mode,
             upstream_remote: upstream_remote.to_string(),
             tunnel,
+            need_print: true,
+        }
+    }
+
+    pub fn clone_for_multiplexing(&mut self) -> Self {
+        self.need_print = false;
+        Self {
+            downstream_remote: self.downstream_remote,
+            downstream_local: self.downstream_local,
+            mode: self.mode,
             need_print: true,
         }
     }

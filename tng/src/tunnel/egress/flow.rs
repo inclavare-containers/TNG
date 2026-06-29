@@ -136,17 +136,10 @@ impl EgressFlow {
             dst,
             listener_addr: _,
             egress_mode: _,
-            access_accepted,
+            // Egress processes multiple upstream connections per accepted downstream.
+            // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
+            mut access_accepted,
         } = accepted_stream;
-
-        // Egress processes multiple upstream connections per accepted downstream.
-        // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
-        let access_src = access_accepted.downstream_remote_addr();
-        let access_local = access_accepted.downstream_local_addr();
-        let access_egress_mode = match access_accepted.egress_mode() {
-            Some(mode) => mode,
-            None => panic!("egress flow: AccessAccepted must have egress mode"),
-        };
 
         let trusted_stream_manager = self.trusted_stream_manager.clone();
         let metrics = self.metrics.clone();
@@ -181,6 +174,7 @@ impl EgressFlow {
                 // Spawn a task to handle the connection
                 runtime_cloned.spawn_supervised_task_current_span({
                     let dst = dst.clone();
+                    let access_accepted = access_accepted.clone_for_multiplexing();
 
                     async move {
                         let fut = async {
@@ -191,11 +185,6 @@ impl EgressFlow {
                             let downstream = next_stream.into_stream();
 
                             // Transition to AccessRouted: dst and from_trusted_tunnel are known
-                            let access_accepted = AccessAccepted::new_egress(
-                                access_src,
-                                access_local,
-                                access_egress_mode,
-                            );
                             let access_routed =
                                 access_accepted.into_routed(&dst, from_trusted_tunnel);
 
