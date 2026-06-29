@@ -104,7 +104,7 @@ quinn = {version = "0.11", default-features = false, features = ["aws-lc-rs", "r
 ring = "0.17.8"
 rsa = {version = "0.9.7", features = ["sha2"]}
 rstest = "0.25.0"
-rtnetlink = "0.17.0"
+rtnetlink = "0.21.0"
 rustls = {version = "0.23.27", default-features = false, features = ["logging", "std", "tls12"]}
 rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.10.1"
