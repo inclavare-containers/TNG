@@ -101,7 +101,6 @@ impl rustls::client::danger::ServerCertVerifier for BlockingServerCertVerifier {
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         let _: AttestationResult = self.1.verify_cert_blocking(end_entity).map_err(|error| {
-            tracing::error!(?error, "Failed to verify server certificate");
             rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
                 Arc::from(error.into_boxed_dyn_error()),
             )))
