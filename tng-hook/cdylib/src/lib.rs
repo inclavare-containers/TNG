@@ -356,12 +356,10 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         proxy_port
     );
 
-    // Connect to the internal HTTP proxy instead
-    let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port);
-    let proxy_sockaddr = make_sockaddr_v4(&proxy_addr);
-
-    // Save socket flags before the first connect attempt so we can restore
-    // O_NONBLOCK after the handshake (for non-blocking sockets like UCX).
+    // Save socket flags and force the socket to blocking mode so that
+    // real_connect waits for the TCP handshake to complete.  This avoids
+    // EINPROGRESS handling entirely — the same approach used by
+    // proxychains-ng (src/libproxychains.c:752-763).
     let saved_flags = unsafe { libc::fcntl(sockfd, libc::F_GETFL, 0) };
     if saved_flags < 0 {
         tracing::error!(
@@ -369,8 +367,7 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
             proxy_port,
             std::io::Error::last_os_error()
         );
-        let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port);
-        let proxy_sockaddr = make_sockaddr_v4(&proxy_addr);
+        let proxy_sockaddr = make_sockaddr_v4(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port));
         return unsafe {
             real_connect(
                 sockfd,
@@ -380,17 +377,20 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         };
     }
 
-    // Restore O_NONBLOCK on every exit path if we had to clear it for the
-    // blocking handshake.  The `clearing_nb` flag is set to true only when
-    // EINPROGRESS is observed and O_NONBLOCK is cleared.
-    let clearing_nb = std::cell::Cell::new(false);
+    unsafe {
+        libc::fcntl(sockfd, libc::F_SETFL, saved_flags & !libc::O_NONBLOCK);
+    }
+
+    // Restore O_NONBLOCK on every exit path so the caller's socket state
+    // is preserved after the blocking handshake completes.
     scopeguard::defer! {
-        if clearing_nb.get() {
-            unsafe {
-                libc::fcntl(sockfd, libc::F_SETFL, saved_flags);
-            }
+        unsafe {
+            libc::fcntl(sockfd, libc::F_SETFL, saved_flags);
         }
     }
+
+    // Connect to the internal HTTP proxy instead (now blocking)
+    let proxy_sockaddr = make_sockaddr_v4(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port));
 
     let ret = unsafe {
         real_connect(
@@ -401,49 +401,15 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
     };
     if ret != 0 {
         let errno = unsafe { *libc::__errno_location() };
-        if errno == libc::EINPROGRESS {
-            // The application uses non-blocking sockets (e.g. UCX).
-            // EINPROGRESS from a non-blocking connect is not a failure —
-            // it means the kernel hasn't finished the TCP handshake yet.
-            // However, we need the connect to complete synchronously so we
-            // can perform the HTTP CONNECT handshake before returning to the
-            // caller.  Temporarily clear O_NONBLOCK, retry the connect, then
-            // restore O_NONBLOCK after the handshake finishes.
-            unsafe {
-                libc::fcntl(sockfd, libc::F_SETFL, saved_flags & !libc::O_NONBLOCK);
-            }
-            clearing_nb.set(true);
-
-            let ret2 = unsafe {
-                real_connect(
-                    sockfd,
-                    &proxy_sockaddr as *const _ as *const sockaddr,
-                    std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
-                )
-            };
-            if ret2 != 0 {
-                let errno2 = unsafe { *libc::__errno_location() };
-                tracing::error!(
-                    "connect hijacked: failed to connect to proxy 127.0.0.1:{} (non-blocking -> blocking): {}",
-                    proxy_port,
-                    std::io::Error::from_raw_os_error(errno2)
-                );
-                return ret2;
-            }
-
-            // Proxy connection succeeded — proceed to CONNECT handshake below.
-            tracing::debug!("connect: connected to proxy 127.0.0.1:{} (was non-blocking, now blocking for handshake)", proxy_port);
-        } else {
-            tracing::error!(
-                "connect hijacked: failed to connect to proxy 127.0.0.1:{}: {}",
-                proxy_port,
-                std::io::Error::from_raw_os_error(errno)
-            );
-            return ret;
-        }
-    } else {
-        tracing::debug!("connect: connected to proxy 127.0.0.1:{}", proxy_port);
+        tracing::error!(
+            "connect hijacked: failed to connect to proxy 127.0.0.1:{}: {}",
+            proxy_port,
+            std::io::Error::from_raw_os_error(errno)
+        );
+        return ret;
     }
+
+    tracing::debug!("connect: connected to proxy 127.0.0.1:{}", proxy_port);
 
     // Set a receive timeout for the HTTP CONNECT handshake so that
     // a proxy that accepts the TCP connection but never responds
