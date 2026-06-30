@@ -79,7 +79,10 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
         let (upstream, local_addr, attestation_result, _session_id) =
             self.connect(endpoint.clone()).await?;
         Ok((
-            Box::pin(async { utils::forward::forward_stream(upstream, downstream).await }),
+            Box::pin(async {
+                let _: () = utils::forward::forward_stream(upstream, downstream).await;
+                Ok(())
+            }),
             attestation_result,
             local_addr,
         ))

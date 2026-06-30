@@ -282,7 +282,7 @@ async fn forward_to_upstream(
 
     let downstream = metrics.new_wrapped_stream(downstream);
 
-    utils::forward::forward_stream(upstream, downstream).await?;
+    utils::forward::forward_stream(upstream, downstream).await;
 
     active_cx.mark_finished_successfully();
     Ok(())

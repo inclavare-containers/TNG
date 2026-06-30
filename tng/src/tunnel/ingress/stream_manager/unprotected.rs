@@ -61,8 +61,10 @@ impl StreamManager for UnprotectedStreamManager {
         let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 
         Ok((
-            Box::pin(async { utils::forward::forward_stream(upstream, downstream).await })
-                as Pin<Box<_>>,
+            Box::pin(async {
+                let _: () = utils::forward::forward_stream(upstream, downstream).await;
+                Ok(())
+            }) as Pin<Box<_>>,
             None,
             Some(upstream_local),
         ))

@@ -27,7 +27,12 @@ pub struct TngExecTask {
 }
 
 impl TngExecTask {
-    pub fn new(config_json: String, command: Vec<String>, stop_after_exit: bool, node_type: NodeType) -> Self {
+    pub fn new(
+        config_json: String,
+        command: Vec<String>,
+        stop_after_exit: bool,
+        node_type: NodeType,
+    ) -> Self {
         Self {
             config_json,
             command,
