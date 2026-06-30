@@ -103,6 +103,7 @@ tracing = {workspace = true}
 tracing-futures = {workspace = true, features = ["futures-03"]}
 tracing-opentelemetry = {workspace = true, optional = true}
 tracing-subscriber = {workspace = true}
+tracing-appender = {workspace = true}
 url = {workspace = true}
 uuid = {workspace = true, features = ["v4"], optional = true}
 which = {workspace = true, optional = true}
