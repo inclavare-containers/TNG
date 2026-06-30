@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::os::raw::c_void;
 use std::sync::OnceLock;
 
-use libc::{c_int, sockaddr, socklen_t};
+use libc::{c_int, size_t, sockaddr, socklen_t, ssize_t};
 use tng_hook_types::{
     EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup, IngressHookMappingTable,
 };
@@ -21,6 +21,19 @@ static REAL_GETSOCKNAME: OnceLock<GetsocknameFn> = OnceLock::new();
 type ConnectFn = unsafe extern "C" fn(c_int, *const sockaddr, socklen_t) -> c_int;
 
 static REAL_CONNECT: OnceLock<ConnectFn> = OnceLock::new();
+
+/// Resolved real `sendto` function pointer.
+type SendtoFn = unsafe extern "C" fn(
+    c_int,
+    *const c_void,
+    size_t,
+    c_int,
+    *const sockaddr,
+    socklen_t,
+) -> ssize_t;
+
+static REAL_SENDTO: OnceLock<SendtoFn> = OnceLock::new();
+
 static INGRESS_LOOKUP: OnceLock<IngressHookLookup> = OnceLock::new();
 
 /// Global mapping lookup table, initialized once from env var at library load.
@@ -88,6 +101,11 @@ fn init() {
             resolve_libc_symbol::<ConnectFn>("connect").expect("Failed to resolve libc connect");
         tracing::debug!("init: resolved libc connect");
         let _ = REAL_CONNECT.set(real_connect);
+
+        let real_sendto =
+            resolve_libc_symbol::<SendtoFn>("sendto").expect("Failed to resolve libc sendto");
+        tracing::debug!("init: resolved libc sendto");
+        let _ = REAL_SENDTO.set(real_sendto);
     }
 
     // Build egress lookup from env var
@@ -555,6 +573,55 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
             return -1;
         }
     }
+}
+
+/// Intercepted `sendto()` — handle TCP Fast Open (MSG_FASTOPEN) by routing
+/// through the `connect()` hook before delegating to the real `sendto`.
+///
+/// Applications using TCP Fast Open can call `sendto()` with `MSG_FASTOPEN`
+/// without calling `connect()` first, which would bypass the proxy hijacking.
+/// This hook ensures TFO connections go through the same proxy logic as
+/// regular `connect()` calls.
+///
+/// Reference: proxychains-ng, src/libproxychains.c:894-901.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[no_mangle]
+pub extern "C" fn sendto(
+    sockfd: c_int,
+    buf: *const c_void,
+    len: size_t,
+    flags: c_int,
+    dest_addr: *const sockaddr,
+    addrlen: socklen_t,
+) -> ssize_t {
+    let real_sendto = REAL_SENDTO.get().expect("REAL_SENDTO not initialized");
+
+    // Only intercept when MSG_FASTOPEN is set — otherwise pass through.
+    if (flags & libc::MSG_FASTOPEN) == 0 {
+        return unsafe { real_sendto(sockfd, buf, len, flags, dest_addr, addrlen) };
+    }
+
+    // MSG_FASTOPEN is set: call our connect() hook first to trigger proxy
+    // hijacking, then clear the flag and nullify the address for sendto.
+    if !dest_addr.is_null() {
+        let connect_ret = connect(sockfd, dest_addr, addrlen);
+        if connect_ret == 0 {
+            tracing::debug!(
+                "sendto: TFO detected, connect hijacked fd={} dest_addr={:?}",
+                sockfd,
+                dest_addr
+            );
+        } else {
+            // Connect failed — let the real sendto handle it with the
+            // original parameters (TFO semantics).
+            return unsafe { real_sendto(sockfd, buf, len, flags, dest_addr, addrlen) };
+        }
+    }
+
+    // Clear MSG_FASTOPEN and nullify the address so the real sendto
+    // behaves as a regular send on an already-connected socket.
+    let cleared_flags = flags & !libc::MSG_FASTOPEN;
+    unsafe { real_sendto(sockfd, buf, len, cleared_flags, std::ptr::null(), 0) }
 }
 
 /// Build a sockaddr_in for the given SocketAddrV4.
