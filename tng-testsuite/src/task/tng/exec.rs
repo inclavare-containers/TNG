@@ -7,8 +7,7 @@ use tracing::Instrument;
 
 use super::binary_locator::resolve_tng_binary;
 use crate::task::tagged_spawn::spawn_with_span_output;
-use crate::task::NodeType;
-use crate::task::Task;
+use crate::task::{NodeType, Task};
 
 /// Task that runs `tng exec` as an external process.
 ///
@@ -24,15 +23,17 @@ pub struct TngExecTask {
     stop_after_exit: bool,
     #[allow(dead_code)]
     tag: String,
+    node_type: NodeType,
 }
 
 impl TngExecTask {
-    pub fn new(config_json: String, command: Vec<String>, stop_after_exit: bool) -> Self {
+    pub fn new(config_json: String, command: Vec<String>, stop_after_exit: bool, node_type: NodeType) -> Self {
         Self {
             config_json,
             command,
             stop_after_exit,
             tag: "tng_exec".to_owned(),
+            node_type,
         }
     }
 }
@@ -44,7 +45,7 @@ impl Task for TngExecTask {
     }
 
     fn node_type(&self) -> NodeType {
-        NodeType::Server
+        self.node_type
     }
 
     async fn launch(&self, token: CancellationToken) -> Result<JoinHandle<Result<()>>> {

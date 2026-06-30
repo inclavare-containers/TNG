@@ -4,7 +4,7 @@ use tng_testsuite::{
     task::{
         app::AppType,
         tng::{TngExecTask, TngInstance},
-        Task as _,
+        NodeType, Task as _,
     },
 };
 
@@ -48,6 +48,7 @@ async fn test() -> Result<()> {
                 .to_string(),
             ],
             false,
+            NodeType::Server,
         )
         .boxed(),
         // Client side: TNG client with ingress mapping to server's hook port.

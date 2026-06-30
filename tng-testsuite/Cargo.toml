@@ -198,3 +198,9 @@ required-features = ["on-bin"]
 name = "connect_reject_null_ip"
 path = "tests/hook/connect_reject_null_ip.rs"
 required-features = ["on-bin"]
+
+[[test]]
+name = "sendto_tfo_intercept"
+path = "tests/hook/sendto_tfo_intercept.rs"
+required-features = ["on-bin"]
+

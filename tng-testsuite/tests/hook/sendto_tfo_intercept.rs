@@ -8,27 +8,31 @@ use tng_testsuite::{
     },
 };
 
-/// Test ingress hook mode: LD_PRELOAD-based connect() interception.
+/// Test sendto hook intercepting TCP Fast Open (MSG_FASTOPEN) connections.
+///
+/// Applications using TCP Fast Open call `sendto()` with `MSG_FASTOPEN`
+/// without calling `connect()` first, which would bypass the connect()
+/// hook and proxy hijacking. The sendto hook ensures TFO connections
+/// go through the same proxy logic.
 ///
 /// Architecture:
-/// - Server side: Echo server on port 30001 + TNG with egress mapping
+/// - Server side: Python echo server on port 30001 + TNG with egress mapping
 ///   (0.0.0.0:20001 → 127.0.0.1:30001).
-/// - Client side: `tng exec` with ingress hook (captures connect to 20001)
-///   running a Python TCP client.
+/// - Client side: `tng exec` with ingress hook (captures connections to port
+///   20001) running a Python script that uses sendto() with MSG_FASTOPEN.
 ///
 /// Flow:
-/// 1. Echo server listens on 0.0.0.0:30001 (server node).
-/// 2. Python client connects to 127.0.0.1:20001 → intercepted by ingress hook,
-///    tunneled to server's egress mapping on 20001.
-/// 3. Server egress mapping forwards to 127.0.0.1:30001 → echo server.
-/// 4. Echo response travels back through the tunnel to client.
-///
-/// This test requires `libtng_hook.so` to be installed alongside the `tng`
-/// binary, so it only runs in `on-bin` mode (via `required-features`).
+/// 1. Echo server (on server node) listens on port 30001.
+/// 2. Python client (inside `tng exec`) calls sendto(data, MSG_FASTOPEN,
+///    (127.0.0.1, 20001)) without calling connect() first.
+/// 3. sendto hook detects MSG_FASTOPEN, calls connect() hook to trigger
+///    proxy hijacking → connection tunneled to server's egress mapping.
+/// 4. Server egress mapping forwards locally to echo server on 127.0.0.1:30001.
+/// 5. Echo server responds, data travels back through the tunnel to client.
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-async fn test() -> Result<()> {
+async fn test_sendto_tfo_intercept() -> Result<()> {
     run_test!(vec![
-        // Echo server on the Server node, port 30001.
+        // Echo server on the Server node, port 30001 (local to server).
         ShellTask {
             name: "echo server".to_owned(),
             node_type: NodeType::Server,
@@ -84,14 +88,29 @@ sleep 120
                 "-c".to_string(),
                 r#"
 python3 -c '
-import socket
+import socket, struct
+
+# MSG_FASTOPEN value for Linux
+MSG_FASTOPEN = 0x20000000
+# TCP_FASTOPEN socket option
+TCP_FASTOPEN = 23
+
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("127.0.0.1", 20001))
-s.sendall(b"Hello World TCP!")
+
+# Enable TCP Fast Open on this socket
+s.setsockopt(socket.IPPROTO_TCP, TCP_FASTOPEN, 1)
+
+# Send data using sendto with MSG_FASTOPEN — this bypasses connect().
+# The sendto hook must intercept this and route through the proxy tunnel.
+data = b"Hello TFO via sendto!"
+n = s.sendto(data, MSG_FASTOPEN, ("127.0.0.1", 20001))
+assert n == len(data), f"Expected sendto to send {len(data)} bytes, got {n}"
+
+# Read the echo response through the tunnel.
 s.shutdown(socket.SHUT_WR)
-d = s.recv(4096)
-assert d == b"Hello World TCP!", f"Expected echo, got: {d}"
-print("OK: ingress hook test passed")
+response = s.recv(4096)
+assert response == data, f"Expected echo {data!r}, got {response!r}"
+print("OK: sendto TFO intercept test passed")
 '
 "#
                 .to_string(),
