@@ -329,6 +329,18 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         dst_addr.port()
     );
 
+    // Reject connections to 0.0.0.0 (NULL IP) early. Connecting to the
+    // unspecified address is often an application bug and should not be
+    // routed through the proxy. Mirrors proxychains-ng's behavior
+    // (src/libproxychains.c:702-705).
+    if *dst_addr.ip() == Ipv4Addr::UNSPECIFIED {
+        tracing::debug!("connect: rejecting 0.0.0.0 (null IP)");
+        unsafe {
+            *libc::__errno_location() = libc::ECONNREFUSED;
+        }
+        return -1;
+    }
+
     // Check if this destination matches any ingress capture rule
     let Some(lookup) = INGRESS_LOOKUP.get() else {
         tracing::debug!(
