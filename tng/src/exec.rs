@@ -92,6 +92,7 @@ impl TngExec {
         mut config: TngConfig,
         command: Vec<String>,
         reload_handle: &crate::runtime::TracingReloadHandle,
+        log_file: Option<&PathBuf>,
     ) -> Result<()> {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
@@ -181,6 +182,10 @@ impl TngExec {
         }
         // Always set ingress mapping (even if empty proxies, for consistency)
         child_cmd.env("TNG_HOOK_INGRESS_MAPPINGS", &ingress_json);
+
+        if let Some(ref log_file) = log_file {
+            child_cmd.env("TNG_HOOK_LOG_FILE", log_file);
+        }
 
         let mut child = child_cmd.spawn().context("Failed to spawn child command")?;
 
