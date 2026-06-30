@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context as _, Result};
@@ -196,11 +197,11 @@ impl TngExec {
         let _ = runtime_handle.await;
 
         // 10. Exit with child's exit code
-        if !exit_status.success() {
-            std::process::exit(exit_status.code().unwrap_or(1));
-        }
-
-        Ok(())
+        let exit_code = exit_status
+            .code()
+            .or_else(|| exit_status.signal().map(|sig| 128 + sig))
+            .unwrap_or(1);
+        std::process::exit(exit_code);
     }
 
     /// Validate hook-mode configuration.
