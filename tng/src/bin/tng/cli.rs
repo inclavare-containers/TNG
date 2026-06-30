@@ -14,6 +14,10 @@ pub struct Cli {
     #[clap(long, global = true)]
     /// Enable tokio console
     pub tokio_console: bool,
+
+    #[clap(long, global = true, value_name = "FILE")]
+    /// Path to log file (writes to stdout/stderr if not set)
+    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
