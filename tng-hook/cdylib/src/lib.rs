@@ -70,21 +70,44 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
 /// the mapping lookup table from the `TNG_HOOK_EGRESS_MAPPINGS` env var.
 #[ctor::ctor]
 fn init() {
-    // Initialize tracing subscriber writing to stderr.
-    // This allows `tracing::info!` etc. to produce output even in a
-    // preloaded library where the host process has no tracing configured.
-    // The log level can be controlled via `RUST_LOG` env var (default: info).
+    // Initialize tracing subscriber based on TNG_HOOK_LOG_FILE env var.
+    // When set, write to the specified file; otherwise fall back to stderr.
     // Uses `set_default` so it won't panic if the host already has a subscriber.
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(atty::is(atty::Stream::Stderr))
-                .with_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-                ),
-        )
-        .init();
+    let log_file_path = std::env::var("TNG_HOOK_LOG_FILE").ok();
+
+    if let Some(ref path) = log_file_path {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| {
+                panic!("tng-hook: failed to open log file {}: {}", path, e);
+            });
+
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_ansi(false)
+                    .with_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    ),
+            )
+            .init();
+    } else {
+        // Default: write to stderr (existing behavior)
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(atty::is(atty::Stream::Stderr))
+                    .with_filter(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                    ),
+            )
+            .init();
+    }
 
     // Resolve real functions directly from libc
     unsafe {
