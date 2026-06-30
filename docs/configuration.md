@@ -42,6 +42,7 @@
 - [Deprecated Configuration](#deprecated-configuration)
 - [Observability](#observability)
   - [Log](#log)
+    - [`--log-file`](#---log-file-file-)
   - [Metric](#metric)
   - [Trace](#trace)
 - [Appendix: Regular Expression Syntax](#appendix-regular-expression-syntax)
@@ -1776,6 +1777,32 @@ Includes Log, Metric, and Trace aspects.
 TNG outputs logs to standard output by default. Control the log level via the `RUST_LOG` environment variable: `error`, `warn`, `info`, `debug`, `trace`, `off`. Default is `info`, with all third-party library logs disabled.
 
 > Supports complex configurations; see [tracing-subscriber EnvFilter](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives).
+
+#### `--log-file <FILE>`
+
+Redirect all log output to the specified file instead of stdout/stderr.
+This is a global CLI option and applies to both `tng launch` and `tng exec`.
+
+When used with `tng exec`, the hook library (`.so`) loaded by the child
+process also writes to the same log file.
+
+Log level is controlled by the `RUST_LOG` environment variable (same as
+without `--log-file`).
+
+```bash
+# Write logs to file
+tng --log-file /var/log/tng.log launch --config-file config.json
+
+# Exec mode — tng and hook .so both write to the same file
+tng --log-file /tmp/tng.log exec --config-file config.json -- /usr/bin/app
+
+# Control log level via RUST_LOG
+RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
+```
+
+If the specified directory does not exist, the command fails with an error.
+The file is created automatically if it doesn't exist but the directory does.
+Logs are appended to existing files.
 
 ### Metric
 

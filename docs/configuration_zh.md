@@ -42,6 +42,7 @@
 - [废弃配置](#废弃配置)
 - [可观测性](#可观测性)
   - [Log](#log)
+    - [`--log-file`](#---log-file-file-)
   - [Metric](#metric)
   - [Trace](#trace)
 - [附录：正则表达式语法](#附录正则表达式语法)
@@ -1780,6 +1781,30 @@ MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
 TNG 默认将日志输出到标准输出，通过 `RUST_LOG` 环境变量控制日志级别：`error`、`warn`、`info`、`debug`、`trace`、`off`。默认 `info`，禁用所有第三方库日志。
 
 > 支持复杂配置，参考 [tracing-subscriber EnvFilter](https://docs.rs/tracing-subscriber/0.3.19/tracing_subscriber/filter/struct.EnvFilter.html#directives)。
+
+#### `--log-file <FILE>`
+
+将所有日志输出重定向到指定文件，而非 stdout/stderr。
+这是一个全局 CLI 选项，对 `tng launch` 和 `tng exec` 均生效。
+
+在 `tng exec` 模式下，子进程加载的 hook 库（`.so`）也会写入同一个日志文件。
+
+日志级别由 `RUST_LOG` 环境变量控制（与不使用 `--log-file` 时相同）。
+
+```bash
+# 将日志写入文件
+tng --log-file /var/log/tng.log launch --config-file config.json
+
+# Exec 模式 — tng 和 hook .so 都写入同一个文件
+tng --log-file /tmp/tng.log exec --config-file config.json -- /usr/bin/app
+
+# 通过 RUST_LOG 控制日志级别
+RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
+```
+
+如果指定的目录不存在，命令会报错并退出。
+如果目录存在但文件不存在，文件会自动创建。
+已存在的文件会以追加模式写入。
 
 ### Metric
 
