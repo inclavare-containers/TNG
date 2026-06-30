@@ -193,3 +193,8 @@ required-features = ["on-bin"]
 name = "ingress_hook_basic"
 path = "tests/hook/ingress_hook_basic.rs"
 required-features = ["on-bin"]
+
+[[test]]
+name = "connect_reject_null_ip"
+path = "tests/hook/connect_reject_null_ip.rs"
+required-features = ["on-bin"]
