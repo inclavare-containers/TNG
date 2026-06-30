@@ -267,8 +267,8 @@ pub extern "C" fn bind(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t)
         }
     } else if !addr.is_null() {
         let sa = unsafe { &*addr };
-        tracing::warn!(
-            "bind: non-IPv4 socket, family={:#x}, fd={}",
+        tracing::debug!(
+            "bind: non-IPv4 socket, family={:#x}, fd={}, passthrough",
             sa.sa_family,
             sockfd
         );
@@ -354,8 +354,8 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
     let Some(dst_addr) = (unsafe { sockaddr_to_v4(addr) }) else {
         if !addr.is_null() {
             let sa = unsafe { &*addr };
-            tracing::warn!(
-                "connect: non-IPv4 destination, family={:#x}, fd={}",
+            tracing::debug!(
+                "connect: non-IPv4 destination, family={:#x}, fd={}, passthrough",
                 sa.sa_family,
                 sockfd
             );
