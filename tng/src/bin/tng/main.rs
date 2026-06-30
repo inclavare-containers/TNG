@@ -1,7 +1,10 @@
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 
-use std::{fs::File, io::BufReader};
+use std::{
+    fs::{File, OpenOptions},
+    io::BufReader,
+};
 
 use anyhow::{bail, Context};
 use clap::Parser as _;
@@ -39,7 +42,7 @@ fn reject_hook_modes(config: &TngConfig) -> anyhow::Result<()> {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize rustls crypto provider
@@ -52,24 +55,51 @@ async fn main() {
     let pending_tracing_layers = vec![];
     let (pending_tracing_layers, reload_handle) =
         tracing_subscriber::reload::Layer::new(pending_tracing_layers);
+
+    // Open log file if --log-file is specified.
+    // We always create a NonBlocking writer (either file-backed or stdout-backed)
+    // so that both branches produce the same concrete Layer type.
+    let (log_writer, is_file) = match &cli.log_file {
+        Some(path) => {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .context("Failed to open log file")?;
+            let (non_blocking, guard) = tracing_appender::non_blocking(file);
+            // Leak the guard to keep the worker thread alive for the process
+            // lifetime. This is safe because the guard is never dropped until
+            // process exit, at which point the OS cleans up anyway.
+            std::mem::forget(guard);
+            (non_blocking, true)
+        }
+        None => {
+            let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
+            std::mem::forget(guard);
+            (non_blocking, false)
+        }
+    };
+
     let subscriber_init = tracing_subscriber::registry()
-        // Here we add two layer each has it's own filter (per-layer filter), and the first layer is
-        // a vector which can be updated dynamically later(e.g. to append a layer like otlp exporter).
         .with(
             pending_tracing_layers.with_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=trace,tng=trace".into()),
             ),
         )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(atty::is(atty::Stream::Stdout))
-                .with_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                        "info,tokio_graceful=off,rats_cert=info,tng=info".into()
-                    }),
-                ),
-        );
+        .with({
+            let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=info,tng=info".into());
+
+            let base_layer = tracing_subscriber::fmt::layer().with_writer(log_writer.clone());
+            if is_file {
+                base_layer.with_ansi(false).with_filter(filter)
+            } else {
+                base_layer
+                    .with_ansi(atty::is(atty::Stream::Stdout))
+                    .with_filter(filter)
+            }
+        });
 
     #[cfg(unix)]
     if cli.tokio_console {
@@ -148,7 +178,13 @@ async fn main() {
                     }
                 };
 
-                TngExec::run(config, options.command, &reload_handle).await?;
+                TngExec::run(
+                    config,
+                    options.command,
+                    &reload_handle,
+                    cli.log_file.as_ref(),
+                )
+                .await?;
 
                 tracing::info!("Exec session ended");
             }
@@ -161,4 +197,6 @@ async fn main() {
         tracing::error!(?error);
         std::process::exit(1);
     }
+
+    Ok(())
 }
