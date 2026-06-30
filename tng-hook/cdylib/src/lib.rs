@@ -338,6 +338,10 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
     let proxy_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port);
     let proxy_sockaddr = make_sockaddr_v4(&proxy_addr);
 
+    // Save socket flags before the first connect attempt so we can restore
+    // O_NONBLOCK after the handshake (for non-blocking sockets like UCX).
+    let saved_flags = unsafe { libc::fcntl(sockfd, libc::F_GETFL, 0) };
+
     let ret = unsafe {
         real_connect(
             sockfd,
@@ -346,15 +350,63 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         )
     };
     if ret != 0 {
-        tracing::error!(
-            "connect hijacked: failed to connect to proxy 127.0.0.1:{}: {}",
-            proxy_port,
-            std::io::Error::last_os_error()
-        );
-        return ret;
-    }
+        let errno = unsafe { *libc::__errno_location() };
+        if errno == libc::EINPROGRESS {
+            // The application uses non-blocking sockets (e.g. UCX).
+            // EINPROGRESS from a non-blocking connect is not a failure —
+            // it means the kernel hasn't finished the TCP handshake yet.
+            // However, we need the connect to complete synchronously so we
+            // can perform the HTTP CONNECT handshake before returning to the
+            // caller.  Temporarily clear O_NONBLOCK, retry the connect, then
+            // restore O_NONBLOCK after the handshake finishes.
+            if saved_flags < 0 {
+                tracing::error!(
+                    "connect hijacked: failed to get socket flags for proxy 127.0.0.1:{}: {}",
+                    proxy_port,
+                    std::io::Error::last_os_error()
+                );
+                return ret;
+            }
+            unsafe {
+                libc::fcntl(sockfd, libc::F_SETFL, saved_flags & !libc::O_NONBLOCK);
+            }
 
-    tracing::debug!("connect: connected to proxy 127.0.0.1:{}", proxy_port);
+            let ret2 = unsafe {
+                real_connect(
+                    sockfd,
+                    &proxy_sockaddr as *const _ as *const sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
+                )
+            };
+            if ret2 != 0 {
+                let errno2 = unsafe { *libc::__errno_location() };
+                tracing::error!(
+                    "connect hijacked: failed to connect to proxy 127.0.0.1:{} (non-blocking -> blocking): {}",
+                    proxy_port,
+                    std::io::Error::from_raw_os_error(errno2)
+                );
+                // Restore O_NONBLOCK even on failure so the caller's socket
+                // state is consistent with what it originally set.
+                unsafe {
+                    libc::fcntl(sockfd, libc::F_SETFL, saved_flags);
+                }
+                return ret2;
+            }
+
+            // Proxy connection succeeded — proceed to CONNECT handshake below.
+            // O_NONBLOCK will be restored after the handshake (via defer).
+            tracing::debug!("connect: connected to proxy 127.0.0.1:{} (was non-blocking, now blocking for handshake)", proxy_port);
+        } else {
+            tracing::error!(
+                "connect hijacked: failed to connect to proxy 127.0.0.1:{}: {}",
+                proxy_port,
+                std::io::Error::from_raw_os_error(errno)
+            );
+            return ret;
+        }
+    } else {
+        tracing::debug!("connect: connected to proxy 127.0.0.1:{}", proxy_port);
+    }
 
     // Set a receive timeout for the HTTP CONNECT handshake so that
     // a proxy that accepts the TCP connection but never responds
@@ -375,9 +427,10 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         );
     }
 
-    // Restore the original timeout on every exit path from this point.
-    // Using scopeguard::defer! ensures the restore happens regardless of
-    // which branch returns, eliminating duplicate setsockopt calls.
+    // Restore the original SO_RCVTIMEO and O_NONBLOCK on every exit path
+    // from this point.  Using scopeguard::defer! ensures the restore happens
+    // regardless of which branch returns, eliminating duplicate setsockopt
+    // calls and guaranteeing the caller's socket state is preserved.
     let restore_timeout = orig_timeout;
     scopeguard::defer! {
         unsafe {
@@ -388,6 +441,12 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
                 &restore_timeout as *const _ as *const libc::c_void,
                 std::mem::size_of::<libc::timeval>() as libc::socklen_t,
             );
+            // If the socket was non-blocking, we cleared O_NONBLOCK to do a
+            // blocking connect + CONNECT handshake.  Restore it here so the
+            // caller's socket remains non-blocking.
+            if saved_flags >= 0 && saved_flags & libc::O_NONBLOCK != 0 {
+                libc::fcntl(sockfd, libc::F_SETFL, saved_flags);
+            }
         }
     }
 
