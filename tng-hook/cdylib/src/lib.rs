@@ -287,6 +287,28 @@ pub extern "C" fn getsockname(
 pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int {
     let real_connect = REAL_CONNECT.get().expect("REAL_CONNECT not initialized");
 
+    // Only hijack TCP sockets (SOCK_STREAM).  UDP, RAW, etc. must pass through
+    // to the real connect() — they don't speak HTTP CONNECT.
+    let mut sock_type: libc::c_int = 0;
+    let mut sock_type_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    unsafe {
+        libc::getsockopt(
+            sockfd,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            &mut sock_type as *mut _ as *mut libc::c_void,
+            &mut sock_type_len,
+        );
+    }
+    if sock_type != libc::SOCK_STREAM {
+        tracing::debug!(
+            "connect: fd={} is not SOCK_STREAM (type={}), passthrough",
+            sockfd,
+            sock_type
+        );
+        return unsafe { real_connect(sockfd, addr, addrlen) };
+    }
+
     // Only handle AF_INET (IPv4)
     let Some(dst_addr) = (unsafe { sockaddr_to_v4(addr) }) else {
         if !addr.is_null() {
