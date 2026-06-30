@@ -367,14 +367,9 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
             proxy_port,
             std::io::Error::last_os_error()
         );
-        let proxy_sockaddr = make_sockaddr_v4(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port));
-        return unsafe {
-            real_connect(
-                sockfd,
-                &proxy_sockaddr as *const _ as *const sockaddr,
-                std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
-            )
-        };
+        // Cannot safely save/restore flags — fall back to the original
+        // destination instead of hijacking.
+        return unsafe { real_connect(sockfd, addr, addrlen) };
     }
 
     unsafe {
