@@ -58,7 +58,7 @@ pub(super) struct AcceptedStream {
     pub stream: Box<dyn CommonStreamTrait + Send>,
     pub src: SocketAddr,
     pub dst: Arc<TngEndpoint>,
-    pub via_tunnel: bool,
+    pub encrypted: bool,
     pub listener_addr: SocketAddr,
     pub ingress_mode: IngressAccessMode,
     pub access_accepted: AccessAccepted,
@@ -146,7 +146,7 @@ impl IngressFlow {
             stream,
             src,
             dst,
-            via_tunnel,
+            encrypted,
             listener_addr: _,
             ingress_mode: _,
             access_accepted,
@@ -162,18 +162,18 @@ impl IngressFlow {
             tracing::info_span!("serve", client=?src),
             async move {
                 let fut = async move {
-                    tracing::debug!(%src, %dst, via_tunnel, "Acquire connection to upstream");
+                    tracing::debug!(%src, %dst, encrypted, "Acquire connection to upstream");
 
                     // TODO: merge .new_cx() and .new_wrapped_stream()
                     let active_cx = metrics.new_cx();
                     let stream = metrics.new_wrapped_stream(stream);
 
-                    // Transition to AccessRouted: dst and via_tunnel are known here
-                    let access_routed = access_accepted.into_routed(&dst, via_tunnel);
+                    // Transition to AccessRouted: dst and encrypted are known here
+                    let access_routed = access_accepted.into_routed(&dst, encrypted);
 
                     let attestation_result;
                     let upstream_local;
-                    let forward_stream_task = if !via_tunnel {
+                    let forward_stream_task = if !encrypted {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att, up_local) = unprotected_stream_manager
                             .forward_stream(&dst, Box::new(stream))

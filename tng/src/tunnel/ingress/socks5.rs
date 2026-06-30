@@ -163,7 +163,7 @@ impl IngressTrait for Socks5Ingress {
 
                     tracing::debug!(src = ?peer_addr, %dst, "Accepted socks5 connection");
 
-                    let via_tunnel = self.stream_router.should_forward_via_tunnel(&dst);
+                    let encrypted = self.stream_router.should_forward_via_tunnel(&dst);
 
                     let access_accepted = AccessAccepted::new_ingress(
                         peer_addr,
@@ -174,7 +174,7 @@ impl IngressTrait for Socks5Ingress {
                         stream: Box::new(crate::ContextualStream::new(stream, "ingress-socks5")),
                         src: peer_addr,
                         dst: Arc::new(dst),
-                        via_tunnel,
+                        encrypted,
                         listener_addr,
                         ingress_mode: IngressAccessMode::Socks5,
                         access_accepted,

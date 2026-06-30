@@ -9,7 +9,7 @@ use crate::config::ingress::IngressHookArgs;
 use crate::config::ingress::IngressMode as IngressHookMode;
 use crate::config::{
     EgressHookMappingEntry, EgressHookMappingTable, IngressHookCaptureRule,
-    IngressHookMappingTable, IngressHookProxy, TngConfig,
+    IngressHookMappingTable, IngressHookProxy, TngConfig, TngEgressHookMappingEntry,
 };
 use crate::tunnel::access_log::EgressAccessMode;
 use crate::tunnel::access_log::IngressAccessMode;
@@ -95,10 +95,8 @@ impl TngExec {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
 
-        // 2. Build egress resolved entries, tracking used real ports to avoid
-        // portpicker TOCTOU collisions (pick_unused_port binds then drops, so
-        // another entry can pick the same port before conflict check runs).
-        let mut all_egress_entries: Vec<EgressHookMappingEntry> = Vec::new();
+        // 2. Build egress resolved entries
+        let mut all_egress_entries: Vec<TngEgressHookMappingEntry> = Vec::new();
         let mut next_auto_port: u16 = 49152;
         let mut port_alloc = PortAllocator::new();
 
@@ -277,7 +275,7 @@ impl TngExec {
         args: &EgressHookArgs,
         start_auto_port: u16,
         port_alloc: &mut PortAllocator,
-    ) -> Result<(Vec<EgressHookMappingEntry>, u16)> {
+    ) -> Result<(Vec<TngEgressHookMappingEntry>, u16)> {
         let mut entries = Vec::new();
         let mut next_auto_port = start_auto_port;
 
@@ -299,8 +297,8 @@ impl TngExec {
                     let real_port = port_alloc
                         .pick()
                         .context("Failed to pick unused port for hook mapping")?;
-                    entries.push(EgressHookMappingEntry {
-                        host: e.host,
+                    entries.push(TngEgressHookMappingEntry {
+                        host_cidr: e.host_cidr,
                         origin_port: e.origin_port,
                         real_port,
                     });
@@ -314,45 +312,40 @@ impl TngExec {
     }
 
     /// Check for conflicts across all resolved entries from all egress entries.
-    /// Two entries conflict if they map the same (host, origin_port) to different real_ports,
+    /// Two entries conflict if they map the same origin_port to different real_ports,
     /// or if two entries claim the same real_port.
-    fn check_conflicts(all_entries: &[EgressHookMappingEntry]) -> Result<()> {
-        let mut origin_map: HashMap<(std::net::Ipv4Addr, u16), u16> = HashMap::new();
-        let mut real_port_map: HashMap<u16, (std::net::Ipv4Addr, u16)> = HashMap::new();
+    fn check_conflicts(all_entries: &[TngEgressHookMappingEntry]) -> Result<()> {
+        let mut origin_map: HashMap<u16, u16> = HashMap::new(); // origin_port -> real_port
+        let mut real_port_map: HashMap<u16, u16> = HashMap::new(); // real_port -> origin_port
 
         for entry in all_entries {
-            let key = (entry.host, entry.origin_port);
-
-            // Check duplicate (host, origin_port)
-            if let Some(existing_real) = origin_map.get(&key) {
+            // Check duplicate origin_port
+            if let Some(existing_real) = origin_map.get(&entry.origin_port) {
                 if *existing_real != entry.real_port {
                     bail!(
-                        "Conflict: ({}, {}) is mapped to both real_port {} and {}",
-                        key.0,
-                        key.1,
+                        "Conflict: origin_port {} is mapped to both real_port {} and {}",
+                        entry.origin_port,
                         existing_real,
                         entry.real_port
                     );
                 }
                 // Same mapping is fine (deduplicated at .so level)
             } else {
-                origin_map.insert(key, entry.real_port);
+                origin_map.insert(entry.origin_port, entry.real_port);
             }
 
             // Check duplicate real_port
-            if let Some(existing_key) = real_port_map.get(&entry.real_port) {
-                if *existing_key != key {
+            if let Some(existing_origin) = real_port_map.get(&entry.real_port) {
+                if *existing_origin != entry.origin_port {
                     bail!(
-                        "Conflict: real_port {} is claimed by both ({}, {}) and ({}, {})",
+                        "Conflict: real_port {} is claimed by both origin_port {} and {}",
                         entry.real_port,
-                        existing_key.0,
-                        existing_key.1,
-                        key.0,
-                        key.1
+                        existing_origin,
+                        entry.origin_port
                     );
                 }
             } else {
-                real_port_map.insert(entry.real_port, key);
+                real_port_map.insert(entry.real_port, entry.origin_port);
             }
         }
 
@@ -361,15 +354,17 @@ impl TngExec {
 
     /// Build combined EgressHookMappingTable for .so env var.
     fn build_mapping_table_for_so(
-        all_entries: &[EgressHookMappingEntry],
+        all_entries: &[TngEgressHookMappingEntry],
     ) -> EgressHookMappingTable {
-        // Deduplicate: if multiple entries map the same (host, origin_port), first wins
+        // Deduplicate: if multiple entries map the same origin_port, first wins
         let mut seen = std::collections::HashSet::new();
         let mut deduped = Vec::new();
         for e in all_entries {
-            let key = (e.host, e.origin_port);
-            if seen.insert(key) {
-                deduped.push(e.clone());
+            if seen.insert(e.origin_port) {
+                deduped.push(EgressHookMappingEntry {
+                    origin_port: e.origin_port,
+                    real_port: e.real_port,
+                });
             }
         }
 
@@ -610,13 +605,13 @@ mod tests {
     #[test]
     fn test_check_conflicts_no_conflict() {
         let entries = vec![
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8080,
                 real_port: 48080,
             },
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8081,
                 real_port: 48081,
             },
@@ -627,13 +622,13 @@ mod tests {
     #[test]
     fn test_check_conflicts_duplicate_origin() {
         let entries = vec![
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8080,
                 real_port: 48080,
             },
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8080,
                 real_port: 48080, // same origin, same real → no conflict
             },
@@ -644,13 +639,13 @@ mod tests {
     #[test]
     fn test_check_conflicts_real_port_collision() {
         let entries = vec![
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8080,
                 real_port: 48080,
             },
-            EgressHookMappingEntry {
-                host: std::net::Ipv4Addr::UNSPECIFIED,
+            TngEgressHookMappingEntry {
+                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
                 origin_port: 8081,
                 real_port: 48080, // different origin, same real → conflict
             },

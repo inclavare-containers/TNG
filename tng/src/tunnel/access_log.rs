@@ -100,14 +100,14 @@ impl AccessAccepted {
     }
 
     /// Transition to AccessRouted. Consumes self.
-    pub fn into_routed(mut self, upstream_remote: impl Display, tunnel: bool) -> AccessRouted {
+    pub fn into_routed(mut self, upstream_remote: impl Display, encrypted: bool) -> AccessRouted {
         self.need_print = false;
         AccessRouted {
             downstream_remote: self.downstream_remote,
             downstream_local: self.downstream_local,
             mode: self.mode,
             upstream_remote: upstream_remote.to_string(),
-            tunnel,
+            encrypted,
             need_print: true,
         }
     }
@@ -151,7 +151,7 @@ pub struct AccessRouted {
     downstream_local: SocketAddr,
     mode: AccessMode,
     upstream_remote: String,
-    tunnel: bool,
+    encrypted: bool,
     need_print: bool,
 }
 
@@ -170,7 +170,7 @@ impl AccessRouted {
             mode: self.mode,
             upstream_remote: self.upstream_remote.clone(),
             upstream_local,
-            tunnel: self.tunnel,
+            encrypted: self.encrypted,
             attested,
             need_print: true,
         }
@@ -181,8 +181,8 @@ impl Display for AccessRouted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "downstream_remote={} -> downstream_local={}({}) -> (..) -> upstream_remote={} — not connected tunnel={}",
-            self.downstream_remote, self.downstream_local, self.mode, self.upstream_remote, self.tunnel
+            "downstream_remote={} -> downstream_local={}({}) -> (..) -> upstream_remote={} — not connected encrypted={}",
+            self.downstream_remote, self.downstream_local, self.mode, self.upstream_remote, self.encrypted
         )
     }
 }
@@ -205,7 +205,7 @@ pub struct AccessEstablished {
     mode: AccessMode,
     upstream_remote: String,
     upstream_local: Option<SocketAddr>,
-    tunnel: bool,
+    encrypted: bool,
     attested: bool,
     need_print: bool,
 }
@@ -223,8 +223,8 @@ impl Display for AccessEstablished {
             write!(f, " -> upstream_local={}", local)?;
         }
         write!(f, " -> upstream_remote={}", self.upstream_remote)?;
-        write!(f, " — tunnel={}", self.tunnel)?;
-        // Only print attested if tunnel is true (meaningful only with tunnel)
+        write!(f, " — encrypted={}", self.encrypted)?;
+        // Only print attested if encrypted is true (meaningful only with tunnel)
         // Actually per spec, always print attested in established state
         write!(f, " attested={}", self.attested)?;
         Ok(())
@@ -267,7 +267,7 @@ mod tests {
         let routed = accepted.into_routed("10.0.0.2:443", false);
         assert_eq!(
             format!("{routed}"),
-            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> (..) -> upstream_remote=10.0.0.2:443 — not connected tunnel=false"
+            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> (..) -> upstream_remote=10.0.0.2:443 — not connected encrypted=false"
         );
         std::mem::forget(routed);
     }
@@ -283,7 +283,7 @@ mod tests {
         let established = routed.into_established(None, false);
         assert_eq!(
             format!("{established}"),
-            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> upstream_remote=10.0.0.2:443 — tunnel=false attested=false"
+            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(hook) -> upstream_remote=10.0.0.2:443 — encrypted=false attested=false"
         );
         std::mem::forget(established);
     }
@@ -299,7 +299,7 @@ mod tests {
         let established = routed.into_established(Some("10.0.0.1:54322".parse().unwrap()), true);
         assert_eq!(
             format!("{established}"),
-            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(mapping) -> upstream_local=10.0.0.1:54322 -> upstream_remote=10.0.0.2:443 — tunnel=true attested=true"
+            "downstream_remote=10.0.0.1:54321 -> downstream_local=0.0.0.0:8080(mapping) -> upstream_local=10.0.0.1:54322 -> upstream_remote=10.0.0.2:443 — encrypted=true attested=true"
         );
         std::mem::forget(established);
     }

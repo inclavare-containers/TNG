@@ -136,7 +136,7 @@ impl IngressTrait for NetfilterIngress {
                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
                     src: peer_addr,
                     dst: Arc::new(orig_dst),
-                    via_tunnel: true,
+                    encrypted: true,
                     listener_addr: listen_addr,
                     ingress_mode: IngressAccessMode::Netfilter,
                     access_accepted,

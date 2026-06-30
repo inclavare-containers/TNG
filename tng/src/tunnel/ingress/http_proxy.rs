@@ -147,7 +147,7 @@ impl RequestHelper {
                         .await
                         .context("Failed during http connect upgrade")?;
 
-                    let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
+                    let encrypted = stream_router.should_forward_via_tunnel(&dst);
                     let access_accepted =
                         AccessAccepted::new_ingress(peer_addr, listener_addr, mode);
                     sender
@@ -158,7 +158,7 @@ impl RequestHelper {
                             )),
                             src: peer_addr,
                             dst: Arc::new(dst),
-                            via_tunnel,
+                            encrypted,
                             listener_addr,
                             ingress_mode: mode,
                             access_accepted,
@@ -191,13 +191,13 @@ impl RequestHelper {
                 let (s1, s2) = tokio::io::duplex(4096);
 
                 let send_accepted_stream = async {
-                    let via_tunnel = stream_router.should_forward_via_tunnel(&dst);
+                    let encrypted = stream_router.should_forward_via_tunnel(&dst);
                     let access_accepted = AccessAccepted::new_ingress(
                         peer_addr,
                         listener_addr,
                         mode,
                     );
-                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), via_tunnel, listener_addr, ingress_mode: mode, access_accepted })
+                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), encrypted, listener_addr, ingress_mode: mode, access_accepted })
                 };
 
                 let send_task = async {

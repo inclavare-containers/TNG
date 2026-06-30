@@ -139,7 +139,7 @@ impl IngressTrait for MappingIngress {
                                     stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
                                     src: peer_addr,
                                     dst: Arc::clone(&target.out_ep),
-                                    via_tunnel: true,
+                                    encrypted: true,
                                     listener_addr: target.local_addr,
                                     ingress_mode: IngressAccessMode::Mapping,
                                     access_accepted,

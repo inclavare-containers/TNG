@@ -199,7 +199,7 @@ pub extern "C" fn bind(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t)
     // Only intercept AF_INET (IPv4)
     if let Some(origin_addr) = unsafe { sockaddr_to_v4(addr) } {
         if let Some(lookup) = LOOKUP.get() {
-            if let Some(real_port) = lookup.lookup_forward(origin_addr) {
+            if let Some(real_port) = lookup.lookup_forward(origin_addr.port()) {
                 // Rewrite the port in-place
                 let mut new_addr = unsafe { std::ptr::read(addr as *const libc::sockaddr_in) };
                 new_addr.sin_port = real_port.to_be();
@@ -259,7 +259,7 @@ pub extern "C" fn getsockname(
     // Check if the returned address is one we remapped
     if let Some(real_addr) = unsafe { sockaddr_to_v4(addr) } {
         if let Some(lookup) = LOOKUP.get() {
-            if let Some(origin_port) = lookup.lookup_reverse(real_addr) {
+            if let Some(origin_port) = lookup.lookup_reverse(real_addr.port()) {
                 // Rewrite the port back to origin
                 let mut new_addr = unsafe { std::ptr::read(addr as *const libc::sockaddr_in) };
                 new_addr.sin_port = origin_port.to_be();

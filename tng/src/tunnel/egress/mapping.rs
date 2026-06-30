@@ -138,6 +138,7 @@ impl EgressTrait for MappingEgress {
                                     listener_addr: target.local_addr,
                                     egress_mode: EgressAccessMode::Mapping,
                                     access_accepted,
+                                    encrypted: true,
                                 })
                             }
                             Err(e) => yield Err(anyhow!(e)),

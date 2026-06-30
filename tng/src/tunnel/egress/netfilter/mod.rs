@@ -142,6 +142,7 @@ impl EgressTrait for NetfilterEgress {
                     listener_addr: listen_addr,
                     egress_mode: EgressAccessMode::Netfilter,
                     access_accepted,
+                    encrypted: true,
                 })
             }),
         ))

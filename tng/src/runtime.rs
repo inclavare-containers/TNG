@@ -219,8 +219,9 @@ impl TngRuntime {
                     }
                     EgressMode::Hook(hook_args) => {
                         use crate::tunnel::egress::hook::HookEgress;
+
                         vec![EgressFlow::new(
-                            HookEgress::new(id, &hook_args.resolved_entries),
+                            HookEgress::new(id, hook_args),
                             &add_egress.common,
                             &service_metrics_creator,
                             runtime.clone(),
