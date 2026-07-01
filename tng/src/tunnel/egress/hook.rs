@@ -121,19 +121,25 @@ impl HookEgress {
     /// Returns true if local_addr matches any entry's host AND ifname filter.
     /// When no entries are configured, defaults to encrypted (backward compatible).
     /// IPv6 connections always return false.
-    pub fn encrypted(&self, local_addr: SocketAddr) -> bool {
+    pub fn encrypted(&self, peer_addr: SocketAddr, local_addr: SocketAddr) -> bool {
         if self.entries.is_empty() {
             return true;
         }
 
+        let peer_ip = match peer_addr.ip() {
+            IpAddr::V4(ip) => ip,
+            IpAddr::V6(_) => return false,
+        };
         let ip = match local_addr.ip() {
             IpAddr::V4(ip) => ip,
             IpAddr::V6(_) => return false,
         };
 
-        // When capture_local_traffic is false, skip if peer IP is local
-        // (loopback or a network interface address).
-        if !self.capture_local_traffic && (ip.is_loopback() || self.local_ips.contains(&ip)) {
+        // When capture_local_traffic is false, skip only if the connection
+        // is purely local — source is also a local address. An external
+        // source connecting to a local destination must still be encrypted.
+        let peer_is_local = peer_ip.is_loopback() || self.local_ips.contains(&peer_ip);
+        if !self.capture_local_traffic && peer_is_local {
             return false;
         }
 
@@ -257,7 +263,7 @@ impl EgressTrait for HookEgress {
                                     info.local_addr,
                                     EgressAccessMode::Hook,
                                 );
-                                let encrypted = self.encrypted(local);
+                                let encrypted = self.encrypted(peer_addr, local);
 
                                 yield Ok(AcceptedStream {
                                     stream: Box::new(crate::ContextualStream::new(stream, "egress-hook")),
@@ -284,12 +290,14 @@ impl EgressTrait for HookEgress {
 mod tests {
     use super::*;
 
+    // ── helpers ──────────────────────────────────────────────────────────────
+
     fn make_egress(entries: Vec<ResolvedEgressEntry>) -> HookEgress {
         HookEgress {
             id: 0,
             entries,
-            // Default to true so existing tests exercise the host/ifname
-            // matching logic without local-IP filtering.
+            // Default to true so host/ifname matching tests aren't affected
+            // by the local-traffic filter.
             capture_local_traffic: true,
             local_ips: HashSet::new(),
         }
@@ -309,32 +317,38 @@ mod tests {
         }
     }
 
+    // Well-known IPs used across tests for clarity.
+    const LOOPBACK: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
+    const EXT: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 99); // "external" non-local
+    const IFACE1: Ipv4Addr = Ipv4Addr::new(172, 17, 89, 111); // simulated interface IP
+    const IFACE2: Ipv4Addr = Ipv4Addr::new(172, 17, 89, 112); // another interface IP
+
+    fn peer(ip: Ipv4Addr) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(ip), 12345)
+    }
+
+    fn dest(ip: Ipv4Addr) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(ip), 5600)
+    }
+
+    // ── host / ifname matching (capture_local_traffic = true, local_ips empty)
+    // These tests isolate the host/ifname filter without the local-traffic
+    // shortcut.
+
     #[test]
     fn test_encrypted_empty_entries_returns_true() {
         let egress = make_egress(vec![]);
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5600);
-        assert!(egress.encrypted(addr));
+        assert!(egress.encrypted(peer(EXT), dest(LOOPBACK)));
     }
 
     #[test]
     fn test_encrypted_wildcard_host_matches_all() {
-        // host = 0.0.0.0, no ifname -> always true
         let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
         let egress = make_egress(vec![entry]);
 
-        // Any IP should match
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            5600
-        )));
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
-            5600
-        )));
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            5600
-        )));
+        assert!(egress.encrypted(peer(EXT), dest(LOOPBACK)));
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(egress.encrypted(peer(EXT), dest(EXT)));
     }
 
     #[test]
@@ -342,22 +356,12 @@ mod tests {
         let entry = make_entry(Ipv4Addr::new(172, 17, 80, 1), None, 5600, 9600);
         let egress = make_egress(vec![entry]);
 
-        // Exact match
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
-            5600
-        )));
-
-        // Different IP -> fail
-        assert!(!egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            5600
-        )));
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(172, 17, 80, 1))));
+        assert!(!egress.encrypted(peer(EXT), dest(LOOPBACK)));
     }
 
     #[test]
     fn test_encrypted_ifname_filter() {
-        // host = 0.0.0.0, ifname resolved to specific IPs
         let mut ips = HashSet::new();
         ips.insert(Ipv4Addr::new(172, 17, 80, 1));
         ips.insert(Ipv4Addr::new(172, 17, 80, 2));
@@ -365,47 +369,34 @@ mod tests {
         let entry = make_entry(Ipv4Addr::UNSPECIFIED, Some(ips), 5600, 9600);
         let egress = make_egress(vec![entry]);
 
-        // IP in the resolved set -> match
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
-            5600
-        )));
-
-        // IP not in the set -> no match
-        assert!(!egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            5600
-        )));
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(172, 17, 80, 1))));
+        assert!(!egress.encrypted(peer(EXT), dest(LOOPBACK)));
     }
 
     #[test]
     fn test_encrypted_host_and_ifname_and() {
-        // host = 172.17.80.1 AND ifname_ips contains 172.17.80.1
         let mut ips = HashSet::new();
         ips.insert(Ipv4Addr::new(172, 17, 80, 1));
 
         let entry = make_entry(Ipv4Addr::new(172, 17, 80, 1), Some(ips.clone()), 5600, 9600);
         let egress = make_egress(vec![entry]);
 
-        // Both match -> true
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
-            5600
-        )));
+        // Both match
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(172, 17, 80, 1))));
+        // Neither matches
+        assert!(!egress.encrypted(peer(EXT), dest(Ipv4Addr::new(172, 17, 80, 2))));
 
-        // IP matches neither host nor ifname -> false
-        assert!(!egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 2)),
-            5600
-        )));
-
-        // IP matches ifname but not host (different entry) -> false
+        // IP matches ifname but not host (separate entry)
         let entry2 = make_entry(Ipv4Addr::new(10, 0, 0, 1), Some(ips), 5601, 9601);
         let egress2 = make_egress(vec![entry2]);
-        assert!(!egress2.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
-            5601
-        )));
+        assert!(!egress2.encrypted(peer(EXT), dest(Ipv4Addr::new(172, 17, 80, 1))));
+    }
+
+    #[test]
+    fn test_encrypted_ifname_no_ips_blocks_all() {
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, Some(HashSet::new()), 5600, 9600);
+        let egress = make_egress(vec![entry]);
+        assert!(!egress.encrypted(peer(EXT), dest(EXT)));
     }
 
     #[test]
@@ -414,68 +405,182 @@ mod tests {
         let egress = make_egress(vec![entry]);
 
         let addr = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 5600);
-        assert!(!egress.encrypted(addr));
+        assert!(!egress.encrypted(peer(EXT), addr));
     }
 
-    #[test]
-    fn test_encrypted_ifname_no_ips_blocks_all() {
-        // ifname configured but interface has no IPs -> empty Some -> nothing matches
-        let entry = make_entry(Ipv4Addr::UNSPECIFIED, Some(HashSet::new()), 5600, 9600);
-        let egress = make_egress(vec![entry]);
-        // No IPs to match -> nothing is encrypted
-        assert!(!egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            5600
-        )));
-    }
+    // ── capture_local_traffic = false: peer locality is the gatekeeper ───────
+    //
+    // When false, the only question for the local-traffic shortcut is:
+    // "is the peer local?"  If yes → skip encryption.  If no → proceed to
+    // host/ifname matching normally.
 
-    #[test]
-    fn test_encrypted_local_ip_skipped_when_capture_local_traffic_false() {
-        // Host = 0.0.0.0 (wildcard), capture_local_traffic = false
-        // 127.0.0.1 is a local IP -> should return false
+    fn egress_no_capture(local_ips: HashSet<Ipv4Addr>) -> HookEgress {
         let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        HookEgress {
+            id: 0,
+            entries: vec![entry],
+            capture_local_traffic: false,
+            local_ips,
+        }
+    }
+
+    #[test]
+    fn test_no_capture_loopback_peer_always_skipped() {
+        // Loopback peer is always local (is_loopback()), regardless of dest
+        // or local_ips contents.
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let egress = egress_no_capture(ips);
+
+        // Loopback peer → loopback dest
+        assert!(!egress.encrypted(peer(LOOPBACK), dest(LOOPBACK)));
+        // Loopback peer → interface dest
+        assert!(!egress.encrypted(peer(LOOPBACK), dest(IFACE1)));
+        // Loopback peer → external dest
+        assert!(!egress.encrypted(peer(LOOPBACK), dest(EXT)));
+    }
+
+    #[test]
+    fn test_no_capture_interface_peer_always_skipped() {
+        // Peer is a known interface IP → local → skip, regardless of dest.
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        ips.insert(IFACE2);
+        let egress = egress_no_capture(ips);
+
+        // Interface peer → interface dest
+        assert!(!egress.encrypted(peer(IFACE1), dest(IFACE2)));
+        // Interface peer → loopback dest
+        assert!(!egress.encrypted(peer(IFACE1), dest(LOOPBACK)));
+        // Interface peer → external dest (the bug scenario: external-looking
+        // dest but local peer → must skip)
+        assert!(!egress.encrypted(peer(IFACE1), dest(EXT)));
+    }
+
+    #[test]
+    fn test_no_capture_external_peer_to_local_dest_is_encrypted() {
+        // The bug fix: external peer → local dest must be encrypted.
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let egress = egress_no_capture(ips);
+
+        // External → interface dest: encrypted
+        assert!(egress.encrypted(peer(EXT), dest(IFACE1)));
+        // External → loopback dest: encrypted
+        assert!(egress.encrypted(peer(EXT), dest(LOOPBACK)));
+        // External → external dest: encrypted
+        assert!(egress.encrypted(peer(EXT), dest(EXT)));
+    }
+
+    #[test]
+    fn test_no_capture_empty_local_ips_only_loopback_is_local() {
+        // With no interface IPs in local_ips, only loopback peers are local.
+        let egress = egress_no_capture(HashSet::new());
+
+        // Loopback peer → skipped
+        assert!(!egress.encrypted(peer(LOOPBACK), dest(LOOPBACK)));
+        // Any non-loopback peer → encrypted (wildcard entry always matches)
+        assert!(egress.encrypted(peer(EXT), dest(LOOPBACK)));
+        assert!(egress.encrypted(peer(IFACE1), dest(IFACE1)));
+    }
+
+    #[test]
+    fn test_no_capture_loopback_range_coverage() {
+        // is_loopback() covers all of 127.0.0.0/8, not just 127.0.0.1.
+        let egress = egress_no_capture(HashSet::new());
+
+        assert!(!egress.encrypted(peer(Ipv4Addr::new(127, 0, 0, 1)), dest(EXT)));
+        assert!(!egress.encrypted(peer(Ipv4Addr::new(127, 0, 0, 2)), dest(EXT)));
+        assert!(!egress.encrypted(peer(Ipv4Addr::new(127, 1, 2, 3)), dest(EXT)));
+    }
+
+    #[test]
+    fn test_no_capture_external_peer_host_mismatch_still_false() {
+        // External peer passes the local-traffic gate, but host/ifname
+        // matching can still reject the connection.
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let entry = make_entry(Ipv4Addr::new(10, 10, 10, 10), None, 5600, 9600);
         let egress = HookEgress {
             id: 0,
             entries: vec![entry],
             capture_local_traffic: false,
-            local_ips: {
-                let mut ips = HashSet::new();
-                ips.insert(Ipv4Addr::new(127, 0, 0, 1));
-                ips
-            },
+            local_ips: ips,
         };
 
-        assert!(!egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            5600
-        )));
+        // External peer passes gate, but dest doesn't match host → false
+        assert!(!egress.encrypted(peer(EXT), dest(IFACE1)));
+        // External peer passes gate, dest matches host → true
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(10, 10, 10, 10))));
+    }
 
-        // Non-local IP should still match
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            5600
-        )));
+    // ── capture_local_traffic = true: local-traffic shortcut is disabled ─────
+    //
+    // All connections proceed to host/ifname matching, regardless of peer
+    // locality.
+
+    fn egress_capture_local(local_ips: HashSet<Ipv4Addr>) -> HookEgress {
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        HookEgress {
+            id: 0,
+            entries: vec![entry],
+            capture_local_traffic: true,
+            local_ips,
+        }
     }
 
     #[test]
-    fn test_encrypted_local_ip_captured_when_capture_local_traffic_true() {
-        // Host = 0.0.0.0 (wildcard), capture_local_traffic = true
-        // 127.0.0.1 is local but should be captured
-        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+    fn test_capture_local_loopback_peer_encrypted() {
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let egress = egress_capture_local(ips);
+
+        // Loopback peer → any dest: still encrypted (wildcard entry)
+        assert!(egress.encrypted(peer(LOOPBACK), dest(LOOPBACK)));
+        assert!(egress.encrypted(peer(LOOPBACK), dest(IFACE1)));
+        assert!(egress.encrypted(peer(LOOPBACK), dest(EXT)));
+    }
+
+    #[test]
+    fn test_capture_local_interface_peer_encrypted() {
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        ips.insert(IFACE2);
+        let egress = egress_capture_local(ips);
+
+        // Interface peer → any dest: still encrypted
+        assert!(egress.encrypted(peer(IFACE1), dest(IFACE2)));
+        assert!(egress.encrypted(peer(IFACE1), dest(LOOPBACK)));
+        assert!(egress.encrypted(peer(IFACE1), dest(EXT)));
+    }
+
+    #[test]
+    fn test_capture_local_external_peer_encrypted() {
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let egress = egress_capture_local(ips);
+
+        assert!(egress.encrypted(peer(EXT), dest(IFACE1)));
+        assert!(egress.encrypted(peer(EXT), dest(LOOPBACK)));
+    }
+
+    #[test]
+    fn test_capture_local_host_mismatch_still_rejects() {
+        // Even with capture_local_traffic = true, host/ifname matching still
+        // applies.
+        let mut ips = HashSet::new();
+        ips.insert(IFACE1);
+        let entry = make_entry(Ipv4Addr::new(10, 10, 10, 10), None, 5600, 9600);
         let egress = HookEgress {
             id: 0,
             entries: vec![entry],
             capture_local_traffic: true,
-            local_ips: {
-                let mut ips = HashSet::new();
-                ips.insert(Ipv4Addr::new(127, 0, 0, 1));
-                ips
-            },
+            local_ips: ips,
         };
 
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            5600
-        )));
+        // Dest doesn't match host → false (even though peer is external)
+        assert!(!egress.encrypted(peer(EXT), dest(IFACE1)));
+        // Dest matches host → true
+        assert!(egress.encrypted(peer(EXT), dest(Ipv4Addr::new(10, 10, 10, 10))));
     }
 }
