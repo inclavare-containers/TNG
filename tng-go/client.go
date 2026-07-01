@@ -24,6 +24,9 @@ import (
 //	defer rt.Close()
 //	client := &http.Client{Transport: rt}
 //	resp, _ := client.Get("http://target:30001/api/data")
+// TngRoundTripper is the exported RoundTripper type.
+//
+//nolint:revive // Tng prefix is intentional: distinguishes from net/http.RoundTripper
 type TngRoundTripper struct {
 	proc      *tngproc.Process
 	transport *Transport

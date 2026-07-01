@@ -48,7 +48,7 @@ func New(cfg *IngressConfig) (*Process, error) {
 
 	// Start TNG subprocess
 	cmd := exec.Command(binPath, "launch", "--config-file", cfgPath)
-	cmd.Stdout = logFile  // Redirect stdout to log file for debugging
+	cmd.Stdout = logFile // Redirect stdout to log file for debugging
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 

@@ -55,6 +55,8 @@ func main() {
 }
 
 // Example streaming: streaming works natively via http_proxy, no special option needed.
+//
+//nolint:unused // kept as documentation example
 func exampleStreaming() {
 	cfg := &tng.Config{
 		Verify: map[string]any{

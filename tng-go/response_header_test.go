@@ -9,10 +9,10 @@ import (
 func TestParseAttestationInfoFromHeaders(t *testing.T) {
 	t.Run("with valid header containing JSON", func(t *testing.T) {
 		info := &AttestationInfo{
-			Token:     "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test",
+			Token:      "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test",
 			ASProvider: "coco",
-			ASAddr:    "http://localhost:8080",
-			PolicyIDs: []string{"policy-1", "policy-2"},
+			ASAddr:     "http://localhost:8080",
+			PolicyIDs:  []string{"policy-1", "policy-2"},
 		}
 		jsonBytes, err := json.Marshal(info)
 		if err != nil {

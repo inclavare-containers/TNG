@@ -28,7 +28,7 @@ func TestParseAttestationInfo(t *testing.T) {
 	}
 
 	// Malformed JSON
-	info, err = ParseAttestationInfo(`{invalid json}`)
+	_, err = ParseAttestationInfo(`{invalid json}`)
 	if err == nil {
 		t.Error("expected error for malformed JSON")
 	}
