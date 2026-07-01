@@ -19,12 +19,13 @@ use tng_testsuite::{
 /// - Server side: Python echo server on port 30001 + TNG with egress mapping
 ///   (0.0.0.0:20001 → 127.0.0.1:30001).
 /// - Client side: `tng exec` with ingress hook (captures connections to port
-///   20001) running a Python script that uses sendto() with MSG_FASTOPEN.
+///   20001) running a Python script that uses sendto() with MSG_FASTOPEN
+///   targeting the server address 192.168.1.1:20001.
 ///
 /// Flow:
 /// 1. Echo server (on server node) listens on port 30001.
 /// 2. Python client (inside `tng exec`) calls sendto(data, MSG_FASTOPEN,
-///    (127.0.0.1, 20001)) without calling connect() first.
+///    (192.168.1.1, 20001)) without calling connect() first.
 /// 3. sendto hook detects MSG_FASTOPEN, calls connect() hook to trigger
 ///    proxy hijacking → connection tunneled to server's egress mapping.
 /// 4. Server egress mapping forwards locally to echo server on 127.0.0.1:30001.
@@ -103,7 +104,7 @@ s.setsockopt(socket.IPPROTO_TCP, TCP_FASTOPEN, 1)
 # Send data using sendto with MSG_FASTOPEN — this bypasses connect().
 # The sendto hook must intercept this and route through the proxy tunnel.
 data = b"Hello TFO via sendto!"
-n = s.sendto(data, MSG_FASTOPEN, ("127.0.0.1", 20001))
+n = s.sendto(data, MSG_FASTOPEN, ("192.168.1.1", 20001))
 assert n == len(data), f"Expected sendto to send {len(data)} bytes, got {n}"
 
 # Read the echo response through the tunnel.

@@ -13,7 +13,7 @@ use tng_testsuite::{
 /// Architecture:
 /// - Server side: Echo server on port 30001 + TNG with egress mapping
 ///   (0.0.0.0:20001 → 127.0.0.1:30001).
-/// - Client side: `tng exec` with ingress hook (captures connect to 20001)
+/// - Client side: `tng exec` with ingress hook (captures connect to 192.168.1.1:20001)
 ///   running a Python TCP client.
 ///
 /// Flow:
@@ -86,7 +86,7 @@ sleep 120
 python3 -c '
 import socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("127.0.0.1", 20001))
+s.connect(("192.168.1.1", 20001))
 s.sendall(b"Hello World TCP!")
 s.shutdown(socket.SHUT_WR)
 d = s.recv(4096)
