@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use scopeguard::defer;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -89,13 +90,15 @@ impl Task for TngExecTask {
                 // On cancellation, kill the child process before returning.
                 tokio::select! {
                     status = child.wait() => {
+                        defer! {
+                            if stop_after_exit {
+                                token.cancel();
+                            }
+                        }
                         let status = status.context("Failed to wait for tng exec child")?;
                         tracing::info!(?status, "tng exec child exited");
                         if !status.success() {
                             anyhow::bail!("tng exec exited with status: {:?}", status);
-                        }
-                        if stop_after_exit {
-                            token.cancel();
                         }
                         Ok::<_, anyhow::Error>(())
                     }
