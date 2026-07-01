@@ -18,7 +18,7 @@ func Example_basicUsage() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	client := &http.Client{Transport: rt}
 	_ = client
@@ -29,7 +29,7 @@ func Example_basicUsage() {
 
 func Example_fallbackPassthrough() {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "fallback response")
+		_ = fmt.Fprint(w, "fallback response")
 	}))
 	defer ts.Close()
 
@@ -44,7 +44,7 @@ func Example_fallbackPassthrough() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	client := &http.Client{Transport: rt}
 	resp, err := client.Get(ts.URL)
@@ -52,7 +52,7 @@ func Example_fallbackPassthrough() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	fmt.Println("fallback status:", resp.StatusCode)
 	// Output: fallback status: 200
@@ -71,7 +71,7 @@ func Example_errorHandling() {
 		}
 		return
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	fmt.Println("RoundTripper created")
 	// Output: RoundTripper created
@@ -87,7 +87,7 @@ func Example_noRaTesting() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	fmt.Println("no-RA RoundTripper created")
 	// Output: no-RA RoundTripper created
@@ -105,7 +105,7 @@ func Example_fromJSON() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	fmt.Println("parsed config and created RoundTripper")
 	// Output: parsed config and created RoundTripper

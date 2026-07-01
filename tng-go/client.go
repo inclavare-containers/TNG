@@ -115,7 +115,7 @@ func (t *TngRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Read request body into a buffer (http_proxy expects rewritable body)
 	if req.Body != nil {
 		body, err := io.ReadAll(req.Body)
-		req.Body.Close()
+		_ = req.Body.Close()
 		if err != nil {
 			return nil, &Error{Op: "RoundTrip", Msg: "failed to read body", Err: err}
 		}

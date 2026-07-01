@@ -38,7 +38,7 @@ func TestWriteTempConfig_CreatesValidJson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	// Verify file exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {

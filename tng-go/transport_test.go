@@ -25,7 +25,7 @@ func TestTransport_RoundTrip_Fallback(t *testing.T) {
 	// Create a fallback server that returns a known response
 	fallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
-		w.Write([]byte("fallback"))
+		_, _ = w.Write([]byte("fallback"))
 	}))
 	defer fallbackServer.Close()
 
@@ -54,7 +54,7 @@ func TestTransport_RoundTrip_Fallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error from RoundTrip: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusTeapot {
 		t.Errorf("expected status %d, got %d", http.StatusTeapot, resp.StatusCode)

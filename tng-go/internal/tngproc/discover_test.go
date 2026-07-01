@@ -40,7 +40,7 @@ func TestFindTngBinary_EnvSetInvalid(t *testing.T) {
 
 func TestFindTngBinary_NotSetNotOnPath(t *testing.T) {
 	// Clear TNG_BINARY and ensure "tng" is not on PATH
-	os.Unsetenv("TNG_BINARY")
+	_ = os.Unsetenv("TNG_BINARY")
 	t.Setenv("PATH", "/nonexistent-empty-path")
 
 	_, err := findTngBinary()

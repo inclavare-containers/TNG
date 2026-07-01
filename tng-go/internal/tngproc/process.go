@@ -42,7 +42,7 @@ func New(cfg *IngressConfig) (*Process, error) {
 	// Create log file for debugging
 	logFile, err := os.CreateTemp("", "tng-sdk-*.log")
 	if err != nil {
-		os.Remove(cfgPath)
+		_ = os.Remove(cfgPath)
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
 
@@ -53,8 +53,8 @@ func New(cfg *IngressConfig) (*Process, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		logFile.Close()
-		os.Remove(cfgPath)
+		_ = logFile.Close()
+		_ = os.Remove(cfgPath)
 		return nil, fmt.Errorf("failed to start tng: %w", err)
 	}
 
@@ -65,7 +65,7 @@ func New(cfg *IngressConfig) (*Process, error) {
 
 	// Wait for readiness
 	if err := p.waitForReady(30 * time.Second); err != nil {
-		p.cleanup()
+		_ = p.cleanup()
 		return nil, fmt.Errorf("tng failed to start: %w", err)
 	}
 
@@ -102,7 +102,7 @@ func (p *Process) waitForReady(timeout time.Duration) error {
 		// Try TCP connection to the proxy port
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", p.proxyPort), 500*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			// Extra buffer to avoid iptables/SO_MARK race conditions
 			time.Sleep(200 * time.Millisecond)
 			return nil
@@ -137,13 +137,13 @@ func (p *Process) cleanup() error {
 	// Close and remove temp log file
 	if p.logFile != nil {
 		logPath := p.logFile.Name()
-		p.logFile.Close()
-		os.Remove(logPath)
+		_ = p.logFile.Close()
+		_ = os.Remove(logPath)
 	}
 
 	// Remove temp config
 	if p.cfgPath != "" {
-		os.Remove(p.cfgPath)
+		_ = os.Remove(p.cfgPath)
 	}
 
 	return nil
@@ -156,7 +156,7 @@ func findFreePort() (int, error) {
 		return 0, err
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 	return port, nil
 }
 
@@ -171,10 +171,10 @@ func writeTempConfig(port int, cfg *IngressConfig) (string, error) {
 		return "", err
 	}
 	if _, err := f.Write(configJSON); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 		return "", err
 	}
-	f.Close()
+	_ = f.Close()
 	return f.Name(), nil
 }

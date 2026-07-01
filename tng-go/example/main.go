@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create RoundTripper: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	// Use with standard http.Client
 	client := &http.Client{Transport: rt}
@@ -40,7 +40,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check server attestation
 	info := tng.GetAttestationInfo(resp)
@@ -70,14 +70,14 @@ func exampleStreaming() {
 	if err != nil {
 		log.Fatalf("Failed to create RoundTripper: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	client := &http.Client{Transport: rt}
 	resp, err := client.Get("http://target:30001/events")
 	if err != nil {
 		log.Fatalf("Request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read streaming response line by line (e.g. SSE)
 	scanner := bufio.NewScanner(resp.Body)
