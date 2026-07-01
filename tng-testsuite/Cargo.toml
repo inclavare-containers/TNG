@@ -239,3 +239,13 @@ name = "go_sdk_rats_tls"
 path = "tests/go_sdk_http/go_sdk_rats_tls.rs"
 required-features = ["go-sdk"]
 
+[[test]]
+name = "ingress_hook_capture_local_traffic"
+path = "tests/hook/ingress_hook_capture_local_traffic.rs"
+required-features = ["on-bin"]
+
+[[test]]
+name = "egress_hook_capture_local_traffic"
+path = "tests/hook/egress_hook_capture_local_traffic.rs"
+required-features = ["on-bin"]
+
