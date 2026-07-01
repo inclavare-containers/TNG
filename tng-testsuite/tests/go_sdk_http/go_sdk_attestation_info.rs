@@ -22,6 +22,7 @@ async fn test() -> Result<()> {
                         "in": { "host": "0.0.0.0", "port": 20001 },
                         "out": { "host": "127.0.0.1", "port": 30001 }
                     },
+                    "ohttp": {},
                     "no_ra": true
                 }]
             }"#,
