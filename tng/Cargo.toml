@@ -21,7 +21,6 @@ bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}
 clap = {workspace = true}
-local-ip-address = "0.6"
 console-subscriber = {workspace = true, optional = true}
 const_format = {workspace = true}
 derivative = {workspace = true}
@@ -41,6 +40,7 @@ hyper = {workspace = true}
 hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
+local-ip-address = "0.6"
 nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
 ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "7d45814b747eb3944b234956edc1e56e2bf9cb2f"}
 opentelemetry = {workspace = true, optional = true}
