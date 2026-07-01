@@ -809,7 +809,8 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 | `hook` | object | 是 | Hook egress 配置对象 |
 | `hook.capture_listen` | array | 是 | 要拦截的端口列表 |
 | `hook.capture_listen[].port` | number | 是 | 要拦截的端口 |
-| `hook.capture_listen[].host` | string | 否 | 要匹配的 IPv4 地址（默认：任意） |
+| `hook.capture_listen[].host` | string | 否 | 要匹配的 IPv4 地址（默认：`0.0.0.0` — 任意 IP） |
+| `hook.capture_listen[].ifname` | string | 否 | 网卡名称（如 `docker0`）。设置后，连接必须来自该网卡。`host` 和 `ifname` 是 AND 关系。 |
 | `hook.capture_listen[].port_end` | number | 否 | 范围匹配的结束端口 |
 | `hook.capture_listen[].redirect_to_port` | number | 否 | 重定向到的真实端口（未设置时自动分配） |
 | `hook.capture_listen[].redirect_to_port_end` | number | 否 | 重定向范围的结束端口 |
@@ -829,7 +830,7 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
                 "capture_listen": [
                     { "port": 8080 },
                     { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 },
-                    { "host": "192.168.1.1", "port": 30002, "redirect_to_port": 45002 }
+                    { "host": "192.168.1.1", "ifname": "docker0", "port": 30002, "redirect_to_port": 45002 }
                 ]
             },
             "attest": {

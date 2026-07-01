@@ -809,7 +809,8 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 | `hook` | object | Yes | Hook egress configuration object |
 | `hook.capture_listen` | array | Yes | List of ports to intercept |
 | `hook.capture_listen[].port` | number | Yes | Port to intercept |
-| `hook.capture_listen[].host` | string | No | IPv4 address to match (default: any) |
+| `hook.capture_listen[].host` | string | No | IPv4 address to match (default: `0.0.0.0` — any IP) |
+| `hook.capture_listen[].ifname` | string | No | Network interface name (e.g. `docker0`). When set, connections must arrive on this interface. `host` and `ifname` are AND conditions. |
 | `hook.capture_listen[].port_end` | number | No | End port for range matching |
 | `hook.capture_listen[].redirect_to_port` | number | No | Real port to redirect to (auto-allocated if not set) |
 | `hook.capture_listen[].redirect_to_port_end` | number | No | End port for redirect range |
@@ -829,7 +830,7 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
                 "capture_listen": [
                     { "port": 8080 },
                     { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 },
-                    { "host": "192.168.1.1", "port": 30002, "redirect_to_port": 45002 }
+                    { "host": "192.168.1.1", "ifname": "docker0", "port": 30002, "redirect_to_port": 45002 }
                 ]
             },
             "attest": {
