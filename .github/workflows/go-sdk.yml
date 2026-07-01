@@ -41,7 +41,7 @@ jobs:
           set -x
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-          yum install -y git make tar clang protobuf-devel jq
+          yum install -y git make tar clang protobuf-devel jq iptables
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
