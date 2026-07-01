@@ -182,7 +182,7 @@ impl TngExec {
         if let Some(ref json) = egress_json {
             child_cmd.env("TNG_HOOK_EGRESS_MAPPINGS", json);
         }
-        // Always set ingress mapping (even if empty proxies, for consistency)
+        // Always set ingress mapping (even if empty ingresses, for consistency)
         child_cmd.env("TNG_HOOK_INGRESS_MAPPINGS", &ingress_json);
 
         if let Some(ref log_file) = log_file {

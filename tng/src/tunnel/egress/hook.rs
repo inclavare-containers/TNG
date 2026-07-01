@@ -97,14 +97,12 @@ impl HookEgress {
 
         // Collect local interface IPs for capture_local_traffic filtering.
         let mut local_ips = HashSet::new();
-        // 127.0.0.0/8 loopback
-        for b in 0..=255u8 {
-            local_ips.insert(Ipv4Addr::new(127, b, 0, 1));
-        }
         if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
             for (_, addr) in ifaces {
                 if let IpAddr::V4(v4) = addr {
-                    local_ips.insert(v4);
+                    if !v4.is_loopback() {
+                        local_ips.insert(v4);
+                    }
                 }
             }
         }
@@ -133,8 +131,9 @@ impl HookEgress {
             IpAddr::V6(_) => return false,
         };
 
-        // When capture_local_traffic is false, skip if peer IP is local.
-        if !self.capture_local_traffic && self.local_ips.contains(&ip) {
+        // When capture_local_traffic is false, skip if peer IP is local
+        // (loopback or a network interface address).
+        if !self.capture_local_traffic && (ip.is_loopback() || self.local_ips.contains(&ip)) {
             return false;
         }
 
@@ -287,7 +286,9 @@ mod tests {
         HookEgress {
             id: 0,
             entries,
-            capture_local_traffic: false,
+            // Default to true so existing tests exercise the host/ifname
+            // matching logic without local-IP filtering.
+            capture_local_traffic: true,
             local_ips: HashSet::new(),
         }
     }

@@ -73,8 +73,10 @@ impl IngressHookLookup {
             for rule in &proxy.capture_rules {
                 if rule.matches(dst) {
                     // When capture_local_traffic is false, skip if destination
-                    // is a local interface IP.
-                    if !proxy.capture_local_traffic && self.local_ips.contains(dst.ip()) {
+                    // is a local interface IP or a loopback address.
+                    if !proxy.capture_local_traffic
+                        && (dst.ip().is_loopback() || self.local_ips.contains(dst.ip()))
+                    {
                         return None;
                     }
                     return Some(proxy.proxy_port);
@@ -85,24 +87,22 @@ impl IngressHookLookup {
     }
 }
 
-/// Collect all local interface IPv4 addresses at load time.
+/// Collect IPv4 addresses of non-loopback network interfaces at load time.
 ///
-/// Includes the full 127.0.0.0/8 loopback range and all IPs
-/// from `local_ip_address::list_afinet_netifas()`. If the
-/// interface enumeration fails, only loopback addresses are returned.
+/// Uses `local_ip_address::list_afinet_netifas()` to enumerate all interfaces.
+/// Loopback addresses are handled separately via `is_loopback()` in
+/// `find_proxy_port()`. If interface enumeration fails, an empty set is
+/// returned.
 fn get_local_ips() -> HashSet<Ipv4Addr> {
     let mut ips = HashSet::new();
 
-    // 127.0.0.0/8 loopback range
-    for b in 0..=255u8 {
-        ips.insert(Ipv4Addr::new(127, b, 0, 1));
-    }
-
-    // Runtime interfaces
+    // Runtime interfaces (non-loopback — loopback is checked via is_loopback())
     if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
         for (_, addr) in ifaces {
             if let IpAddr::V4(v4) = addr {
-                ips.insert(v4);
+                if !v4.is_loopback() {
+                    ips.insert(v4);
+                }
             }
         }
     }
