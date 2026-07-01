@@ -57,10 +57,7 @@ impl HookEgress {
         let mut entries: Vec<ResolvedEgressEntry> = Vec::new();
 
         for entry in &hook_args.resolved_entries {
-            let resolved_ifname_ips = match &entry.ifname {
-                None => None,
-                Some(name) => Some(resolve_ifname_ips(name)),
-            };
+            let resolved_ifname_ips = entry.ifname.as_ref().map(|name| resolve_ifname_ips(name));
 
             entries.push(ResolvedEgressEntry {
                 origin_port: entry.origin_port,
