@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tng_testsuite::{
     run_test,
-    task::{tng::TngExecTask, Task as _},
+    task::{tng::TngExecTask, NodeType, Task as _},
 };
 
 /// Test that the connect hook rejects connections to 0.0.0.0 (NULL IP).
@@ -41,6 +41,7 @@ async fn test() -> Result<()> {
             .to_string(),
         ],
         true, // stop_after_exit: test is complete once this exits
+        NodeType::Client,
     )
     .boxed(),])
     .await?;
