@@ -16,24 +16,22 @@ linters:
     - misspell
     - unconvert
     - revive
-
-settings:
-  govet:
-    check-shadowing: true
-  revive:
-    rules:
-      - name: exported
-        severity: warning
-      - name: blank-imports
-        severity: warning
-      - name: context-as-parameter
-        severity: warning
-      - name: error-return
-        severity: warning
-      - name: var-declaration
-        severity: warning
+  settings:
+    govet:
+      check-shadowing: true
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: blank-imports
+          severity: warning
+        - name: context-as-parameter
+          severity: warning
+        - name: error-return
+          severity: warning
+        - name: var-declaration
+          severity: warning
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 50
   max-same-issues: 10
