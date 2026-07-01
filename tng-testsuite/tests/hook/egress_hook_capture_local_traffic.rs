@@ -1,10 +1,5 @@
 use anyhow::Result;
-use tng_testsuite::{
-    run_test,
-    task::tng::TngExecTask,
-    task::NodeType,
-    task::Task as _,
-};
+use tng_testsuite::{run_test, task::tng::TngExecTask, task::NodeType, task::Task as _};
 
 /// Test egress hook with `capture_local_traffic` defaulting to `false`.
 ///

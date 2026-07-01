@@ -249,3 +249,8 @@ name = "egress_hook_capture_local_traffic"
 path = "tests/hook/egress_hook_capture_local_traffic.rs"
 required-features = ["on-bin"]
 
+[[test]]
+name = "ingress_hook_capture_local_traffic_true"
+path = "tests/hook/ingress_hook_capture_local_traffic_true.rs"
+required-features = ["on-bin"]
+
