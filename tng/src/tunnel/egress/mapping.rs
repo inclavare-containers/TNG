@@ -91,7 +91,9 @@ impl EgressTrait for MappingEgress {
                     let addr = format!("{host}:{port}");
                     tracing::debug!(%addr, "Add TCP listener");
 
-                    let listener = TcpListener::bind(&addr).await?;
+                    let listener = TcpListener::bind(&addr).await.with_context(|| {
+                        format!("Failed to bind mapping egress listener on {addr}")
+                    })?;
                     listener.set_listener_common_sock_opts()?;
                     let local_addr = listener.local_addr()?;
                     let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), out_port));
@@ -106,7 +108,9 @@ impl EgressTrait for MappingEgress {
                 let addr = format!("{host}:{}", rule.r#in.port);
                 tracing::debug!(%addr, "Add TCP listener");
 
-                let listener = TcpListener::bind(&addr).await?;
+                let listener = TcpListener::bind(&addr)
+                    .await
+                    .with_context(|| format!("Failed to bind mapping egress listener on {addr}"))?;
                 listener.set_listener_common_sock_opts()?;
                 let local_addr = listener.local_addr()?;
                 let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), rule.out.port));

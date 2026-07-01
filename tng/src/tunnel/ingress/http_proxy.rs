@@ -288,7 +288,9 @@ impl HttpProxyIngress {
         // The port is bound here at construction time.
         let listen_addr_full = format!("{}:{}", listen_addr, listen_port);
         tracing::debug!(%listen_addr_full, "Add TCP listener");
-        let std_listener = std::net::TcpListener::bind(&listen_addr_full)?;
+        let std_listener = std::net::TcpListener::bind(&listen_addr_full).with_context(|| {
+            format!("Failed to bind http_proxy ingress listener on {listen_addr_full}")
+        })?;
         std_listener
             .set_nonblocking(true)
             .context("Failed to set nonblocking on listener")?;

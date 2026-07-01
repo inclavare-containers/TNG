@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -69,7 +69,11 @@ impl HookIngress {
         // before the listener is ready.
         let listen_addr_full = format!("{}:{}", listen_addr, listen_port);
         tracing::debug!(%listen_addr_full, "Add TCP listener for hook ingress");
-        let listener = TcpListener::bind(&listen_addr_full).await?;
+        let listener = TcpListener::bind(&listen_addr_full)
+            .await
+            .with_context(|| {
+                format!("Failed to bind hook ingress listener on {listen_addr_full}")
+            })?;
         listener.set_listener_common_sock_opts()?;
         let listener_addr = listener.local_addr()?;
 

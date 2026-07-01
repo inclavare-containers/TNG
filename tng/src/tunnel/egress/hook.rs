@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::stream::select_all;
@@ -215,7 +215,9 @@ impl EgressTrait for HookEgress {
             let addr = format!("0.0.0.0:{}", entry.origin_port);
             tracing::debug!(%addr, real_port = entry.real_port, "Hook egress: Add TCP listener on origin port");
 
-            let listener = TcpListener::bind(&addr).await?;
+            let listener = TcpListener::bind(&addr)
+                .await
+                .with_context(|| format!("Failed to bind hook egress listener on {addr}"))?;
             listener.set_listener_common_sock_opts()?;
             let local_addr = listener.local_addr()?;
 

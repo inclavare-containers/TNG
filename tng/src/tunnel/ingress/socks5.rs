@@ -133,7 +133,9 @@ impl IngressTrait for Socks5Ingress {
         let listen_addr = format!("{}:{}", self.listen_addr, self.listen_port);
         tracing::debug!(%listen_addr, "Add TCP listener");
 
-        let listener = TcpListener::bind(listen_addr).await?;
+        let listener = TcpListener::bind(&listen_addr)
+            .await
+            .with_context(|| format!("Failed to bind socks5 ingress listener on {listen_addr}"))?;
         listener.set_listener_common_sock_opts()?;
 
         let listener_addr = listener.local_addr()?;

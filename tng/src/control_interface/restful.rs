@@ -1,6 +1,6 @@
 use std::{convert::Infallible, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{extract::Path, routing::get, Json, Router};
 use http::{HeaderValue, StatusCode};
 use tower::ServiceBuilder;
@@ -81,7 +81,12 @@ impl RestfulControlInterface {
             port = addr.1,
             "Restful Control interface listening"
         );
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| {
+            format!(
+                "Failed to bind REST control interface on {}:{}",
+                addr.0, addr.1
+            )
+        })?;
         axum::serve(listener, app).await?;
 
         tracing::info!("Restful Control interface stopping");

@@ -97,7 +97,9 @@ impl EgressTrait for NetfilterEgress {
         // Setup iptables
         let iptables_guard = IptablesExecutor::setup(self).await?;
 
-        let listener = TcpListener::bind(listen_addr).await?;
+        let listener = TcpListener::bind(&listen_addr).await.with_context(|| {
+            format!("Failed to bind netfilter egress listener on {listen_addr}")
+        })?;
         listener.set_listener_common_sock_opts()?;
 
         let listen_addr = listener.local_addr()?;
