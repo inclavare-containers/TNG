@@ -140,37 +140,15 @@ func TestIntegration_CreateClient_PassportMode(t *testing.T) {
 // Integration tests: functional RoundTrip (requires target server)
 // ---------------------------------------------------------------------------
 
-// TestIntegration_NoRA_RoundTrip tests a full request/response cycle in NoRA
-// mode. It starts a local mock HTTP server that emulates a TNG egress proxy
-// capable of handling the OHTTP protocol in NoRA mode.
-//
-// NOTE: This test currently documents the expected behavior. The mock server
-// would need to implement the full OHTTP protocol to pass. Until a local
-// OHTTP proxy is available for testing, this test verifies that:
-// 1. Client creation succeeds
-// 2. RoundTrip returns an error (expected, since no real OHTTP endpoint exists)
-func TestIntegration_NoRA_RoundTrip(t *testing.T) {
-	cfg := &Config{
-		NoRA: true,
-	}
+// NOTE: Full RoundTrip integration tests (GET, POST, Streaming, etc.) have
+// been migrated to tng-testsuite (tests/go_sdk_http/), which exercises the
+// Go SDK against a real Rust TNG server through the OHTTP tunnel.
+// The tests below verify SDK-level behavior (client creation, fallback,
+// error handling) that does not require a real TNG egress server.
 
-	rt, err := NewRoundTripper(cfg)
-	if err != nil {
-		t.Fatalf("NewRoundTripper failed: %v", err)
-	}
-	defer rt.Close()
-
-	// Attempt a request to a non-OHTTP endpoint.
-	// In NoRA mode, this should fail with a connection or protocol error
-	// because the target is not a TNG egress proxy.
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:19999/test", nil)
-	_, err = rt.RoundTrip(req)
-	if err == nil {
-		t.Log("RoundTrip succeeded unexpectedly (no target server running)")
-	} else {
-		t.Logf("RoundTrip failed as expected (no OHTTP proxy at target): %v", err)
-	}
-}
+// ---------------------------------------------------------------------------
+// Integration tests: fallback (uses httptest.Server, no TNG server needed)
+// ---------------------------------------------------------------------------
 
 // TestIntegration_Fallback_PassThrough verifies that the fallback transport
 // correctly delegates traffic when the URL matches the fallback predicate.
