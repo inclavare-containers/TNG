@@ -1,4 +1,5 @@
-use std::net::SocketAddrV4;
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,8 @@ pub struct IngressHookCaptureRule {
 /// Built once at library init time, read-only thereafter.
 pub struct IngressHookLookup {
     ingresses: Vec<IngressInstance>,
+    /// Cached set of local interface IPs, built at init time.
+    local_ips: HashSet<Ipv4Addr>,
 }
 
 impl IngressHookLookup {
@@ -58,6 +61,7 @@ impl IngressHookLookup {
     pub fn from_table(table: &IngressHookMappingTable) -> Self {
         Self {
             ingresses: table.ingresses.clone(),
+            local_ips: get_local_ips(),
         }
     }
 
@@ -68,12 +72,42 @@ impl IngressHookLookup {
         for proxy in &self.ingresses {
             for rule in &proxy.capture_rules {
                 if rule.matches(dst) {
+                    // When capture_local_traffic is false, skip if destination
+                    // is a local interface IP.
+                    if !proxy.capture_local_traffic && self.local_ips.contains(dst.ip()) {
+                        return None;
+                    }
                     return Some(proxy.proxy_port);
                 }
             }
         }
         None
     }
+}
+
+/// Collect all local interface IPv4 addresses at load time.
+///
+/// Includes the full 127.0.0.0/8 loopback range and all IPs
+/// from `local_ip_address::list_afinet_netifas()`. If the
+/// interface enumeration fails, only loopback addresses are returned.
+fn get_local_ips() -> HashSet<Ipv4Addr> {
+    let mut ips = HashSet::new();
+
+    // 127.0.0.0/8 loopback range
+    for b in 0..=255u8 {
+        ips.insert(Ipv4Addr::new(127, b, 0, 1));
+    }
+
+    // Runtime interfaces
+    if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
+        for (_, addr) in ifaces {
+            if let IpAddr::V4(v4) = addr {
+                ips.insert(v4);
+            }
+        }
+    }
+
+    ips
 }
 
 impl IngressHookCaptureRule {
@@ -221,5 +255,71 @@ mod tests {
         assert_eq!(parsed.ingresses[0].proxy_port, 49001);
         assert_eq!(parsed.ingresses[0].capture_rules.len(), 2);
         assert_eq!(parsed.ingresses[1].capture_rules[0].port_end, Some(8090));
+    }
+
+    #[test]
+    fn test_find_proxy_port_skips_local_ip_when_capture_local_traffic_false() {
+        // Build a table with capture_local_traffic: false
+        let table = IngressHookMappingTable {
+            ingresses: vec![IngressInstance {
+                proxy_port: 49001,
+                capture_rules: vec![IngressHookCaptureRule {
+                    host_cidr: "*".to_string(), // match any
+                    port: 80,
+                    port_end: None,
+                }],
+                capture_local_traffic: false,
+            }],
+        };
+        let lookup = IngressHookLookup::from_table(&table);
+
+        // 127.0.0.1 is a local IP -> should be skipped
+        assert!(lookup
+            .find_proxy_port(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 80))
+            .is_none());
+    }
+
+    #[test]
+    fn test_find_proxy_port_captures_local_ip_when_capture_local_traffic_true() {
+        let table = IngressHookMappingTable {
+            ingresses: vec![IngressInstance {
+                proxy_port: 49001,
+                capture_rules: vec![IngressHookCaptureRule {
+                    host_cidr: "*".to_string(),
+                    port: 80,
+                    port_end: None,
+                }],
+                capture_local_traffic: true,
+            }],
+        };
+        let lookup = IngressHookLookup::from_table(&table);
+
+        // 127.0.0.1 is local but capture_local_traffic is true -> should match
+        assert_eq!(
+            lookup.find_proxy_port(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 80)),
+            Some(49001)
+        );
+    }
+
+    #[test]
+    fn test_find_proxy_port_non_local_ip_always_matches() {
+        let table = IngressHookMappingTable {
+            ingresses: vec![IngressInstance {
+                proxy_port: 49001,
+                capture_rules: vec![IngressHookCaptureRule {
+                    host_cidr: "*".to_string(),
+                    port: 80,
+                    port_end: None,
+                }],
+                capture_local_traffic: false,
+            }],
+        };
+        let lookup = IngressHookLookup::from_table(&table);
+
+        // 10.0.0.5 is not local -> should match even with capture_local_traffic: false
+        assert_eq!(
+            lookup.find_proxy_port(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 5), 80)),
+            Some(49001)
+        );
     }
 }
