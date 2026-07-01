@@ -67,6 +67,29 @@ impl HookEgress {
             });
         }
 
+        // Diagnose missing ifname interfaces at startup so users know why
+        // all connections are being blocked.
+        for entry in &entries {
+            if let Some(ips) = &entry.resolved_ifname_ips {
+                if ips.is_empty() {
+                    let ifname = hook_args
+                        .resolved_entries
+                        .iter()
+                        .find(|r| {
+                            r.origin_port == entry.origin_port && r.real_port == entry.real_port
+                        })
+                        .and_then(|r| r.ifname.as_deref())
+                        .unwrap_or("?");
+                    tracing::warn!(
+                        %ifname,
+                        origin_port = entry.origin_port,
+                        real_port = entry.real_port,
+                        "ifname configured but interface not found or has no IPv4 addresses — connections will bypass tunnel"
+                    );
+                }
+            }
+        }
+
         Self { id, entries }
     }
 
@@ -345,7 +368,7 @@ mod tests {
             5600
         )));
 
-        // IP matches ifname but not host -> false
+        // IP matches neither host nor ifname -> false
         assert!(!egress.encrypted(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::new(172, 17, 80, 2)),
             5600
