@@ -157,8 +157,8 @@ impl EgressFlow {
 
             if !encrypted {
                 // Transport-level direct forward: determined at accept time by the
-                // egress mode's host CIDR filter (HookEgress::encrypted checks whether
-                // the connection's local_addr.ip() matches a configured CIDR).
+                // egress mode's host/ifname filter (HookEgress::encrypted checks whether
+                // the connection's local_addr.ip() matches a configured host and ifname).
                 // When the IP doesn't match any rule, the entire connection bypasses
                 // the trusted stream manager — no OHTTP/RATS-TLS processing happens.
                 // This is a per-connection decision, made once when the TCP accept occurs.
@@ -211,7 +211,7 @@ impl EgressFlow {
                         // decryption entirely and is forwarded as plain HTTP to upstream.
                         //
                         // This is a per-request decision, distinct from the transport-level
-                        // decision above. A connection can pass the transport-level CIDR
+                        // decision above. A connection can pass the transport-level IP/ifname
                         // check (encrypted=true, entering the trusted stream path) yet
                         // still yield DirectlyForward NextStreams when individual request
                         // paths match the direct_forward rules.
