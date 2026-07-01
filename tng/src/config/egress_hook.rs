@@ -1,14 +1,12 @@
+use std::net::Ipv4Addr;
+
 use anyhow::bail;
-use cidr::Ipv4Cidr;
 use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
-use std::net::Ipv4Addr;
-use std::ops::RangeInclusive;
 
-/// Wildcard CIDR (0.0.0.0/0 — match all).
-#[allow(clippy::expect_used)]
-fn wildcard_cidr() -> Ipv4Cidr {
-    Ipv4Cidr::new(Ipv4Addr::UNSPECIFIED, 0).expect("0.0.0.0/0 is always valid")
+/// Wildcard IP address (0.0.0.0 — match all).
+fn wildcard_ip() -> Ipv4Addr {
+    Ipv4Addr::UNSPECIFIED
 }
 
 /// Configuration for the hook-based egress mode.
@@ -43,7 +41,11 @@ pub struct EgressHookArgs {
 pub struct EgressHookInterceptEntry {
     /// IPv4 address to match (e.g., "0.0.0.0", "192.168.1.1").
     /// When omitted, matches any bind address.
-    pub host: Option<Ipv4Cidr>,
+    pub host: Option<Ipv4Addr>,
+
+    /// Optional network interface name to match (e.g., "eth0", "docker0").
+    /// When specified, the bind address must belong to this interface.
+    pub ifname: Option<String>,
 
     /// Port to intercept. Required.
     pub port: Option<u16>,
@@ -69,42 +71,18 @@ pub struct EgressHookInterceptEntry {
 /// Internal mapping entry used by TNG exec/runtime.
 ///
 /// Unlike EgressHookMappingEntry (passed to the .so), this includes the host
-/// CIDR for runtime accept-time filtering.
+/// IP for runtime accept-time filtering.
 #[derive(Debug, Clone)]
 pub struct TngEgressHookMappingEntry {
-    /// Host CIDR to match at accept time (e.g. 172.17.80.0/20)
-    pub host_cidr: Ipv4Cidr,
+    /// Host IP to match at accept time (e.g. 172.17.80.1).
+    /// Ipv4Addr::UNSPECIFIED (0.0.0.0) means match any host.
+    pub host: Ipv4Addr,
+    /// Optional network interface name to match at accept time.
+    pub ifname: Option<String>,
     /// The port the app thinks it's binding to
     pub origin_port: u16,
     /// The actual port the app binds to (redirected by hook)
     pub real_port: u16,
-}
-
-impl TngEgressHookMappingEntry {
-    /// Build a host filter rule from this mapping entry.
-    ///
-    /// Returns `None` when the host CIDR is 0.0.0.0/0 (match all),
-    /// meaning no host-level filtering is needed.
-    pub fn host_filter_rule(&self) -> Option<EgressHookHostFilterRule> {
-        let cidr = &self.host_cidr;
-        if cidr.first_address() == Ipv4Addr::UNSPECIFIED && cidr.network_length() == 0 {
-            return None;
-        }
-        Some(EgressHookHostFilterRule {
-            host_cidr: self.host_cidr,
-            port_range: self.origin_port..=self.origin_port,
-        })
-    }
-}
-
-/// Host filter rule used at accept time.
-///
-/// A connection's local_addr.ip() is checked against this CIDR,
-/// and the local port is checked against the port range.
-#[derive(Debug, Clone)]
-pub struct EgressHookHostFilterRule {
-    pub host_cidr: Ipv4Cidr,
-    pub port_range: RangeInclusive<u16>,
 }
 
 impl EgressHookInterceptEntry {
@@ -125,15 +103,17 @@ impl EgressHookInterceptEntry {
             bail!("'port_end' ({}) must be >= 'port' ({})", port_end, port);
         }
 
-        // Default host CIDR: 0.0.0.0/0 (match all) when not specified
-        let host_cidr = self.host.unwrap_or(wildcard_cidr());
+        // Default host IP: 0.0.0.0 (match all) when not specified
+        let host = self.host.unwrap_or(wildcard_ip());
+        let ifname = self.ifname.clone();
 
         let redirect_to_port = self.redirect_to_port;
         let redirect_to_port_end = self.redirect_to_port_end;
 
         // Helper to create a mapping entry
         let make_entry = |origin_port: u16, real_port: u16| TngEgressHookMappingEntry {
-            host_cidr,
+            host,
+            ifname: ifname.clone(),
             origin_port,
             real_port,
         };
@@ -253,6 +233,7 @@ mod tests {
             "redirect_to_port": 45002
         }))?;
         assert!(entry.host.is_some());
+        assert_eq!(entry.host.unwrap(), Ipv4Addr::new(192, 168, 1, 1));
         Ok(())
     }
 
@@ -266,8 +247,8 @@ mod tests {
         assert_eq!(entries[0].origin_port, 8080);
         assert_eq!(entries[0].real_port, 40000);
         assert_eq!(next_port, 40001);
-        // host_cidr should be 0.0.0.0/0 when not specified
-        assert!(entries[0].host_cidr.contains(&Ipv4Addr::UNSPECIFIED));
+        // host should be 0.0.0.0 (wildcard) when not specified
+        assert_eq!(entries[0].host, Ipv4Addr::UNSPECIFIED);
         Ok(())
     }
 
@@ -386,35 +367,31 @@ mod tests {
     }
 
     #[test]
-    fn test_host_filter_rule_wildcard_returns_none() {
-        // When host CIDR is 0.0.0.0/0, host_filter_rule should return None
+    fn test_ifname_propagation() {
         let entry: EgressHookInterceptEntry = serde_json::from_value(json!({
+            "host": "10.0.0.1",
+            "ifname": "eth0",
             "port": 8080,
             "redirect_to_port": 48080
         }))
         .unwrap();
         let (entries, _) = entry.expand_mappings(40000).unwrap();
-        assert!(entries[0].host_filter_rule().is_none());
+        assert_eq!(entries[0].host, Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(entries[0].ifname.as_deref(), Some("eth0"));
     }
 
     #[test]
-    fn test_host_filter_rule_specific_host_returns_some() {
-        // When host CIDR is a specific network, host_filter_rule should return Some
+    fn test_wildcard_ip_default() {
+        assert_eq!(wildcard_ip(), Ipv4Addr::UNSPECIFIED);
+    }
+
+    #[test]
+    fn test_ifname_none_by_default() {
         let entry: EgressHookInterceptEntry = serde_json::from_value(json!({
-            "host": "172.17.80.0/20",
-            "port": 8080,
-            "redirect_to_port": 48080
+            "port": 8080
         }))
         .unwrap();
         let (entries, _) = entry.expand_mappings(40000).unwrap();
-        let rule = entries[0].host_filter_rule().expect("expected Some");
-        assert_eq!(rule.port_range, (8080..=8080));
-        // Verify the CIDR matches
-        assert!(rule
-            .host_cidr
-            .contains(&"172.17.80.0".parse::<Ipv4Addr>().unwrap()));
-        assert!(!rule
-            .host_cidr
-            .contains(&"192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+        assert!(entries[0].ifname.is_none());
     }
 }
