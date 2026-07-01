@@ -96,14 +96,10 @@ impl HookEgress {
     /// Check whether a connection arriving at local_addr should go through
     /// the encryption/decryption path.
     ///
-    /// Returns true if:
-    /// - local_addr.ip() matches the configured host (0.0.0.0 = wildcard), AND
-    /// - if ifname was configured (Some), local_addr.ip() is in the resolved ifname IP set
-    /// - if ifname was not configured (None), skip the ifname check
-    /// - IPv6 connections always return false
-    /// - No entries -> default to encrypted (backward compatible)
+    /// Returns true if local_addr matches any entry's host AND ifname filter.
+    /// When no entries are configured, defaults to encrypted (backward compatible).
+    /// IPv6 connections always return false.
     pub fn encrypted(&self, local_addr: SocketAddr) -> bool {
-        // No entries configured -> default to encrypted (backward compatible)
         if self.entries.is_empty() {
             return true;
         }
@@ -114,25 +110,17 @@ impl HookEgress {
         };
 
         for entry in &self.entries {
-            // Host check: 0.0.0.0 matches all, otherwise exact match
-            if !entry.host.is_unspecified() && entry.host != ip {
-                continue;
-            }
+            let host_match = entry.host.is_unspecified() || entry.host == ip;
+            let ifname_match = match &entry.resolved_ifname_ips {
+                None => true,                   // no ifname configured
+                Some(set) => set.contains(&ip), // empty set → false (no IPs)
+            };
 
-            // Ifname check: None = no filter (pass-through),
-            // Some(empty) = nothing matches, Some(set) = must contain IP
-            match &entry.resolved_ifname_ips {
-                None => {} // no ifname configured -> pass-through
-                Some(set) if set.is_empty() => continue,
-                Some(set) if !set.contains(&ip) => continue,
-                Some(_) => {}
+            if host_match && ifname_match {
+                return true;
             }
-
-            // Found a matching entry
-            return true;
         }
 
-        // Entries exist but none matched
         false
     }
 }
