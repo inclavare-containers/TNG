@@ -315,7 +315,8 @@ impl TngExec {
                         .pick()
                         .context("Failed to pick unused port for hook mapping")?;
                     entries.push(TngEgressHookMappingEntry {
-                        host_cidr: e.host_cidr,
+                        host: e.host,
+                        ifname: e.ifname,
                         origin_port: e.origin_port,
                         real_port,
                     });
@@ -623,12 +624,14 @@ mod tests {
     fn test_check_conflicts_no_conflict() {
         let entries = vec![
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8080,
                 real_port: 48080,
             },
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8081,
                 real_port: 48081,
             },
@@ -640,12 +643,14 @@ mod tests {
     fn test_check_conflicts_duplicate_origin() {
         let entries = vec![
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8080,
                 real_port: 48080,
             },
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8080,
                 real_port: 48080, // same origin, same real → no conflict
             },
@@ -657,12 +662,14 @@ mod tests {
     fn test_check_conflicts_real_port_collision() {
         let entries = vec![
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8080,
                 real_port: 48080,
             },
             TngEgressHookMappingEntry {
-                host_cidr: cidr::Ipv4Cidr::new(std::net::Ipv4Addr::UNSPECIFIED, 0).unwrap(),
+                host: std::net::Ipv4Addr::UNSPECIFIED,
+                ifname: None,
                 origin_port: 8081,
                 real_port: 48080, // different origin, same real → conflict
             },
