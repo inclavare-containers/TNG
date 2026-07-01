@@ -29,7 +29,7 @@ func Example_basicUsage() {
 
 func Example_fallbackPassthrough() {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = fmt.Fprint(w, "fallback response")
+		_, _ = fmt.Fprint(w, "fallback response")
 	}))
 	defer ts.Close()
 
