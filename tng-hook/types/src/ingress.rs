@@ -6,23 +6,29 @@ use serde::{Deserialize, Serialize};
 ///
 /// Serialized as JSON and passed via `TNG_HOOK_INGRESS_MAPPINGS` environment variable.
 /// Groups capture rules by their shared proxy port — one ingress hook rule
-/// produces one `IngressHookProxy` entry.
+/// produces one `IngressInstance` entry.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IngressHookMappingTable {
     /// One entry per unique HTTP proxy port. Each proxy groups its
     /// capture rules that should be routed through it.
-    pub proxies: Vec<IngressHookProxy>,
+    pub ingresses: Vec<IngressInstance>,
 }
 
-/// A single HTTP proxy endpoint with its associated capture rules.
+/// A single ingress instance: which proxy port to use, which
+/// destination rules trigger capture, and whether local-IP traffic
+/// should also be captured.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngressHookProxy {
+pub struct IngressInstance {
     /// The internal HTTP proxy port on the TNG main process that
     /// handles CONNECT requests for the associated capture rules.
     pub proxy_port: u16,
 
     /// Capture rules that map to this proxy port.
     pub capture_rules: Vec<IngressHookCaptureRule>,
+
+    /// Mirrors the config-level capture_local_traffic for this instance.
+    /// When false, connections to local interface IPs are excluded.
+    pub capture_local_traffic: bool,
 }
 
 /// A single capture rule: match destination IP+port and route to the proxy.
@@ -44,22 +50,22 @@ pub struct IngressHookCaptureRule {
 ///
 /// Built once at library init time, read-only thereafter.
 pub struct IngressHookLookup {
-    proxies: Vec<IngressHookProxy>,
+    ingresses: Vec<IngressInstance>,
 }
 
 impl IngressHookLookup {
     /// Build the lookup from a deserialized `IngressHookMappingTable`.
     pub fn from_table(table: &IngressHookMappingTable) -> Self {
         Self {
-            proxies: table.proxies.clone(),
+            ingresses: table.ingresses.clone(),
         }
     }
 
     /// Find the proxy port for a given destination (IP, port).
     /// Returns the first matching proxy_port, or None.
-    /// Iterates proxies in order; within each proxy, checks capture_rules.
+    /// Iterates ingresses in order; within each ingress, checks capture_rules.
     pub fn find_proxy_port(&self, dst: SocketAddrV4) -> Option<u16> {
-        for proxy in &self.proxies {
+        for proxy in &self.ingresses {
             for rule in &proxy.capture_rules {
                 if rule.matches(dst) {
                     return Some(proxy.proxy_port);
@@ -140,22 +146,24 @@ mod tests {
     #[test]
     fn test_ingress_lookup_first_match_wins() {
         let table = IngressHookMappingTable {
-            proxies: vec![
-                IngressHookProxy {
+            ingresses: vec![
+                IngressInstance {
                     proxy_port: 49001,
                     capture_rules: vec![IngressHookCaptureRule {
                         host_cidr: "10.0.0.0/24".to_string(),
                         port: 80,
                         port_end: None,
                     }],
+                    capture_local_traffic: false,
                 },
-                IngressHookProxy {
+                IngressInstance {
                     proxy_port: 49002,
                     capture_rules: vec![IngressHookCaptureRule {
                         host_cidr: "*".to_string(),
                         port: 80,
                         port_end: None,
                     }],
+                    capture_local_traffic: false,
                 },
             ],
         };
@@ -179,8 +187,8 @@ mod tests {
     #[test]
     fn test_ingress_json_roundtrip() {
         let table = IngressHookMappingTable {
-            proxies: vec![
-                IngressHookProxy {
+            ingresses: vec![
+                IngressInstance {
                     proxy_port: 49001,
                     capture_rules: vec![
                         IngressHookCaptureRule {
@@ -194,22 +202,24 @@ mod tests {
                             port_end: None,
                         },
                     ],
+                    capture_local_traffic: false,
                 },
-                IngressHookProxy {
+                IngressInstance {
                     proxy_port: 49002,
                     capture_rules: vec![IngressHookCaptureRule {
                         host_cidr: "*".to_string(),
                         port: 8080,
                         port_end: Some(8090),
                     }],
+                    capture_local_traffic: true,
                 },
             ],
         };
         let json = serde_json::to_string(&table).unwrap();
         let parsed: IngressHookMappingTable = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.proxies.len(), 2);
-        assert_eq!(parsed.proxies[0].proxy_port, 49001);
-        assert_eq!(parsed.proxies[0].capture_rules.len(), 2);
-        assert_eq!(parsed.proxies[1].capture_rules[0].port_end, Some(8090));
+        assert_eq!(parsed.ingresses.len(), 2);
+        assert_eq!(parsed.ingresses[0].proxy_port, 49001);
+        assert_eq!(parsed.ingresses[0].capture_rules.len(), 2);
+        assert_eq!(parsed.ingresses[1].capture_rules[0].port_end, Some(8090));
     }
 }

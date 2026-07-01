@@ -12,7 +12,7 @@ use crate::config::ingress::IngressHookArgs;
 use crate::config::ingress::IngressMode as IngressHookMode;
 use crate::config::{
     EgressHookMappingEntry, EgressHookMappingTable, IngressHookCaptureRule,
-    IngressHookMappingTable, IngressHookProxy, TngConfig, TngEgressHookMappingEntry,
+    IngressHookMappingTable, IngressInstance, TngConfig, TngEgressHookMappingEntry,
 };
 use crate::tunnel::access_log::EgressAccessMode;
 use crate::tunnel::access_log::IngressAccessMode;
@@ -127,7 +127,7 @@ impl TngExec {
 
         // 3. Build ingress mapping table and serialize
         let ingress_table = Self::build_ingress_mapping_table(&mut config, &mut port_alloc)?;
-        let has_ingress_hooks = !ingress_table.proxies.is_empty();
+        let has_ingress_hooks = !ingress_table.ingresses.is_empty();
         let ingress_json = serde_json::to_string(&ingress_table)
             .context("Failed to serialize ingress mapping table")?;
 
@@ -402,13 +402,13 @@ impl TngExec {
         for (i, ingress) in config.add_ingress.iter_mut().enumerate() {
             if let IngressHookMode::Hook(args) = &mut ingress.ingress_mode {
                 let proxy = Self::build_ingress_proxy(i, args, port_alloc)?;
-                mapping_table.proxies.push(proxy);
+                mapping_table.ingresses.push(proxy);
             }
         }
 
-        if !mapping_table.proxies.is_empty() {
+        if !mapping_table.ingresses.is_empty() {
             tracing::info!(
-                proxies = mapping_table.proxies.len(),
+                ingresses = mapping_table.ingresses.len(),
                 "Built ingress hook mapping table"
             );
         }
@@ -416,7 +416,7 @@ impl TngExec {
         Ok(mapping_table)
     }
 
-    /// Build a single IngressHookProxy from an IngressHookArgs.
+    /// Build a single IngressInstance from an IngressHookArgs.
     ///
     /// If `args.proxy_port` is not set, a port is auto-allocated via the shared
     /// allocator and written back to `args.proxy_port` so the runtime uses the
@@ -425,7 +425,7 @@ impl TngExec {
         _entry_index: usize,
         args: &mut IngressHookArgs,
         port_alloc: &mut PortAllocator,
-    ) -> Result<IngressHookProxy> {
+    ) -> Result<IngressInstance> {
         let proxy_port = match args.proxy_port {
             Some(port) => {
                 port_alloc
@@ -459,9 +459,10 @@ impl TngExec {
             bail!("Ingress hook entry has no capture_dst rules. At least one is required.");
         }
 
-        Ok(IngressHookProxy {
+        Ok(IngressInstance {
             proxy_port,
             capture_rules,
+            capture_local_traffic: args.capture_local_traffic,
         })
     }
 

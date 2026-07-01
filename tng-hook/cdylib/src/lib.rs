@@ -175,7 +175,8 @@ fn init() {
             tracing::debug!("init: TNG_HOOK_INGRESS_MAPPINGS={}", truncated);
             match serde_json::from_str::<IngressHookMappingTable>(&json) {
                 Ok(table) => {
-                    let entries: usize = table.proxies.iter().map(|p| p.capture_rules.len()).sum();
+                    let entries: usize =
+                        table.ingresses.iter().map(|p| p.capture_rules.len()).sum();
                     let lookup = IngressHookLookup::from_table(&table);
                     let _ = INGRESS_LOOKUP.set(lookup);
                     tracing::debug!("init: ingress mapping loaded with {} entries", entries);

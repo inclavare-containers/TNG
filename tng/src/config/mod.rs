@@ -15,7 +15,7 @@ pub mod ra;
 // Shared types used by both tng and tng-hook
 pub use tng_hook_types::{
     EgressHookMappingEntry, EgressHookMappingTable, IngressHookCaptureRule,
-    IngressHookMappingTable, IngressHookProxy,
+    IngressHookMappingTable, IngressInstance,
 };
 
 // Internal TNG types (not serialized to .so)
