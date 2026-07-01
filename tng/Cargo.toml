@@ -103,7 +103,6 @@ tracing = {workspace = true}
 tracing-futures = {workspace = true, features = ["futures-03"]}
 tracing-opentelemetry = {workspace = true, optional = true}
 tracing-subscriber = {workspace = true}
-tracing-appender = {workspace = true}
 url = {workspace = true}
 uuid = {workspace = true, features = ["v4"], optional = true}
 which = {workspace = true, optional = true}
@@ -118,6 +117,7 @@ quinn = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "time", "process"]}
+tracing-appender = {workspace = true}
 # Enable aws-lc-rs for native targets (AVX512/VAES optimization)
 rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs", "brotli"]}
 tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 use anyhow::{bail, Context as _, Result};
 
@@ -204,7 +206,16 @@ impl TngExec {
         // 10. Exit with child's exit code
         let exit_code = exit_status
             .code()
-            .or_else(|| exit_status.signal().map(|sig| 128 + sig))
+            .or_else(|| {
+                #[cfg(unix)]
+                {
+                    exit_status.signal().map(|sig| 128 + sig)
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            })
             .unwrap_or(1);
         std::process::exit(exit_code);
     }
