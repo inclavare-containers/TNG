@@ -46,6 +46,11 @@ pub struct ResolvedEgressEntry {
 pub struct HookEgress {
     id: usize,
     entries: Vec<ResolvedEgressEntry>,
+    /// Whether to capture traffic where the peer IP is a local interface
+    /// address. When false, local-traffic is excluded from the tunnel.
+    capture_local_traffic: bool,
+    /// Cached set of local interface IPs.
+    local_ips: HashSet<Ipv4Addr>,
 }
 
 impl HookEgress {
@@ -90,7 +95,26 @@ impl HookEgress {
             }
         }
 
-        Self { id, entries }
+        // Collect local interface IPs for capture_local_traffic filtering.
+        let mut local_ips = HashSet::new();
+        // 127.0.0.0/8 loopback
+        for b in 0..=255u8 {
+            local_ips.insert(Ipv4Addr::new(127, b, 0, 1));
+        }
+        if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
+            for (_, addr) in ifaces {
+                if let IpAddr::V4(v4) = addr {
+                    local_ips.insert(v4);
+                }
+            }
+        }
+
+        Self {
+            id,
+            entries,
+            capture_local_traffic: hook_args.capture_local_traffic,
+            local_ips,
+        }
     }
 
     /// Check whether a connection arriving at local_addr should go through
@@ -108,6 +132,11 @@ impl HookEgress {
             IpAddr::V4(ip) => ip,
             IpAddr::V6(_) => return false,
         };
+
+        // When capture_local_traffic is false, skip if peer IP is local.
+        if !self.capture_local_traffic && self.local_ips.contains(&ip) {
+            return false;
+        }
 
         for entry in &self.entries {
             let host_match = entry.host.is_unspecified() || entry.host == ip;
@@ -255,7 +284,12 @@ mod tests {
     use super::*;
 
     fn make_egress(entries: Vec<ResolvedEgressEntry>) -> HookEgress {
-        HookEgress { id: 0, entries }
+        HookEgress {
+            id: 0,
+            entries,
+            capture_local_traffic: false,
+            local_ips: HashSet::new(),
+        }
     }
 
     fn make_entry(
@@ -388,6 +422,56 @@ mod tests {
         // No IPs to match -> nothing is encrypted
         assert!(!egress.encrypted(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            5600
+        )));
+    }
+
+    #[test]
+    fn test_encrypted_local_ip_skipped_when_capture_local_traffic_false() {
+        // Host = 0.0.0.0 (wildcard), capture_local_traffic = false
+        // 127.0.0.1 is a local IP -> should return false
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        let egress = HookEgress {
+            id: 0,
+            entries: vec![entry],
+            capture_local_traffic: false,
+            local_ips: {
+                let mut ips = HashSet::new();
+                ips.insert(Ipv4Addr::new(127, 0, 0, 1));
+                ips
+            },
+        };
+
+        assert!(!egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            5600
+        )));
+
+        // Non-local IP should still match
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            5600
+        )));
+    }
+
+    #[test]
+    fn test_encrypted_local_ip_captured_when_capture_local_traffic_true() {
+        // Host = 0.0.0.0 (wildcard), capture_local_traffic = true
+        // 127.0.0.1 is local but should be captured
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        let egress = HookEgress {
+            id: 0,
+            entries: vec![entry],
+            capture_local_traffic: true,
+            local_ips: {
+                let mut ips = HashSet::new();
+                ips.insert(Ipv4Addr::new(127, 0, 0, 1));
+                ips
+            },
+        };
+
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             5600
         )));
     }
