@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
@@ -8,16 +10,14 @@ linters:
     - errcheck
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - gofmt
     - goimports
     - misspell
     - unconvert
     - revive
 
-linters-settings:
+settings:
   govet:
     check-shadowing: true
   revive:
@@ -26,7 +26,7 @@ linters-settings:
         severity: warning
       - name: blank-imports
         severity: warning
-      - name: context-as-argument
+      - name: context-as-parameter
         severity: warning
       - name: error-return
         severity: warning
