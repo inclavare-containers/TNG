@@ -25,42 +25,7 @@ on:
       - ".github/workflows/go-sdk.yml"
 
 jobs:
-  go-unit-test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    container:
-      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
-      options: --privileged
-
-    steps:
-      - name: Install git and tar (required for checkout with submodules and setup-go)
-        run: yum install -y git tar
-
-      - uses: actions/checkout@v6
-        with:
-          submodules: "true"
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.21"
-
-      - name: Run Go unit tests
-        run: cd tng-go && go test -v ./...
-
-      - name: Run go vet
-        run: cd tng-go && go vet ./...
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.1
-          working-directory: tng-go
-          args: --timeout=5m
-
-  go-integration-test:
+  go-sdk-tests:
     runs-on: oracle-vm-16cpu-64gb-x86-64
     defaults:
       run:
@@ -91,6 +56,21 @@ jobs:
 
       - name: Build TNG binary
         run: cargo build --release -p tng
+
+      - name: Run Go unit tests
+        run: cd tng-go && go test -v ./...
+        env:
+          TNG_BINARY: "${{ github.workspace }}/target/release/tng"
+
+      - name: Run go vet
+        run: cd tng-go && go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.1
+          working-directory: tng-go
+          args: --timeout=5m
 
       - name: Start Attestation Agent and Attestation Service
         run: |
@@ -166,15 +146,11 @@ jobs:
 
       - name: Run Go SDK tng-testsuite tests
         run: |
+          # Glob pattern -- cargo expands go_sdk_* to match all go_sdk_* test
+          # binaries. New tests are auto-discovered without updating the workflow.
           cargo test --package tng-testsuite \
             --features on-source-code,go-sdk \
-            --test go_sdk_roundtrip \
-            --test go_sdk_post \
-            --test go_sdk_streaming \
-            --test go_sdk_attestation_info \
-            --test go_sdk_multi_request \
-            --test go_sdk_rats_tls \
-            -- --test-threads=1
+            --test 'go_sdk_*' -- --test-threads=1
         env:
           TNG_BINARY: "${{ github.workspace }}/target/release/tng"
 
