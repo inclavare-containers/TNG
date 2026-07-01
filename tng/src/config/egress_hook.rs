@@ -17,6 +17,12 @@ fn wildcard_ip() -> Ipv4Addr {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EgressHookArgs {
+    /// When `false` (default), accepted connections whose peer IP is a local
+    /// interface address are excluded from the encrypted tunnel. Set to `true`
+    /// to also capture local-to-local traffic.
+    #[serde(default)]
+    pub capture_local_traffic: bool,
+
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -393,5 +399,24 @@ mod tests {
         .unwrap();
         let (entries, _) = entry.expand_mappings(40000).unwrap();
         assert!(entries[0].ifname.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_egress_hook_capture_local_traffic() -> Result<()> {
+        let args: EgressHookArgs = serde_json::from_value(json!({
+            "capture_listen": [{ "port": 8080 }],
+            "capture_local_traffic": true
+        }))?;
+        assert!(args.capture_local_traffic);
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_hook_capture_local_traffic_default() -> Result<()> {
+        let args: EgressHookArgs = serde_json::from_value(json!({
+            "capture_listen": [{ "port": 8080 }]
+        }))?;
+        assert!(!args.capture_local_traffic);
+        Ok(())
     }
 }

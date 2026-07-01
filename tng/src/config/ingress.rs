@@ -197,6 +197,12 @@ pub struct IngressHookArgs {
     /// Optional bind address for the internal HTTP proxy (default: 127.0.0.1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_listen: Option<String>,
+
+    /// When `false` (default), connections whose destination IP is a local
+    /// interface address are excluded from capture. Set to `true` to also
+    /// capture local-to-local traffic.
+    #[serde(default)]
+    pub capture_local_traffic: bool,
 }
 
 /// A single capture destination rule for ingress hook mode.
@@ -371,6 +377,41 @@ mod tests {
     use super::{
         AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
     };
+
+    #[test]
+    fn test_deserialize_ingress_hook_capture_local_traffic() -> Result<()> {
+        let args: AddIngressArgs = serde_json::from_value(json!({
+            "hook": {
+                "capture_dst": [{ "port": 80 }],
+                "capture_local_traffic": true
+            },
+            "no_ra": true
+        }))?;
+        match args.ingress_mode {
+            IngressMode::Hook(hook_args) => {
+                assert!(hook_args.capture_local_traffic);
+            }
+            _ => panic!("expected hook mode"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_hook_capture_local_traffic_default() -> Result<()> {
+        let args: AddIngressArgs = serde_json::from_value(json!({
+            "hook": {
+                "capture_dst": [{ "port": 80 }]
+            },
+            "no_ra": true
+        }))?;
+        match args.ingress_mode {
+            IngressMode::Hook(hook_args) => {
+                assert!(!hook_args.capture_local_traffic);
+            }
+            _ => panic!("expected hook mode"),
+        }
+        Ok(())
+    }
 
     fn test_deserialize_netfilter_common(value: serde_json::Value) -> Result<()> {
         // Check deserialize
