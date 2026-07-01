@@ -19,7 +19,7 @@ pub use tng_hook_types::{
 };
 
 // Internal TNG types (not serialized to .so)
-pub use egress_hook::{EgressHookHostFilterRule, TngEgressHookMappingEntry};
+pub use egress_hook::TngEgressHookMappingEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
