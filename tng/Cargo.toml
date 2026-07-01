@@ -21,6 +21,7 @@ bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}
 clap = {workspace = true}
+local-ip-address = "0.6"
 console-subscriber = {workspace = true, optional = true}
 const_format = {workspace = true}
 derivative = {workspace = true}
