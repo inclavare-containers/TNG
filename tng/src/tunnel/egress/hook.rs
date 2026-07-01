@@ -1,4 +1,5 @@
-use std::net::{IpAddr, SocketAddr};
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -8,9 +9,6 @@ use futures::stream::select_all;
 use indexmap::IndexMap;
 use tokio::net::TcpListener;
 
-use crate::config::egress_hook::EgressHookArgs;
-use crate::config::egress_hook::EgressHookHostFilterRule;
-use crate::config::EgressHookMappingEntry;
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::egress::flow::AcceptedStream;
 use crate::tunnel::endpoint::TngEndpoint;
@@ -19,61 +17,74 @@ use crate::tunnel::utils::socket::SetListenerSockOpts;
 
 use super::flow::{EgressTrait, Incomming};
 
+/// Pre-resolved entry: port mapping + resolved ifname IPs.
+///
+/// Built from config entries during HookEgress::new(),
+/// with ifname resolved to actual IPs via list_afinet_netifas().
+pub struct ResolvedEgressEntry {
+    /// The port the app thinks it's binding to
+    pub origin_port: u16,
+    /// The actual port the app binds to (redirected by hook)
+    pub real_port: u16,
+    /// Host IP to match (0.0.0.0 = wildcard, match all)
+    pub host: Ipv4Addr,
+    /// Resolved IPs of the configured ifname.
+    /// None = no ifname was configured (pass-through).
+    /// Some(empty) = ifname configured but interface has no IPs (nothing matches).
+    /// Some(set) = ifname configured with IPs (check membership).
+    pub resolved_ifname_ips: Option<HashSet<Ipv4Addr>>,
+}
+
 /// Hook-based egress that listens on origin ports and forwards
 /// to real ports on localhost.
 ///
 /// Each HookEgress instance handles a list of origin->real port mappings
 /// (expanded from capture_listen entries by `tng exec`).
 ///
-/// Host CIDR filtering happens at accept time: connections whose local_addr
-/// matches a configured CIDR go through encryption; others are forwarded directly.
+/// Host/ifname filtering happens at accept time: connections are checked
+/// against the resolved host IP and ifname IP set.
 pub struct HookEgress {
     id: usize,
-    /// Port-only mapping entries (origin_port -> real_port) for metric attributes
-    /// and getsockname lookup reference.
-    entries: Vec<EgressHookMappingEntry>,
-    /// Host filter rules for accept-time CIDR matching.
-    /// A connection is encrypted only if its local_addr.ip() matches
-    /// one of these CIDRs AND the port is in range.
-    /// When empty, all traffic is encrypted (default behavior).
-    host_filters: Vec<EgressHookHostFilterRule>,
+    entries: Vec<ResolvedEgressEntry>,
 }
 
 impl HookEgress {
     /// Create a new HookEgress from hook args.
     ///
-    /// Expands `resolved_entries` into port-only mapping entries for
-    /// metric attributes and getsockname lookup, and builds host filter
-    /// rules for accept-time CIDR matching.
-    pub fn new(id: usize, hook_args: &EgressHookArgs) -> Self {
-        let mut entries: Vec<EgressHookMappingEntry> = Vec::new();
-        let mut host_filters: Vec<EgressHookHostFilterRule> = Vec::new();
+    /// Expands `resolved_entries` into resolved entries, resolving
+    /// ifname -> IPs via list_afinet_netifas() once at startup.
+    pub fn new(id: usize, hook_args: &crate::config::egress_hook::EgressHookArgs) -> Self {
+        let mut entries: Vec<ResolvedEgressEntry> = Vec::new();
 
         for entry in &hook_args.resolved_entries {
-            entries.push(EgressHookMappingEntry {
+            let resolved_ifname_ips = match &entry.ifname {
+                None => None,
+                Some(name) => Some(resolve_ifname_ips(name)),
+            };
+
+            entries.push(ResolvedEgressEntry {
                 origin_port: entry.origin_port,
                 real_port: entry.real_port,
+                host: entry.host,
+                resolved_ifname_ips,
             });
-            if let Some(rule) = entry.host_filter_rule() {
-                host_filters.push(rule);
-            }
         }
 
-        Self {
-            id,
-            entries,
-            host_filters,
-        }
+        Self { id, entries }
     }
 
     /// Check whether a connection arriving at local_addr should go through
     /// the encryption/decryption path.
     ///
-    /// Returns true if local_addr.ip() matches any configured host CIDR
-    /// and the port is within the configured range. When no filters are
-    /// configured, all traffic is encrypted (backward compatible default).
+    /// Returns true if:
+    /// - local_addr.ip() matches the configured host (0.0.0.0 = wildcard), AND
+    /// - if ifname was configured (Some), local_addr.ip() is in the resolved ifname IP set
+    /// - if ifname was not configured (None), skip the ifname check
+    /// - IPv6 connections always return false
+    /// - No entries -> default to encrypted (backward compatible)
     pub fn encrypted(&self, local_addr: SocketAddr) -> bool {
-        if self.host_filters.is_empty() {
+        // No entries configured -> default to encrypted (backward compatible)
+        if self.entries.is_empty() {
             return true;
         }
 
@@ -82,11 +93,54 @@ impl HookEgress {
             IpAddr::V6(_) => return false,
         };
 
-        let port = local_addr.port();
+        for entry in &self.entries {
+            // Host check: 0.0.0.0 matches all, otherwise exact match
+            if !entry.host.is_unspecified() && entry.host != ip {
+                continue;
+            }
 
-        self.host_filters
-            .iter()
-            .any(|rule| rule.host_cidr.contains(&ip) && rule.port_range.contains(&port))
+            // Ifname check: None = no filter (pass-through),
+            // Some(empty) = nothing matches, Some(set) = must contain IP
+            match &entry.resolved_ifname_ips {
+                None => {} // no ifname configured -> pass-through
+                Some(set) if set.is_empty() => continue,
+                Some(set) if !set.contains(&ip) => continue,
+                Some(_) => {}
+            }
+
+            // Found a matching entry
+            return true;
+        }
+
+        // Entries exist but none matched
+        false
+    }
+}
+
+/// Resolve a network interface name to its IPv4 addresses.
+///
+/// Called once at HookEgress startup. Uses netlink on Linux
+/// (via local-ip-address crate). Returns empty set if the
+/// interface doesn't exist or has no IPv4 addresses.
+fn resolve_ifname_ips(ifname: &str) -> HashSet<Ipv4Addr> {
+    match local_ip_address::list_afinet_netifas() {
+        Ok(interfaces) => interfaces
+            .into_iter()
+            .filter_map(|(name, ip)| {
+                if name == ifname {
+                    match ip {
+                        IpAddr::V4(addr) => Some(addr),
+                        IpAddr::V6(_) => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(?error, %ifname, "Failed to resolve interface IPs");
+            HashSet::new()
+        }
     }
 }
 
@@ -191,99 +245,142 @@ impl EgressTrait for HookEgress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::egress_hook::TngEgressHookMappingEntry;
-    use cidr::Ipv4Cidr;
-    use std::net::Ipv4Addr;
 
-    fn make_args(entries: Vec<TngEgressHookMappingEntry>) -> EgressHookArgs {
-        EgressHookArgs {
-            capture_listen: vec![],
-            resolved_entries: entries,
+    fn make_egress(entries: Vec<ResolvedEgressEntry>) -> HookEgress {
+        HookEgress { id: 0, entries }
+    }
+
+    fn make_entry(
+        host: Ipv4Addr,
+        ifname_ips: Option<HashSet<Ipv4Addr>>,
+        origin_port: u16,
+        real_port: u16,
+    ) -> ResolvedEgressEntry {
+        ResolvedEgressEntry {
+            origin_port,
+            real_port,
+            host,
+            resolved_ifname_ips: ifname_ips,
         }
     }
 
     #[test]
-    fn test_should_encrypt_empty_filters_returns_true() {
-        let egress = HookEgress::new(0, &make_args(vec![]));
+    fn test_encrypted_empty_entries_returns_true() {
+        let egress = make_egress(vec![]);
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5600);
         assert!(egress.encrypted(addr));
     }
 
     #[test]
-    fn test_should_encrypt_matches_cidr_and_port() {
-        let entry = TngEgressHookMappingEntry {
-            host_cidr: Ipv4Cidr::new(Ipv4Addr::new(172, 17, 80, 0), 20).unwrap(),
-            origin_port: 5600,
-            real_port: 9600,
-        };
-        let egress = HookEgress::new(0, &make_args(vec![entry]));
+    fn test_encrypted_wildcard_host_matches_all() {
+        // host = 0.0.0.0, no ifname -> always true
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        let egress = make_egress(vec![entry]);
 
-        // In range
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(172, 17, 80, 5)), 5600);
-        assert!(egress.encrypted(addr));
-
-        // Out of CIDR
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5600);
-        assert!(!egress.encrypted(addr));
-
-        // Out of port range
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(172, 17, 80, 5)), 5601);
-        assert!(!egress.encrypted(addr));
+        // Any IP should match
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            5600
+        )));
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            5600
+        )));
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            5600
+        )));
     }
 
     #[test]
-    fn test_should_encrypt_ipv6_returns_false() {
-        let entry = TngEgressHookMappingEntry {
-            host_cidr: Ipv4Cidr::new(Ipv4Addr::new(172, 17, 80, 0), 20).unwrap(),
-            origin_port: 5600,
-            real_port: 9600,
-        };
-        let egress = HookEgress::new(0, &make_args(vec![entry]));
+    fn test_encrypted_specific_host_matches() {
+        let entry = make_entry(Ipv4Addr::new(172, 17, 80, 1), None, 5600, 9600);
+        let egress = make_egress(vec![entry]);
+
+        // Exact match
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
+            5600
+        )));
+
+        // Different IP -> fail
+        assert!(!egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            5600
+        )));
+    }
+
+    #[test]
+    fn test_encrypted_ifname_filter() {
+        // host = 0.0.0.0, ifname resolved to specific IPs
+        let mut ips = HashSet::new();
+        ips.insert(Ipv4Addr::new(172, 17, 80, 1));
+        ips.insert(Ipv4Addr::new(172, 17, 80, 2));
+
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, Some(ips), 5600, 9600);
+        let egress = make_egress(vec![entry]);
+
+        // IP in the resolved set -> match
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
+            5600
+        )));
+
+        // IP not in the set -> no match
+        assert!(!egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            5600
+        )));
+    }
+
+    #[test]
+    fn test_encrypted_host_and_ifname_and() {
+        // host = 172.17.80.1 AND ifname_ips contains 172.17.80.1
+        let mut ips = HashSet::new();
+        ips.insert(Ipv4Addr::new(172, 17, 80, 1));
+
+        let entry = make_entry(Ipv4Addr::new(172, 17, 80, 1), Some(ips.clone()), 5600, 9600);
+        let egress = make_egress(vec![entry]);
+
+        // Both match -> true
+        assert!(egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
+            5600
+        )));
+
+        // IP matches ifname but not host -> false
+        assert!(!egress.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 2)),
+            5600
+        )));
+
+        // IP matches ifname but not host (different entry) -> false
+        let entry2 = make_entry(Ipv4Addr::new(10, 0, 0, 1), Some(ips), 5601, 9601);
+        let egress2 = make_egress(vec![entry2]);
+        assert!(!egress2.encrypted(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(172, 17, 80, 1)),
+            5601
+        )));
+    }
+
+    #[test]
+    fn test_encrypted_ipv6_returns_false() {
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, None, 5600, 9600);
+        let egress = make_egress(vec![entry]);
 
         let addr = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 5600);
         assert!(!egress.encrypted(addr));
     }
 
     #[test]
-    fn test_should_encrypt_port_range() {
-        // Each TngEgressHookMappingEntry creates a single-port host filter rule.
-        // Include entries only for 8000, 8005, 8010 — 8011 should return false.
-        let entry = TngEgressHookMappingEntry {
-            host_cidr: Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
-            origin_port: 8000,
-            real_port: 9000,
-        };
-        let entry2 = TngEgressHookMappingEntry {
-            host_cidr: Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
-            origin_port: 8005,
-            real_port: 9005,
-        };
-        let entry3 = TngEgressHookMappingEntry {
-            host_cidr: Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
-            origin_port: 8010,
-            real_port: 9010,
-        };
-        let egress = HookEgress::new(0, &make_args(vec![entry, entry2, entry3]));
-
-        // Port at start of range
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            8000
-        )));
-        // Port in middle
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            8005
-        )));
-        // Port at end of range
-        assert!(egress.encrypted(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            8010
-        )));
-        // Port just outside range
+    fn test_encrypted_ifname_no_ips_blocks_all() {
+        // ifname configured but interface has no IPs -> empty Some -> nothing matches
+        let entry = make_entry(Ipv4Addr::UNSPECIFIED, Some(HashSet::new()), 5600, 9600);
+        let egress = make_egress(vec![entry]);
+        // No IPs to match -> nothing is encrypted
         assert!(!egress.encrypted(SocketAddr::new(
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            8011
+            5600
         )));
     }
 }
