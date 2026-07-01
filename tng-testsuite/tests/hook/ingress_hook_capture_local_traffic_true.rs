@@ -77,7 +77,7 @@ sleep 120
         // traffic interception with capture_local_traffic: true.
         TngInstance::TngClient(
             r#"{
-                "add_ingress": [{
+                "add_egress": [{
                     "mapping": {
                         "in": {"host": "127.0.0.1", "port": 20001},
                         "out": {"host": "127.0.0.1", "port": 30001}
