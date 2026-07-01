@@ -71,6 +71,8 @@ jobs:
           version: v1.64
           working-directory: tng-go
           args: --timeout=5m
+        env:
+          GOFLAGS: -buildvcs=false
 
       - name: Start Attestation Agent and Attestation Service
         run: |
