@@ -15,12 +15,68 @@
 
 ## Quick Start
 
+TNG offers multiple integration modes — pick the one that fits your scenario.
+
+<details>
+<summary><b>Run with Docker</b> — fastest way to try TNG</summary>
+
 ```sh
-# Run TNG with a single command — just provide a JSON config
 docker run -it --rm --privileged --network host --cgroupns=host \
   ghcr.io/inclavare-containers/tng:latest \
   tng launch --config-content='<your config json>'
 ```
+
+No installation needed. Just provide a JSON config and TNG handles the rest.
+
+</details>
+
+<details>
+<summary><b>tng exec</b> — zero code changes for existing apps</summary>
+
+```sh
+# Start your existing app through TNG transparently
+tng exec --config-file config.json -- ./your-app
+```
+
+Your app talks to the backend as usual — TNG intercepts at the network layer and encrypts via remote attestation tunnel.
+
+</details>
+
+<details>
+<summary><b>JavaScript SDK</b> — browser-side encrypted requests</summary>
+
+```sh
+npm install @inclavare-containers/tng
+```
+
+```js
+import { TngClient } from '@inclavare-containers/tng';
+
+const client = new TngClient({ config: { /* your config */ } });
+const response = await client.fetch('https://your-tee-service/api/data');
+```
+
+Runs entirely in the browser via WebAssembly. No server-side proxy needed.
+
+</details>
+
+<details>
+<summary><b>Python SDK</b> — programmatic integration</summary>
+
+```sh
+pip install tng-sdk
+```
+
+```python
+from tng import TngClient
+
+client = TngClient(config={"ingress": {...}, "egress": {...}})
+response = client.request("https://your-tee-service/api/data")
+```
+
+Supports `httpx`, `requests`, and `openai` as optional backends.
+
+</details>
 
 See [Installation](#installation) for Docker, RPM, binary, and SDK options.
 
@@ -123,7 +179,7 @@ Download the pre-built binary from [Releases](https://github.com/inclavare-conta
 ### Option 4: JavaScript SDK (Browser)
 
 ```sh
-npm install tng-wasm-<version>.tgz
+npm install @inclavare-containers/tng
 ```
 
 Full SDK docs: [tng-wasm/README.md](tng-wasm/README.md)
@@ -131,7 +187,7 @@ Full SDK docs: [tng-wasm/README.md](tng-wasm/README.md)
 ### Option 5: Python SDK
 
 ```sh
-pip install tng-python
+pip install tng-sdk
 ```
 
 Full SDK docs: [tng-python/README.md](tng-python/README.md)
