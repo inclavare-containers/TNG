@@ -485,6 +485,7 @@ Intercepts outgoing TCP connections from the child process via LD_PRELOAD and ro
 | `capture_dst[].port_end` | integer | No | End of port range (inclusive). Without this, single port match. |
 | `proxy_port` | integer | No | Internal HTTP proxy port. Auto-allocated if omitted. |
 | `proxy_listen` | string | No | Bind address for internal proxy. Default: `127.0.0.1`. |
+| `capture_local_traffic` | boolean | No (`false`) | Safety filter: when `false` (default), traffic to/from local interface addresses (loopback `127.0.0.0/8` and local interface IPs) is **never captured**, even if a `capture_dst` or `capture_listen` rule matches it. Set to `true` to allow local-to-local traffic to be captured by matching rules. |
 
 **Example:**
 
@@ -895,6 +896,7 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `hook` | object | Yes | Hook egress configuration object |
+| `hook.capture_local_traffic` | boolean | No (`false`) | Safety filter: when `false` (default), accepted connections from local interface addresses (loopback `127.0.0.0/8` and local interface IPs) are **never encrypted**, even if a `capture_listen` rule matches the port. Set to `true` to allow local-to-local traffic to be encrypted by matching rules. |
 | `hook.capture_listen` | array | Yes | List of ports to intercept |
 | `hook.capture_listen[].port` | number | Yes | Port to intercept |
 | `hook.capture_listen[].host` | string | No | IPv4 address to match (default: `0.0.0.0` — any IP) |

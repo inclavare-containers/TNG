@@ -485,6 +485,7 @@ flowchart TD
 | `capture_dst[].port_end` | 整数 | 否 | 端口范围结束（包含）。省略时为单端口匹配。 |
 | `proxy_port` | 整数 | 否 | 内部 HTTP 代理端口。省略时自动分配。 |
 | `proxy_listen` | 字符串 | 否 | 内部代理的绑定地址。默认：`127.0.0.1`。 |
+| `capture_local_traffic` | 布尔值 | 否（`false`） | 安全过滤：默认为 `false` 时，**永远不会**捕获目标为本地接口地址（回环 `127.0.0.0/8` 和本机接口 IP）的流量，即使 `capture_dst` 规则显式匹配该 IP。设置为 `true` 时，匹配规则的本地到本地流量才会被捕获。 |
 
 **示例：**
 
@@ -895,6 +896,7 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 | 字段 | 类型 | 必填 | 说明 |
 |-------|------|------|------|
 | `hook` | object | 是 | Hook egress 配置对象 |
+| `hook.capture_local_traffic` | 布尔值 | 否（`false`） | 安全过滤：默认为 `false` 时，**永远不会**加密来自本地接口地址（回环 `127.0.0.0/8` 和本机接口 IP）的已接受连接，即使 `capture_listen` 规则匹配了该端口。设置为 `true` 时，匹配规则的本地到本地流量才会被加密。 |
 | `hook.capture_listen` | array | 是 | 要拦截的端口列表 |
 | `hook.capture_listen[].port` | number | 是 | 要拦截的端口 |
 | `hook.capture_listen[].host` | string | 否 | 要匹配的 IPv4 地址（默认：`0.0.0.0` — 任意 IP） |
