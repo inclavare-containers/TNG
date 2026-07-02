@@ -236,7 +236,7 @@ impl BridgeNetwork {
                 })
                 .unwrap_or("");
 
-            if ifname.starts_with("tngtest-br") || ifname.starts_with("tngtest-veth") {
+            if ifname.starts_with("tngtest-br") || ifname.starts_with("tngtest-v") {
                 if let Err(e) = handle.link().del(msg.header.index).execute().await {
                     tracing::warn!(
                         link_idx = msg.header.index,
@@ -314,11 +314,11 @@ impl VethPair {
         // Generate a random veth name
         let random_part: String = rand::rng()
             .sample_iter(&Alphanumeric)
-            .take(2) // Fixed length characters
+            .take(5) // 5 random chars + "tngtest-v"(9) + suffix(1) = 15 chars, fits IFNAMSIZ(15)
             .map(char::from)
             .collect();
-        let veth: String = format!("tngtest-veth{}o", random_part);
-        let veth_2: String = format!("tngtest-veth{}i", random_part);
+        let veth: String = format!("tngtest-v{}o", random_part);
+        let veth_2: String = format!("tngtest-v{}i", random_part);
 
         handle
             .link()
