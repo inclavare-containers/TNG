@@ -55,6 +55,19 @@ tng = Tng(
 )
 ```
 
+## 加密协议
+
+```python
+# 默认使用 OHTTP
+tng = Tng(no_ra=True)
+
+# 使用 rats-TLS 替代 OHTTP（二者互斥）
+tng = Tng(no_ra=True, rats_tls={"multiplex": True})
+
+# 自定义 OHTTP
+tng = Tng(no_ra=True, ohttp={"key": {"source": "self_generated", "rotation_interval": 300}})
+```
+
 ## 文档
 
 - **[快速入门](docs/getting-started_zh.md)** — 完整的安装、使用和配置指南

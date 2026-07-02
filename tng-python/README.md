@@ -55,6 +55,19 @@ tng = Tng(
 )
 ```
 
+## Encryption Protocol
+
+```python
+# OHTTP is the default
+tng = Tng(no_ra=True)
+
+# Use rats-TLS instead of OHTTP (mutually exclusive)
+tng = Tng(no_ra=True, rats_tls={"multiplex": True})
+
+# Custom OHTTP
+tng = Tng(no_ra=True, ohttp={"key": {"source": "self_generated", "rotation_interval": 300}})
+```
+
 ## Documentation
 
 - **[Getting Started](docs/getting-started.md)** — Complete installation, usage, and configuration guide
