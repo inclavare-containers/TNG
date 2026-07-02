@@ -185,10 +185,20 @@ jobs:
           path: |
             ./npm/*.tgz
 
-      - name: Publish NPM packages
+      - name: Publish NPM packages (GitHub Packages)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           wasm-pack publish --target web --tag ${{ env.NPM_PKG_LABEL }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to npmjs.com
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc.publish
+          PKG=$(ls tng-wasm/pkg/*.tgz | head -1)
+          npm publish --registry=https://registry.npmjs.org/ --userconfig=~/.npmrc.publish "$PKG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

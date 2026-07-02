@@ -123,6 +123,18 @@ jobs:
       - name: Download all wheel artifacts
         uses: actions/download-artifact@v7
 
+      - name: Collect wheels
+        run: |
+          mkdir -p dist
+          find wheel-* -name '*.whl' -exec cp {} dist/ \;
+          ls dist/
+
+      - name: Publish to PyPI
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
