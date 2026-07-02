@@ -358,6 +358,28 @@ class TestTngSubprocess:
         tng._cleanup()  # should not raise
 
 
+class TestContextManager:
+    """Tests for Tng context manager support."""
+
+    def test_enter_returns_self(self, mock_tng_startup):
+        """__enter__ returns the Tng instance."""
+        tng = Tng(no_ra=True)
+        assert tng.__enter__() is tng
+
+    def test_context_manager_cleanup(self, mock_tng_startup):
+        """with Tng() as tng automatically cleans up on exit."""
+        with Tng(no_ra=True) as tng:
+            assert tng._proc is not None
+        assert tng._proc is None
+
+    def test_context_manager_exception_cleanup(self, mock_tng_startup):
+        """with Tng() cleans up even when an exception is raised."""
+        with pytest.raises(ValueError):
+            with Tng(no_ra=True) as tng:
+                raise ValueError("test")
+        assert tng._proc is None
+
+
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------

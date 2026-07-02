@@ -257,6 +257,8 @@ async for chunk in await async_client.chat.completions.create(
 
 The server-side TNG process must be deployed separately. Here's a minimal config:
 
+### OHTTP Server
+
 ```json
 {
   "add_egress": [{
@@ -265,6 +267,23 @@ The server-side TNG process must be deployed separately. Here's a minimal config
       "out": { "host": "backend", "port": 30001 }
     },
     "ohttp": {},
+    "no_ra": true
+  }]
+}
+```
+
+### rats-TLS Server
+
+If the client uses rats-TLS, the server must match:
+
+```json
+{
+  "add_egress": [{
+    "mapping": {
+      "in":  { "host": "0.0.0.0", "port": 10001 },
+      "out": { "host": "backend", "port": 30001 }
+    },
+    "rats_tls": {},
     "no_ra": true
   }]
 }
@@ -321,10 +340,29 @@ RUST_LOG=debug tng launch --config-file /tmp/tng_cfg_xxxxx.json
 ```python
 tng = Tng(no_ra=True)
 try:
-    # use tng
-    ...
+    session = requests.Session()
+    tng.wrap_requests(session)
+    resp = session.get("http://tng-server:10001/api/data")
+    resp.raise_for_status()
+    print(resp.json())
 finally:
     tng.close()
+```
+
+### Context Manager (Recommended)
+
+The ``Tng`` class supports the context manager protocol for automatic cleanup:
+
+```python
+import requests
+from tng import Tng
+
+with Tng(no_ra=True) as tng:
+    session = requests.Session()
+    tng.wrap_requests(session)
+    resp = session.get("http://tng-server:10001/api/data")
+    print(resp.json())
+# TNG subprocess is automatically terminated on exit
 ```
 
 ### Automatic Cleanup

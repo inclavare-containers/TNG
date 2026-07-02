@@ -39,6 +39,56 @@ class Tng:
         ohttp: dict[str, Any] | None = None,
         rats_tls: dict[str, Any] | None = None,
     ) -> None:
+        """Create and start a local TNG proxy.
+
+        Spawns the ``tng`` binary as a subprocess with an auto-configured
+        ``http_proxy`` ingress, then provides ``wrap_*`` methods that route
+        HTTP traffic through the encrypted tunnel.
+
+        Args:
+            no_ra:
+                Disable remote attestation. Set to ``True`` for local testing
+                or when the AA/AS services are unavailable.
+            verify:
+                Verifier configuration for validating the remote server's
+                attestation. Keys: ``as_addr`` (Attestation Service URL),
+                ``policy_ids`` (list of policy IDs to verify against).
+            attest:
+                Attester configuration for providing the client's own
+                attestation to the server. Keys: ``aa_addr`` (Attestation
+                Agent socket path), ``model`` (e.g. ``"passport"``),
+                ``as_addr`` (optional, for nested attestation).
+            ohttp:
+                OHTTP configuration dict. Omitted keys use defaults.
+                Common keys: ``key`` (``{"source": "self_generated",
+                "rotation_interval": 300}``), ``path_rewrites``.
+            rats_tls:
+                rats-TLS configuration dict as an alternative to OHTTP.
+                Common keys: ``multiplex`` (enable connection multiplexing).
+
+        Raises:
+            ValueError: If both ``ohttp`` and ``rats_tls`` are provided
+                (they are mutually exclusive).
+            FileNotFoundError: If the ``tng`` binary cannot be found.
+            RuntimeError: If the TNG process fails to start.
+            TimeoutError: If the proxy port is not ready within 30 seconds.
+
+        Example::
+
+            # Simplest: no remote attestation
+            tng = Tng(no_ra=True)
+
+            # With server verification
+            tng = Tng(verify={"as_addr": "http://127.0.0.1:8080/", "policy_ids": ["default"]})
+
+            # Using rats-TLS instead of OHTTP
+            tng = Tng(no_ra=True, rats_tls={"multiplex": True})
+
+            # Context manager for automatic cleanup
+            with Tng(no_ra=True) as tng:
+                tng.wrap_requests(session)
+                resp = session.get("http://server:10001/api/data")
+        """
         # Validate mutual exclusivity: ohttp and rats_tls conflict
         if ohttp is not None and rats_tls is not None:
             raise ValueError("ohttp and rats_tls are mutually exclusive")
@@ -200,6 +250,12 @@ class Tng:
 
         Safe to call multiple times.
         """
+        self._cleanup()
+
+    def __enter__(self) -> "Tng":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self._cleanup()
 
 

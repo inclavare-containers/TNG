@@ -257,6 +257,8 @@ async for chunk in await async_client.chat.completions.create(
 
 服务器侧的 TNG 进程需要单独部署。最小配置示例：
 
+### OHTTP 服务器
+
 ```json
 {
   "add_egress": [{
@@ -265,6 +267,23 @@ async for chunk in await async_client.chat.completions.create(
       "out": { "host": "backend", "port": 30001 }
     },
     "ohttp": {},
+    "no_ra": true
+  }]
+}
+```
+
+### rats-TLS 服务器
+
+如果客户端使用 rats-TLS，服务器端必须匹配：
+
+```json
+{
+  "add_egress": [{
+    "mapping": {
+      "in":  { "host": "0.0.0.0", "port": 10001 },
+      "out": { "host": "backend", "port": 30001 }
+    },
+    "rats_tls": {},
     "no_ra": true
   }]
 }
@@ -321,10 +340,29 @@ RUST_LOG=debug tng launch --config-file /tmp/tng_cfg_xxxxx.json
 ```python
 tng = Tng(no_ra=True)
 try:
-    # 使用 tng
-    ...
+    session = requests.Session()
+    tng.wrap_requests(session)
+    resp = session.get("http://tng-server:10001/api/data")
+    resp.raise_for_status()
+    print(resp.json())
 finally:
     tng.close()
+```
+
+### 上下文管理器（推荐）
+
+``Tng`` 类支持上下文管理器协议，可以自动清理资源：
+
+```python
+import requests
+from tng import Tng
+
+with Tng(no_ra=True) as tng:
+    session = requests.Session()
+    tng.wrap_requests(session)
+    resp = session.get("http://tng-server:10001/api/data")
+    print(resp.json())
+# 退出 with 块时，TNG 子进程自动终止
 ```
 
 ### 自动清理
