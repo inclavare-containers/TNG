@@ -51,21 +51,33 @@ jobs:
             echo "executable=./target/${{ inputs.target }}/release/${{ env.exe_name }}" >> "$GITHUB_ENV"
           fi
 
-      - name: Upload binary artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.target }}
-          path: target/${{ inputs.target }}/release/${{ env.exe_name }}
-          if-no-files-found: error
-
       - name: Build libtng_hook.so (Linux only)
         if: contains( inputs.target, 'linux' )
         run: |
           cargo zigbuild --target ${{ inputs.target }} --release -p tng-hook-cdylib
-      - name: Upload hook artifact (Linux only)
-        if: contains( inputs.target, 'linux' )
+
+      - name: Stage artifacts with system path layout
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          mkdir -p artifacts/usr/bin
+          cp "target/${{ inputs.target }}/release/${{ env.exe_name }}" artifacts/usr/bin/
+          if [[ "${{ inputs.target }}" == *"linux"* ]]; then
+              mkdir -p artifacts/usr/lib/tng
+              cp "target/${{ inputs.target }}/release/libtng_hook.so" artifacts/usr/lib/tng/
+          fi
+
+      - name: Upload artifact
+        if: ${{ runner.os != 'Windows' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.target }}-libtng-hook
-          path: target/${{ inputs.target }}/release/libtng_hook.so
+          name: ${{ inputs.target }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Upload Windows artifact
+        if: ${{ runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.target }}
+          path: target/${{ inputs.target }}/release/${{ env.exe_name }}
           if-no-files-found: error
