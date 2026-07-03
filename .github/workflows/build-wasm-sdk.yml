@@ -178,7 +178,7 @@ jobs:
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-packages
           if-no-files-found: error

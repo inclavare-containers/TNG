@@ -92,7 +92,7 @@ jobs:
         working-directory: tng-python
 
       - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.target }}
           path: tng-python/dist/*.whl
@@ -121,7 +121,7 @@ jobs:
       contents: write
     steps:
       - name: Download all wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
