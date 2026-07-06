@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use std::collections::{HashMap, HashSet};
 
-use super::token::{AttestationTokenVerifierConfig, TokenVerifier};
+use super::token::{AttestationTokenVerifierConfig, TokenError, TokenVerifier};
 
 pub(super) struct CommonCocoVerifier {
     /// The token verifier used to validate JWT.
@@ -35,7 +35,11 @@ impl CommonCocoVerifier {
             .token_verifier
             .verify(token.to_string())
             .await
-            .map_err(Error::CocoTokenVerifierError)?;
+            .map_err(|e| match e {
+                TokenError::TokenVerificationFailed { source } => {
+                    Error::CocoTokenVerifierError(source)
+                }
+            })?;
 
         let is_ear = if let Some(eat_profile) = claims_value.get("eat_profile") {
             if eat_profile != "tag:github.com,2024:confidential-containers/Trustee" {

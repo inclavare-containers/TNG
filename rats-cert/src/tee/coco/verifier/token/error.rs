@@ -14,10 +14,4 @@ pub enum Error {
         #[source]
         source: anyhow::Error,
     },
-
-    #[error("Failed to initialize Token Verifier")]
-    TokenVerifierInitialization {
-        #[source]
-        source: anyhow::Error,
-    },
 }

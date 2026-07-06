@@ -187,7 +187,9 @@ impl JwkAttestationTokenVerifier {
             if let Some(as_addr) = &config.as_addr {
                 let certs = Self::fetch_certs_from_as(&client, as_addr, &config.as_headers)
                     .await
-                    .context("Failed to fetch certificates from AS")?;
+                    .with_context(|| {
+                        format!("Failed to fetch certificates from AS at {as_addr}")
+                    })?;
                 trusted_certs.extend(certs);
             }
 
@@ -258,8 +260,7 @@ impl JwkAttestationTokenVerifier {
                 .get(&url)
                 .headers(headers)
                 .send()
-                .await
-                .with_context(|| format!("Failed to fetch certificates chain from {}", url))?
+                .await?
                 .error_for_status()
                 .with_context(|| format!("HTTP error when fetching certificates from {}", url))?;
 

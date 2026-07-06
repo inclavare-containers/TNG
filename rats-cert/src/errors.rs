@@ -90,7 +90,7 @@ pub enum Error {
     ConnectAttestationAgentTtrpcFailed(#[source] ttrpc::Error),
 
     #[error("Coco token verifier error")]
-    CocoTokenVerifierError(#[source] crate::tee::coco::verifier::token::Error),
+    CocoTokenVerifierError(#[source] anyhow::Error),
 
     #[error("Signer transparency verification failed: {detail}")]
     SignerTransparencyVerificationFailed { detail: String },

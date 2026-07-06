@@ -11,6 +11,7 @@ use tracing::debug;
 
 mod error;
 pub(crate) mod jwk;
+pub use error::Error as TokenError;
 pub use error::*;
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -72,10 +73,8 @@ impl TokenVerifier {
             .map_err(|e| Error::TokenVerificationFailed { source: e })
     }
 
-    pub async fn from_config(config: AttestationTokenVerifierConfig) -> Result<Self> {
-        let verifier = JwkAttestationTokenVerifier::new(&config)
-            .await
-            .map_err(|e| Error::TokenVerifierInitialization { source: e })?;
+    pub async fn from_config(config: AttestationTokenVerifierConfig) -> anyhow::Result<Self> {
+        let verifier = JwkAttestationTokenVerifier::new(&config).await?;
 
         Ok(Self { verifier })
     }
