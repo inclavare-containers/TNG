@@ -44,7 +44,7 @@ class ReadmeLinksHook(BuildHookInterface):
         # Point hatch at the converted README for wheel metadata
         converted = Path(__file__).parent / "build" / "README.md"
         if converted.is_file():
-            build_data.readme = {
+            build_data["readme"] = {
                 "content-type": "text/markdown",
                 "path": str(converted),
             }
