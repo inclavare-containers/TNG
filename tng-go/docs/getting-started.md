@@ -12,7 +12,7 @@ If neither is found, `NewRoundTripper` returns an error.
 ## Installation
 
 ```bash
-go get github.com/inclavare-containers/tng/sdk-go/tng-go
+go get github.com/inclavare-containers/tng/tng-go
 ```
 
 No CGO required — pure Go build (`CGO_ENABLED=0 go build` works).
@@ -28,7 +28,7 @@ import (
     "log"
     "net/http"
 
-    tng "github.com/inclavare-containers/tng/sdk-go/tng-go"
+    tng "github.com/inclavare-containers/tng/tng-go"
 )
 
 func main() {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	tng "github.com/inclavare-containers/tng/sdk-go/tng-go"
+	tng "github.com/inclavare-containers/tng/tng-go"
 )
 
 func main() {

@@ -12,7 +12,7 @@
 ## 安装
 
 ```bash
-go get github.com/inclavare-containers/tng/sdk-go/tng-go
+go get github.com/inclavare-containers/tng/tng-go
 ```
 
 无需 CGO — 纯 Go 构建（`CGO_ENABLED=0 go build` 可用）。
@@ -28,7 +28,7 @@ import (
     "log"
     "net/http"
 
-    tng "github.com/inclavare-containers/tng/sdk-go/tng-go"
+    tng "github.com/inclavare-containers/tng/tng-go"
 )
 
 func main() {

@@ -15,7 +15,7 @@ The `TNG_BINARY` environment variable is shared with the [Python SDK](../tng-pyt
 ## Installation
 
 ```bash
-go get github.com/inclavare-containers/tng/sdk-go/tng-go
+go get github.com/inclavare-containers/tng/tng-go
 ```
 
 No CGO required — pure Go build.
@@ -23,7 +23,7 @@ No CGO required — pure Go build.
 ## Quick Start
 
 ```go
-import "github.com/inclavare-containers/tng/sdk-go/tng-go"
+import "github.com/inclavare-containers/tng/tng-go"
 
 func main() {
     // Create a RoundTripper (spawns TNG subprocess automatically)

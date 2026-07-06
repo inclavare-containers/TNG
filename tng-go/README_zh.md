@@ -15,7 +15,7 @@
 ## 安装
 
 ```bash
-go get github.com/inclavare-containers/tng/sdk-go/tng-go
+go get github.com/inclavare-containers/tng/tng-go
 ```
 
 无需 CGO — 纯 Go 构建。
@@ -23,7 +23,7 @@ go get github.com/inclavare-containers/tng/sdk-go/tng-go
 ## 快速开始
 
 ```go
-import "github.com/inclavare-containers/tng/sdk-go/tng-go"
+import "github.com/inclavare-containers/tng/tng-go"
 
 func main() {
     // 创建 RoundTripper（自动启动 TNG 子进程）

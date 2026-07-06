@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"sync/atomic"
 
-	"github.com/inclavare-containers/tng/sdk-go/tng-go/internal/tngproc"
+	"github.com/inclavare-containers/tng/tng-go/internal/tngproc"
 )
 
 // TngRoundTripper implements http.RoundTripper.
