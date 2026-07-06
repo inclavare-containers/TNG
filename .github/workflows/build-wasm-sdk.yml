@@ -11,6 +11,7 @@ on:
     branches:
       - "master"
       - "native"
+  workflow_dispatch:
 
 jobs:
   build-and-release:
@@ -193,12 +194,35 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  publish-npm:
+    name: Publish to npmjs.com
+    needs: build-and-release
+    if: >-
+      github.repository == 'inclavare-containers/TNG' &&
+      (
+        startsWith(github.ref, 'refs/tags/') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Download npm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+
       - name: Publish to npmjs.com
-        if: startsWith(github.ref, 'refs/tags/')
-        continue-on-error: true
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc.publish
-          PKG=$(ls tng-wasm/pkg/*.tgz | head -1)
-          npm publish --registry=https://registry.npmjs.org/ --userconfig=~/.npmrc.publish "$PKG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PKG=$(ls *.tgz | head -1)
+          echo "Publishing $PKG"
+          npm publish "$PKG" --provenance --access public
