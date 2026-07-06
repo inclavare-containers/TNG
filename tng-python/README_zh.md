@@ -70,22 +70,5 @@ tng = Tng(no_ra=True, ohttp={"key": {"source": "self_generated", "rotation_inter
 
 ## 文档
 
-- **[快速入门](docs/getting-started_zh.md)** — 完整的安装、使用和配置指南
-- **[Getting Started](docs/getting-started.md)** — Complete installation, usage, and configuration guide
-- **[架构说明](#架构)** — 工作原理
-
-## 架构
-
-```
-你的代码 → HTTP 库（原生代理）→ TNG http_proxy（本地）
-    → OHTTP/rats-TLS → TNG Server（远程）→ 后端服务
-```
-
-SDK 启动一个 TNG 子进程，配置 `http_proxy` ingress。请求通过各 HTTP 库的原生代理支持路由，自动加密后发送到远程 TNG 服务器。
-
-## 要求
-
-- Python 3.8+
-- `tng` 二进制在系统 PATH 上（wheel 中已包含，或单独安装）
-
-详细安装说明请参阅[快速入门指南](docs/getting-started_zh.md)。
+- **[快速入门](https://github.com/inclavare-containers/TNG/blob/master/tng-python/docs/getting-started_zh.md)** — 完整的安装、使用和配置指南
+- **[Getting Started](https://github.com/inclavare-containers/TNG/blob/master/tng-python/docs/getting-started.md)** — Complete installation, usage, and configuration guide
