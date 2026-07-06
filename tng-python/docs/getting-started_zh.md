@@ -5,15 +5,15 @@
 ### 从 PyPI 安装
 
 ```bash
-pip install tng
+pip install tng-sdk
 ```
 
 ### 从预构建的 wheel 安装
 
-从 [GitHub Releases](https://github.com/inclavare-containers/tng/releases) 下载对应平台的 wheel：
+从 [GitHub Releases](https://github.com/inclavare-containers/TNG/releases) 下载对应平台的 wheel：
 
 ```bash
-pip install tng-0.1.0-cp38-abi3-linux_x86_64.whl
+pip install tng_sdk-<version>-py3-none-any.whl
 ```
 
 支持的平台：

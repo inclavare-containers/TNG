@@ -6,6 +6,8 @@
 [![Build WASM SDK](/../../actions/workflows/build-wasm-sdk.yml/badge.svg)](/../../actions/workflows/build-wasm-sdk.yml)
 [![CI](/../../actions/workflows/test.yml/badge.svg)](/../../actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/inclavare-containers/TNG/graph/badge.svg?token=7CUZW26SH6)](https://codecov.io/gh/inclavare-containers/TNG)
+[![npm](https://img.shields.io/npm/v/@inclavare-containers/tng?logo=npm&label=npm)](https://www.npmjs.com/package/@inclavare-containers/tng)
+[![PyPI](https://img.shields.io/pypi/v/tng-sdk?logo=pypi&label=pypi)](https://pypi.org/project/tng-sdk/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rustc-1.89.0+-blue?logo=rust)](https://www.rust-lang.org)
 

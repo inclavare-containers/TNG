@@ -1,5 +1,7 @@
 # TNG Python SDK
 
+[![PyPI](https://img.shields.io/pypi/v/tng-sdk?logo=pypi&label=pypi)](https://pypi.org/project/tng-sdk/)
+
 [English](README.md)
 
 Trusted Network Gateway (TNG) Python SDK — 加密 HTTP 请求与远程证明。

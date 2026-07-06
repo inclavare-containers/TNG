@@ -1,6 +1,8 @@
 # TNG Python SDK
 
-[中文文档](README_zh.md)
+[![PyPI](https://img.shields.io/pypi/v/tng-sdk?logo=pypi&label=pypi)](https://pypi.org/project/tng-sdk/)
+
+[中文文档](https://github.com/inclavare-containers/TNG/blob/master/tng-python/README_zh.md)
 
 Trusted Network Gateway (TNG) Python SDK — encrypted HTTP requests with remote attestation.
 
@@ -70,5 +72,5 @@ tng = Tng(no_ra=True, ohttp={"key": {"source": "self_generated", "rotation_inter
 
 ## Documentation
 
-- **[Getting Started](docs/getting-started.md)** — Complete installation, usage, and configuration guide
-- **[Getting Started (中文)](docs/getting-started_zh.md)** — 完整的安装、使用和配置指南
+- **[Getting Started](https://github.com/inclavare-containers/TNG/blob/master/tng-python/docs/getting-started.md)** — Complete installation, usage, and configuration guide
+- **[Getting Started (中文)](https://github.com/inclavare-containers/TNG/blob/master/tng-python/docs/getting-started_zh.md)** — 完整的安装、使用和配置指南
