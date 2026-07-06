@@ -184,11 +184,35 @@ jobs:
           path: |
             ./npm/*.tgz
 
-      - name: Publish NPM packages (GitHub Packages)
-        if: startsWith(github.ref, 'refs/tags/')
+  publish-github:
+    name: Publish to GitHub Packages
+    needs: build-and-release
+    if: >-
+      github.repository == 'inclavare-containers/TNG' &&
+      (
+        startsWith(github.ref, 'refs/tags/') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Download npm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+
+      - name: Publish to GitHub Packages
         run: |
           echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          wasm-pack publish --target web --tag ${{ env.NPM_PKG_LABEL }}
+          PKG=$(ls *.tgz | head -1)
+          npm publish "$PKG" --registry=https://npm.pkg.github.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -209,7 +233,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install latest npm
         run: npm install -g npm@latest
@@ -223,4 +246,4 @@ jobs:
         run: |
           PKG=$(ls *.tgz | head -1)
           echo "Publishing $PKG"
-          npm publish "$PKG" --provenance --access public
+          npm publish "$PKG" --provenance --access public --registry=https://registry.npmjs.org
