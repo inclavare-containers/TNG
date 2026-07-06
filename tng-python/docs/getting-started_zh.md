@@ -13,7 +13,7 @@ pip install tng-sdk
 从 [GitHub Releases](https://github.com/inclavare-containers/TNG/releases) 下载对应平台的 wheel：
 
 ```bash
-pip install tng_sdk-<version>-py3-none-any.whl
+pip install tng_sdk-<version>-<platform>.whl
 ```
 
 支持的平台：

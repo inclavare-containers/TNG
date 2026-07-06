@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "tng-sdk"
 version = "2.6.0"
 description = "TNG (Trusted Network Gateway) Python SDK — encrypted HTTP requests with remote attestation"
-readme = "README.md"
+dynamic = ["readme"]
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
 

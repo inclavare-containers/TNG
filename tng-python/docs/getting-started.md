@@ -13,7 +13,7 @@ pip install tng-sdk
 Download the appropriate wheel for your platform from [GitHub Releases](https://github.com/inclavare-containers/TNG/releases):
 
 ```bash
-pip install tng_sdk-<version>-py3-none-any.whl
+pip install tng_sdk-<version>-<platform>.whl
 ```
 
 Available platforms:
