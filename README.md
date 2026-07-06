@@ -8,6 +8,7 @@
 [![codecov](https://codecov.io/gh/inclavare-containers/TNG/graph/badge.svg?token=7CUZW26SH6)](https://codecov.io/gh/inclavare-containers/TNG)
 [![npm](https://img.shields.io/npm/v/@inclavare-containers/tng?logo=npm&label=npm)](https://www.npmjs.com/package/@inclavare-containers/tng)
 [![PyPI](https://img.shields.io/pypi/v/tng-sdk?logo=pypi&label=pypi)](https://pypi.org/project/tng-sdk/)
+[![Go Reference](https://pkg.go.dev/badge/github.com/inclavare-containers/tng/tng-go.svg)](https://pkg.go.dev/github.com/inclavare-containers/tng/tng-go)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rustc-1.89.0+-blue?logo=rust)](https://www.rust-lang.org)
 
