@@ -184,7 +184,6 @@ tng = Tng(
 tng = Tng(
     no_ra=True,
     ohttp={
-        "key": {"source": "self_generated", "rotation_interval": 300},
         "path_rewrites": [
             {"match_regex": "^/api/(.*)", "substitution": "/v1/\\1"},
         ],

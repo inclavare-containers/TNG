@@ -65,9 +65,6 @@ tng = Tng(no_ra=True)
 
 # Use rats-TLS instead of OHTTP (mutually exclusive)
 tng = Tng(no_ra=True, rats_tls={"multiplex": True})
-
-# Custom OHTTP
-tng = Tng(no_ra=True, ohttp={"key": {"source": "self_generated", "rotation_interval": 300}})
 ```
 
 ## Documentation
