@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "master"
-      - "native"
       - "sdk-go"
     paths:
       - "tng-go/**"
@@ -15,7 +14,6 @@ on:
   pull_request:
     branches:
       - "master"
-      - "native"
       - "sdk-go"
     paths:
       - "tng-go/**"
