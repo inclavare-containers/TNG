@@ -8,10 +8,15 @@ TNG Client JavaScript SDK为浏览器环境提供客户端功能，使用wasm-pa
 
 您可以通过两种方式获取 TNG SDK：
 
-### 1. 从 GitHub Packages 下载
+### 1. 安装预编译包
 
-直接从 GitHub Packages 页面下载预编译的 npm 包：
-[https://github.com/inclavare-containers/TNG/pkgs/npm/tng](https://github.com/inclavare-containers/TNG/pkgs/npm/tng)
+直接从 npm 安装：
+
+```bash
+npm install @inclavare-containers/tng
+```
+
+也可从 [GitHub Packages](https://github.com/inclavare-containers/TNG/pkgs/npm/tng) 下载。
 
 ### 2. 从源码构建
 
@@ -80,7 +85,7 @@ make wasm-pack-debug
 ### 安装 SDK 到您的项目
 
 ```bash
-npm install tng-<version>.tgz
+npm install @inclavare-containers/tng
 ```
 
 ### 在您的 HTML 中集成 SDK

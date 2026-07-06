@@ -7,7 +7,7 @@ Trusted Network Gateway (TNG) Python SDK — 加密 HTTP 请求与远程证明�
 ## 快速开始
 
 ```bash
-pip install tng
+pip install tng-sdk
 ```
 
 ```python

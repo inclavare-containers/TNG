@@ -123,7 +123,7 @@ sudo tng launch --config-file=/etc/tng/config.json
 ### 方式四：JavaScript SDK（浏览器端）
 
 ```sh
-npm install tng-wasm-<version>.tgz
+npm install @inclavare-containers/tng
 ```
 
 完整 SDK 文档：[tng-wasm/README_zh.md](tng-wasm/README_zh.md)
@@ -131,7 +131,7 @@ npm install tng-wasm-<version>.tgz
 ### 方式五：Python SDK
 
 ```sh
-pip install tng-python
+pip install tng-sdk
 ```
 
 完整 SDK 文档：[tng-python/README_zh.md](tng-python/README_zh.md)

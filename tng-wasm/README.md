@@ -8,10 +8,15 @@ The TNG Client JavaScript SDK provides client functionality for use in browser e
 
 You can obtain the TNG SDK in two ways:
 
-### 1. Download from GitHub Packages
+### 1. Install a pre-built package
 
-Download the precompiled npm package directly from the GitHub Packages page:
-[https://github.com/inclavare-containers/TNG/pkgs/npm/tng](https://github.com/inclavare-containers/TNG/pkgs/npm/tng)
+Install directly from npm:
+
+```bash
+npm install @inclavare-containers/tng
+```
+
+Alternatively, download from [GitHub Packages](https://github.com/inclavare-containers/TNG/pkgs/npm/tng).
 
 ### 2. Build from Source
 
@@ -80,7 +85,7 @@ The resulting `tar.gz` file will be placed in the `./tng-wasm/pkg/` directory, w
 ### Install the SDK to Your Project
 
 ```bash
-npm install tng-<version>.tgz
+npm install @inclavare-containers/tng
 ```
 
 ### Integrate the SDK in Your HTML

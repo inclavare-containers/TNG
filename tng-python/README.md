@@ -7,7 +7,7 @@ Trusted Network Gateway (TNG) Python SDK — encrypted HTTP requests with remote
 ## Quick Start
 
 ```bash
-pip install tng
+pip install tng-sdk
 ```
 
 ```python
