@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tng-sdk"
-version = "2.7.2"
+version = "2.7.3"
 description = "TNG (Trusted Network Gateway) Python SDK — encrypted HTTP requests with remote attestation"
 readme = "README.md"
 requires-python = ">=3.8"
