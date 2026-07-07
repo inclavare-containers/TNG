@@ -57,7 +57,11 @@ jobs:
           cargo zigbuild --target ${{ inputs.target }} --release -p tng-hook-cdylib
 
       - name: Stage artifacts with system path layout
-        if: ${{ runner.os != 'Windows' }}
+        # Non-Windows targets get the system usr/ layout. Note: windows-gnu is
+        # cross-compiled on Linux, so we must gate on the *target*, not runner.os,
+        # otherwise windows-gnu would be staged under usr/bin/ and the release
+        # zip step (which expects a standalone tng.exe) would find nothing.
+        if: ${{ !contains(inputs.target, 'windows') }}
         run: |
           mkdir -p artifacts/usr/bin
           cp "target/${{ inputs.target }}/release/${{ env.exe_name }}" artifacts/usr/bin/
@@ -67,7 +71,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        if: ${{ runner.os != 'Windows' }}
+        if: ${{ !contains(inputs.target, 'windows') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.target }}
@@ -75,7 +79,9 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Windows artifact
-        if: ${{ runner.os == 'Windows' }}
+        # Upload a standalone tng.exe for Windows targets (both gnu and msvc),
+        # matching the release zip step which expects tng.exe at the top level.
+        if: ${{ contains(inputs.target, 'windows') }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.target }}
