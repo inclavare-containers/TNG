@@ -61,7 +61,10 @@ jobs:
           for dir in */; do
               dirname="${dir%/}"
               if [[ $dirname == *"windows"* ]]; then
-                  (cd ${dirname} && zip -r tng-${version}.${dirname}.zip tng.exe)
+                  # Write the zip to the parent (artifacts/) so the Release step's
+                  # ./artifacts/*.zip glob matches it, just like the tarballs below.
+                  # The subshell cd makes the zip entry a bare `tng.exe` (no path prefix).
+                  (cd ${dirname} && zip -r ../tng-${version}.${dirname}.zip tng.exe)
               else
                   tar czvf tng-${version}.${dirname}.tar.gz -C ${dirname} usr
               fi
