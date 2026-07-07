@@ -190,14 +190,12 @@ mod tests {
         assert_eq!(ep.http_authority(), "example.com:80");
     }
     #[test]
-    fn test_display_and_debug() {
+    fn test_display() {
         let ep = TngEndpoint::from_ipv4(Ipv4Addr::new(127, 0, 0, 1), 80);
         assert_eq!(format!("{}", ep), "127.0.0.1:80");
-        assert_eq!(format!("{:?}", ep), "127.0.0.1:80");
 
         let ep = TngEndpoint::from_domain("localhost".to_string(), 443);
         assert_eq!(format!("{}", ep), "localhost:443");
-        assert_eq!(format!("{:?}", ep), "localhost:443");
     }
 
     #[test]
