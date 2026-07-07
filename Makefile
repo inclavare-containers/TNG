@@ -52,6 +52,11 @@ define update-buildspec-yml
 	@sed -i -E 's/(tags: \[\[)[0-9]+\.[0-9]+\.[0-9]+(, latest\]\])/\1$(1)\2/' APPLICATION/tng/buildspec.yml
 endef
 
+# Function to update pyproject.toml version (Python SDK)
+define update-pyproject-toml
+	@sed -i 's/^version = "$(VERSION)"/version = "$(1)"/' tng-python/pyproject.toml
+endef
+
 # Function to update Cargo.lock
 define update-cargo-lock
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
@@ -79,7 +84,7 @@ endef
 define update-rpm-spec
 	@# Update Version field in spec file (matches any version number)
 	@sed -i 's/^Version: .*/Version: $(1)/' trusted-network-gateway.spec
-	$(eval RPM_DATE := $(shell date +"%a %b %d %Y"))
+	$(eval RPM_DATE := $(shell LC_ALL=C date +"%a %b %d %Y"))
 	@echo "* $(RPM_DATE) $(AUTHOR) - $(1)-1" > /tmp/rpm_changelog_entry.txt
 	$(call write-commits-to-file,/tmp/rpm_commits.txt,$(1))
 	@cat /tmp/rpm_commits.txt >> /tmp/rpm_changelog_entry.txt
@@ -96,10 +101,12 @@ endef
 define bump-version-internal
 	@echo "Bumping $(1) version: $(VERSION) -> $(2)"
 	$(call update-cargo-toml,$(2))
+	$(call update-pyproject-toml,$(2))
 	@echo "New version: $(2)"
 	$(call update-cargo-lock)
 	$(call update-buildspec-yml,$(2))
 	@echo "Updated APPLICATION/tng/buildspec.yml"
+	@echo "Updated tng-python/pyproject.toml"
 	$(call get-git-info)
 	$(call determine-last-tag,$(3))
 	@echo "Using last tag: $(LAST_TAG)"
@@ -110,6 +117,7 @@ define bump-version-internal
 	@echo "  - Updated Cargo.toml"
 	@echo "  - Updated Cargo.lock"
 	@echo "  - Updated APPLICATION/tng/buildspec.yml"
+	@echo "  - Updated tng-python/pyproject.toml"
 	@echo "  - Updated RPM spec version and changelog"
 	@echo ""
 	@echo "If it is ok to commit, run the following commands:"
