@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.7.1
+Version: 2.7.2
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,10 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Tue Jul 07 2026 Kun Lai <laikun@linux.alibaba.com> - 2.7.2-1
+- fix(ci): grant release job contents:write + actions:read permissions
+- fix(ci): write windows zip to artifacts/ top level for release glob
+
 * Tue Jul 07 2026 Kun Lai <laikun@linux.alibaba.com> - 2.7.1-1
 - fix(python-sdk): populate PyPI project description via static readme
 - fix(tng): drop incorrect Debug assertions from endpoint test
