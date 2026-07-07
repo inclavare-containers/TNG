@@ -9,6 +9,7 @@ pub mod egress;
 pub mod egress_hook;
 pub mod ingress;
 pub mod mapping_rule;
+pub mod match_rule;
 pub mod observability;
 pub mod ra;
 
@@ -67,6 +68,8 @@ pub struct UdpQuicArgs {
 
 #[cfg(test)]
 pub mod tests {
+    use std::net::Ipv4Addr;
+
     use anyhow::Result;
     use egress::{EgressHeaderPassthroughConfig, EgressMode};
     use ingress::{IngressHeaderPassthroughConfig, IngressMode, PathRewrite};
@@ -100,7 +103,7 @@ pub mod tests {
                             port_end: None,
                         },
                         out: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some("127.0.0.1".parse::<Ipv4Addr>().unwrap()),
                             port: 20001,
                             port_end: None,
                         },
@@ -144,12 +147,12 @@ pub mod tests {
                 egress_mode: EgressMode::Mapping (EgressMappingArgs{
                     rules: vec![MappingRule {
                         r#in: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some("127.0.0.1".parse::<Ipv4Addr>().unwrap()),
                             port: 20001,
                             port_end: None,
                         },
                         out: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some("127.0.0.1".parse::<Ipv4Addr>().unwrap()),
                             port: 30001,
                             port_end: None,
                         },
@@ -214,7 +217,7 @@ pub mod tests {
                             port_end: None,
                         },
                         out: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some("127.0.0.1".parse::<Ipv4Addr>().unwrap()),
                             port: 20001,
                             port_end: None,
                         },

@@ -101,9 +101,13 @@ pub struct LazyOnetimeTlsClientConfig(rustls::ClientConfig, Option<Arc<LazyServe
 #[cfg(not(wasm))]
 impl LazyOnetimeTlsClientConfig {
     /// Perform TLS handshake then verify the peer certificate if a verifier was configured.
+    ///
+    /// Takes the peer as an `EndpointAddr` rather than a pre-formatted string so that
+    /// IPv4 addresses become `ServerName::IpAddress` directly (no allocation) and
+    /// domains become `ServerName::DnsName` from the borrowed string.
     pub async fn handshake_with_stream<S>(
         self,
-        server_name: &str,
+        server_name: &crate::tunnel::endpoint::EndpointAddr,
         stream: S,
     ) -> Result<(
         tokio_rustls::client::TlsStream<S>,
@@ -112,15 +116,25 @@ impl LazyOnetimeTlsClientConfig {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
-        use rustls::pki_types::ServerName;
+        use rustls::pki_types::{DnsName, IpAddr, ServerName};
+
+        // Build the borrowing `ServerName` from the structured address: IPv4 →
+        // `IpAddress` (no string allocation), domain → `DnsName` from the
+        // borrowed string. `to_owned()` then lifts it to `ServerName<'static>`
+        // (a cheap IpAddr copy for IPv4; an owned copy of the DNS name for
+        // domains, which is unavoidable for the async connect future).
+        let server_name = match server_name {
+            crate::tunnel::endpoint::EndpointAddr::Ipv4(ip) => {
+                ServerName::IpAddress(IpAddr::V4((*ip).into()))
+            }
+            crate::tunnel::endpoint::EndpointAddr::Domain(d) => ServerName::DnsName(
+                DnsName::try_from(d.as_str())
+                    .with_context(|| format!("Invalid server name for TLS handshake ({d})"))?,
+            ),
+        };
 
         let tls_stream = tokio_rustls::TlsConnector::from(std::sync::Arc::new(self.0))
-            .connect(
-                ServerName::try_from(server_name)
-                    .context("Invalid server name for TLS handshake")?
-                    .to_owned(),
-                stream,
-            )
+            .connect(server_name.to_owned(), stream)
             .await
             .context("Failed to establish TLS connection")?;
 

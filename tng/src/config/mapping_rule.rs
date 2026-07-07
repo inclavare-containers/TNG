@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 
-/// Endpoint within a mapping rule. Host is always a single address;
+/// Endpoint within a mapping rule. Host is always a single IPv4 address;
 /// port can be a single value or a closed range [port, port_end].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleEndpoint {
-    pub host: Option<String>,
+    pub host: Option<Ipv4Addr>,
     pub port: u16,
     /// Optional end port for port range matching.
     /// When set, represents a closed interval [port, port_end].
@@ -21,7 +22,7 @@ pub struct MappingRule {
 /// Legacy endpoint used during deserialization of old-style mapping configs.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LegacyEndpoint {
-    pub host: Option<String>,
+    pub host: Option<Ipv4Addr>,
     pub port: u16,
 }
 
@@ -111,12 +112,8 @@ impl MappingDe {
     }
 }
 
-fn normalize_host(host: Option<&str>) -> &str {
-    host.unwrap_or("0.0.0.0")
-}
-
 fn endpoints_overlap(a: &RuleEndpoint, b: &RuleEndpoint) -> bool {
-    if normalize_host(a.host.as_deref()) != normalize_host(b.host.as_deref()) {
+    if a.host.unwrap_or(Ipv4Addr::UNSPECIFIED) != b.host.unwrap_or(Ipv4Addr::UNSPECIFIED) {
         return false;
     }
 

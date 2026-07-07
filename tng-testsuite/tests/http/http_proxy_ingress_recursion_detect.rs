@@ -23,7 +23,6 @@ async fn test() -> Result<()> {
                                 },
                                 "dst_filters": [
                                     {
-                                        "domain": "*",
                                         "port": 7711
                                     }
                                 ]

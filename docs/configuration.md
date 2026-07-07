@@ -190,10 +190,14 @@ TNG listens on an HTTP proxy port. Clients route traffic through the proxy to TN
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `domain` | string | `*` | Target domain to match (supports `*` wildcard; does not support regex) |
-| `domain_regex` | string | `.*` | Target domain regex (mutually exclusive with `domain`) |
-| `port` | integer | `80` | Target port to match |
-| `port_end` | integer | None | Optional end port for range matching. When set with `port`, matches ports in `[port, port_end]` inclusive range. Requires `port` to be set. |
+| `domain` | string | — | Target domain to match (supports `*` wildcard for prefix/suffix matching; `*` alone matches all domain names). Only matches domain-name endpoints, not IP addresses. |
+| `domain_regex` | string | — | Target domain regex. Only matches domain-name endpoints, not IP addresses. Mutually exclusive with `domain`. |
+| `ip` | string | — | Exact IPv4 address match (e.g. `"10.0.0.1"`). Only matches IP endpoints. |
+| `ip_cidr` | string | — | IPv4 CIDR range match (e.g. `"10.0.0.0/24"`). Only matches IP endpoints. |
+| `port` | integer | — | Target port to match. When omitted, matches any port. |
+| `port_end` | integer | — | Optional end port for range matching. When set with `port`, matches ports in `[port, port_end]` inclusive range. Requires `port` to be set. |
+
+When neither `domain`, `domain_regex`, `ip`, nor `ip_cidr` is specified, the rule matches **all** endpoint types (both domain names and IP addresses), filtered only by port if `port` is set.
 
 > The `domain` wildcard syntax is described in [Envoy VirtualHost domains](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost).
 

@@ -3,11 +3,7 @@ use std::{future::Future, net::SocketAddr, pin::Pin};
 use anyhow::{Context as _, Result};
 
 use crate::{
-    tunnel::{
-        attestation_result::AttestationResult,
-        endpoint::TngEndpoint,
-        utils::{self, socket::tcp_connect},
-    },
+    tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint, utils},
     CommonStreamTrait, ContextualStream,
 };
 
@@ -48,15 +44,15 @@ impl StreamManager for UnprotectedStreamManager {
         Option<AttestationResult>,
         /* upstream_local */ Option<SocketAddr>,
     )> {
-        let upstream = tcp_connect(
-            (endpoint.host(), endpoint.port()),
-            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-            self.transport_so_mark,
-        )
-        .await
-        .with_context(|| {
-            format!("Failed to establish TCP connection with upstream '{endpoint}'")
-        })?;
+        let upstream = endpoint
+            .tcp_connect(
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                self.transport_so_mark,
+            )
+            .await
+            .with_context(|| {
+                format!("Failed to establish TCP connection with upstream '{endpoint}'")
+            })?;
         let upstream_local = upstream.local_addr().context("Failed to get local addr")?;
         let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 

@@ -116,7 +116,7 @@ impl RatsTlsWrappingLayer {
         let local_addr = tcp_stream.local_addr().ok();
 
         let (tls_stream, attestation_result) = tls_client_config
-            .handshake_with_stream(endpoint.host(), tcp_stream)
+            .handshake_with_stream(endpoint.addr(), tcp_stream)
             .await?;
 
         tracing::debug!("Rats-TLS tunnel established");

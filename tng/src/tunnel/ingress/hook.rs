@@ -44,23 +44,13 @@ impl HookIngress {
             .proxy_port
             .ok_or_else(|| anyhow::anyhow!("Ingress hook mode requires proxy_port to be set. This should be populated by tng exec"))?;
 
-        // Build an endpoint matcher from the capture_dst rules converted to
-        // EndpointFilter format. The hook already filtered at the connect()
-        // level via LD_PRELOAD, but we still need domain/port matching for
-        // the HTTP CONNECT authority.
-        let dst_filters: Vec<_> = hook_args
-            .capture_dst
-            .iter()
-            .map(|capture| crate::config::ingress::EndpointFilter {
-                domain: Some("*".to_owned()),
-                domain_regex: None,
-                port: Some(capture.port),
-                port_end: capture.port_end,
-            })
-            .collect();
-
+        // Hook mode uses LD_PRELOAD to intercept connect() calls, which
+        // already filters traffic by capture_dst rules at the IP+port level.
+        // All connections that reach this proxy have already been matched by
+        // the .so layer, so use an empty matcher — it always returns true
+        // (encrypted), routing all traffic through the trusted tunnel.
         let stream_router = Arc::new(StreamRouter::with_endpoint_matcher(EndpointMatcher::new(
-            &dst_filters,
+            &[],
         )?));
 
         // Eager binding: the listener is bound here in the constructor,

@@ -130,7 +130,14 @@ impl EgressTrait for NetfilterEgress {
                     Err(anyhow::anyhow!("The original destination is the same as the listener port, recursion is detected"))?
                 }
 
-                let dst = Arc::new(TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port()));
+                let dst = match orig_dst.ip() {
+                    std::net::IpAddr::V4(ip) => {
+                        Arc::new(TngEndpoint::from_ipv4(ip, orig_dst.port()))
+                    }
+                    std::net::IpAddr::V6(_) => {
+                        bail!("SO_ORIGINAL_DST returned an IPv6 address, which is not supported")
+                    }
+                };
 
                 let access_accepted = AccessAccepted::new_egress(
                     peer_addr,

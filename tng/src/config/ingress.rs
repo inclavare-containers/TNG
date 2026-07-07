@@ -6,6 +6,7 @@ use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 use crate::tunnel::access_log::IngressAccessMode;
 
 use super::mapping_rule::MappingDe;
+use super::match_rule::{HostMatchConfig, PortMatchConfig};
 use super::{ra::RaArgsUnchecked, Endpoint, UdpQuicArgs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +149,7 @@ pub struct IngressHttpProxyArgs {
     // In TNG version <= 1.0.1, this field is named as `dst_filter`
     #[serde(alias = "dst_filter")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dst_filters: Vec<EndpointFilter>,
+    pub dst_filters: Vec<EndpointMatcherConfig>,
 }
 
 #[serde_as]
@@ -301,7 +302,7 @@ pub struct IngressSocks5Args {
 
     #[serde(default = "Vec::new")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dst_filters: Vec<EndpointFilter>,
+    pub dst_filters: Vec<EndpointMatcherConfig>,
 
     pub auth: Option<Socks5AuthArgs>,
 }
@@ -345,30 +346,36 @@ pub struct IngressHeaderPassthroughConfig {
     pub request_headers: Vec<String>,
 }
 
+/// A single filter rule for endpoint matching in ingress modes that support
+/// destination filtering (http_proxy, socks5).
+///
+/// The `rule` field specifies the host/address matching criteria (domain,
+/// domain regex, IP, or IP CIDR). For backward compatibility, the deserialized
+/// JSON also accepts the legacy flat format with separate `domain` and
+/// `domain_regex` fields.
+///
+/// Note: `#[serde(deny_unknown_fields)]` is intentionally omitted because it is
+/// incompatible with `#[serde(flatten)]`. Typos in field names (e.g. `doman`)
+/// will silently produce an `All` matcher instead of erroring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EndpointFilter {
-    /// Host name to match.
+pub struct EndpointMatcherConfig {
+    /// Host/address matching rule: domain, domain_regex, IP, or CIDR.
     ///
-    /// Only some of the wildcards types are supported. See "domains" field in https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-virtualhost
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub domain_regex: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
-
-    /// Optional end port for port range matching.
+    /// For backward compatibility, deserializes from the legacy flat format
+    /// with separate `domain` and `domain_regex` fields.
+    #[serde(flatten)]
+    pub host_match: HostMatchConfig,
+    /// Port matching rule (single port or range).
     ///
-    /// When set together with `port`, matches destination ports in the range `[port, port_end]`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_end: Option<u16>,
+    /// When a range is specified via `port_end`, matches ports in `[port, port_end]`.
+    #[serde(flatten)]
+    pub port_match: PortMatchConfig,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use anyhow::Result;
     use serde_json::json;
 
@@ -739,6 +746,31 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_endpoint_filter_ip() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!({
+            "add_ingress": [
+                {
+                    "http_proxy": {
+                        "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                        "dst_filters": [
+                            { "ip": "10.0.0.1", "port": 80 },
+                            { "ip_cidr": "10.0.0.0/24", "port": 443 }
+                        ]
+                    },
+                    "no_ra": true
+                }
+            ]
+        }))?;
+        let json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_deserialize_mapping_backward_compat() -> Result<()> {
         // Legacy format: single in/out
         let config: TngConfig = serde_json::from_value(json!(
@@ -764,10 +796,10 @@ mod tests {
         // Verify rules were parsed correctly
         if let IngressMode::Mapping(m) = &config.add_ingress[0].ingress_mode {
             assert_eq!(m.rules.len(), 1);
-            assert_eq!(m.rules[0].r#in.host, Some("0.0.0.0".to_owned()));
+            assert_eq!(m.rules[0].r#in.host, Some(Ipv4Addr::UNSPECIFIED));
             assert_eq!(m.rules[0].r#in.port, 10001);
             assert_eq!(m.rules[0].r#in.port_end, None);
-            assert_eq!(m.rules[0].out.host, Some("127.0.0.1".to_owned()));
+            assert_eq!(m.rules[0].out.host, Some(Ipv4Addr::LOCALHOST));
             assert_eq!(m.rules[0].out.port, 20001);
         } else {
             panic!("expected mapping mode");

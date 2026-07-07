@@ -12,7 +12,7 @@ impl StreamRouter {
     pub fn should_forward_via_tunnel(&self, endpoint: &TngEndpoint) -> bool {
         let encrypted = self.endpoint_matcher.matches(endpoint);
         tracing::debug!(
-            endpoint=?endpoint,
+            endpoint=%endpoint,
             encrypted,
             "Determine whether to forward the stream via secure tunnel"
         );

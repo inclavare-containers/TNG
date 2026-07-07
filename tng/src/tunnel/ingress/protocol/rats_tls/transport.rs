@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result};
 use tracing::{Instrument, Span};
 
 use super::security::pool::PoolKey;
-use crate::tunnel::utils::{socket::tcp_connect, tokio::TokioIo};
+use crate::tunnel::utils::tokio::TokioIo;
 
 /// The transport layer creator is used to create the transport layer.
 pub struct RatsTlsTransportLayerCreator {
@@ -44,7 +44,7 @@ impl RatsTlsTransportLayerCreator {
 }
 
 // TODO: The connector will be cloned each time when we clone the hyper http client. Maybe we can replace it with std::borrow::Cow to save memory.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RatsTlsTransportLayerConnector {
     pub pool_key: PoolKey,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -69,13 +69,13 @@ impl<Req> tower::Service<Req> for RatsTlsTransportLayerConnector {
         let fut = async move {
             tracing::debug!("Establishing the underlying tcp connection with upstream");
 
-            let tcp_stream = tcp_connect(
-                (dst.host(), dst.port()),
-                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-                so_mark,
-            )
-            .await
-            .context("Failed to establish the underlying tcp connection for rats-tls")?;
+            let tcp_stream = dst
+                .tcp_connect(
+                    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                    so_mark,
+                )
+                .await
+                .context("Failed to establish the underlying tcp connection for rats-tls")?;
 
             Ok(TokioIo::new(tcp_stream))
         }

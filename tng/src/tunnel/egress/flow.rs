@@ -16,7 +16,6 @@ use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
-use crate::tunnel::utils::socket::tcp_connect;
 use crate::{service::RegistedService, CommonStreamTrait, ContextualStream};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
@@ -260,13 +259,13 @@ async fn forward_to_upstream(
 
     let access_routed = access_accepted.into_routed(dst, encrypted);
 
-    let upstream = tcp_connect(
-        (dst.host(), dst.port()),
-        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-        transport_so_mark,
-    )
-    .await
-    .context("Failed to connect to upstream")?;
+    let upstream = dst
+        .tcp_connect(
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            transport_so_mark,
+        )
+        .await
+        .context("Failed to connect to upstream")?;
     let egress_local = upstream.local_addr().context("Failed to get local addr")?;
     let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
 

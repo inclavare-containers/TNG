@@ -23,7 +23,7 @@ use tracing::{Instrument, Span};
 use crate::{
     tunnel::{
         attestation_result::AttestationResult,
-        endpoint::TngEndpoint,
+        endpoint::{EndpointAddr, TngEndpoint},
         ingress::protocol::rats_tls::wrapping::RatsTlsWrappingLayer,
         ra_context::RaContext,
         utils::{
@@ -224,9 +224,13 @@ impl tower::Service<Uri> for SecurityConnector {
 
                 tracing::debug!("Creating rats-tls connection");
                 async {
-                    let host = uri.host().context("Host is empty")?.to_owned();
+                    let host = uri.host().context("Host is empty")?;
+                    // Model the URI host as an `EndpointAddr` so the TLS
+                    // handshake can build a `ServerName` without formatting a
+                    // string for the IPv4 case.
+                    let server_name = EndpointAddr::from_host(host);
                     let (security_layer_stream, attestation_result) = tls_client_config
-                        .handshake_with_stream(&host, transport_layer_stream.into_inner())
+                        .handshake_with_stream(&server_name, transport_layer_stream.into_inner())
                         .await?;
 
                     tracing::debug!("New rats-tls connection established");

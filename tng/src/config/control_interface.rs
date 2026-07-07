@@ -24,6 +24,8 @@ pub struct TtrpcArgs {
 #[cfg(test)]
 mod tests {
 
+    use std::net::Ipv4Addr;
+
     use anyhow::Result;
     use serde_json::json;
 
@@ -85,7 +87,7 @@ mod tests {
                             port_end: None,
                         },
                         out: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some(Ipv4Addr::LOCALHOST),
                             port: 30001,
                             port_end: None,
                         },
@@ -160,7 +162,7 @@ mod tests {
                             port_end: None,
                         },
                         out: RuleEndpoint {
-                            host: Some("127.0.0.1".to_owned()),
+                            host: Some(Ipv4Addr::LOCALHOST),
                             port: 30001,
                             port_end: None,
                         },

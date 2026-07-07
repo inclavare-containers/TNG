@@ -144,11 +144,7 @@ impl OHttpSecurityLayer {
 
             tracing::debug!(original_path, rewrited_path, "path is rewrited");
 
-            let url = format!(
-                "http://{}:{}{rewrited_path}",
-                endpoint.host(),
-                endpoint.port()
-            );
+            let url = format!("http://{}{rewrited_path}", endpoint.http_authority());
 
             url.parse::<Url>()
                 .with_context(|| format!("Not a valid URL: {url}"))

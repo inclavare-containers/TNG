@@ -85,12 +85,14 @@ async fn serve_socks5(
             let inner = proto.reply_success(empty_sockaddr).await?;
 
             let dst = match target_addr {
-                fast_socks5::util::target_addr::TargetAddr::Ip(sock_addr) => {
-                    // TODO: replace TngEndpoint with a enum type, so that no need to call sock_addr.ip().to_string()
-                    TngEndpoint::new(sock_addr.ip().to_string(), sock_addr.port())
-                }
+                fast_socks5::util::target_addr::TargetAddr::Ip(sock_addr) => match sock_addr.ip() {
+                    std::net::IpAddr::V4(ip) => TngEndpoint::from_ipv4(ip, sock_addr.port()),
+                    std::net::IpAddr::V6(_) => {
+                        bail!("SOCKS5 target with IPv6 address is not supported, only IPv4 and domain targets are allowed");
+                    }
+                },
                 fast_socks5::util::target_addr::TargetAddr::Domain(domain, port) => {
-                    TngEndpoint::new(domain, port)
+                    TngEndpoint::from_domain(domain, port)
                 }
             };
 

@@ -16,7 +16,7 @@ use crate::error::TngError;
 use crate::service::RegistedService;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
-use crate::tunnel::endpoint::TngEndpoint;
+use crate::tunnel::endpoint::{EndpointAddr, TngEndpoint};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils::runtime::TokioRuntime;
@@ -176,9 +176,19 @@ impl DatagramEgressFlow {
         idle_timeout_secs: u64,
         runtime: &TokioRuntime,
     ) -> Result<()> {
-        let backend_addr = format!("{}:{}", backend_ep.host(), backend_ep.port());
         let backend_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        backend_socket.connect(&backend_addr).await?;
+        // Connect without formatting a "host:port" string: both `(Ipv4Addr, u16)`
+        // and `(&str, u16)` implement `ToSocketAddrs` directly.
+        match backend_ep.addr() {
+            EndpointAddr::Ipv4(ip) => {
+                backend_socket.connect((*ip, backend_ep.port())).await?;
+            }
+            EndpointAddr::Domain(d) => {
+                backend_socket
+                    .connect((d.as_str(), backend_ep.port()))
+                    .await?;
+            }
+        }
 
         let idle_timeout = Duration::from_secs(idle_timeout_secs);
         let last_activity = Arc::new(Mutex::new(Instant::now()));

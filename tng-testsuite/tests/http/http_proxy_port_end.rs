@@ -49,7 +49,6 @@ async fn test_http_proxy_port_end() -> Result<()> {
                             },
                             "dst_filters": [
                                 {
-                                    "domain": "*",
                                     "port": 30000,
                                     "port_end": 30063
                                 }

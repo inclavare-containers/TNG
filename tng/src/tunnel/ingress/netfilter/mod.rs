@@ -127,7 +127,10 @@ impl IngressTrait for NetfilterIngress {
                     Err(anyhow!("The original destination is the same as the listener port, recursion is detected"))?
                 }
 
-                let orig_dst = TngEndpoint::new(orig_dst.ip().to_string(), orig_dst.port());
+                let std::net::IpAddr::V4(v4) = orig_dst.ip() else {
+                    bail!("original destination is an IPv6 address, which is not supported");
+                };
+                let orig_dst = TngEndpoint::from_ipv4(v4, orig_dst.port());
 
                 let access_accepted = AccessAccepted::new_ingress(
                     peer_addr,

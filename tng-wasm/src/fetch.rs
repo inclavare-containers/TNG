@@ -70,10 +70,7 @@ async fn fetch_core_impl(
         .clone();
 
     // TODO: note that in wasm mode, this field should be same as the http request in the body
-    let endpoint = TngEndpoint::new(
-        authority.host().to_string(),
-        authority.port_u16().unwrap_or(80),
-    );
+    let endpoint = TngEndpoint::new(authority.host(), authority.port_u16().unwrap_or(80));
 
     send_request_async_impl(&endpoint, ohttp, ra_args, http_request)
         .await

@@ -16,7 +16,7 @@ use crate::{
 
 use super::flow::{EgressTrait, Incomming};
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub struct MappingEgress {
@@ -44,16 +44,17 @@ impl EgressTrait for MappingEgress {
         let in_desc = first.map_or("".to_owned(), |rule| {
             format!(
                 "{}:{}",
-                rule.r#in.host.as_deref().unwrap_or("0.0.0.0"),
+                rule.r#in.host.unwrap_or(Ipv4Addr::UNSPECIFIED),
                 rule.r#in.port
             )
         });
-        let out_desc = first.map_or("".to_owned(), |rule| {
-            format!(
-                "{}:{}",
-                rule.out.host.as_deref().unwrap_or(""),
-                rule.out.port
-            )
+        let out_desc = first.map_or("".to_owned(), |rule| match rule.out.host {
+            Some(host) => {
+                format!("{}:{}", host, rule.out.port)
+            }
+            None => {
+                format!(":{}", rule.out.port)
+            }
         });
 
         [
@@ -80,8 +81,8 @@ impl EgressTrait for MappingEgress {
         let mut targets: Vec<ListenerTarget> = Vec::new();
 
         for rule in &self.rules {
-            let host = rule.r#in.host.as_deref().unwrap_or("0.0.0.0");
-            let out_host = rule.out.host.as_deref().context("out.host is required")?;
+            let host = rule.r#in.host.unwrap_or(Ipv4Addr::UNSPECIFIED);
+            let out_host = rule.out.host.context("out.host is required")?;
 
             if let Some(port_end) = rule.r#in.port_end {
                 let offset_base = rule.out.port;
@@ -96,7 +97,7 @@ impl EgressTrait for MappingEgress {
                     })?;
                     listener.set_listener_common_sock_opts()?;
                     let local_addr = listener.local_addr()?;
-                    let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), out_port));
+                    let out_ep = Arc::new(TngEndpoint::from_ipv4(out_host, out_port));
 
                     targets.push(ListenerTarget {
                         listener,
@@ -113,7 +114,7 @@ impl EgressTrait for MappingEgress {
                     .with_context(|| format!("Failed to bind mapping egress listener on {addr}"))?;
                 listener.set_listener_common_sock_opts()?;
                 let local_addr = listener.local_addr()?;
-                let out_ep = Arc::new(TngEndpoint::new(out_host.to_owned(), rule.out.port));
+                let out_ep = Arc::new(TngEndpoint::from_ipv4(out_host, rule.out.port));
 
                 targets.push(ListenerTarget {
                     listener,

@@ -2,7 +2,6 @@ use http_body_util::combinators::BoxBody;
 use hyper_util::client::legacy::Client;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::tunnel::endpoint::TngEndpoint;
@@ -13,7 +12,7 @@ pub type HyperClientType = Client<SecurityConnector, BoxBody<bytes::Bytes, Infal
 
 pub type ClientPool = HashMap<PoolKey, RatsTlsClient>;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct PoolKey {
     /// The distination endpoint where the underlying transport layer will connect to.
     endpoint: TngEndpoint,
