@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.7.0
+Version: 2.7.1
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,11 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Tue Jul 07 2026 Kun Lai <laikun@linux.alibaba.com> - 2.7.1-1
+- fix(python-sdk): populate PyPI project description via static readme
+- fix(tng): drop incorrect Debug assertions from endpoint test
+- fix(ci): upload standalone tng.exe for windows-gnu cross-build
+
 * Tue Jul 07 2026 Kun Lai <laikun@linux.alibaba.com> - 2.7.0-1
 - build: bump Python SDK version alongside Rust in make bump-version
 - refactor: clarify IP/CIDR/Domain types and add IP/CIDR endpoint filtering
