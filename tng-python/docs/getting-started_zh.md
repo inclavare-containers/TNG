@@ -13,27 +13,31 @@ pip install tng-sdk
 从 [GitHub Releases](https://github.com/inclavare-containers/TNG/releases) 下载对应平台的 wheel：
 
 ```bash
-pip install tng_sdk-<version>-<platform>.whl
+pip install tng_sdk-<version>-py3-none-<platform>.whl
 ```
 
-支持的平台：
-- `x86_64-unknown-linux-gnu` (Linux x86_64)
-- `aarch64-unknown-linux-gnu` (Linux ARM64)
-- `x86_64-apple-darwin` (macOS Intel)
-- `aarch64-apple-darwin` (macOS Apple Silicon)
+支持的平台（即文件名中的 `<platform>` 部分）：
+- `manylinux_2_17_x86_64`（Linux x86_64）
+- `manylinux_2_17_aarch64`（Linux ARM64）
+- `macosx_11_0_x86_64`（macOS Intel）
+- `macosx_11_0_arm64`（macOS Apple Silicon）
+- `win_amd64`（Windows x86_64）
+
+> 使用 `pip install tng-sdk` 从 PyPI 安装时会自动选择对应平台的 wheel。
 
 ### 从源码构建
 
-需要 Rust 工具链和 maturin：
+需要 Rust 工具链；若未安装 `hatch`，将自动安装。
 
 ```bash
-# 编译 tng 二进制
-cargo build --release -p tng
-cp target/release/tng tng-python/bin/scripts/tng
+# 在仓库根目录执行 —— 编译 tng 二进制、构建 wheel 并安装
+make python-wheel-install
+```
 
-# 构建并安装 Python SDK
-cd tng-python
-maturin develop
+仅构建 wheel 而不安装：
+
+```bash
+make python-wheel   # 产物位于 tng-python/dist/
 ```
 
 ### TNG 二进制要求

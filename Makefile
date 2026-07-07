@@ -514,17 +514,12 @@ bench-multiplex:
 	TNG_MULTIPLEX=true bash ./scripts/bench.sh
 
 # Python wheel build for current platform
-# Requires: Rust toolchain, maturin (pip install maturin)
+# Requires: Rust toolchain and hatch (installed automatically if missing)
 # Builds tng binary for current platform, embeds it in Python wheel
-# Usage: make python-wheel [PYTHON=python3.11]
-PYTHON ?= python3.11
+# Usage: make python-wheel
 
 .PHONY: python-wheel
 python-wheel:
-	@if ! command -v maturin > /dev/null; then \
-		echo ">> maturin not found. Installing..."; \
-		pip install maturin; \
-	fi
 	@echo ">> Building tng binary for current platform..."
 	cargo build --release -p tng
 	@echo ">> Copying tng binary to tng-python/bin/scripts/"
@@ -544,7 +539,7 @@ python-wheel:
 .PHONY: python-wheel-install
 python-wheel-install: python-wheel
 	@echo ">> Installing Python wheel..."
-	pip install --force-reinstall target/wheels/*.whl
+	pip install --force-reinstall tng-python/dist/*.whl
 	@echo ">> Python wheel installed successfully!"
 
 # Run Python tests

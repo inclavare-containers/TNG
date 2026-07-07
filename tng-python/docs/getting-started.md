@@ -13,27 +13,31 @@ pip install tng-sdk
 Download the appropriate wheel for your platform from [GitHub Releases](https://github.com/inclavare-containers/TNG/releases):
 
 ```bash
-pip install tng_sdk-<version>-<platform>.whl
+pip install tng_sdk-<version>-py3-none-<platform>.whl
 ```
 
-Available platforms:
-- `x86_64-unknown-linux-gnu` (Linux x86_64)
-- `aarch64-unknown-linux-gnu` (Linux ARM64)
-- `x86_64-apple-darwin` (macOS Intel)
-- `aarch64-apple-darwin` (macOS Apple Silicon)
+Available platforms (the `<platform>` part of the filename):
+- `manylinux_2_17_x86_64` (Linux x86_64)
+- `manylinux_2_17_aarch64` (Linux ARM64)
+- `macosx_11_0_x86_64` (macOS Intel)
+- `macosx_11_0_arm64` (macOS Apple Silicon)
+- `win_amd64` (Windows x86_64)
+
+> `pip install tng-sdk` from PyPI selects the correct platform wheel automatically.
 
 ### From Source
 
-Requires Rust toolchain and maturin:
+Requires a Rust toolchain; `hatch` is installed automatically if missing.
 
 ```bash
-# Build the tng binary
-cargo build --release -p tng
-cp target/release/tng tng-python/bin/scripts/tng
+# From the repo root — builds the tng binary, the wheel, and installs it
+make python-wheel-install
+```
 
-# Build and install the Python SDK
-cd tng-python
-maturin develop
+To build the wheel without installing:
+
+```bash
+make python-wheel   # leaves the wheel at tng-python/dist/
 ```
 
 ### TNG Binary Requirement
