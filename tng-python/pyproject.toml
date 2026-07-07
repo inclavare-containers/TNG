@@ -39,6 +39,11 @@ artifacts = ["bin/scripts/tng", "bin/scripts/tng.exe"]
 "bin/scripts/tng" = "bin/tng"
 "bin/scripts/tng.exe" = "bin/tng.exe"
 
+# Pin the wheel platform tag per CI target via TNG_WHEEL_TAG so each platform
+# gets a distinct wheel filename instead of all colliding on py3-none-any.
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.pytest.ini_options]
 markers = [
     "e2e: end-to-end tests requiring TNG egress server + mock backend",

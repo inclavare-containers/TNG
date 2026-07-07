@@ -23,14 +23,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            wheel_tag: py3-none-manylinux_2_17_x86_64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            wheel_tag: py3-none-manylinux_2_17_aarch64
           - os: macos-latest
             target: x86_64-apple-darwin
+            wheel_tag: py3-none-macosx_11_0_x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
+            wheel_tag: py3-none-macosx_11_0_arm64
           - os: ubuntu-latest
             target: x86_64-pc-windows-gnu
+            wheel_tag: py3-none-win_amd64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -67,6 +72,10 @@ jobs:
 
       - name: Build tng binary (macOS)
         if: runner.os == 'macOS'
+        env:
+          # Match the macosx_11_0 wheel tag so the bundled binary actually
+          # runs on macOS 11+, not just the SDK version of the build runner.
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
           cargo build -p tng --release --target ${{ matrix.target }}
           mkdir -p tng-python/bin/scripts
@@ -85,6 +94,12 @@ jobs:
         working-directory: ${{ github.workspace }}
 
       - name: Build wheel
+        env:
+          # Pin the wheel platform tag so each target produces a distinct
+          # wheel filename (see tng-python/hatch_build.py). Without this every
+          # platform's wheel would be tng_sdk-<ver>-py3-none-any.whl and they
+          # would overwrite each other on upload, leaving PyPI with one wheel.
+          TNG_WHEEL_TAG: ${{ matrix.wheel_tag }}
         run: |
           pip install hatch
           hatch build
@@ -105,10 +120,14 @@ jobs:
         working-directory: tng-python
 
       - name: Run tests (Linux cross-build)
+        # The cross-compiled wheel is platform-tagged (aarch64 / win_amd64) and
+        # cannot be installed on this x86_64 runner, so run the unit tests
+        # against the source tree instead. test_unit.py mocks the tng binary,
+        # so no real binary is required.
         if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-gnu'
         run: |
-          pip install "dist/$(ls dist/*.whl | head -1 | xargs basename)[dev]"
-          pytest tests/test_unit.py -v
+          pip install pytest pytest-asyncio httpx requests openai
+          PYTHONPATH=. pytest tests/test_unit.py -v
         working-directory: tng-python
 
   release:
