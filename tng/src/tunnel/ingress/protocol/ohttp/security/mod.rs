@@ -10,7 +10,7 @@ use crate::tunnel::utils::socket::{
     TCP_KEEPALIVE_IDLE_SECS, TCP_KEEPALIVE_INTERVAL_SECS, TCP_KEEPALIVE_PROBE_COUNT,
 };
 use crate::{
-    config::ingress::OHttpArgs,
+    config::ingress::{OHttpArgs, PathDefault},
     error::TngError,
     tunnel::{
         endpoint::TngEndpoint,
@@ -33,6 +33,16 @@ use url::Url;
 /// Cached OHTTP client per base URL, lazily initialized on first use.
 type OhttpClientCache = RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>;
 
+/// Compute the outer OHTTP POST path used when no `path_rewrites` rule matches
+/// (or `path_rewrites` is unset/empty). The caller is responsible for ensuring
+/// the result starts with `/` (see `construct_base_url`).
+fn fallback_outer_path(path_default: PathDefault, original_path: &str) -> String {
+    match path_default {
+        PathDefault::Root => "/".to_string(),
+        PathDefault::Original => original_path.to_string(),
+    }
+}
+
 /// Root status response for /status/.../ohttp/keys.
 #[derive(Serialize)]
 #[cfg_attr(wasm, allow(dead_code))]
@@ -45,6 +55,7 @@ pub struct OHttpSecurityLayer {
     http_client: Arc<reqwest::Client>,
     ohttp_clients: OhttpClientCache,
     path_rewrite_group: PathRewriteGroup,
+    path_default: PathDefault,
     runtime: TokioRuntime,
     passthrough_request_headers: Arc<Vec<String>>,
 }
@@ -101,6 +112,7 @@ impl OHttpSecurityLayer {
             http_client: Arc::new(http_client),
             ohttp_clients,
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
+            path_default: ohttp_args.path_default,
             runtime,
             passthrough_request_headers,
         })
@@ -133,10 +145,13 @@ impl OHttpSecurityLayer {
         let old_uri = request.uri();
         let base_url = {
             let original_path = old_uri.path();
+            // When no path_rewrite rule matches (path_rewrites unset/empty or
+            // no regex hit), fall back according to `path_default`: `/` (Root,
+            // the historical default) or the inner request's original path.
             let mut rewrited_path = self
                 .path_rewrite_group
                 .rewrite(original_path)
-                .unwrap_or_else(|| "/".to_string());
+                .unwrap_or_else(|| fallback_outer_path(self.path_default, original_path));
 
             if !rewrited_path.starts_with('/') {
                 rewrited_path.insert(0, '/');
@@ -226,7 +241,8 @@ impl StatusProvider for OHttpSecurityLayer {
 #[cfg(test)]
 mod tests {
     use super::client::ServerStatusEntry;
-    use super::ServersStatus;
+    use super::{fallback_outer_path, ServersStatus};
+    use crate::config::ingress::PathDefault;
 
     #[test]
     fn test_servers_status_collection() {
@@ -260,5 +276,27 @@ mod tests {
         let value = serde_json::to_value(&status).unwrap();
         let servers = value["servers"].as_array().unwrap();
         assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn test_fallback_outer_path_root() {
+        assert_eq!(fallback_outer_path(PathDefault::Root, "/foo/bar"), "/");
+    }
+
+    #[test]
+    fn test_fallback_outer_path_root_ignores_original() {
+        // Root always yields "/" regardless of the original path.
+        assert_eq!(
+            fallback_outer_path(PathDefault::Root, "/deeply/nested/path"),
+            "/"
+        );
+    }
+
+    #[test]
+    fn test_fallback_outer_path_original() {
+        assert_eq!(
+            fallback_outer_path(PathDefault::Original, "/foo/bar"),
+            "/foo/bar"
+        );
     }
 }
