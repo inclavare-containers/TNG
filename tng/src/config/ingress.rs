@@ -313,11 +313,30 @@ pub struct Socks5AuthArgs {
     pub password: String,
 }
 
+/// Fallback outer OHTTP POST path used when no `path_rewrites` rule matches
+/// (including when `path_rewrites` is unset or empty).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum PathDefault {
+    /// Outer path = `/` (the historical default behavior).
+    #[default]
+    #[serde(rename = "root")]
+    Root,
+    /// Outer path = the inner request's original path.
+    #[serde(rename = "original")]
+    Original,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OHttpArgs {
     #[serde(default)]
     pub path_rewrites: Vec<PathRewrite>,
+
+    /// Fallback outer path when no `path_rewrite` rule matches
+    /// (including when `path_rewrites` is unset/empty). Defaults to `Root`
+    /// (outer path `/`), preserving pre-2.8 behavior.
+    #[serde(default)]
+    pub path_default: PathDefault,
 
     /// Controls which headers from the downstream request are copied to the
     /// outer OHTTP POST request.
@@ -383,6 +402,7 @@ mod tests {
 
     use super::{
         AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
+        OHttpArgs, PathDefault,
     };
 
     #[test]
@@ -1016,5 +1036,44 @@ mod tests {
             _ => panic!("expected hook mode"),
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_ohttp_path_default_omitted_is_root() -> Result<()> {
+        let args: OHttpArgs = serde_json::from_str(r#"{}"#)?;
+        assert_eq!(args.path_default, PathDefault::Root);
+        assert!(args.path_rewrites.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ohttp_path_default_original() -> Result<()> {
+        let args: OHttpArgs = serde_json::from_str(r#"{"path_default": "original"}"#)?;
+        assert_eq!(args.path_default, PathDefault::Original);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ohttp_path_default_root_explicit() -> Result<()> {
+        let args: OHttpArgs = serde_json::from_str(r#"{"path_default": "root"}"#)?;
+        assert_eq!(args.path_default, PathDefault::Root);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ohttp_path_default_unknown_value_errors() {
+        let result: anyhow::Result<OHttpArgs> =
+            serde_json::from_str(r#"{"path_default": "absolute"}"#).map_err(Into::into);
+        assert!(
+            result.is_err(),
+            "unknown path_default value must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_ohttp_path_default_typo_rejected_by_deny_unknown_fields() {
+        let result: anyhow::Result<OHttpArgs> =
+            serde_json::from_str(r#"{"path_defualt": "original"}"#).map_err(Into::into);
+        assert!(result.is_err(), "typo'd field name must be rejected");
     }
 }

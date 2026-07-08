@@ -116,6 +116,7 @@ pub mod tests {
                             match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
                             substitution: "/foo/bar/\\1".to_owned(),
                         }],
+                        path_default: ingress::PathDefault::Root,
                         header_passthrough: Some(IngressHeaderPassthroughConfig {
                             request_headers: vec!["x-trace-id".to_owned()],
                         }),
@@ -227,6 +228,7 @@ pub mod tests {
                     web_page_inject: false,
                     ohttp: Some(ingress::OHttpArgs {
                         path_rewrites: vec![],
+                        path_default: ingress::PathDefault::Root,
                         header_passthrough: Some(IngressHeaderPassthroughConfig {
                             request_headers: vec![
                                 "x-trace-id".to_owned(),
