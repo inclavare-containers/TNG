@@ -147,5 +147,8 @@ func (t *TngRoundTripper) Close() error {
 	if t.closed.Swap(true) {
 		return nil
 	}
+	// Release idle connections to the local proxy before killing the
+	// subprocess that owns them.
+	t.transport.Close()
 	return t.proc.Close()
 }
