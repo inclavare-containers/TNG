@@ -1526,6 +1526,7 @@ Enable OHTTP in `add_ingress` by specifying the `ohttp` field.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `path_rewrites` | array [[PathRewrite](#pathrewrite)] | `[]` | Path rewrite rule list, matched in order |
+| `path_default` | string | `"root"` | Fallback outer path when no `path_rewrites` rule matches (unset/empty/no match). `"root"` → `/`; `"original"` → the inner request's original path |
 
 #### PathRewrite
 
@@ -1570,7 +1571,7 @@ Enable OHTTP in `add_ingress` by specifying the `ohttp` field.
 OHTTP-encrypted HTTP requests follow these rules for compatibility with L7 load balancers:
 
 1. Method is unified as `POST`
-2. Path defaults to `/`, can be rewritten via `path_rewrites`
+2. Path defaults to `/` (`path_default: "root"`); set `path_default: "original"` to preserve the inner request's path. Can additionally be rewritten via `path_rewrites`
 3. Host (or `:authority`) remains consistent with the inner business request
 4. `Content-Type` is `message/ohttp-chunked-req` for requests and `message/ohttp-chunked-res` for responses
 5. Does not include the original request and response headers of the encrypted request

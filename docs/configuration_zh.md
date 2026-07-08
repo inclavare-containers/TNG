@@ -1538,6 +1538,7 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `path_rewrites` | array [[PathRewrite](#pathrewrite)] | `[]` | Path 重写规则列表，按顺序匹配 |
+| `path_default` | string | `"root"` | 当没有 `path_rewrites` 规则命中（未设置/为空/未匹配）时的外层路径回退值。`"root"` → `/`；`"original"` → 内层请求的原始 path |
 
 #### PathRewrite
 
@@ -1582,7 +1583,7 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器配合使用：
 
 1. Method 统一为 `POST`
-2. Path 默认为 `/`，可通过 `path_rewrites` 重写
+2. Path 默认为 `/`（`path_default: "root"`）；设置 `path_default: "original"` 可保留内层请求的原始 path。还可通过 `path_rewrites` 进一步重写
 3. Host（或 `:authority`）与内层业务请求保持一致
 4. `Content-Type` 分别为 `message/ohttp-chunked-req` 和 `message/ohttp-chunked-res`
 5. 不包含被加密请求的原始请求头和响应头
