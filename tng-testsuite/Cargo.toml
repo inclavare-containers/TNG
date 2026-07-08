@@ -162,6 +162,10 @@ name = "header_passthrough"
 path = "tests/ohttp/header_passthrough.rs"
 
 [[test]]
+name = "ohttp_path_default"
+path = "tests/ohttp/ohttp_path_default.rs"
+
+[[test]]
 name = "server_netfilter"
 path = "tests/netfilter/server_netfilter.rs"
 
