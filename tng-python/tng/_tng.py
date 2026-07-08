@@ -61,7 +61,10 @@ class Tng:
             ohttp:
                 OHTTP configuration dict. Omitted keys use defaults.
                 Common keys: ``key`` (``{"source": "self_generated",
-                "rotation_interval": 300}``), ``path_rewrites``.
+                "rotation_interval": 300}``), ``path_rewrites``,
+                ``path_default`` (``"root"`` default, or ``"original"`` to
+                use the inner request's original path as the outer OHTTP POST
+                path when no ``path_rewrites`` rule matches).
             rats_tls:
                 rats-TLS configuration dict as an alternative to OHTTP.
                 Common keys: ``multiplex`` (enable connection multiplexing).
