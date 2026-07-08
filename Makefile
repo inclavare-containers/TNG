@@ -312,6 +312,13 @@ wasm-integration-test: wasm-build-debug install-test-deps
 www-demo:
 	cd tng-wasm/www && npm run start
 
+.PHONY: wasm-example-serve
+wasm-example-serve: wasm-build-debug
+	miniserve ./tng-wasm \
+		--header "Cross-Origin-Opener-Policy:same-origin" \
+		--header "Cross-Origin-Embedder-Policy:require-corp" \
+		--port 8082
+
 .PHONY: mac-cross-build
 mac-cross-build:
 	RUSTFLAGS="-L native=/usr/lib/" cargo zigbuild --target aarch64-apple-darwin

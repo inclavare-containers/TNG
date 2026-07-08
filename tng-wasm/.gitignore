@@ -4,5 +4,3 @@ Cargo.lock
 bin/
 wasm-pack.log
 pkg/*
-
-!pkg/index.html
