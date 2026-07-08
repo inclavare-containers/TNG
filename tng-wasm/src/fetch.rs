@@ -60,10 +60,16 @@ async fn fetch_core_impl(
     // Create web_sys::Request
     let web_request: web_sys::Request = web_sys::Request::new_with_str_and_init(&url, &init)?;
 
-    let http_request = convert_to_rust_request(web_request).await?;
-
-    let authority = http_request
-        .uri()
+    // Parse the upstream authority from the URL. We can't read it from the
+    // forwarded http::Request's URI because convert_to_rust_request strips
+    // scheme+authority to origin-form (so the BHTTP-encoded request carries
+    // only the path, and the egress gateway emits an origin-form request line
+    // that the backend accepts — an absolute-form line is rejected with 404).
+    let abs_uri: http::Uri = url
+        .parse()
+        .context("Failed to parse request URL")
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+    let authority = abs_uri
         .authority()
         .context("The authority is empty")
         .map_err(|e| JsError::new(&format!("{e:?}")))?
@@ -71,6 +77,8 @@ async fn fetch_core_impl(
 
     // TODO: note that in wasm mode, this field should be same as the http request in the body
     let endpoint = TngEndpoint::new(authority.host(), authority.port_u16().unwrap_or(80));
+
+    let http_request = convert_to_rust_request(web_request).await?;
 
     send_request_async_impl(&endpoint, ohttp, ra_args, http_request)
         .await
@@ -119,13 +127,49 @@ async fn convert_to_rust_request(
         axum::body::Body::empty()
     };
 
+    // The browser-built Request carries the full absolute URL but does NOT
+    // expose a `Host` header (fetch sets it internally, outside Headers). The
+    // BHTTP encoder (RFC 9292) encodes scheme+authority when the URI is
+    // absolute, and the egress gateway reconstructs an absolute-form request
+    // line from them — which the PAI-EAS backend rejects (404). The daemon's
+    // http_proxy path forwards an origin-form URI (path+query only) plus a Host
+    // header, which the backend accepts. Mirror that: strip scheme+authority so
+    // BHTTP encodes only the path, and add a Host header derived from the
+    // original authority. (fetch_core_impl parses the authority from the URL
+    // separately for the upstream TngEndpoint, since this URI no longer has it.)
+    let abs_uri: http::Uri = gloo_request
+        .url()
+        .parse()
+        .context("Failed to parse request URL")
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+    let authority = abs_uri.authority().map(|a| a.as_str().to_owned());
+    let mut parts = abs_uri.into_parts();
+    parts.scheme = None;
+    parts.authority = None;
+    let origin_uri = http::Uri::from_parts(parts)
+        .context("Failed to convert request URL to origin-form")
+        .map_err(|e| JsError::new(&format!("{e:?}")))?;
+
     let mut builder = http::Request::builder()
-        .uri(gloo_request.url())
+        .uri(origin_uri)
         .method(gloo_request.method().as_ref())
         .version(http::Version::HTTP_11);
 
     for (key, value) in gloo_request.headers().entries() {
         builder = builder.header(key, value);
+    }
+    // Ensure a Host header exists (the browser hides it from Headers). Don't
+    // override one the caller set explicitly via init.headers.
+    if let Some(host) = authority {
+        let has_host = builder
+            .headers_ref()
+            .map(|h| h.contains_key(http::header::HOST))
+            .unwrap_or(false);
+        if !has_host {
+            let hv = http::HeaderValue::from_str(&host)
+                .map_err(|e| JsError::new(&format!("invalid host header value: {e:?}")))?;
+            builder = builder.header(http::header::HOST, hv);
+        }
     }
 
     let http_request = builder
