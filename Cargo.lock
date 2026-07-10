@@ -7893,6 +7893,7 @@ version = "2.7.3"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
+ "base64 0.22.1",
  "bytes",
  "console_error_panic_hook",
  "futures",
@@ -7905,6 +7906,8 @@ dependencies = [
  "http-body-util",
  "hyper 1.8.1",
  "js-sys",
+ "jsonwebtoken",
+ "rcgen",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

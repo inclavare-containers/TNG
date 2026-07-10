@@ -29,7 +29,7 @@ js-sys = {workspace = true}
 serde = {workspace = true}
 serde-wasm-bindgen = {workspace = true}
 serde_json = {workspace = true}
-tng = {path = "../tng", default-features = false, features = ["__ingress-common"]}
+tng = {path = "../tng", default-features = false, features = ["__ingress-common", "__builtin-as-wasm"]}
 tokio = {workspace = true, default-features = false}
 tokio-graceful = {workspace = true, default-features = false}
 tracing = {workspace = true}
@@ -52,6 +52,9 @@ tokio_with_wasm = {workspace = true}
 tokio_with_wasm_proc = {workspace = true}
 
 [dev-dependencies]
+base64 = {workspace = true}
+jsonwebtoken = {workspace = true}
+rcgen = {workspace = true}
 wasm-bindgen-test = "0.3.34"
 
 # https://github.com/rustwasm/wasm-pack/issues/1351#issuecomment-2100231587
