@@ -31,14 +31,11 @@ use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEviden
 use super::convert_additional_evidence;
 use crate::errors::*;
 use crate::tee::coco::converter::builtin_config::{
-    PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
+    PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig, DEFAULT_POLICY_ID,
 };
 use crate::tee::coco::converter::CoCoNonce;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 use crate::tee::GenericConverter;
-
-/// Default policy ID used by builtin AS
-pub const DEFAULT_POLICY_ID: &str = "default";
 
 /// Certificate validity period in days (10 years)
 const CERT_VALIDITY_DAYS: i64 = 365 * 10;

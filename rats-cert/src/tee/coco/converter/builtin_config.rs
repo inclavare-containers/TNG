@@ -12,6 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Default policy ID used by builtin AS
+pub const DEFAULT_POLICY_ID: &str = "default";
+
 /// Configuration for policy loading.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
