@@ -51,7 +51,7 @@ pub fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
             } => Ok(TngConverter::Coco(CocoConverter::Grpc(
                 CocoGrpcConverter::new(as_addr, policy_ids, as_headers)?,
             ))),
-            #[cfg(feature = "__builtin-as")]
+            #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
             CocoConverterArgs::Builtin { .. } => {
                 anyhow::bail!("Builtin AS converter creation via factory is not supported")
             }
@@ -117,7 +117,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                     .await?,
                 )))
             }
-            #[cfg(feature = "__builtin-as")]
+            #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
             CocoVerifierArgs::Builtin => {
                 anyhow::bail!("Builtin AS verifier creation via factory is not supported")
             }

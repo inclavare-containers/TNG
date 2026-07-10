@@ -66,6 +66,10 @@ pub(super) fn attach_attestation_info(
                         attest_info.as_addr = as_addr.clone();
                         attest_info.policy_ids = Some(policy_ids.clone());
                     }
+                    // Builtin AS has no remote address or policy ids to expose.
+                    CocoVerifierArgs::Builtin => {
+                        attest_info.as_provider = Some("coco".into());
+                    }
                 },
                 VerifierArgs::Ita(ita) => {
                     attest_info.as_provider = Some("ita".into());
@@ -91,6 +95,10 @@ pub(super) fn attach_attestation_info(
                         attest_info.as_provider = Some("coco".into());
                         attest_info.as_addr = Some(as_addr.clone());
                         attest_info.policy_ids = Some(policy_ids.clone());
+                    }
+                    // Builtin AS has no remote address or policy ids to expose.
+                    CocoConverterArgs::Builtin { .. } => {
+                        attest_info.as_provider = Some("coco".into());
                     }
                 },
                 ConverterArgs::Ita(ita) => {

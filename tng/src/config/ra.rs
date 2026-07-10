@@ -274,7 +274,7 @@ impl RaArgsUnchecked {
                                     }
                                 }
                             }
-                            #[cfg(feature = "__builtin-as")]
+                            #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
                             CocoVerifierArgs::Builtin => {}
                         },
                         VerifierArgs::Ita(_) => {
@@ -298,7 +298,7 @@ impl RaArgsUnchecked {
                                 .map_err(TngError::InvalidParameter)?;
                         }
                         // Validate builtin configuration
-                        #[cfg(feature = "__builtin-as")]
+                        #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
                         CocoConverterArgs::Builtin {
                             attestation_policy,
                             reference_values,
@@ -514,7 +514,7 @@ pub enum CocoConverterArgs {
         as_headers: HashMap<String, String>,
     },
     /// Builtin AS (embedded)
-    #[cfg(feature = "__builtin-as")]
+    #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
     Builtin {
         /// Attestation policy configuration for builtin AS
         #[serde(default)]
@@ -596,7 +596,7 @@ pub enum CocoVerifierArgs {
         skip_as_token_cert_verify: bool,
     },
     /// Builtin AS (embedded)
-    #[cfg(feature = "__builtin-as")]
+    #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
     Builtin,
 }
 
@@ -721,7 +721,7 @@ fn inject_ita_api_key_default(obj: &mut serde_json::Map<String, serde_json::Valu
 // ============================================================================
 
 // Re-export config types from rats-cert to ensure consistency
-#[cfg(feature = "__builtin-as")]
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
 pub use rats_cert::cert::verify::{
     PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
 };

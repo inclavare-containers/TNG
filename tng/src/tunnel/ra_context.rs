@@ -13,12 +13,12 @@ use crate::config::ra::AttestArgs;
 use crate::config::ra::{RaArgs, VerifyArgs};
 #[cfg(feature = "__builtin-as")]
 use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-#[cfg(feature = "__builtin-as")]
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
 use rats_cert::tee::coco::converter::CocoConverter;
-#[cfg(feature = "__builtin-as")]
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
 use rats_cert::tee::coco::verifier::CocoVerifier;
 
-#[cfg(feature = "__builtin-as")]
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
 use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
@@ -210,18 +210,38 @@ impl VerifyContext {
                 converter: converter_args,
                 verifier: verifier_args,
             } => {
-                #[cfg(feature = "__builtin-as")]
+                #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
                 if let ConverterArgs::Coco(CocoConverterArgs::Builtin {
                     attestation_policy,
                     reference_values,
                 }) = converter_args
                 {
+                    // Native target: use the trustee-based BuiltinCocoConverter.
+                    // Only available when `__builtin-as` is enabled (the `builtin`
+                    // module in rats-cert is gated on that feature).
+                    #[cfg(all(not(wasm), feature = "__builtin-as"))]
                     let builtin_converter =
                         BuiltinCocoConverter::new(attestation_policy, reference_values).await?;
+                    // Wasm target: use the headless WasmBuiltinCocoConverter.
+                    // Only available when `__builtin-as-wasm` is enabled.
+                    #[cfg(all(wasm, feature = "__builtin-as-wasm"))]
+                    let builtin_converter =
+                        rats_cert::tee::coco::converter::builtin_wasm::WasmBuiltinCocoConverter::new(
+                            attestation_policy,
+                            reference_values,
+                        )
+                        .await?;
+
                     let builtin_verifier =
                         CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
+
                     return Ok(Self::BackgroundCheck {
-                        converter: TngConverter::Coco(CocoConverter::Builtin(builtin_converter)),
+                        converter: TngConverter::Coco(
+                            #[cfg(all(not(wasm), feature = "__builtin-as"))]
+                            CocoConverter::Builtin(builtin_converter),
+                            #[cfg(all(wasm, feature = "__builtin-as-wasm"))]
+                            CocoConverter::WasmBuiltin(builtin_converter),
+                        ),
                         verifier: TngVerifier::Coco(builtin_verifier),
                     });
                 }
