@@ -7905,6 +7905,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.8.1",
  "js-sys",
+ "reqwest 0.12.9",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
