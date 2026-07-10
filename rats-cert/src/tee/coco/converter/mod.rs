@@ -12,6 +12,8 @@ use crate::tee::GenericConverter;
 
 #[cfg(feature = "__builtin-as")]
 pub mod builtin;
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
+pub mod builtin_config;
 pub mod grpc;
 pub mod restful;
 

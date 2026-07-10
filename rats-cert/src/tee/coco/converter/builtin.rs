@@ -17,8 +17,7 @@ use rcgen::{
 use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use reference_value_provider_service::storage::{local_json, ReferenceValueStorageConfig};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde::Serialize;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -31,6 +30,9 @@ use attestation_service::{
 use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use super::convert_additional_evidence;
 use crate::errors::*;
+use crate::tee::coco::converter::builtin_config::{
+    PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
+};
 use crate::tee::coco::converter::CoCoNonce;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 use crate::tee::GenericConverter;
@@ -158,71 +160,6 @@ impl AttestationServiceWorkDir {
     }
 }
 
-/// Configuration for policy loading
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum PolicyConfig {
-    /// Use the attestation-service default policy (the trustee
-    /// `ear_default_policy_cpu.rego`): a comprehensive appraisal that checks
-    /// hardware, boot measurements, configuration and filesystem against
-    /// configured reference values. Suited to deployments where those
-    /// reference values are available and mandatory.
-    /// See: https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego
-    HardwareWithReferenceValues,
-    /// tng-bundled template: only hardware TEE recognition is enforced; the
-    /// other three trustworthiness dimensions are affirming by default and
-    /// `data.reference` is ignored. This is the default policy, suited to
-    /// general-purpose deployments that only need to assert the hardware TEE.
-    #[default]
-    #[serde(alias = "default")]
-    HardwareOnly,
-    /// tng-bundled template: every trustworthiness dimension is affirming
-    /// regardless of input. **For development and testing only.**
-    TrustAll,
-    /// Base64 encoded policy content
-    Inline { content: String },
-    /// Path to policy file
-    Path { path: String },
-}
-
-/// Configuration for sample provenance payload loading
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SampleProvenancePayloadConfig {
-    /// Inline JSON content (Provenance)
-    Inline { content: Provenance },
-    /// Path to payload file
-    Path { path: String },
-}
-
-/// Configuration for SLSA reference value payload loading
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SlsaReferenceValuePayloadConfig {
-    /// Inline JSON content (ReferenceValueListPayload)
-    Inline { content: ReferenceValueListPayload },
-    /// Path to payload file
-    Path { path: String },
-}
-
-/// Configuration for reference values
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReferenceValueConfig {
-    /// Sample reference values (inline or from file)
-    Sample {
-        payload: SampleProvenancePayloadConfig,
-    },
-    /// SLSA-based reference values from Rekor
-    Slsa {
-        payload: SlsaReferenceValuePayloadConfig,
-    },
-    /// RV release manifest-based reference values
-    ReleaseManifest {
-        payload: SlsaReferenceValuePayloadConfig,
-    },
-}
-
 /// Builtin CoCo Converter
 ///
 /// Converts CocoEvidence to CocoAsToken using an embedded attestation-service instance.
@@ -334,6 +271,12 @@ impl BuiltinCocoConverter {
     }
 
     /// Load reference values from configuration
+    ///
+    /// The shared config payloads (`ReferenceValuePayloadConfig`) hold inline
+    /// content as `serde_json::Value` so they compile on both native and wasm.
+    /// Here, on the native path, we convert those `Value`s back into the concrete
+    /// trustee types (`Provenance` / `ReferenceValueListPayload`) at the point
+    /// where the attestation-service API is called.
     async fn load_reference_values(
         attestation_service: &mut AttestationService,
         reference_values: &[ReferenceValueConfig],
@@ -341,9 +284,18 @@ impl BuiltinCocoConverter {
         for rv in reference_values {
             match rv {
                 ReferenceValueConfig::Sample { payload } => {
-                    let provenance = match payload {
-                        SampleProvenancePayloadConfig::Inline { content } => Ok(content.clone()),
-                        SampleProvenancePayloadConfig::Path { path } => {
+                    let provenance: Provenance = match payload {
+                        ReferenceValuePayloadConfig::Inline { content } => {
+                            // Convert the shared serde_json::Value payload into
+                            // the trustee Provenance type at the AS call site.
+                            serde_json::from_value(content.clone()).map_err(|e| {
+                                Error::ParseReferenceValuePayloadFailed {
+                                    path: "<inline>".to_string(),
+                                    source: e,
+                                }
+                            })?
+                        }
+                        ReferenceValuePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
                                     Error::ReadReferenceValueFileFailed {
@@ -356,9 +308,9 @@ impl BuiltinCocoConverter {
                                     path: path.clone(),
                                     source: e,
                                 }
-                            })
+                            })?
                         }
-                    }?;
+                    };
                     let provenance_base64 = base64::engine::general_purpose::STANDARD.encode(
                         serde_json::to_vec(&provenance)
                             .map_err(Error::SerializeProvenanceFailed)?,
@@ -386,9 +338,18 @@ impl BuiltinCocoConverter {
                         .map_err(Error::RegisterSampleReferenceValueFailed)?;
                 }
                 ReferenceValueConfig::Slsa { payload } => {
-                    let payload_value = match payload {
-                        SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
-                        SlsaReferenceValuePayloadConfig::Path { path } => {
+                    let payload_value: ReferenceValueListPayload = match payload {
+                        ReferenceValuePayloadConfig::Inline { content } => {
+                            // Convert the shared serde_json::Value payload into
+                            // the trustee ReferenceValueListPayload at the AS call site.
+                            serde_json::from_value(content.clone()).map_err(|e| {
+                                Error::ParseReferenceValuePayloadFailed {
+                                    path: "<inline>".to_string(),
+                                    source: e,
+                                }
+                            })?
+                        }
+                        ReferenceValuePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
                                     Error::ReadReferenceValueFileFailed {
@@ -412,9 +373,18 @@ impl BuiltinCocoConverter {
                         .map_err(Error::SetSlsaReferenceValueListFailed)?;
                 }
                 ReferenceValueConfig::ReleaseManifest { payload } => {
-                    let payload_value = match payload {
-                        SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
-                        SlsaReferenceValuePayloadConfig::Path { path } => {
+                    let payload_value: ReferenceValueListPayload = match payload {
+                        ReferenceValuePayloadConfig::Inline { content } => {
+                            // Convert the shared serde_json::Value payload into
+                            // the trustee ReferenceValueListPayload at the AS call site.
+                            serde_json::from_value(content.clone()).map_err(|e| {
+                                Error::ParseReferenceValuePayloadFailed {
+                                    path: "<inline>".to_string(),
+                                    source: e,
+                                }
+                            })?
+                        }
+                        ReferenceValuePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
                                     Error::ReadReferenceValueFileFailed {
@@ -734,8 +704,8 @@ default file_system := 2"#;
         rvs.insert("example-measurement".to_string(), vec![]);
         let provenance = Provenance { rvs };
         let reference = ReferenceValueConfig::Sample {
-            payload: SampleProvenancePayloadConfig::Inline {
-                content: provenance,
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&provenance).expect("serialize provenance"),
             },
         };
         let result =
@@ -758,7 +728,7 @@ default file_system := 2"#;
             .expect("Failed to write ref file");
 
         let reference = ReferenceValueConfig::Sample {
-            payload: SampleProvenancePayloadConfig::Path {
+            payload: ReferenceValuePayloadConfig::Path {
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
@@ -796,7 +766,9 @@ default file_system := 2"#;
         };
 
         let reference = ReferenceValueConfig::ReleaseManifest {
-            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&payload).expect("serialize payload"),
+            },
         };
         BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
@@ -829,7 +801,9 @@ default file_system := 2"#;
         };
 
         let reference = ReferenceValueConfig::ReleaseManifest {
-            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&payload).expect("serialize payload"),
+            },
         };
         BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
             .await
@@ -870,7 +844,7 @@ default file_system := 2"#;
             .expect("Failed to write ref file");
 
         let reference = ReferenceValueConfig::ReleaseManifest {
-            payload: SlsaReferenceValuePayloadConfig::Path {
+            payload: ReferenceValuePayloadConfig::Path {
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
@@ -892,13 +866,13 @@ default file_system := 2"#;
 
         let references = vec![
             ReferenceValueConfig::Sample {
-                payload: SampleProvenancePayloadConfig::Inline {
-                    content: provenance1,
+                payload: ReferenceValuePayloadConfig::Inline {
+                    content: serde_json::to_value(&provenance1).expect("serialize provenance1"),
                 },
             },
             ReferenceValueConfig::Sample {
-                payload: SampleProvenancePayloadConfig::Inline {
-                    content: provenance2,
+                payload: ReferenceValuePayloadConfig::Inline {
+                    content: serde_json::to_value(&provenance2).expect("serialize provenance2"),
                 },
             },
         ];
@@ -924,7 +898,7 @@ default file_system := 2"#;
     #[serial]
     async fn test_converter_new_error_sample_path_not_found() {
         let reference = ReferenceValueConfig::Sample {
-            payload: SampleProvenancePayloadConfig::Path {
+            payload: ReferenceValuePayloadConfig::Path {
                 path: "/nonexistent/reference_values.json".to_string(),
             },
         };
@@ -953,8 +927,8 @@ default file_system := 2"#;
         let provenance = Provenance { rvs };
 
         let config = ReferenceValueConfig::Sample {
-            payload: SampleProvenancePayloadConfig::Inline {
-                content: provenance,
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&provenance).expect("serialize provenance"),
             },
         };
 
@@ -978,7 +952,7 @@ default file_system := 2"#;
     #[test]
     fn test_reference_value_config_sample_path_serde() -> Result<(), serde_json::Error> {
         let config = ReferenceValueConfig::Sample {
-            payload: SampleProvenancePayloadConfig::Path {
+            payload: ReferenceValuePayloadConfig::Path {
                 path: "/path/to/provenance.json".to_string(),
             },
         };
@@ -1022,7 +996,9 @@ default file_system := 2"#;
         };
 
         let config = ReferenceValueConfig::Slsa {
-            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&payload).expect("serialize payload"),
+            },
         };
 
         let json_str = serde_json::to_string(&config).expect("Failed to serialize");
@@ -1043,7 +1019,7 @@ default file_system := 2"#;
     #[test]
     fn test_reference_value_config_slsa_path_serde() -> Result<(), serde_json::Error> {
         let config = ReferenceValueConfig::Slsa {
-            payload: SlsaReferenceValuePayloadConfig::Path {
+            payload: ReferenceValuePayloadConfig::Path {
                 path: "/path/to/slsa_payload.json".to_string(),
             },
         };
@@ -1087,7 +1063,9 @@ default file_system := 2"#;
         };
 
         let config = ReferenceValueConfig::ReleaseManifest {
-            payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+            payload: ReferenceValuePayloadConfig::Inline {
+                content: serde_json::to_value(&payload).expect("serialize payload"),
+            },
         };
 
         let json_str = serde_json::to_string(&config).expect("Failed to serialize");
@@ -1116,9 +1094,10 @@ default file_system := 2"#;
             serde_json::from_str(sample_json).expect("Failed to parse");
         match config {
             ReferenceValueConfig::Sample { payload } => match payload {
-                SampleProvenancePayloadConfig::Inline { content } => {
-                    // Provenance uses flattened HashMap, verify it has the expected key
-                    assert!(content.rvs.get("example-key").is_some());
+                ReferenceValuePayloadConfig::Inline { content } => {
+                    // Provenance uses flattened HashMap; the inline content is
+                    // now a serde_json::Value, verify it has the expected key.
+                    assert!(content.get("example-key").is_some());
                 }
                 _ => panic!("Expected Inline payload"),
             },
@@ -1154,9 +1133,18 @@ default file_system := 2"#;
             serde_json::from_str(slsa_json).expect("Failed to parse");
         match config {
             ReferenceValueConfig::Slsa { payload } => match payload {
-                SlsaReferenceValuePayloadConfig::Inline { content } => {
-                    assert_eq!(content.rv_list.len(), 1);
-                    assert_eq!(content.rv_list[0].id, "test-artifact");
+                ReferenceValuePayloadConfig::Inline { content } => {
+                    // content is now a serde_json::Value; navigate the
+                    // ReferenceValueListPayload shape stored inside it.
+                    let rv_list = content
+                        .get("rv_list")
+                        .and_then(|v| v.as_array())
+                        .expect("rv_list array");
+                    assert_eq!(rv_list.len(), 1);
+                    assert_eq!(
+                        rv_list[0].get("id").and_then(|v| v.as_str()),
+                        Some("test-artifact")
+                    );
                 }
                 _ => panic!("Expected Inline payload"),
             },

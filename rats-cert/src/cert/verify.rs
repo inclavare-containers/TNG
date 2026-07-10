@@ -21,11 +21,16 @@ use serde::{Deserialize, Serialize};
 use signature::Verifier;
 use x509_cert::Certificate;
 
-// Re-export builtin config types for external use
+// Re-export builtin config types for external use.
+// The config enums live in the shared `builtin_config` module (compiled under
+// both `__builtin-as` and `__builtin-as-wasm`) so the same config surface is
+// available on native and wasm. `DEFAULT_POLICY_ID` is native-only.
 #[cfg(feature = "__builtin-as")]
-pub use crate::tee::coco::converter::builtin::{
-    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-    SlsaReferenceValuePayloadConfig, DEFAULT_POLICY_ID,
+pub use crate::tee::coco::converter::builtin::DEFAULT_POLICY_ID;
+
+#[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
+pub use crate::tee::coco::converter::builtin_config::{
+    PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
 };
 
 // Re-export reference value list types from RVPS

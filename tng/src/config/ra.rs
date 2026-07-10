@@ -304,8 +304,7 @@ impl RaArgsUnchecked {
                             reference_values,
                         } => {
                             use rats_cert::cert::verify::{
-                                PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-                                SlsaReferenceValuePayloadConfig,
+                                PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
                             };
                             // Check policy path exists if using Path variant
                             if let PolicyConfig::Path { path } = attestation_policy {
@@ -321,13 +320,13 @@ impl RaArgsUnchecked {
                             for rv in reference_values {
                                 match rv {
                                     ReferenceValueConfig::Sample {
-                                        payload: SampleProvenancePayloadConfig::Path { path },
+                                        payload: ReferenceValuePayloadConfig::Path { path },
                                     }
                                     | ReferenceValueConfig::Slsa {
-                                        payload: SlsaReferenceValuePayloadConfig::Path { path },
+                                        payload: ReferenceValuePayloadConfig::Path { path },
                                     }
                                     | ReferenceValueConfig::ReleaseManifest {
-                                        payload: SlsaReferenceValuePayloadConfig::Path { path },
+                                        payload: ReferenceValuePayloadConfig::Path { path },
                                     } => {
                                         if !Path::new(path).exists() {
                                             return Err(TngError::InvalidParameter(anyhow!(
@@ -724,8 +723,7 @@ fn inject_ita_api_key_default(obj: &mut serde_json::Map<String, serde_json::Valu
 // Re-export config types from rats-cert to ensure consistency
 #[cfg(feature = "__builtin-as")]
 pub use rats_cert::cert::verify::{
-    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-    SlsaReferenceValuePayloadConfig,
+    PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
 };
 
 #[cfg(test)]
@@ -1220,7 +1218,7 @@ mod tests {
                     assert_eq!(reference_values.len(), 1);
                     match &reference_values[0] {
                         ReferenceValueConfig::Sample { payload } => match payload {
-                            SampleProvenancePayloadConfig::Path { path } => {
+                            ReferenceValuePayloadConfig::Path { path } => {
                                 assert_eq!(path, "/path/to/payload.json");
                             }
                             _ => panic!("Expected Path payload"),
@@ -1288,9 +1286,15 @@ mod tests {
                         ReferenceValueConfig::Slsa { payload } => {
                             // Verify payload is inline with ReferenceValueListPayload content
                             match payload {
-                                SlsaReferenceValuePayloadConfig::Inline { content } => {
-                                    assert_eq!(content.rv_list.len(), 1);
-                                    let rv = &content.rv_list[0];
+                                ReferenceValuePayloadConfig::Inline { content } => {
+                                    // content is now a serde_json::Value; deserialize
+                                    // it back into the trustee ReferenceValueListPayload
+                                    // to inspect its fields.
+                                    let payload: rats_cert::cert::verify::ReferenceValueListPayload =
+                                        serde_json::from_value(content.clone())
+                                            .expect("deserialize payload");
+                                    assert_eq!(payload.rv_list.len(), 1);
+                                    let rv = &payload.rv_list[0];
                                     assert_eq!(rv.id, "test-artifact");
                                     assert_eq!(rv.version, "1.0.0");
                                     assert_eq!(rv.rv_type, "binary");
@@ -1376,9 +1380,14 @@ mod tests {
                     assert_eq!(reference_values.len(), 1);
                     match &reference_values[0] {
                         ReferenceValueConfig::ReleaseManifest { payload } => match payload {
-                            SlsaReferenceValuePayloadConfig::Inline { content } => {
-                                assert_eq!(content.rv_list.len(), 1);
-                                let rv = &content.rv_list[0];
+                            ReferenceValuePayloadConfig::Inline { content } => {
+                                // content is now a serde_json::Value; deserialize
+                                // it back into the trustee ReferenceValueListPayload.
+                                let payload: rats_cert::cert::verify::ReferenceValueListPayload =
+                                    serde_json::from_value(content.clone())
+                                        .expect("deserialize payload");
+                                assert_eq!(payload.rv_list.len(), 1);
+                                let rv = &payload.rv_list[0];
                                 assert_eq!(rv.id, "cvm_uki");
                                 assert_eq!(
                                     rv.provenance_info.provenance_type,

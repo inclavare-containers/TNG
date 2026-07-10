@@ -180,7 +180,8 @@ mod tests {
     #[cfg(feature = "__builtin-as")]
     mod builtin_e2e_tests {
         use super::*;
-        use crate::tee::coco::converter::builtin::{BuiltinCocoConverter, PolicyConfig};
+        use crate::tee::coco::converter::builtin::BuiltinCocoConverter;
+        use crate::tee::coco::converter::builtin_config::PolicyConfig;
         use serial_test::serial;
 
         /// E2E test: Builtin model (local AS)

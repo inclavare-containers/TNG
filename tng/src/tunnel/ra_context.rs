@@ -675,8 +675,7 @@ mod tests {
         use crate::tunnel::provider::TngConverter;
         use base64::{engine::general_purpose::STANDARD, Engine};
         use rats_cert::cert::verify::{
-            PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-            SlsaReferenceValuePayloadConfig,
+            PolicyConfig, ReferenceValueConfig, ReferenceValuePayloadConfig,
         };
         use rats_cert::tee::coco::converter::CoCoNonce;
         use rats_cert::tee::GenericConverter;
@@ -751,8 +750,8 @@ mod tests {
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![ReferenceValueConfig::Sample {
-                    payload: SampleProvenancePayloadConfig::Inline {
-                        content: provenance,
+                    payload: ReferenceValuePayloadConfig::Inline {
+                        content: serde_json::to_value(&provenance).unwrap(),
                     },
                 }],
             );
@@ -815,7 +814,7 @@ mod tests {
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![ReferenceValueConfig::Sample {
-                    payload: SampleProvenancePayloadConfig::Path {
+                    payload: ReferenceValuePayloadConfig::Path {
                         path: "/nonexistent/ref.json".to_string(),
                     },
                 }],
@@ -901,7 +900,9 @@ mod tests {
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![ReferenceValueConfig::Slsa {
-                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+                    payload: ReferenceValuePayloadConfig::Inline {
+                        content: serde_json::to_value(&payload).unwrap(),
+                    },
                 }],
             );
             // This may fail due to Rekor not being available, so we just attempt creation
@@ -942,7 +943,9 @@ mod tests {
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![ReferenceValueConfig::Slsa {
-                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+                    payload: ReferenceValuePayloadConfig::Inline {
+                        content: serde_json::to_value(&payload).unwrap(),
+                    },
                 }],
             );
             // This test requires external services from `make test-dep-as`
@@ -981,7 +984,9 @@ mod tests {
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![ReferenceValueConfig::ReleaseManifest {
-                    payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
+                    payload: ReferenceValuePayloadConfig::Inline {
+                        content: serde_json::to_value(&payload).unwrap(),
+                    },
                 }],
             );
             let _result = VerifyContext::from_verify_args(&verify_args).await;
@@ -1005,13 +1010,13 @@ mod tests {
                 PolicyConfig::HardwareWithReferenceValues,
                 vec![
                     ReferenceValueConfig::Sample {
-                        payload: SampleProvenancePayloadConfig::Inline {
-                            content: provenance1,
+                        payload: ReferenceValuePayloadConfig::Inline {
+                            content: serde_json::to_value(&provenance1).unwrap(),
                         },
                     },
                     ReferenceValueConfig::Sample {
-                        payload: SampleProvenancePayloadConfig::Inline {
-                            content: provenance2,
+                        payload: ReferenceValuePayloadConfig::Inline {
+                            content: serde_json::to_value(&provenance2).unwrap(),
                         },
                     },
                 ],
