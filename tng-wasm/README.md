@@ -4,6 +4,10 @@
 
 The TNG Client JavaScript SDK provides client functionality for use in browser environments, built with wasm-pack.
 
+## Live Demo
+
+A live demo of the TNG JavaScript SDK integrated into a web page is hosted on GitHub Pages: <https://inclavare-containers.github.io/TNG/>
+
 ## Getting the SDK
 
 You can obtain the TNG SDK in two ways:

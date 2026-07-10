@@ -4,6 +4,10 @@
 
 TNG Client JavaScript SDK为浏览器环境提供客户端功能，使用wasm-pack构建。
 
+## 在线示例
+
+我们在 GitHub Pages 上提供了一个集成 TNG JavaScript SDK 的网页在线示例：<https://inclavare-containers.github.io/TNG/>
+
 ## 获取 SDK
 
 您可以通过两种方式获取 TNG SDK：

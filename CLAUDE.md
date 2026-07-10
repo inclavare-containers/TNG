@@ -25,11 +25,24 @@ When creating or amending commits:
 - **Never commit plan or spec files** (e.g. `docs/*-plan.md`, `docs/*-design.md`, `docs/*-spec.md`, or anything under `docs/superpowers/`). These should be gitignored (already covered by `.gitignore`) and kept local only.
 - **Never commit any file that is already gitignored** — if a file matches `.gitignore`, it is intentionally local-only.
 
+## Bilingual Documentation Convention
+
+This project maintains paired English/Chinese documentation throughout the repo. Whenever you update any documentation, **update both the English and the Chinese counterpart together**:
+
+- Each crate has a `README.md` paired with a `README_zh.md` (e.g. `tng-wasm/README.md` ↔ `tng-wasm/README_zh.md`, same for `tng-go`, `tng-hook`, `tng-python`).
+- `docs/` files are paired as `*.md` ↔ `*_zh.md` (e.g. `docs/configuration.md` ↔ `docs/configuration_zh.md`, same for `architecture`, `developer`, `version_compatibility`, etc.).
+
+Do not update one language and leave the other stale. If a section is added/removed on one side, mirror it on the other.
+
+## GitHub Pages Demo Site
+
+The `tng-wasm/www/` directory is the source for the live demo published at **<https://inclavare-containers.github.io/TNG/>** (it contains `index.html`, `js/`, and the built `tng_wasm_bg.wasm` / `tng_wasm.js`). When changing the JavaScript SDK or the demo page, remember this site is a published artifact — do not delete `www/`, and rebuild/sync the `.wasm` bundle there when the SDK changes so the live demo stays up to date.
+
 ## PR Requirements
 
 When creating a pull request, always:
 
-1. Update relevant documentation (both `docs/configuration.md` and `docs/configuration_zh.md`)
+1. Update relevant documentation **in both languages** — the English file and its `*_zh.md` counterpart (see the Bilingual Documentation Convention above; this includes each crate's `README.md`/`README_zh.md` and `docs/*.md`/`docs/*_zh.md`, notably `docs/configuration.md` ↔ `docs/configuration_zh.md`).
 2. Add or update integration tests for new features
 3. Never mention "🤖 Generated with Claude Code" in the PR description
 

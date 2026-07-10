@@ -139,6 +139,14 @@ pip install tng-sdk
 
 完整 SDK 文档：[tng-python/README_zh.md](tng-python/README_zh.md)
 
+### 方式六：Go SDK
+
+```sh
+go get github.com/inclavare-containers/tng/tng-go
+```
+
+完整 SDK 文档：[tng-go/README_zh.md](tng-go/README_zh.md)
+
 > [!TIP]
 > **刚接触 TNG？** 建议先阅读 [核心概念与工作原理](docs/architecture_zh.md) 了解 Ingress/Egress 模型和远程证明角色，然后查看 [配置参考](docs/configuration_zh.md) 了解所有可用字段。
 
@@ -150,6 +158,7 @@ rats-cert/       证书生成与管理库
 tng-hook/        LD_PRELOAD 钩子库（libtng_hook.so），用于 `tng exec` 透明端口拦截
 tng-wasm/        WebAssembly 模块 + 浏览器 JavaScript SDK
 tng-python/      Python SDK，用于程序化集成
+tng-go/          Go SDK，用于程序化集成
 tng-testsuite/   集成测试和端到端测试用例
 scripts/         构建、部署和 CI 辅助脚本
 docs/            架构、配置、场景和开发者指南
@@ -166,6 +175,7 @@ docs/            架构、配置、场景和开发者指南
 | [版本兼容性](docs/version_compatibility_zh.md) | 大版本间的变更和迁移说明 |
 | [JavaScript SDK](tng-wasm/README_zh.md) | 浏览器端 SDK 使用指南与示例 |
 | [Python SDK](tng-python/README_zh.md) | Python SDK 使用指南与示例 |
+| [Go SDK](tng-go/README_zh.md) | Go SDK 使用指南与示例 |
 
 ## 贡献
 

@@ -81,6 +81,32 @@ Supports `httpx`, `requests`, and `openai` as optional backends.
 
 </details>
 
+<details>
+<summary><b>Go SDK</b> — programmatic integration for Go services</summary>
+
+```sh
+go get github.com/inclavare-containers/tng/tng-go
+```
+
+```go
+import "github.com/inclavare-containers/tng/tng-go"
+
+// Spawns a TNG subprocess with an http_proxy ingress automatically
+rt, err := tng.NewRoundTripper(&tng.Config{NoRA: true})
+if err != nil {
+    log.Fatal(err)
+}
+defer rt.Close()
+
+// Works with the standard http.Client
+client := &http.Client{Transport: rt}
+resp, err := client.Get("http://your-tee-service/api/data")
+```
+
+Pure Go, no CGO required. Drop-in `http.RoundTripper` for any Go HTTP client.
+
+</details>
+
 See [Installation](#installation) for Docker, RPM, binary, and SDK options.
 
 ---
@@ -195,6 +221,14 @@ pip install tng-sdk
 
 Full SDK docs: [tng-python/README.md](tng-python/README.md)
 
+### Option 6: Go SDK
+
+```sh
+go get github.com/inclavare-containers/tng/tng-go
+```
+
+Full SDK docs: [tng-go/README.md](tng-go/README.md)
+
 > [!TIP]
 > **New to TNG?** Start with [Core Concepts & Workflow](docs/architecture.md) to understand the Ingress/Egress model and remote attestation roles, then check the [Configuration Reference](docs/configuration.md) for all available fields.
 
@@ -206,6 +240,7 @@ rats-cert/       Certificate generation and management library
 tng-hook/        LD_PRELOAD hook library (libtng_hook.so) for `tng exec` transparent port interception
 tng-wasm/        WebAssembly module + JavaScript SDK for browsers
 tng-python/      Python SDK for programmatic integration
+tng-go/          Go SDK for programmatic integration
 tng-testsuite/   Integration and e2e test cases
 scripts/         Build, deploy, and CI helper scripts
 docs/            Architecture, configuration, scenarios, and developer guides
@@ -222,6 +257,7 @@ docs/            Architecture, configuration, scenarios, and developer guides
 | [Version Compatibility](docs/version_compatibility.md) | Breaking changes and migration notes between versions |
 | [JavaScript SDK](tng-wasm/README.md) | Browser-side SDK usage and examples |
 | [Python SDK](tng-python/README.md) | Python SDK usage and examples |
+| [Go SDK](tng-go/README.md) | Go SDK usage and examples |
 
 ## Contributing
 
