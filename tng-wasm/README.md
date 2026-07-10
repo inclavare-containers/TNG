@@ -178,10 +178,10 @@ Supported appraisal policies on wasm:
 - `hardware_only` — accepted, but degrades to trust-all on wasm (no TEE verifier runs).
 - `hardware_with_reference_values` / `inline` / `path` rego policies — **not supported** on wasm (the regorus policy engine has no wasm target).
 
-Reference values: sample reference values are supported (best-effort JSON match); SLSA / ReleaseManifest reference values are native-only (they require RVPS/rekor, unavailable on wasm).
+Reference values: `Sample` reference values are accepted for config compatibility but NOT appraised (the wasm builtin-as is trust-all and always issues an affirming token — there is no reference-value appraisal on wasm since no TEE verifier / RVPS compiles for wasm); `Slsa` / `ReleaseManifest` reference values are native-only (they require RVPS/rekor, unavailable on wasm).
 
 > [!IMPORTANT]
-> The wasm builtin-as performs **no real TEE evidence appraisal**. The TEE verifier crates (Intel TDX, AMD SEV-SNP, SGX, CSV, TPM) have no `wasm32-unknown-unknown` targets, so the browser SDK cannot appraise hardware evidence. The wasm builtin-as is a self-contained, trust-all / sample-match path — the same TNG instance signs and verifies the token (a closed system; the verifier trusts the embedded key with `insecure_key: true`). It is suited to development, demos, and scenarios where running an external AS process is undesirable. For real TEE verification, use `as_type: "restful"` (an external Attestation Service) or native TNG.
+> The wasm builtin-as performs **no real TEE evidence appraisal**. The TEE verifier crates (Intel TDX, AMD SEV-SNP, SGX, CSV, TPM) have no `wasm32-unknown-unknown` targets, so the browser SDK cannot appraise hardware evidence. The wasm builtin-as is a self-contained, trust-all path — the same TNG instance signs and verifies the token (a closed system; the verifier trusts the embedded key with `insecure_key: true`). It is suited to development, demos, and scenarios where running an external AS process is undesirable. For real TEE verification, use `as_type: "restful"` (an external Attestation Service) or native TNG.
 
 ### Deployment Configuration
 

@@ -231,15 +231,6 @@ pub enum Error {
     WasmBuiltinReferenceValueKindNotSupported { kind: String },
 
     #[cfg(feature = "__builtin-as-wasm")]
-    #[error("wasm builtin-as: reference value mismatch")]
-    WasmBuiltinReferenceValueMismatch,
-
-    #[cfg(feature = "__builtin-as-wasm")]
-    #[allow(dead_code)] // constructed in Task 5 (reference value parser)
-    #[error("wasm builtin-as: failed to parse reference value: {detail}")]
-    WasmBuiltinReferenceValueParseFailed { detail: String },
-
-    #[cfg(feature = "__builtin-as-wasm")]
     #[error("wasm builtin-as: failed to sign token")]
     WasmBuiltinTokenSignFailed {
         #[source]

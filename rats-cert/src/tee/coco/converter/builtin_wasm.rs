@@ -6,7 +6,9 @@
 //! with `jsonwebtoken`, embedding the AS public JWK in the JWT header. The paired
 //! `BuiltinCocoVerifier` trusts that JWK (`insecure_key: true`, closed system).
 //!
-//! Appraisal is TrustAll / sample-match only — no TEE verifier compiles for wasm.
+//! Appraisal is TrustAll only — no TEE verifier compiles for wasm. `Sample` reference
+//! values are accepted for config compatibility but not appraised (the converter always
+//! issues an affirming token).
 //!
 //! The module compiles on BOTH native (under `--features __builtin-as-wasm`) and wasm,
 //! so a native `#[cfg(test)]` round-trip can validate the sign/verify correctness.
@@ -48,11 +50,11 @@ pub struct WasmBuiltinCocoConverter {
 impl WasmBuiltinCocoConverter {
     /// Create a new converter with the given policy and reference values.
     ///
-    /// On wasm only `TrustAll` and `HardwareOnly` policies are supported (no regorus
-    /// policy engine compiles for wasm). `HardwareWithReferenceValues` degrades to
-    /// `TrustAll` on wasm — but we still accept it here for config compatibility and
-    /// let the converter produce an affirming token regardless (the wasm converter does
-    /// not appraise TEE evidence).
+    /// On wasm only `TrustAll` and `HardwareOnly` are accepted (no regorus policy
+    /// engine compiles for wasm). `HardwareWithReferenceValues`, `Inline`, and `Path`
+    /// are REJECTED — the match returns `Error::WasmBuiltinPolicyNotSupported` because
+    /// no regorus/AS policy engine compiles for wasm. The wasm converter does not
+    /// appraise TEE evidence (it always issues an affirming token).
     pub async fn new(
         policy: &PolicyConfig,
         reference_values: &[ReferenceValueConfig],
@@ -120,6 +122,19 @@ impl WasmBuiltinCocoConverter {
         Ok((key_der, jwk))
     }
 
+    /// Sign a JWT with the AS key, embedding the AS public JWK in the header.
+    fn sign_jwt(&self, claims: &serde_json::Value) -> Result<String> {
+        let header = Header {
+            typ: Some("JWT".to_string()),
+            alg: Algorithm::ES256,
+            jwk: Some(self.as_public_jwk.clone()),
+            ..Default::default()
+        };
+        let enc_key = EncodingKey::from_ec_der(&self.as_key_der);
+        encode(&header, claims, &enc_key)
+            .map_err(|source| Error::WasmBuiltinTokenSignFailed { source })
+    }
+
     pub async fn new_verifier(&self) -> Result<BuiltinCocoVerifier> {
         BuiltinCocoVerifier::new_insecure().await
     }
@@ -162,15 +177,7 @@ impl GenericConverter for WasmBuiltinCocoConverter {
 
         // Embed the AS public JWK in the JWT header — the verifier reads `header.jwk`
         // (with `insecure_key: true` it trusts the embedded key directly).
-        let header = Header {
-            typ: Some("JWT".to_string()),
-            alg: Algorithm::ES256,
-            jwk: Some(self.as_public_jwk.clone()),
-            ..Default::default()
-        };
-        let enc_key = EncodingKey::from_ec_der(&self.as_key_der);
-        let token = encode(&header, &claims, &enc_key)
-            .map_err(|source| Error::WasmBuiltinTokenSignFailed { source })?;
+        let token = self.sign_jwt(&claims)?;
 
         CocoAsToken::new(token)
     }
@@ -186,15 +193,7 @@ impl GenericConverter for WasmBuiltinCocoConverter {
             "nonce": URL_SAFE_NO_PAD.encode(nonce_bytes),
             "exp": TOKEN_EXP,
         });
-        let header = Header {
-            typ: Some("JWT".to_string()),
-            alg: Algorithm::ES256,
-            jwk: Some(self.as_public_jwk.clone()),
-            ..Default::default()
-        };
-        let enc_key = EncodingKey::from_ec_der(&self.as_key_der);
-        let token = encode(&header, &claims, &enc_key)
-            .map_err(|source| Error::WasmBuiltinTokenSignFailed { source })?;
+        let token = self.sign_jwt(&claims)?;
         Ok(CoCoNonce::Jwt(token))
     }
 }

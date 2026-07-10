@@ -177,10 +177,10 @@ wasm 上支持的度量策略：
 - `hardware_only`——可接受，但在 wasm 上退化为 trust-all（没有 TEE 验证器运行）。
 - `hardware_with_reference_values` / `inline` / `path` rego 策略——在 wasm 上**不支持**（regorus 策略引擎没有 wasm 目标）。
 
-参考值：样本参考值（sample）受支持（尽力而为的 JSON 匹配）；SLSA / ReleaseManifest 参考值仅原生支持（需要 RVPS/rekor，在 wasm 上不可用）。
+参考值：`Sample` 参考值仅为配置兼容性而接受，但**不被度量**（wasm builtin-as 为 trust-all，始终签发 affirming token——由于没有 TEE 验证器 / RVPS 可为 wasm 编译，wasm 上不存在参考值度量）；`Slsa` / `ReleaseManifest` 参考值仅原生支持（需要 RVPS/rekor，在 wasm 上不可用）。
 
 > [!IMPORTANT]
-> wasm builtin-as **不执行真实的 TEE 证据度量**。TEE 验证器 crate（Intel TDX、AMD SEV-SNP、SGX、CSV、TPM）没有 `wasm32-unknown-unknown` 目标，因此浏览器 SDK 无法对硬件证据进行度量。wasm builtin-as 是一个自包含的 trust-all / 样本匹配路径——同一个 TNG 实例既签名又验证 token（闭环系统；验证器以 `insecure_key: true` 信任嵌入的密钥）。它适用于开发、演示以及不希望运行外部 AS 进程的场景。如需真实的 TEE 验证，请使用 `as_type: "restful"`（外部证明服务）或原生 TNG。
+> wasm builtin-as **不执行真实的 TEE 证据度量**。TEE 验证器 crate（Intel TDX、AMD SEV-SNP、SGX、CSV、TPM）没有 `wasm32-unknown-unknown` 目标，因此浏览器 SDK 无法对硬件证据进行度量。wasm builtin-as 是一个自包含的 trust-all 路径——同一个 TNG 实例既签名又验证 token（闭环系统；验证器以 `insecure_key: true` 信任嵌入的密钥）。它适用于开发、演示以及不希望运行外部 AS 进程的场景。如需真实的 TEE 验证，请使用 `as_type: "restful"`（外部证明服务）或原生 TNG。
 
 ### 部署配置
 

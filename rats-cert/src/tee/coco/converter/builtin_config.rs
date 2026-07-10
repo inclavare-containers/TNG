@@ -26,8 +26,8 @@ pub enum PolicyConfig {
     /// reference values are available and mandatory.
     /// See: https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego
     ///
-    /// On the wasm builtin-AS this degrades to `HardwareOnly` (no regorus policy
-    /// engine is compiled for wasm).
+    /// On the wasm builtin-AS this is NOT supported — the wasm converter rejects it
+    /// (`WasmBuiltinPolicyNotSupported`); use `TrustAll` or `HardwareOnly` on wasm.
     HardwareWithReferenceValues,
     /// tng-bundled template: only hardware TEE recognition is enforced; the
     /// other three trustworthiness dimensions are affirming by default and
