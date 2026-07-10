@@ -39,6 +39,8 @@ async fn test() -> Result<()> {
             name: "echo server on loopback".to_owned(),
             node_type: NodeType::Client,
             script: r#"
+set -euo pipefail
+
 python3 -c '
 import socket, threading, time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -58,6 +60,16 @@ sleep 120
                 "#
             .to_owned(),
             mode: ShellMode::BackgroundContinue,
+        }
+        .boxed(),
+        ShellTask {
+            name: "sleep a bit for echo server to start".to_owned(),
+            node_type: NodeType::Client,
+            script: r#"
+sleep 3
+            "#
+            .to_owned(),
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         // Client side: tng exec with ingress hook.
