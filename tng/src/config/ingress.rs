@@ -351,18 +351,25 @@ pub struct PathRewrite {
     pub substitution: String,
 }
 
-/// Configuration for copying selected headers from the downstream plaintext
-/// request to the outer OHTTP POST request.
+/// Configuration for copying selected headers across the OHTTP boundary on the
+/// ingress (client) side.
 ///
-/// These headers are visible to intermediaries between Ingress and Egress
-/// but are NOT forwarded to the upstream server — they remain encrypted
-/// inside the OHTTP body.
+/// - `request_headers`: copy from the inner (plaintext) downstream request to
+///   the outer (ciphertext) POST request.
+/// - `response_headers`: copy from the outer (ciphertext) response back to the
+///   inner (plaintext) response returned to the caller.
+///
+/// Each field accepts `"all"` (every header except the protected set) or an
+/// explicit allowlist. Defaults to empty (copy nothing).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct IngressHeaderPassthroughConfig {
-    /// Header names to copy from the downstream request to the outer POST.
+    /// Inner (plaintext) request → outer (ciphertext) request.
     #[serde(default)]
-    pub request_headers: Vec<String>,
+    pub request_headers: crate::config::header_passthrough::HeaderPassthroughSpec,
+    /// Outer (ciphertext) response → inner (plaintext) response.
+    #[serde(default)]
+    pub response_headers: crate::config::header_passthrough::HeaderPassthroughSpec,
 }
 
 /// A single filter rule for endpoint matching in ingress modes that support

@@ -187,6 +187,10 @@ npm install @inclavare-containers/tng
   }
 ```
 
+## 跨域请求（CORS）
+
+当浏览器需要跨域使用 TNG SDK 访问加密的后端服务时，需要一些额外的配置，请查看 [docs/cors_zh.md](docs/cors_zh.md)。
+
 ## 运行示例代码
 
 `example/` 目录中包含一个使用 TNG SDK 发送加密请求的示例页面，详细的端到端部署步骤见 [example/README_zh.md](example/README_zh.md)。

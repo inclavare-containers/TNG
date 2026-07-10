@@ -317,3 +317,79 @@ async fn test_ohttp_header_passthrough_empty() -> Result<()> {
 
     Ok(())
 }
+
+/// Covers the `"all"` spec value and the two new passthrough directions:
+/// egress `request_headers` (outer→inner, e.g. `["origin"]`) and ingress
+/// `response_headers` (outer→inner, e.g. `["x-echo"]`), alongside the
+/// existing directions. Uses the `mapping` topology with `no_ra: true`
+/// (modelled on `ohttp_path_default.rs`) to avoid AA/AS service dependencies.
+///
+/// Like the other tests in this file this is a flow-level smoke test: it
+/// asserts that the config parses and the OHTTP flow completes without
+/// breakage, not that any specific header value is observed end-to-end.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_ohttp_header_passthrough_all_and_new_directions() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "0.0.0.0", "port": 20001 },
+                            "out": { "host": "127.0.0.1", "port": 30001 }
+                        },
+                        "ohttp": {
+                            "header_passthrough": {
+                                "request_headers": ["origin"],
+                                "response_headers": "all"
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+            "#,
+        )
+        .boxed(),
+        TngInstance::TngClient(
+            r#"
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "0.0.0.0", "port": 10001 },
+                            "out": { "host": "192.168.1.1", "port": 20001 }
+                        },
+                        "ohttp": {
+                            "header_passthrough": {
+                                "request_headers": ["x-trace-id"],
+                                "response_headers": ["x-echo"]
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+            "#,
+        )
+        .boxed(),
+        AppType::HttpServer {
+            port: 30001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/cors/all?x=1",
+        }
+        .boxed(),
+        AppType::HttpClient {
+            host: "127.0.0.1",
+            port: 10001,
+            host_header: "example.com",
+            path_and_query: "/cors/all?x=1",
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}

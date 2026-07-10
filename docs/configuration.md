@@ -1578,20 +1578,44 @@ OHTTP-encrypted HTTP requests follow these rules for compatibility with L7 load 
 
 #### `header_passthrough` (Ingress)
 
-Controls which HTTP headers are copied from the plaintext downstream request
-to the outer OHTTP POST request. This allows intermediaries (ALB, WAF, load
-balancers) between Ingress and Egress to read specific headers for routing,
-tracing, or rate limiting.
+Controls which HTTP headers are copied across the OHTTP boundary on the
+Ingress (client) side. This allows intermediaries (ALB, WAF, load balancers)
+between Ingress and Egress to read specific headers for routing, tracing, or
+rate limiting.
 
-| Field | Type | Description |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `request_headers` | `string[]` or `"all"` | `[]` | Inner (plaintext) downstream request → outer (ciphertext) OHTTP POST request. Copied headers are visible to intermediaries but are NOT forwarded to the upstream server — they remain encrypted in the OHTTP body. |
+| `response_headers` | `string[]` or `"all"` | `[]` | Outer (ciphertext) OHTTP response → inner (plaintext) response returned to the caller. Use this to surface headers that Egress copied onto the outer response (e.g. the backend's `Access-Control-Allow-*`) back to the downstream client. |
+
+Each field accepts either an explicit allowlist of header names or the literal
+string `"all"` (copy every header **except** the protected set). Defaults to
+empty (copy nothing). Header name matching is case-insensitive.
+
+##### Protected header set
+
+The following headers are **never** copied by any direction — they would
+corrupt the OHTTP protocol contract or HTTP framing, or are managed
+explicitly by TNG: `content-type`, `content-length`, `content-encoding`,
+`transfer-encoding`, `connection`, `keep-alive`, `te`, `trailer`, `upgrade`,
+`proxy-authenticate`, `proxy-authorization`, `x-tng-ohttp-api`, `server`,
+`host`. Listing a protected header explicitly has no effect. Note that
+`origin` is deliberately **not** protected — it is the header egress
+`request_headers` exists to copy.
+
+##### Direction semantics
+
+| Direction | Ingress field | Source → Destination |
 |---|---|---|
-| `request_headers` | `string[]` | Header names to copy from the downstream request to the outer OHTTP POST request. These headers are NOT forwarded to the upstream server — they remain encrypted in the OHTTP body. |
+| Request (ingress) | `request_headers` | Inner plaintext request → outer ciphertext POST |
+| Response (ingress) | `response_headers` | Outer ciphertext response → inner plaintext response |
 
 Example:
 ```json
 "ohttp": {
   "header_passthrough": {
-    "request_headers": ["x-trace-id", "x-tenant-id"]
+    "request_headers": ["x-trace-id", "x-tenant-id"],
+    "response_headers": ["access-control-allow-origin"]
   }
 }
 ```
@@ -1654,18 +1678,33 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 
 #### `header_passthrough` (Egress)
 
-Controls which HTTP headers are copied from the plaintext upstream response
-to the outer OHTTP HTTP response. This allows intermediaries between Egress
-and Ingress to read specific headers.
+Controls which HTTP headers are copied across the OHTTP boundary on the
+Egress (server) side. This allows intermediaries between Egress and Ingress
+to read specific headers.
 
-| Field | Type | Description |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `request_headers` | `string[]` or `"all"` | `[]` | Outer (ciphertext) request → inner (plaintext) request forwarded upstream. This is how the browser's `Origin` reaches the backend — the Ingress/SDK cannot read `Origin` (it is a forbidden header set by the browser on the outer fetch), so it travels encrypted inside the OHTTP body and is surfaced here. |
+| `response_headers` | `string[]` or `"all"` | `[]` | Inner (plaintext) upstream response → outer (ciphertext) response. This is how the backend's `Access-Control-Allow-*` reach the browser — they are copied onto the outer response and the Ingress `response_headers` relays them to the caller. |
+
+Each field accepts either an explicit allowlist of header names or the literal
+string `"all"` (copy every header **except** the protected set). Defaults to
+empty (copy nothing). Header name matching is case-insensitive. See the
+[protected header set](#protected-header-set) above — it is shared with the
+Ingress side.
+
+##### Direction semantics
+
+| Direction | Egress field | Source → Destination |
 |---|---|---|
-| `response_headers` | `string[]` | Header names to copy from the upstream response to the outer OHTTP HTTP response. These headers are NOT forwarded to the downstream client — they remain encrypted in the OHTTP body. |
+| Request (egress) | `request_headers` | Outer ciphertext request → inner plaintext request (to backend) |
+| Response (egress) | `response_headers` | Inner plaintext response (from backend) → outer ciphertext response |
 
 Example:
 ```json
 "ohttp": {
   "header_passthrough": {
+    "request_headers": ["x-trace-id"],
     "response_headers": ["x-custom-header", "x-rate-limit-remaining"]
   }
 }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod control_interface;
 pub mod egress;
 pub mod egress_hook;
+pub mod header_passthrough;
 pub mod ingress;
 pub mod mapping_rule;
 pub mod match_rule;
@@ -75,6 +76,7 @@ pub mod tests {
     use ingress::{IngressHeaderPassthroughConfig, IngressMode, PathRewrite};
     use ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
 
+    use crate::config::header_passthrough::HeaderPassthroughSpec;
     use crate::config::mapping_rule::{MappingRule, RuleEndpoint};
 
     use crate::config::{
@@ -118,7 +120,10 @@ pub mod tests {
                         }],
                         path_default: ingress::PathDefault::Root,
                         header_passthrough: Some(IngressHeaderPassthroughConfig {
-                            request_headers: vec!["x-trace-id".to_owned()],
+                            request_headers: HeaderPassthroughSpec::List(vec![
+                                "x-trace-id".to_owned()
+                            ]),
+                            response_headers: HeaderPassthroughSpec::default(),
                         }),
                     }),
                     rats_tls: None,
@@ -166,7 +171,10 @@ pub mod tests {
                         cors: None,
                         key: Default::default(),
                         header_passthrough: Some(EgressHeaderPassthroughConfig {
-                            response_headers: vec!["x-custom-header".to_owned()],
+                            request_headers: HeaderPassthroughSpec::default(),
+                            response_headers: HeaderPassthroughSpec::List(vec![
+                                "x-custom-header".to_owned()
+                            ]),
                         }),
                     }),
                     rats_tls: None,
@@ -230,10 +238,11 @@ pub mod tests {
                         path_rewrites: vec![],
                         path_default: ingress::PathDefault::Root,
                         header_passthrough: Some(IngressHeaderPassthroughConfig {
-                            request_headers: vec![
+                            request_headers: HeaderPassthroughSpec::List(vec![
                                 "x-trace-id".to_owned(),
                                 "x-tenant-id".to_owned(),
-                            ],
+                            ]),
+                            response_headers: HeaderPassthroughSpec::default(),
                         }),
                     }),
                     rats_tls: None,
@@ -257,7 +266,10 @@ pub mod tests {
             .header_passthrough
             .as_ref()
             .unwrap();
-        assert_eq!(hp.request_headers, vec!["x-trace-id", "x-tenant-id"]);
+        assert_eq!(
+            hp.request_headers,
+            HeaderPassthroughSpec::List(vec!["x-trace-id".to_owned(), "x-tenant-id".to_owned()])
+        );
 
         // Egress config with header_passthrough (using netfilter mode)
         let egress_config = TngConfig {
@@ -282,7 +294,10 @@ pub mod tests {
                         cors: None,
                         key: Default::default(),
                         header_passthrough: Some(EgressHeaderPassthroughConfig {
-                            response_headers: vec!["x-custom".to_owned()],
+                            request_headers: HeaderPassthroughSpec::default(),
+                            response_headers: HeaderPassthroughSpec::List(vec![
+                                "x-custom".to_owned()
+                            ]),
                         }),
                     }),
                     rats_tls: None,
@@ -305,7 +320,10 @@ pub mod tests {
             .header_passthrough
             .as_ref()
             .unwrap();
-        assert_eq!(hp.response_headers, vec!["x-custom"]);
+        assert_eq!(
+            hp.response_headers,
+            HeaderPassthroughSpec::List(vec!["x-custom".to_owned()])
+        );
 
         // Empty header_passthrough
         let empty_config = TngConfig {
@@ -330,7 +348,8 @@ pub mod tests {
                         cors: None,
                         key: Default::default(),
                         header_passthrough: Some(EgressHeaderPassthroughConfig {
-                            response_headers: vec![],
+                            request_headers: HeaderPassthroughSpec::default(),
+                            response_headers: HeaderPassthroughSpec::default(),
                         }),
                     }),
                     rats_tls: None,
@@ -353,7 +372,7 @@ pub mod tests {
             .header_passthrough
             .as_ref()
             .unwrap();
-        assert!(hp.response_headers.is_empty());
+        assert_eq!(hp.response_headers, HeaderPassthroughSpec::default());
 
         Ok(())
     }

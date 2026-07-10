@@ -189,6 +189,10 @@ If you want to integrate in a Chrome extension, due to manifest v3 restrictions,
 ```
 
 
+## Cross-Origin Requests (CORS)
+
+When the browser needs to use the TNG SDK cross-origin to access encrypted backend services, some additional configuration is required — see [docs/cors.md](docs/cors.md).
+
 ## Running the Example Code
 
 The `example/` directory contains an example page that uses the TNG SDK to send encrypted requests. See [example/README.md](example/README.md) for full end-to-end deployment steps.

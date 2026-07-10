@@ -445,18 +445,29 @@ pub struct CorsConfig {
     pub allow_credentials: bool,
 }
 
-/// Configuration for copying selected headers from the upstream plaintext
-/// response to the outer OHTTP HTTP response.
+/// Configuration for copying selected headers across the OHTTP boundary on the
+/// egress (server) side.
 ///
-/// These headers are visible to intermediaries between Egress and Ingress
-/// but are NOT forwarded to the downstream client — they remain encrypted
-/// inside the OHTTP body.
+/// - `request_headers`: copy from the outer (ciphertext) request to the inner
+///   (plaintext) request before forwarding upstream. This is how the browser's
+///   `Origin` reaches the backend (the ingress/SDK cannot read `Origin` — it is
+///   a forbidden header set by the browser on the outer fetch).
+/// - `response_headers`: copy from the inner (plaintext) upstream response to
+///   the outer (ciphertext) response. This is how the backend's
+///   `Access-Control-Allow-*` reach the browser.
+///
+/// Each field accepts either the literal string `"all"` (copy every header
+/// except the protected set) or an explicit allowlist of header names. Defaults
+/// to empty (copy nothing).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct EgressHeaderPassthroughConfig {
-    /// Header names to copy from the upstream response to the outer response.
+    /// Outer (ciphertext) request → inner (plaintext) request.
     #[serde(default)]
-    pub response_headers: Vec<String>,
+    pub request_headers: crate::config::header_passthrough::HeaderPassthroughSpec,
+    /// Inner (plaintext) response → outer (ciphertext) response.
+    #[serde(default)]
+    pub response_headers: crate::config::header_passthrough::HeaderPassthroughSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

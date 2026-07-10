@@ -57,7 +57,10 @@ pub struct OHttpSecurityLayer {
     path_rewrite_group: PathRewriteGroup,
     path_default: PathDefault,
     runtime: TokioRuntime,
-    passthrough_request_headers: Arc<Vec<String>>,
+    /// Headers to copy from the inner (plaintext) request to the outer (ciphertext) POST.
+    passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// Headers to copy from the outer (ciphertext) response to the inner (plaintext) response.
+    passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
 }
 
 impl OHttpSecurityLayer {
@@ -107,6 +110,14 @@ impl OHttpSecurityLayer {
                 .unwrap_or_default(),
         );
 
+        let passthrough_response_headers = Arc::new(
+            ohttp_args
+                .header_passthrough
+                .as_ref()
+                .map(|hp| hp.response_headers.clone())
+                .unwrap_or_default(),
+        );
+
         Ok(Self {
             ra_context,
             http_client: Arc::new(http_client),
@@ -115,6 +126,7 @@ impl OHttpSecurityLayer {
             path_default: ohttp_args.path_default,
             runtime,
             passthrough_request_headers,
+            passthrough_response_headers,
         })
     }
 
@@ -199,6 +211,7 @@ impl OHttpSecurityLayer {
                     base_url,
                     self.runtime.clone(),
                     self.passthrough_request_headers.clone(),
+                    self.passthrough_response_headers.clone(),
                 )
                 .await
                 .map_err(TngError::CreateOHttpClientFailed)?,

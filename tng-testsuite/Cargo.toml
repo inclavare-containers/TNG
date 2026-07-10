@@ -166,6 +166,10 @@ name = "ohttp_path_default"
 path = "tests/ohttp/ohttp_path_default.rs"
 
 [[test]]
+name = "ohttp_cors_passthrough"
+path = "tests/ohttp/ohttp_cors_passthrough.rs"
+
+[[test]]
 name = "server_netfilter"
 path = "tests/netfilter/server_netfilter.rs"
 

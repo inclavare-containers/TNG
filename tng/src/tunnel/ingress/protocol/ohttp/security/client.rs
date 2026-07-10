@@ -40,7 +40,7 @@ use tokio_util::{
 };
 use url::Url;
 
-use std::{pin::Pin, str::FromStr, sync::Arc};
+use std::{pin::Pin, sync::Arc};
 
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::metadata::AttestedPublicKey;
@@ -93,9 +93,12 @@ pub struct OHttpClientInner {
     base_url: Url,
     #[allow(unused)]
     runtime: TokioRuntime,
-    /// Headers to copy from downstream requests to the outer OHTTP POST.
+    /// Headers to copy from the inner (plaintext) request to the outer OHTTP POST.
     #[allow(unused)]
-    passthrough_request_headers: Arc<Vec<String>>,
+    passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// Headers to copy from the outer OHTTP response to the inner (plaintext) response.
+    #[allow(unused)]
+    passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
 }
 
 struct KeyStoreValue {
@@ -148,7 +151,8 @@ impl OHttpClient {
         http_client: Arc<reqwest::Client>,
         base_url: Url,
         runtime: TokioRuntime,
-        passthrough_request_headers: Arc<Vec<String>>,
+        passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+        passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     ) -> Result<Self> {
         let refresh_strategy = {
             #[cfg(unix)]
@@ -177,6 +181,7 @@ impl OHttpClient {
             base_url,
             runtime: runtime.clone(),
             passthrough_request_headers,
+            passthrough_response_headers,
         });
 
         let key_store_value = MaybeCached::new(runtime.clone(), refresh_strategy, {
@@ -507,31 +512,14 @@ impl OHttpClientInner {
     }
 
     /// Copy passthrough headers from the downstream request to the outer POST builder.
-    /// Protocol headers (content-type, x-tng-ohttp-api) are never overwritten.
+    /// Protocol headers (protected set, incl. content-type, x-tng-ohttp-api) are never copied.
     fn passthrough_headers<'a>(
         &'a self,
         request: &'a axum::extract::Request,
     ) -> Vec<(http::HeaderName, http::HeaderValue)> {
-        let protected: std::collections::HashSet<&str> = [
-            http::header::CONTENT_TYPE.as_str(),
-            crate::tunnel::ohttp::protocol::header::OhttpApi::HEADER_NAME,
-        ]
-        .into_iter()
-        .collect();
-
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
         self.passthrough_request_headers
-            .iter()
-            .filter_map(|name| {
-                let header_name = http::HeaderName::from_str(name).ok()?;
-                if protected.contains(header_name.as_str()) {
-                    return None;
-                }
-                request
-                    .headers()
-                    .get(&header_name)
-                    .map(|v| (header_name, v.clone()))
-            })
-            .collect()
+            .collect_passthrough_headers(request.headers(), &protected)
     }
 
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
@@ -750,6 +738,13 @@ impl OHttpClientInner {
             }
         }
 
+        // Capture outer response headers before bytes_stream() consumes the
+        // reqwest::Response. These are copied onto the decrypted inner response
+        // returned to the caller (ingress `response_headers`: outer → inner).
+        let outer_response_headers = response.headers().clone();
+        let passthrough_response = self.passthrough_response_headers.clone();
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+
         #[cfg(unix)]
         let content_len = response
             .headers()
@@ -805,9 +800,18 @@ impl OHttpClientInner {
                 e
             })?;
 
-        let HttpMessage::Response(response) = decode_result.into_full_message()? else {
+        let HttpMessage::Response(mut response) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpResponse);
         };
+
+        // Copy configured outer response headers (outer → inner) onto the
+        // decrypted response returned to the caller, skipping protected headers.
+        let outer_passthrough =
+            passthrough_response.collect_passthrough_headers(&outer_response_headers, &protected);
+        let inner_headers = response.headers_mut();
+        for (name, value) in outer_passthrough {
+            inner_headers.insert(name, value);
+        }
 
         let response = {
             let (head, body) = response.into_parts();

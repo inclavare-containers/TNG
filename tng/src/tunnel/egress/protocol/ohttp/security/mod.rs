@@ -19,6 +19,7 @@ use crate::{
 
 mod api;
 pub mod context;
+pub mod cors_fallback;
 #[allow(dead_code)]
 pub mod key_manager;
 pub mod server;
@@ -48,13 +49,14 @@ impl OHttpSecurityLayer {
         )>,
     ) -> Result<()> {
         async {
+            let state = TngStreamContext {
+                runtime: self.runtime.clone(),
+                sender,
+            };
             let app = self
                 .ohttp_server
-                .create_routes()
-                .with_state(TngStreamContext {
-                    runtime: self.runtime.clone(),
-                    sender,
-                });
+                .create_routes(state.clone())
+                .with_state(state);
 
             let hyper_service = hyper::service::service_fn(
                 move |request: axum::extract::Request<hyper::body::Incoming>| {

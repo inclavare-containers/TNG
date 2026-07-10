@@ -141,6 +141,24 @@ When a change breaks backward compatibility:
 2. **Do not silently remove or rename existing endpoints, config fields, or public struct fields** — either keep the old path working (with deprecation warnings) or ensure the version compatibility doc reflects the break.
 3. **Consider additive-only changes first** — new endpoints alongside old ones, optional fields alongside required ones, new trait methods with default implementations.
 
+### What counts as a compatibility change
+
+`docs/version_compatibility{,_zh}.md` tracks changes that force existing, unmodified configs/clients to behave differently or stop working. Log a row only when a change is **breaking** — i.e. an existing valid config, request, or client integration no longer parses or behaves the same way without user action. Concretely:
+
+- Removed or renamed REST endpoints, config fields, CLI flags, or public struct/trait members.
+- A removed or replaced public API/field that existing configs or code can no longer use unchanged.
+- A flipped default that invalidates existing configs (e.g. a default changing `true`→`false` where old configs relied on the old default).
+- A wire-format/protocol change that is not interoperable with older clients or servers.
+
+Do **not** log a row for additive or behavior-broadening changes, even if noticeable — document these in `docs/configuration{,_zh}.md` (and crate `README.md`/`README_zh.md` where relevant) instead:
+
+- New, optional config fields with backward-compatible defaults (old configs parse unchanged).
+- New endpoints, fields, or trait methods added alongside existing ones.
+- A behavior broadening that only adds capability and does not break any previously-valid config, request, or response (e.g. answering a previously-rejected request, adding a response header).
+- Bug-fix-like enhancements.
+
+The test: **would an existing, unmodified config that worked before still work the same way after?** If yes, it is not a compatibility change — do not add a `version_compatibility` row. A change that merely lets users opt into new behavior (new fields defaulting off; previously-rejected requests now succeeding) is additive, not breaking.
+
 
 ## Error Handling
 

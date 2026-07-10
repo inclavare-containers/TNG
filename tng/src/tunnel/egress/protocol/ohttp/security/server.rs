@@ -26,7 +26,9 @@ use crate::{
     TokioRuntime,
 };
 use crate::{
-    tunnel::egress::protocol::ohttp::security::{api::OhttpServerApi, context::TngStreamContext},
+    tunnel::egress::protocol::ohttp::security::{
+        api::OhttpServerApi, context::TngStreamContext, cors_fallback,
+    },
     HTTP_RESPONSE_SERVER_HEADER,
 };
 use async_trait::async_trait;
@@ -49,12 +51,21 @@ impl OhttpServer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let passthrough_response_headers = Arc::new(
-            ohttp_args
-                .header_passthrough
-                .as_ref()
-                .map(|hp| hp.response_headers.clone())
-                .unwrap_or_default(),
+        let (passthrough_request_headers, passthrough_response_headers) = (
+            Arc::new(
+                ohttp_args
+                    .header_passthrough
+                    .as_ref()
+                    .map(|hp| hp.request_headers.clone())
+                    .unwrap_or_default(),
+            ),
+            Arc::new(
+                ohttp_args
+                    .header_passthrough
+                    .as_ref()
+                    .map(|hp| hp.response_headers.clone())
+                    .unwrap_or_default(),
+            ),
         );
 
         Ok(Self {
@@ -63,6 +74,7 @@ impl OhttpServer {
                     ra_context,
                     ohttp_args.key,
                     runtime,
+                    passthrough_request_headers,
                     passthrough_response_headers,
                 )
                 .await?,
@@ -143,7 +155,7 @@ impl OhttpServer {
     }
 
     /// Create the TNG HTTP routes with the server instance
-    pub fn create_routes(&self) -> Router<TngStreamContext> {
+    pub fn create_routes(&self, state: TngStreamContext) -> Router<TngStreamContext> {
         let router = Router::new().fallback({
             let api = Arc::clone(&self.api);
             move |state: State<TngStreamContext>, req: Request| async move {
@@ -176,10 +188,13 @@ impl OhttpServer {
             }
         });
 
-        let router = if let Some(cors) = &self.cors_layer {
-            router.layer(cors.clone())
-        } else {
-            router
+        // CORS handling is one of two mutually exclusive layers:
+        //  - `cors: Some(...)` → tower_http CorsLayer (TNG as the CORS authority).
+        //  - `cors: None`      → CorsFallbackLayer: forward preflights to the backend
+        //                        (backend stays the authority) + ACAO:* on key-config actuals.
+        let router = match &self.cors_layer {
+            Some(cors) => router.layer(cors.clone()),
+            None => router.layer(cors_fallback::CorsFallbackLayer::new(state)),
         };
 
         router

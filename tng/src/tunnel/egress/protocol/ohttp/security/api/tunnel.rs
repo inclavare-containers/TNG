@@ -7,8 +7,6 @@ use bytes::BytesMut;
 use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
-use std::collections::HashSet;
-use std::str::FromStr;
 
 use crate::tunnel::provider::{ProviderType, TngToken};
 use tokio::io::AsyncReadExt;
@@ -58,6 +56,15 @@ impl OhttpServerApi {
                 )));
             }
         }
+
+        // Capture outer request headers (e.g. the browser's `Origin`) before the
+        // body is consumed. These are copied onto the decrypted inner request so
+        // the upstream backend can make its own CORS decision. `Origin` is a
+        // forbidden header set by the browser on the outer fetch; only the egress
+        // server (which terminates the outer HTTP) can see it.
+        let outer_request_headers = payload.headers().clone();
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+        let passthrough_request = self.passthrough_request_headers.clone();
 
         let mut reader = tokio_util::io::StreamReader::new(
             payload
@@ -151,9 +158,20 @@ impl OhttpServerApi {
         let decode_result = BhttpDecoder::new(plain_text).decode_message().await?;
         let server_response_encapsulator = decode_result.reader_ref().response_encapsulator()?;
 
-        let HttpMessage::Request(request) = decode_result.into_full_message()? else {
+        let HttpMessage::Request(mut request) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpRequest);
         };
+
+        // Copy configured outer headers (outer → inner) onto the decrypted
+        // request, skipping protected headers (e.g. `Host`, `content-type`).
+        let outer_passthrough =
+            passthrough_request.collect_passthrough_headers(&outer_request_headers, &protected);
+        let inner_headers = request.headers_mut();
+        for (name, value) in outer_passthrough {
+            // `insert` replaces any existing inner value; protected headers are
+            // already excluded by `collect_passthrough_headers`.
+            inner_headers.insert(name, value);
+        }
 
         tracing::debug!(
             method = ?request.method(),
@@ -171,23 +189,13 @@ impl OhttpServerApi {
             "Received response from upstream server"
         );
 
-        // Collect passthrough headers before response is consumed by BhttpEncoder
-        let mut passthrough_headers: Vec<(http::HeaderName, http::HeaderValue)> = Vec::new();
-        let protected: HashSet<&str> = [
-            http::header::CONTENT_TYPE.as_str(),
-            crate::HTTP_RESPONSE_SERVER_HEADER,
-        ]
-        .into_iter()
-        .collect();
-        for header_name in self.passthrough_response_headers.iter() {
-            if let Ok(name) = http::HeaderName::from_str(header_name) {
-                if !protected.contains(name.as_str()) {
-                    if let Some(value) = response.headers().get(&name) {
-                        passthrough_headers.push((name, value.clone()));
-                    }
-                }
-            }
-        }
+        // Collect passthrough headers before the response is consumed by BhttpEncoder.
+        // Uses the unified HeaderPassthroughSpec (`"all"` or allowlist) and the
+        // shared protected set. Inner (backend) response → outer (browser) response.
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+        let passthrough_headers = self
+            .passthrough_response_headers
+            .collect_passthrough_headers(response.headers(), &protected);
 
         // Encode the response to bhttp message
         let bhttp_encoder = BhttpEncoder::from_response(response);
