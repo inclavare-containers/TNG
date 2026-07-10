@@ -253,6 +253,15 @@ apt-get update && apt-get install -y curl iptables && update-alternatives --set 
 make run-test
 ```
 
+### Builtin-AS 与 WASM SDK
+
+`make wasm-build-*` 目标（`wasm-build-debug`、`wasm-build-release`）默认将 builtin-as 编译进 wasm SDK——`tng-wasm` crate 在其 `tng` 依赖上启用了 `__builtin-as-wasm` feature，因此浏览器 SDK 可以在进程内转换并验证服务端的证明 token（客户端无需运行外部证明服务进程）。
+
+集成测试 `js_sdk_builtin_as`（在 `tng-testsuite/Cargo.toml` 中注册）端到端地验证了该路径。与 `js_sdk_http` 不同，它只需要 `make test-dep-aa`（证明代理 + ASR，用于服务端证据采集），**不需要** `make test-dep-as`（外部证明服务），因为 wasm SDK 是在进程内验证的。
+
+> [!NOTE]
+> `__builtin-as`（原生，基于 trustee）和 `__builtin-as-wasm`（wasm，纯 Rust）是按目标平台的 feature 开关，**不应**在错误的目标上混用。wasm SDK 仅使用 `__builtin-as-wasm`（默认启用）；原生 TNG 使用 `__builtin-as`。仅启用 `__builtin-as-wasm`（不启用 `__builtin-as`）的原生构建，或仅启用 `__builtin-as`（不启用 `__builtin-as-wasm`）的 wasm 构建，均不受支持。`--all-features` 在原生宿主目标上可用，但在 wasm 上不是受支持的配置。
+
 ## 构建与部署
 
 TNG 有两种常见的运行形态，可以以容器镜像形式部署，也可以通过构建 RPM 包来部署。下面给出推荐的构建流程，适合作为发布或在目标环境中安装使用。

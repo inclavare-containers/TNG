@@ -158,6 +158,31 @@ The main steps include:
 3. Configure the attestation service address and policy ID
 4. Use the wrapped `tng_fetch` function to send encrypted requests
 
+### In-process Attestation Service (`as_type: "builtin"`)
+
+By default, the wasm SDK is built with builtin-as enabled — the `make wasm-build-*` targets turn on the `__builtin-as-wasm` feature on the `tng-wasm` → `tng` dependency. This lets the browser SDK act as its own Attestation Service: it converts and verifies the server's attestation token in-process, so **no external Attestation Service process is required** on the client side. Select it with `as_type: "builtin"` (and omit `as_addr`):
+
+```js
+const tng_config = {
+  ohttp: {},
+  verify: {
+    model: "background_check",
+    as_type: "builtin",
+  },
+};
+```
+
+Supported appraisal policies on wasm:
+
+- `trust_all` — fully supported.
+- `hardware_only` — accepted, but degrades to trust-all on wasm (no TEE verifier runs).
+- `hardware_with_reference_values` / `inline` / `path` rego policies — **not supported** on wasm (the regorus policy engine has no wasm target).
+
+Reference values: sample reference values are supported (best-effort JSON match); SLSA / ReleaseManifest reference values are native-only (they require RVPS/rekor, unavailable on wasm).
+
+> [!IMPORTANT]
+> The wasm builtin-as performs **no real TEE evidence appraisal**. The TEE verifier crates (Intel TDX, AMD SEV-SNP, SGX, CSV, TPM) have no `wasm32-unknown-unknown` targets, so the browser SDK cannot appraise hardware evidence. The wasm builtin-as is a self-contained, trust-all / sample-match path — the same TNG instance signs and verifies the token (a closed system; the verifier trusts the embedded key with `insecure_key: true`). It is suited to development, demos, and scenarios where running an external AS process is undesirable. For real TEE verification, use `as_type: "restful"` (an external Attestation Service) or native TNG.
+
 ### Deployment Configuration
 
 #### Using in Web Pages

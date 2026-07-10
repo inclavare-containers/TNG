@@ -157,6 +157,31 @@ npm install @inclavare-containers/tng
 3. 配置证明服务地址和策略 ID
 4. 使用封装的 `tng_fetch` 函数发送加密请求
 
+### 进程内证明服务（`as_type: "builtin"`）
+
+默认情况下，wasm SDK 在构建时即启用了 builtin-as——`make wasm-build-*` 目标会在 `tng-wasm` → `tng` 依赖上开启 `__builtin-as-wasm` feature。这使得浏览器 SDK 可以充当自身的证明服务（Attestation Service）：它在进程内转换并验证服务端的证明 token，因此客户端**无需运行外部证明服务进程**。通过 `as_type: "builtin"` 选择该模式（并省略 `as_addr`）：
+
+```js
+const tng_config = {
+  ohttp: {},
+  verify: {
+    model: "background_check",
+    as_type: "builtin",
+  },
+};
+```
+
+wasm 上支持的度量策略：
+
+- `trust_all`——完全支持。
+- `hardware_only`——可接受，但在 wasm 上退化为 trust-all（没有 TEE 验证器运行）。
+- `hardware_with_reference_values` / `inline` / `path` rego 策略——在 wasm 上**不支持**（regorus 策略引擎没有 wasm 目标）。
+
+参考值：样本参考值（sample）受支持（尽力而为的 JSON 匹配）；SLSA / ReleaseManifest 参考值仅原生支持（需要 RVPS/rekor，在 wasm 上不可用）。
+
+> [!IMPORTANT]
+> wasm builtin-as **不执行真实的 TEE 证据度量**。TEE 验证器 crate（Intel TDX、AMD SEV-SNP、SGX、CSV、TPM）没有 `wasm32-unknown-unknown` 目标，因此浏览器 SDK 无法对硬件证据进行度量。wasm builtin-as 是一个自包含的 trust-all / 样本匹配路径——同一个 TNG 实例既签名又验证 token（闭环系统；验证器以 `insecure_key: true` 信任嵌入的密钥）。它适用于开发、演示以及不希望运行外部 AS 进程的场景。如需真实的 TEE 验证，请使用 `as_type: "restful"`（外部证明服务）或原生 TNG。
+
 ### 部署配置
 
 #### 在网页中使用

@@ -65,6 +65,13 @@ Only when the Attestation Service returns a successful verification result will 
 > [!TIP]
 > For Verifier configuration fields and examples, please refer to the [Verifier section](configuration.md#verifier-configuration) in the configuration manual.
 
+#### Builtin-AS on WASM
+
+The native Verifier delegates evidence appraisal to an external Attestation Service process (the `restful` AS). The TNG browser SDK additionally supports a **builtin-AS** mode (`as_type: "builtin"`): the wasm SDK embeds a pure-Rust Attestation Service implementation and converts/verifies the server's attestation token **in-process**, eliminating the need to run an external AS process on the client side. The same TNG instance signs and verifies the token (a closed system). This path is enabled by default in the wasm SDK build (`__builtin-as-wasm` feature) and is suited to development, demos, and scenarios where an external AS is undesirable.
+
+> [!IMPORTANT]
+> The wasm builtin-as performs **no real TEE evidence appraisal**. The TEE verifier crates (Intel TDX, AMD SEV-SNP, SGX, CSV, TPM) have no `wasm32-unknown-unknown` targets, so the browser SDK cannot appraise hardware evidence. Appraisal on wasm is limited to `trust_all` (and `hardware_only`, which degrades to trust-all on wasm); sample reference values are matched best-effort, while `hardware_with_reference_values` / `inline` / `path` rego policies and SLSA/ReleaseManifest reference values are not supported on wasm (they need the regorus policy engine or RVPS/rekor, neither of which has a wasm target). For real TEE verification, use `as_type: "restful"` (an external Attestation Service) or native TNG.
+
 ## Encryption Protocols and Security
 
 TNG employs advanced encryption protocols to achieve communication security, implementing transport-layer or session-layer encryption by combining Remote Attestation and privacy protection mechanisms. Currently, two core encryption protocols are primarily supported to adapt to different application scenarios and security needs: RATS-TLS and OHTTP.

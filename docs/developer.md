@@ -250,6 +250,15 @@ apt-get update && apt-get install -y curl iptables && update-alternatives --set 
 make run-test
 ```
 
+### Builtin-AS and the WASM SDK
+
+The `make wasm-build-*` targets (`wasm-build-debug`, `wasm-build-release`) compile builtin-as into the wasm SDK by default — the `tng-wasm` crate enables the `__builtin-as-wasm` feature on its `tng` dependency, so the browser SDK can convert and verify the server's attestation token in-process (no external Attestation Service process required on the client side).
+
+The integration test `js_sdk_builtin_as` (registered in `tng-testsuite/Cargo.toml`) exercises this path end-to-end. Unlike `js_sdk_http`, it requires only `make test-dep-aa` (the Attestation Agent + ASR, for server-side evidence collection) and does **not** require `make test-dep-as` (the external Attestation Service), because the wasm SDK verifies in-process.
+
+> [!NOTE]
+> `__builtin-as` (native, trustee-backed) and `__builtin-as-wasm` (wasm, pure-Rust) are per-target feature knobs and are **not** meant to be mixed on the wrong target. The wasm SDK uses `__builtin-as-wasm` only (default-enabled); native TNG uses `__builtin-as`. A native build with only `__builtin-as-wasm` (no `__builtin-as`), or a wasm build with `__builtin-as` (no `__builtin-as-wasm`), is unsupported. `--all-features` works on the native host target but is not a supported configuration on wasm.
+
 ## Build and Deployment
 
 TNG has two common running forms: it can be deployed as a container image or by building an RPM package. The following recommended build process is suitable for release or installation in a target environment.
