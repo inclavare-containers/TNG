@@ -221,6 +221,38 @@ pub enum Error {
     #[error("Attestation evidence verification failed")]
     AttestationServiceVerifyFailed(#[source] anyhow::Error),
 
+    // Wasm builtin-as (pure-Rust builtin-AS via wasm, no regorus/AS dependency)
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[error("wasm builtin-as: policy {policy} is not supported on wasm (no regorus/AS)")]
+    WasmBuiltinPolicyNotSupported { policy: String },
+
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[error("wasm builtin-as: reference value kind {kind} is not supported")]
+    WasmBuiltinReferenceValueKindNotSupported { kind: String },
+
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[error("wasm builtin-as: reference value mismatch")]
+    WasmBuiltinReferenceValueMismatch,
+
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[allow(dead_code)] // constructed in Task 5 (reference value parser)
+    #[error("wasm builtin-as: failed to parse reference value: {detail}")]
+    WasmBuiltinReferenceValueParseFailed { detail: String },
+
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[error("wasm builtin-as: failed to sign token")]
+    WasmBuiltinTokenSignFailed {
+        #[source]
+        source: jsonwebtoken::errors::Error,
+    },
+
+    #[cfg(feature = "__builtin-as-wasm")]
+    #[error("wasm builtin-as: key generation failed")]
+    WasmBuiltinKeyGenFailed {
+        #[source]
+        source: rcgen::Error,
+    },
+
     // HTTP client building
     #[error("Failed to build HTTP client")]
     AttestationServiceHttpClientBuildFailed(#[source] reqwest::Error),
