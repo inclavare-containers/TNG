@@ -84,6 +84,11 @@ impl ItaConverter {
         })
     }
 
+    /// The ITA portal base URL this converter targets.
+    pub fn as_addr(&self) -> &str {
+        &self.base_url
+    }
+
     fn is_retryable_error(status: reqwest::StatusCode, body: &str) -> bool {
         status.is_server_error()
             || (status == reqwest::StatusCode::BAD_REQUEST

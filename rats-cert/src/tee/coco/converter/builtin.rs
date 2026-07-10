@@ -298,6 +298,12 @@ impl BuiltinCocoConverter {
         })
     }
 
+    /// Builtin converters run the attestation service in-process and have no
+    /// remote attestation-service address; return a sentinel for error context.
+    pub fn as_addr(&self) -> &'static str {
+        "<builtin-attestation-service>"
+    }
+
     /// Load policy from configuration
     /// Returns None for the AS built-in default policy
     /// (HardwareWithReferenceValues), and a URL-safe base64 encoding of the

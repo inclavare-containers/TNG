@@ -22,6 +22,18 @@ pub enum CocoConverter {
     Builtin(BuiltinCocoConverter),
 }
 
+impl CocoConverter {
+    /// The attestation-service address this converter targets (for error context).
+    pub fn as_addr(&self) -> &str {
+        match self {
+            CocoConverter::Restful(c) => c.as_addr(),
+            CocoConverter::Grpc(c) => c.as_addr(),
+            #[cfg(feature = "__builtin-as")]
+            CocoConverter::Builtin(c) => c.as_addr(),
+        }
+    }
+}
+
 pub enum CoCoNonce {
     Jwt(String),
 }

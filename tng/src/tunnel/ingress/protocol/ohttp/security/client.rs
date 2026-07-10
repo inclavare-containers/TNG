@@ -293,7 +293,13 @@ impl OHttpClientInner {
                     let challenge_token = converter
                         .get_nonce()
                         .await
-                        .map_err(|e| TngError::ClientRequestKeyConfigFailed(e.into()))?;
+                        .with_context(|| {
+                            format!(
+                                "requesting challenge token from AS at {}",
+                                converter.as_addr()
+                            )
+                        })
+                        .map_err(TngError::ClientRequestKeyConfigFailed)?;
 
                     // Request hpke configuration for server
                     let response = self
@@ -496,7 +502,8 @@ impl OHttpClientInner {
             .json(&key_config_request)
             .send()
             .await
-            .map_err(|error| TngError::ClientRequestKeyConfigFailed(error.into()))?
+            .with_context(|| format!("POST key-config request to {}", self.base_url))
+            .map_err(TngError::ClientRequestKeyConfigFailed)?
             .check_error_response()
             .await
             .map_err(TngError::ClientRequestKeyConfigFailed)?;

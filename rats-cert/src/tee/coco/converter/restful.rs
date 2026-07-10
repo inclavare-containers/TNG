@@ -67,6 +67,11 @@ impl CocoRestfulConverter {
             policy_ids: policy_ids.to_owned(),
         })
     }
+
+    /// The attestation-service base address this converter targets.
+    pub fn as_addr(&self) -> &str {
+        &self.as_addr
+    }
 }
 
 mod as_api {

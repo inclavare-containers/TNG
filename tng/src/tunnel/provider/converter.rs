@@ -20,6 +20,14 @@ impl TngConverter {
             Self::Ita(_) => super::provider_type::ProviderType::Ita,
         }
     }
+
+    /// The attestation-service address this converter targets (for error context).
+    pub fn as_addr(&self) -> &str {
+        match self {
+            Self::Coco(c) => c.as_addr(),
+            Self::Ita(c) => c.as_addr(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
