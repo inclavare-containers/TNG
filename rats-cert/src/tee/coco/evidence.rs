@@ -124,6 +124,21 @@ impl CocoEvidence {
         self.aa_runtime_data_hash_algo
     }
 
+    /// Test/wasm-builtin-only constructor: build evidence from a TEE type and
+    /// runtime-data JSON. The wasm builtin converter only reads `aa_runtime_data`
+    /// (it does not appraise TEE evidence), so `aa_evidence` and
+    /// `aa_additional_evidence` are empty.
+    #[cfg(any(test, feature = "__builtin-as-wasm"))]
+    pub fn new_for_wasm_builtin(aa_tee_type: Tee, aa_runtime_data: String) -> Result<Self> {
+        Self::new(
+            aa_tee_type,
+            vec![],
+            None,
+            aa_runtime_data,
+            crate::crypto::HashAlgo::Sha256,
+        )
+    }
+
     pub fn serialize_to_json(&self) -> serde_json::Result<serde_json::Value> {
         serde_json::to_value(self.into_json_helper())
     }

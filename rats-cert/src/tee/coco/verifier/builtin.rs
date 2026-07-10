@@ -14,7 +14,7 @@ pub struct BuiltinCocoVerifier {
     inner: CommonCocoVerifier,
     #[cfg(feature = "__builtin-as")]
     #[allow(dead_code)]
-    work_dir: Arc<AttestationServiceWorkDir>,
+    work_dir: Option<Arc<AttestationServiceWorkDir>>,
 }
 
 impl BuiltinCocoVerifier {
@@ -40,20 +40,18 @@ impl BuiltinCocoVerifier {
                 // Builtin AS does not support signer transparency verification
                 verify_signer_transparency: false,
             },
-            work_dir,
+            work_dir: Some(work_dir),
         })
     }
 
     /// Wasm constructor: no filesystem. The converter embeds the AS public JWK in the
     /// JWT header; with `insecure_key: true` the verifier trusts that JWK (closed
     /// system — same TNG instance signs and verifies), mirroring native builtin.
-    #[cfg(all(
-        feature = "__builtin-as-wasm",
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    ))]
-    pub async fn new_wasm() -> Result<Self> {
+    ///
+    /// Gated on `__builtin-as-wasm` (no target predicate) so the native round-trip
+    /// test can construct this verifier to validate the converter's sign path.
+    #[cfg(feature = "__builtin-as-wasm")]
+    pub async fn new_insecure() -> Result<Self> {
         let config = AttestationTokenVerifierConfig {
             trusted_certs_paths: vec![],
             trusted_jwk_sets: vec![],
@@ -71,6 +69,8 @@ impl BuiltinCocoVerifier {
                 policy_ids: vec![DEFAULT_POLICY_ID.to_string()],
                 verify_signer_transparency: false,
             },
+            #[cfg(feature = "__builtin-as")]
+            work_dir: None,
         })
     }
 }

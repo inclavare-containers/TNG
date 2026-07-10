@@ -14,6 +14,8 @@ use crate::tee::GenericConverter;
 pub mod builtin;
 #[cfg(any(feature = "__builtin-as", feature = "__builtin-as-wasm"))]
 pub mod builtin_config;
+#[cfg(feature = "__builtin-as-wasm")]
+pub mod builtin_wasm;
 pub mod grpc;
 pub mod restful;
 
@@ -22,6 +24,8 @@ pub enum CocoConverter {
     Restful(CocoRestfulConverter),
     #[cfg(feature = "__builtin-as")]
     Builtin(BuiltinCocoConverter),
+    #[cfg(feature = "__builtin-as-wasm")]
+    WasmBuiltin(builtin_wasm::WasmBuiltinCocoConverter),
 }
 
 pub enum CoCoNonce {
@@ -41,6 +45,8 @@ impl GenericConverter for CocoConverter {
             CocoConverter::Restful(converter) => converter.convert(in_evidence).await,
             #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(converter) => converter.convert(in_evidence).await,
+            #[cfg(feature = "__builtin-as-wasm")]
+            CocoConverter::WasmBuiltin(converter) => converter.convert(in_evidence).await,
         }
     }
 
@@ -50,6 +56,8 @@ impl GenericConverter for CocoConverter {
             CocoConverter::Restful(converter) => converter.get_nonce().await,
             #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(converter) => converter.get_nonce().await,
+            #[cfg(feature = "__builtin-as-wasm")]
+            CocoConverter::WasmBuiltin(converter) => converter.get_nonce().await,
         }
     }
 }
