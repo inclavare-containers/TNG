@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>TNG JS SDK Demo</title>
+    <link rel="stylesheet" href="./css/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title-block">
+        <h1 data-i18n="app.title">TNG JS SDK Demo</h1>
+        <p class="subtitle" data-i18n="app.subtitle"></p>
+      </div>
+      <div class="topbar-right">
+        <label class="lang-toggle">
+          <select id="lang-select">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+        <span id="init-badge" class="badge badge-waiting"></span>
+      </div>
+    </header>
+
+    <!-- Shared TNG settings -->
+    <section class="card tng-card" id="tng-config-wrap">
+      <div class="card-head">
+        <h2 data-i18n="tng.title"></h2>
+        <button type="button" id="view-config-btn" data-i18n="tng.view_config"></button>
+      </div>
+      <div class="grid">
+        <label>
+          <span data-i18n="tng.as_addr"></span>
+          <input type="text" id="tng-as-addr" name="tng-as-addr" autocomplete="off" list="dl-tng-as-addr" data-i18n-placeholder="tng.as_addr.placeholder" />
+          <datalist id="dl-tng-as-addr"></datalist>
+        </label>
+        <label>
+          <span data-i18n="tng.policy_ids"></span>
+          <input type="text" id="tng-policy-ids" value="default" />
+        </label>
+        <label>
+          <span data-i18n="tng.model"></span>
+          <select id="tng-model">
+            <option value="background_check" data-i18n="tng.model.background_check"></option>
+            <option value="passport" data-i18n="tng.model.passport"></option>
+          </select>
+        </label>
+      </div>
+      <label class="inline checkbox">
+        <input type="checkbox" id="tng-skip-as-token-cert-verify" />
+        <span data-i18n="tng.skip_as_token_cert_verify"></span>
+      </label>
+
+      <h3 class="card-subhead" data-i18n="ohttp.title"></h3>
+      <label>
+        <span data-i18n="ohttp.path_default"></span>
+        <select id="ohttp-path-default">
+          <option value="root" data-i18n="ohttp.path_default.root"></option>
+          <option value="original" data-i18n="ohttp.path_default.original"></option>
+        </select>
+      </label>
+      <div class="field">
+        <span class="field-label" data-i18n="ohttp.path_rewrites"></span>
+        <div id="ohttp-path-rewrites" class="headers-list"></div>
+        <button type="button" id="ohttp-add-rewrite" data-i18n="ohttp.path_rewrites.add"></button>
+      </div>
+
+      <pre id="config-preview" class="config-preview" hidden></pre>
+    </section>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="general" data-i18n="tab.general"></button>
+      <button class="tab" data-tab="llm" data-i18n="tab.llm"></button>
+    </nav>
+
+    <!-- General request demo -->
+    <section id="tab-general" class="tab-panel active">
+      <div class="two-col">
+        <form id="general-form" class="card form" autocomplete="off">
+          <label>
+            <span data-i18n="general.url"></span>
+            <input type="text" id="general-url" name="general-url" autocomplete="off" list="dl-general-url" data-i18n-placeholder="general.url.placeholder" />
+            <datalist id="dl-general-url"></datalist>
+          </label>
+          <label>
+            <span data-i18n="general.method"></span>
+            <select id="general-method"></select>
+          </label>
+          <div class="field">
+            <span class="field-label" data-i18n="general.headers"></span>
+            <div id="general-headers" class="headers-list"></div>
+            <button type="button" id="general-add-header" data-i18n="general.header.add"></button>
+          </div>
+          <div class="field" id="general-body-field">
+            <span class="field-label" data-i18n="general.body"></span>
+            <textarea id="general-body" rows="8" spellcheck="false"></textarea>
+          </div>
+          <p class="hint" id="general-body-hidden" hidden data-i18n="general.body.hidden"></p>
+          <button type="submit" id="general-send" class="primary" disabled data-i18n="general.send"></button>
+        </form>
+        <section class="card response">
+          <h3 data-i18n="resp.title"></h3>
+          <div id="general-response" class="response-body" data-empty="true"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- LLM inference demo -->
+    <section id="tab-llm" class="tab-panel">
+      <div class="two-col">
+        <form id="llm-form" class="card form" autocomplete="off">
+          <label>
+            <span data-i18n="llm.base_url"></span>
+            <input type="text" id="llm-base-url" name="llm-base-url" autocomplete="off" list="dl-llm-base-url" data-i18n-placeholder="llm.base_url.placeholder" />
+            <datalist id="dl-llm-base-url"></datalist>
+          </label>
+          <label>
+            <span data-i18n="llm.endpoint"></span>
+            <select id="llm-endpoint"></select>
+          </label>
+          <label>
+            <span data-i18n="llm.token"></span>
+            <input type="password" id="llm-token" data-i18n-placeholder="llm.token.placeholder" />
+          </label>
+          <label class="inline checkbox">
+            <input type="checkbox" id="llm-stream" checked />
+            <span data-i18n="llm.stream"></span>
+          </label>
+          <div class="field">
+            <span class="field-label" data-i18n="llm.body"></span>
+            <textarea id="llm-body" rows="10" spellcheck="false"></textarea>
+          </div>
+          <button type="submit" id="llm-send" class="primary" disabled data-i18n="llm.send"></button>
+        </form>
+        <section class="card response">
+          <h3 data-i18n="resp.title"></h3>
+          <div id="llm-response" class="response-body" data-empty="true"></div>
+        </section>
+      </div>
+    </section>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>

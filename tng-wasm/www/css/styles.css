@@ -1,0 +1,349 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #f0f2f5;
+  --text: #1f2329;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --border: #d0d7de;
+  --ok: #1a7f37;
+  --err: #cf222e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  line-height: 1.5;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.subtitle {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.lang-toggle select {
+  margin-left: 0.4rem;
+}
+
+.badge {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.badge-waiting {
+  color: var(--muted);
+}
+
+.badge-ready {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.badge-failed {
+  color: var(--err);
+  border-color: var(--err);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  margin: 1rem 1.5rem;
+}
+
+.tng-card .grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+#view-config-btn {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+}
+
+.config-preview {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.8rem;
+  margin-top: 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.tng-card > label,
+.tng-card > .field {
+  margin-top: 0.6rem;
+}
+
+.card-subhead {
+  margin: 0.8rem 0 0.2rem;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+label.checkbox span {
+  color: var(--text);
+}
+
+input,
+select,
+textarea {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+}
+
+textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1.5rem;
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+
+.tab.active {
+  background: var(--panel);
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  padding: 0 1.5rem;
+}
+
+/* min-width:0 lets the grid tracks shrink below their content's min width,
+   so long response lines scroll inside code blocks instead of blowing out the
+   card width. */
+.two-col > * {
+  min-width: 0;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.headers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.4rem;
+}
+
+.response {
+  min-height: 300px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.response-body {
+  font-size: 0.85rem;
+}
+
+/* Status bar: green left accent when ok, red when not. */
+.resp-status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.6rem;
+  border-radius: 4px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--ok);
+}
+.resp-status.err {
+  border-left-color: var(--err);
+}
+.resp-code {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.resp-text {
+  color: var(--muted);
+}
+
+.resp-section {
+  margin-top: 0.6rem;
+}
+.resp-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.resp-collapsible summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+/* Horizontally-scrolling code block for all long response content (body,
+   streamed output, raw SSE, attest info). */
+.code-block {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem;
+  margin: 0;
+  max-width: 100%;
+  white-space: pre;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.resp-headers {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.resp-headers table {
+  border-collapse: collapse;
+}
+.resp-headers td {
+  padding: 0.15rem 0.5rem 0.15rem 0;
+  vertical-align: top;
+  font-size: 0.8rem;
+}
+.resp-headers td.label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.response-body .err {
+  color: var(--err);
+}
+.response-body .label {
+  color: var(--muted);
+}
+.response-body details {
+  margin-top: 0.6rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0;
+}

@@ -184,6 +184,15 @@ jobs:
           path: |
             ./npm/*.tgz
 
+      - name: Upload wasm SDK files
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-sdk-files
+          if-no-files-found: error
+          path: |
+            ./tng-wasm/pkg/tng_wasm.js
+            ./tng-wasm/pkg/tng_wasm_bg.wasm
+
   publish-github:
     name: Publish to GitHub Packages
     needs: build-and-release
@@ -249,3 +258,51 @@ jobs:
           PKG=$(ls *.tgz | head -1)
           echo "Publishing $PKG"
           npm publish "$PKG" --provenance --access public --registry=https://registry.npmjs.org
+
+  deploy-pages:
+    name: Deploy demo to GitHub Pages
+    needs: build-and-release
+    if: >-
+      github.repository == 'inclavare-containers/TNG' &&
+      (
+        github.ref == 'refs/heads/master' ||
+        startsWith(github.ref, 'refs/tags/') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download wasm SDK files
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-sdk-files
+          path: ./wasm-sdk-files
+
+      - name: Assemble site
+        run: |
+          cp ./wasm-sdk-files/tng_wasm.js tng-wasm/www/
+          cp ./wasm-sdk-files/tng_wasm_bg.wasm tng-wasm/www/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: tng-wasm/www
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

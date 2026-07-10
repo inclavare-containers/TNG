@@ -308,9 +308,14 @@ wasm-unit-test-firefox: install-wasm-build-dependencies
 wasm-integration-test: wasm-build-debug install-test-deps
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 cargo test --no-default-features --features on-source-code,js-sdk --package tng-testsuite --test 'js_sdk*' -- --nocapture
 
-.PHONE: www-demo
-www-demo:
-	cd tng-wasm/www && npm run start
+.PHONY: www-demo
+www-demo: wasm-build-debug
+	cp tng-wasm/pkg/tng_wasm.js tng-wasm/www/
+	cp tng-wasm/pkg/tng_wasm_bg.wasm tng-wasm/www/
+	miniserve ./tng-wasm/www \
+		--header "Cross-Origin-Opener-Policy:same-origin" \
+		--header "Cross-Origin-Embedder-Policy:require-corp" \
+		--port 8083
 
 .PHONY: wasm-example-serve
 wasm-example-serve: wasm-build-debug

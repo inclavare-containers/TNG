@@ -178,3 +178,7 @@ miniserve ./tng-wasm \
 ### 9. 从浏览器访问
 
 在本地计算机中打开浏览器，访问 `http://<机密计算服务实例 ip>:8082/example/`，您可以在 F12 中查看请求响应的日志。
+
+## GitHub Pages 演示站点
+
+本仓库还会把一个交互式 SDK 演示发布到 GitHub Pages（站点源码在 `tng-wasm/www/`）。`.github/workflows/build-wasm-sdk.yml` 中的 `deploy-pages` 任务会在每次推送到 `master`、打 tag 或手动触发时构建 SDK 并部署站点。仓库管理员需一次性设置 **Settings → Pages → Source = "GitHub Actions"**。

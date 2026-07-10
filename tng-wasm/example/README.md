@@ -181,3 +181,11 @@ Then visit `http://<server ip>:8082/example/`.
 ### 9. Access in the Browser
 
 Open a browser on the local computer and visit `http://<server ip>:8082/example/`. You can view the request response logs in F12.
+
+## GitHub Pages Demo Site
+
+This repo also publishes an interactive SDK demo to GitHub Pages (served from
+`tng-wasm/www/`). The `deploy-pages` job in `.github/workflows/build-wasm-sdk.yml`
+builds the SDK and deploys the site on every push to `master`, on tags, and on
+manual dispatch. A repo admin must set **Settings → Pages → Source = "GitHub
+Actions"** once.
