@@ -292,7 +292,6 @@ wasm-pack-debug: wasm-build-debug
 
 .PHONE: wasm-unit-test
 wasm-unit-test: wasm-unit-test-chrome
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort
 
 .PHONE: wasm-unit-test-chrome
 wasm-unit-test-chrome: install-wasm-build-dependencies
