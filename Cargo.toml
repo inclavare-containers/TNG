@@ -174,7 +174,7 @@ git = "https://github.com/inclavare-containers/webpki.git"
 
 [patch.crates-io.reqwest]
 git = "https://github.com/inclavare-containers/reqwest.git"
-rev = "edd4658e698a030ff04bbb62e954f363b31a25c8"
+rev = "472703bfd5d3eb415bece730230a823e07dabb78"
 
 [patch.crates-io.tokio-graceful]
 branch = "wasm"

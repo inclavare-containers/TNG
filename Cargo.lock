@@ -6313,7 +6313,7 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.12.9"
-source = "git+https://github.com/inclavare-containers/reqwest.git?rev=edd4658e698a030ff04bbb62e954f363b31a25c8#edd4658e698a030ff04bbb62e954f363b31a25c8"
+source = "git+https://github.com/inclavare-containers/reqwest.git?rev=472703bfd5d3eb415bece730230a823e07dabb78#472703bfd5d3eb415bece730230a823e07dabb78"
 dependencies = [
  "async-compression",
  "base64 0.22.1",
