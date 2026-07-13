@@ -3,7 +3,7 @@
 # setup-vendor-config — Configure vendor-specific PCCS settings for TNG builtin AS mode.
 #
 # When using TNG's builtin attestation service (e.g., the Docker image built with
-# the builtin-as-tdx feature), local quote verification requires a correctly
+# the builtin-as-tdx-ffi feature), local quote verification requires a correctly
 # configured PCCS (Provisioning Certificate Caching Service). If the PCCS_URL in
 # /etc/sgx_default_qcnl.conf does not point to your cloud provider's service,
 # quote verification will fail with:

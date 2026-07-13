@@ -53,7 +53,7 @@ A tool for establishing secure communication tunnels in confidential computing.
 %build
 # Build tng
 pushd src/
-RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root %{_builddir}/%{name}-%{version}/install/tng/
+RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --features 'builtin-as-tdx-rust' --root %{_builddir}/%{name}-%{version}/install/tng/
 # Build libtng_hook.so (LD_PRELOAD hook for transparent TNG tunneling)
 cargo build -p tng-hook-cdylib --release
 popd

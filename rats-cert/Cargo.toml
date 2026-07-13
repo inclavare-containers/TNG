@@ -114,7 +114,12 @@ __builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
-builtin-as-tdx = ["__builtin-as", "attestation-service/tdx-verifier"]
+builtin-as-tdx-ffi = ["__builtin-as", "attestation-service/tdx-verifier"]
+# Pure-Rust dcap-qvl backend (no libtdx-verify/libsgx_dcap_quoteverify link).
+# Statically linkable; fetches TDX collateral from a PCCS over HTTPS.
+# Mutually exclusive with builtin-as-tdx-ffi (which selects the FFI backend) —
+# never enable both in a single build (a compile error is the backstop).
+builtin-as-tdx-rust = ["__builtin-as", "attestation-service/tdx-dcap-rust"]
 
 default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "__builtin-as"]
 

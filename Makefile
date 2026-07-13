@@ -204,7 +204,7 @@ create-tarball:
 
 .PHONE: bin-build
 bin-build:
-	RUSTFLAGS="--cfg tokio_unstable" cargo build --release
+	RUSTFLAGS="--cfg tokio_unstable" cargo build --release --features 'builtin-as-tdx-rust'
 
 .PHONE: tng-hook-build
 tng-hook-build:
@@ -536,7 +536,7 @@ bench-multiplex:
 .PHONY: python-wheel
 python-wheel:
 	@echo ">> Building tng binary for current platform..."
-	cargo build --release -p tng
+	cargo build --release -p tng --features 'builtin-as-tdx-rust'
 	@echo ">> Copying tng binary to tng-python/bin/scripts/"
 	mkdir -p tng-python/bin/scripts
 	cp target/release/tng tng-python/bin/scripts/tng

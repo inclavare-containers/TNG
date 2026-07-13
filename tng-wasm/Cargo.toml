@@ -52,8 +52,8 @@ tokio_with_wasm = {workspace = true}
 tokio_with_wasm_proc = {workspace = true}
 
 [dev-dependencies]
-wasm-bindgen-test = "=0.3.50"
 reqwest = {workspace = true}
+wasm-bindgen-test = "0.3.76"
 
 # https://github.com/rustwasm/wasm-pack/issues/1351#issuecomment-2100231587
 [package.metadata.wasm-pack.profile.dev.wasm-bindgen]
