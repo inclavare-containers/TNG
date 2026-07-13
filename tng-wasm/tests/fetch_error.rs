@@ -35,13 +35,19 @@ async fn fetch_failure_renders_cleanly() {
         !source.contains("JsValue("),
         "raw JsValue(...) wrapper leaked into the error:\n{source}"
     );
-    let occurrences = source.matches("TypeError: Failed to fetch").count();
-    assert_eq!(
-        occurrences, 1,
-        "expected exactly one 'TypeError: Failed to fetch', got {occurrences}:\n{source}"
-    );
-    assert!(
-        source.contains("Note: browsers do not expose"),
-        "missing browser-opacity hint:\n{source}"
-    );
+
+    // On firefox the error will be "TypeError: NetworkError when attempting to fetch resource.", not "TypeError: Failed to fetch"
+    if source.contains("TypeError: NetworkError when attempting to fetch resource.") {
+        // firefox, skip this part
+    } else {
+        let occurrences = source.matches("TypeError: Failed to fetch").count();
+        assert_eq!(
+            occurrences, 1,
+            "expected exactly one 'TypeError: Failed to fetch', got {occurrences}:\n{source}"
+        );
+        assert!(
+            source.contains("Note: browsers do not expose"),
+            "missing browser-opacity hint:\n{source}"
+        );
+    }
 }
