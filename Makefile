@@ -316,6 +316,10 @@ www-demo: wasm-build-debug
 		--header "Cross-Origin-Embedder-Policy:require-corp" \
 		--port 8083
 
+.PHONY: www-test
+www-test:
+	node --test tng-wasm/tests/*.test.mjs
+
 .PHONY: wasm-example-serve
 wasm-example-serve: wasm-build-debug
 	miniserve ./tng-wasm \

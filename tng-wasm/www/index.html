@@ -32,9 +32,25 @@
       </div>
       <div class="grid">
         <label>
+          <span data-i18n="tng.as_provider"></span>
+          <select id="tng-as-provider">
+            <option value="coco" data-i18n="tng.as_provider.coco"></option>
+            <option value="ita" data-i18n="tng.as_provider.ita"></option>
+          </select>
+        </label>
+        <label id="tng-as-addr-wrap">
           <span data-i18n="tng.as_addr"></span>
           <input type="text" id="tng-as-addr" name="tng-as-addr" autocomplete="off" list="dl-tng-as-addr" data-i18n-placeholder="tng.as_addr.placeholder" />
           <datalist id="dl-tng-as-addr"></datalist>
+        </label>
+        <label id="tng-api-key-wrap" hidden>
+          <span data-i18n="tng.api_key"></span>
+          <input type="password" id="tng-api-key" autocomplete="off" data-i18n-placeholder="tng.api_key.placeholder" />
+          <p class="hint" id="tng-api-key-hint" hidden data-i18n="tng.api_key.help"></p>
+        </label>
+        <label id="tng-ita-jwks-wrap" hidden>
+          <span data-i18n="tng.ita_jwks_addr"></span>
+          <input type="text" id="tng-ita-jwks-addr" autocomplete="off" data-i18n-placeholder="tng.ita_jwks_addr.placeholder" />
         </label>
         <label>
           <span data-i18n="tng.policy_ids"></span>
@@ -48,7 +64,7 @@
           </select>
         </label>
       </div>
-      <label class="inline checkbox">
+      <label class="inline checkbox" id="tng-skip-as-token-cert-verify-wrap">
         <input type="checkbox" id="tng-skip-as-token-cert-verify" />
         <span data-i18n="tng.skip_as_token_cert_verify"></span>
       </label>

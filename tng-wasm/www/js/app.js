@@ -1,12 +1,18 @@
 import { t, applyI18n, setLang, getLang } from "./i18n.js";
 import { HTTP_METHODS, BODY_METHODS, METHOD_EXAMPLE_BODIES, LLM_ENDPOINTS, LLM_EXAMPLE_BODIES } from "./examples.js";
 import { readSseStream } from "./sse.js";
+import {
+  buildTngConfig as buildTngConfigFromInputs,
+  visibleFields,
+  DEFAULT_ITA_API_URL,
+} from "./config.js";
 
 // SDK is imported from ./tng_wasm.js (copied into www/ at assemble time by CI
 // or by `make www-demo`). The import is dynamic so the page still loads if the
 // file is missing, showing a clear error in the init badge.
 let tng_init, tng_fetch;
 let sdkState = "waiting"; // "waiting" | "ready" | "failed"
+let sdkReady = false; // mirrors sdkState === "ready"; used to gate Send on form validity
 
 // ---------- i18n ----------
 function initI18n() {
@@ -16,6 +22,8 @@ function initI18n() {
     setLang(select.value);
     updateInitBadge();
     refreshEmptyResponses();
+    // Re-apply the ITA AS-URL placeholder, which applyI18n() reset to the CoCo hint.
+    updateProviderFields();
   });
   applyI18n();
   updateInitBadge();
@@ -49,11 +57,13 @@ async function initSdk() {
     tng_fetch = mod.fetch;
     await tng_init();
     sdkState = "ready";
+    sdkReady = true;
     updateInitBadge();
-    setSendEnabled(true);
+    updateFormValidity();
   } catch (err) {
     console.error("SDK init failed", err);
     sdkState = "failed";
+    sdkReady = false;
     updateInitBadge();
   }
 }
@@ -77,29 +87,111 @@ function readPathRewrites() {
 }
 
 function buildTngConfig() {
-  const asAddr = document.getElementById("tng-as-addr").value.trim();
-  const policyIds = document
-    .getElementById("tng-policy-ids")
-    .value.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Thin DOM-reading wrapper over the pure builder in config.js. The pure
+  // builder owns the field matrix + minimal-config rules and is unit-tested.
+  return buildTngConfigFromInputs({
+    provider: document.getElementById("tng-as-provider").value,
+    model: document.getElementById("tng-model").value,
+    asAddr: document.getElementById("tng-as-addr").value.trim(),
+    apiKey: document.getElementById("tng-api-key").value.trim(),
+    itaJwksAddr: document.getElementById("tng-ita-jwks-addr").value.trim(),
+    policyIds: document
+      .getElementById("tng-policy-ids")
+      .value.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    skipAsTokenCertVerify: document.getElementById("tng-skip-as-token-cert-verify").checked,
+    ohttpPathDefault: document.getElementById("ohttp-path-default").value,
+    ohttpPathRewrites: readPathRewrites(),
+  });
+}
+
+// ---------- provider/model field visibility ----------
+// Toggles which config rows are visible for the (provider, model) combo, swaps
+// the AS URL placeholder to hint the ITA API URL, and prefills that URL when
+// switching to ITA background_check — but only if the user has not typed a
+// value. Visibility rules come from visibleFields() in config.js.
+function updateProviderFields() {
+  const provider = document.getElementById("tng-as-provider").value;
   const model = document.getElementById("tng-model").value;
-  const verify = { model, as_addr: asAddr, policy_ids: policyIds };
-  if (document.getElementById("tng-skip-as-token-cert-verify").checked) {
-    // Skips TLS cert verification when the verifier fetches the AS token.
-    // Matches the flat `verify.skip_as_token_cert_verify` field in tng/src/config/ra.rs.
-    verify.skip_as_token_cert_verify = true;
+  const vis = visibleFields(provider, model);
+
+  const setWrap = (id, show) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !show;
+  };
+  setWrap("tng-as-addr-wrap", vis.asAddr);
+  setWrap("tng-api-key-wrap", vis.apiKey);
+  setWrap("tng-ita-jwks-wrap", vis.itaJwksAddr);
+  setWrap("tng-skip-as-token-cert-verify-wrap", vis.skipAsTokenCertVerify);
+
+  // Swap the AS URL placeholder to hint the ITA API URL in ITA mode.
+  const asAddrEl = document.getElementById("tng-as-addr");
+  if (asAddrEl) {
+    asAddrEl.setAttribute(
+      "placeholder",
+      provider === "ita"
+        ? t("tng.as_addr.placeholder.ita")
+        : t("tng.as_addr.placeholder")
+    );
   }
-  // OHTTP path options (tng/src/config/ingress.rs OHttpArgs). Non-default values
-  // are emitted; defaults (path_default=root, no rewrites) are omitted to keep
-  // the config minimal — same philosophy as skip_as_token_cert_verify above.
-  const ohttp = {};
-  if (document.getElementById("ohttp-path-default").value === "original") {
-    ohttp.path_default = "original";
+
+  // Clear the auto-prefilled ITA API URL when switching back to CoCo, so it
+  // doesn't leak into a CoCo verify config as a bogus AS address. We only
+  // clear the exact prefilled value — a user-typed CoCo AS URL is untouched.
+  if (provider === "coco" && asAddrEl && asAddrEl.value === DEFAULT_ITA_API_URL) {
+    asAddrEl.value = "";
   }
-  const rewrites = readPathRewrites();
-  if (rewrites.length) ohttp.path_rewrites = rewrites;
-  return { ohttp, verify };
+
+  // Prefill the ITA API URL when switching to ITA background_check, but never
+  // overwrite a value the user has typed.
+  if (
+    provider === "ita" &&
+    model !== "passport" &&
+    asAddrEl &&
+    asAddrEl.value.trim() === ""
+  ) {
+    asAddrEl.value = DEFAULT_ITA_API_URL;
+  }
+}
+
+// ITA background_check requires an API key (the converter calls Intel's cloud).
+// Gate Send on that, and surface an inline hint.
+function isFormValid() {
+  const provider = document.getElementById("tng-as-provider").value;
+  const model = document.getElementById("tng-model").value;
+  if (provider === "ita" && model !== "passport") {
+    return document.getElementById("tng-api-key").value.trim() !== "";
+  }
+  return true;
+}
+
+function updateFormValidity() {
+  const valid = isFormValid();
+  const provider = document.getElementById("tng-as-provider").value;
+  const model = document.getElementById("tng-model").value;
+  const needKey = provider === "ita" && model !== "passport";
+  const hint = document.getElementById("tng-api-key-hint");
+  if (hint) hint.hidden = !needKey || valid;
+  setSendEnabled(sdkReady && valid);
+}
+
+function initProviderFields() {
+  const provider = document.getElementById("tng-as-provider");
+  const model = document.getElementById("tng-model");
+  const apiKey = document.getElementById("tng-api-key");
+  for (const el of [provider, model, apiKey]) {
+    if (el) {
+      el.addEventListener("change", () => {
+        updateProviderFields();
+        updateFormValidity();
+      });
+    }
+  }
+  // Re-check validity as the user types the API key.
+  if (apiKey) apiKey.addEventListener("input", updateFormValidity);
+  updateProviderFields();
+  updateFormValidity();
 }
 
 // ---------- tabs ----------
@@ -524,6 +616,7 @@ function boot() {
   initGeneralDemo();
   initLlmDemo();
   initPersistedFields();
+  initProviderFields();
   initSdk();
 }
 

@@ -14,6 +14,15 @@
   box-sizing: border-box;
 }
 
+/* The `hidden` attribute must always suppress rendering. Author `display`
+   rules (e.g. `label { display: flex }` below) otherwise override the UA
+   `[hidden] { display: none }` rule, so without this a <label hidden> row
+   would stay visible. This makes app.js's `el.hidden = ...` toggling
+   authoritative for every element, including <label>. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
