@@ -24,6 +24,7 @@ When creating or amending commits:
 - **Always** use `--no-gpg-sign` to avoid GPG signing.
 - **Never commit plan or spec files** (e.g. `docs/*-plan.md`, `docs/*-design.md`, `docs/*-spec.md`, or anything under `docs/superpowers/`). These should be gitignored (already covered by `.gitignore`) and kept local only.
 - **Never commit any file that is already gitignored** — if a file matches `.gitignore`, it is intentionally local-only.
+- **Never manually edit version information in `trusted-network-gateway.spec`** — do not touch the `Version:` or `Release:` fields, and do not add version-stamped `%changelog` entries by hand. Version/release bumps across the whole repo (`Cargo.toml`, `Cargo.lock`, `APPLICATION/tng/buildspec.yml`, `tng-python/pyproject.toml`, and the RPM spec `Version` + `%changelog`) are produced at a specific release stage by `make bump-version-{major,minor,patch}`. That target regenerates the spec changelog from commit subjects since the last tag, so a hand-written entry would both carry a wrong release number and duplicate the auto-collected commits. Edit the spec only for packaging logic (e.g. `BuildRequires`/`Requires`, `%build` flags); leave versioning to `make bump-version-*`.
 
 ## Bilingual Documentation Convention
 
