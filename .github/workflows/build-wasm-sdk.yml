@@ -71,6 +71,11 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
+      - name: Run www demo config unit test
+        run: |
+          node --version
+          make www-test
+
       - name: Run Attestation Agent and Attestation Service
         run: |
           # Start services in background and capture PIDs
