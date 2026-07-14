@@ -43,11 +43,6 @@ COPY --from=builder /usr/local/cargo/bin/tng /usr/local/bin/tng
 RUN mkdir -p /usr/lib/tng/
 COPY --from=builder /code/target/release/libtng_hook.so /usr/lib/tng/libtng_hook.so
 
-# Install vendor config setup tool
-COPY scripts/setup-vendor-config /usr/local/bin/setup-vendor-config
-RUN chmod +x /usr/local/bin/setup-vendor-config
-
-# install jq for custome shell script
 RUN yum install -y jq
 
 CMD ["tng"]

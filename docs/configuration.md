@@ -1246,9 +1246,12 @@ The **Verifier** receives and verifies Evidence from the Attester, only recogniz
 When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locally without connecting to an external AS. This is suitable for network-isolated, latency-sensitive, or simplified deployment scenarios.
 
 > [!NOTE]
-> Builtin mode requires compiling with the corresponding TEE feature enabled (`builtin-as-tdx`, `builtin-as-sgx`, or `builtin-as-snp`). GitHub CI-built RPM packages and binary artifacts do not support this mode; only container images support it.
+> To verify TDX Evidence, TNG fetches TDX/SGX collateral directly over HTTPS from a PCCS (Provisioning Certificate Caching Service). Set the `PCCS_URL` environment variable to your cloud provider's PCCS; if unset, it defaults to the Alibaba Cloud PCCS (`https://sgx-dcap-server.cn-beijing.aliyuncs.com`). Both bare-host (`https://sgx-dcap-server.cn-hangzhou.aliyuncs.com`) and path-suffixed (`https://sgx-dcap-server.cn-hangzhou.aliyuncs.com/sgx/certification/v4/`) forms are accepted — the backend normalizes the path. Common Alibaba Cloud endpoints:
 >
-> For SGX/TDX builtin AS mode, you also need to configure the PCCS URL in `/etc/sgx_default_qcnl.conf` for your cloud provider. See the [Vendor Configuration Setup](setup-vendor-config.md) guide for details.
+> | Endpoint | `PCCS_URL` |
+> |---|---|
+> | Public (region-specific) | `https://sgx-dcap-server.<region>.aliyuncs.com` |
+> | VPC internal | `https://sgx-dcap-server-vpc.<region>.aliyuncs.com` |
 
 **PolicyConfig (OPA Policy):**
 
