@@ -31,6 +31,9 @@ BuildRequires: binutils-devel
 BuildRequires: protobuf-devel
 BuildRequires: clang
 BuildRequires: jq
+# openssl-sys compiles OpenSSL from source (vendored); OpenSSL's `Configure`
+# needs the IPC::Cmd Perl module, which on an8/al8 ships in perl-IPC-Cmd.
+BuildRequires: perl(IPC::Cmd)
 
 %{!?with_rustup:%global use_system_rust 1}
 %if 0%{?use_system_rust}

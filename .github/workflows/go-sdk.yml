@@ -39,7 +39,14 @@ jobs:
           set -x
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-          yum install -y git make tar clang protobuf-devel jq iptables
+          # openssl-sys builds OpenSSL from source (vendored) because the
+          # builtin-as-tdx-rust (dcap-qvl) backend pulls it in; OpenSSL's
+          # `Configure` requires the IPC::Cmd Perl module, which on alinux
+          # (an8-based) lives in its own `perl-IPC-Cmd` package (FindBin /
+          # File::Compare / File::Copy ship with the base perl-interpreter
+          # already present). Without this, `perl ./Configure` aborts with
+          # "Can't locate IPC/Cmd.pm".
+          yum install -y git make tar clang protobuf-devel jq iptables perl-IPC-Cmd
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
