@@ -69,12 +69,15 @@ phases:
       - rustup default 1.91.1
       # Change yum source from Anolis to Alinux
       - sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-      # openssl-sys builds OpenSSL from source (vendored); OpenSSL's `Configure`
-      # requires the IPC::Cmd Perl module, which on an8 lives in its own
-      # `perl-IPC-Cmd` package (FindBin/File::Compare/File::Copy ship with the
-      # base perl-interpreter already present). Without it, `perl ./Configure`
-      # aborts with "Can't locate IPC/Cmd.pm" and the rpmbuild %build fails.
-      - yum install -y perl-IPC-Cmd
+      # openssl-sys builds OpenSSL from source (vendored); OpenSSL 3.5.x's
+      # `Configure` requires the IPC::Cmd and Time::Piece Perl modules, which
+      # on an8 live in their own `perl-IPC-Cmd` and `perl-Time-Piece` packages
+      # (FindBin/File::Compare/File::Copy ship with the base perl-interpreter
+      # already present). Without them, `perl ./Configure` aborts with
+      # "Can't locate IPC/Cmd.pm" / "Can't locate Time/Piece.pm" during
+      # rpmbuild %build, and rpmbuild's strict BuildRequires check rejects
+      # perl(IPC::Cmd) / perl(Time::Piece) before %build even runs.
+      - yum install -y perl-IPC-Cmd perl-Time-Piece
   build:
     commands:
       - rpmbuild --define "_topdir /tmp/rpmbuild" -ba /tmp/rpmbuild/SPECS/trusted-network-gateway.spec --define 'with_rustup 1'
