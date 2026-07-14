@@ -50,12 +50,98 @@ struct ServersStatus {
     servers: Vec<ServerStatusEntry>,
 }
 
+/// Derive the URL scheme for the outer OHTTP POST from the `tls` config flag.
+/// `Some(true)` ⇒ `https`, anything else ⇒ `http` (the default, pre-feature behavior).
+fn scheme_from_tls(tls: Option<bool>) -> &'static str {
+    match tls {
+        Some(true) => "https",
+        _ => "http",
+    }
+}
+
+/// Build the reqwest client used to forward OHTTP POSTs to the upstream.
+///
+/// On non-wasm targets this honors `ohttp_args.tls_ca_certs` (each file may be a
+/// single cert or a PEM bundle) by adding them as trusted roots. On wasm the
+/// browser performs TLS and controls trust; `tls_ca_certs` does not exist there
+/// (see `OHttpArgs`), and the `https://` URL scheme alone drives browser TLS.
+#[cfg(not(wasm))]
+fn build_ohttp_http_client(
+    ohttp_args: &OHttpArgs,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    transport_so_mark: Option<u32>,
+) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    builder = builder.default_headers({
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
+        );
+        headers
+    });
+
+    #[cfg(unix)]
+    {
+        use std::time::Duration;
+        builder = builder.tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_IDLE_SECS as u64));
+        builder =
+            builder.tcp_keepalive_interval(Duration::from_secs(TCP_KEEPALIVE_INTERVAL_SECS as u64));
+        builder = builder.tcp_keepalive_retries(TCP_KEEPALIVE_PROBE_COUNT);
+    }
+
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    {
+        builder = builder.tcp_mark(transport_so_mark);
+    }
+
+    for path in &ohttp_args.tls_ca_certs {
+        let pem =
+            std::fs::read(path).with_context(|| format!("Failed to read TLS CA cert: {path}"))?;
+        let certs = reqwest::Certificate::from_pem_bundle(&pem)
+            .with_context(|| format!("Failed to parse TLS CA cert bundle: {path}"))?;
+        for cert in certs {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+
+    if !ohttp_args.tls_ca_certs.is_empty() && ohttp_args.tls != Some(true) {
+        tracing::warn!(
+            paths = ?ohttp_args.tls_ca_certs,
+            "tls_ca_certs are configured but `tls` is not enabled; \
+             the CA list is ignored because OHTTP is forwarded over plain HTTP"
+        );
+    }
+
+    Ok(builder.build()?)
+}
+
+/// wasm build of the OHTTP reqwest client. The browser controls TLS and the
+/// trust store, so no CA configuration is applied here; the `https://` URL
+/// scheme (driven by `scheme_from_tls`) is what engages browser TLS. Takes no
+/// `ohttp_args` because `tls_ca_certs` does not exist on wasm.
+#[cfg(wasm)]
+fn build_ohttp_http_client() -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    builder = builder.default_headers({
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
+        );
+        headers
+    });
+    Ok(builder.build()?)
+}
+
 pub struct OHttpSecurityLayer {
     ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     ohttp_clients: OhttpClientCache,
     path_rewrite_group: PathRewriteGroup,
     path_default: PathDefault,
+    /// Outer-POST URL scheme: `"http"` (default) or `"https"` when `ohttp.tls` is enabled.
+    scheme: &'static str,
     runtime: TokioRuntime,
     /// Headers to copy from the inner (plaintext) request to the outer (ciphertext) POST.
     passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
@@ -71,33 +157,21 @@ impl OHttpSecurityLayer {
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        let scheme = scheme_from_tls(ohttp_args.tls);
+
         let http_client = {
-            let mut builder = reqwest::Client::builder();
-            builder = builder.default_headers({
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(
-                    http::header::USER_AGENT,
-                    HeaderValue::from_static(HTTP_REQUEST_USER_AGENT_HEADER),
-                );
-                headers
-            });
-
-            #[cfg(unix)]
+            #[cfg(not(wasm))]
             {
-                use std::time::Duration;
-                builder =
-                    builder.tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_IDLE_SECS as u64));
-                builder = builder.tcp_keepalive_interval(Duration::from_secs(
-                    TCP_KEEPALIVE_INTERVAL_SECS as u64,
-                ));
-                builder = builder.tcp_keepalive_retries(TCP_KEEPALIVE_PROBE_COUNT);
+                build_ohttp_http_client(
+                    ohttp_args,
+                    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                    transport_so_mark,
+                )?
             }
-
-            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            #[cfg(wasm)]
             {
-                builder = builder.tcp_mark(transport_so_mark);
+                build_ohttp_http_client()?
             }
-            builder.build()?
         };
 
         let ohttp_clients: OhttpClientCache = Default::default();
@@ -124,6 +198,7 @@ impl OHttpSecurityLayer {
             ohttp_clients,
             path_rewrite_group: PathRewriteGroup::new(&ohttp_args.path_rewrites)?,
             path_default: ohttp_args.path_default,
+            scheme,
             runtime,
             passthrough_request_headers,
             passthrough_response_headers,
@@ -171,7 +246,11 @@ impl OHttpSecurityLayer {
 
             tracing::debug!(original_path, rewrited_path, "path is rewrited");
 
-            let url = format!("http://{}{rewrited_path}", endpoint.http_authority());
+            let url = format!(
+                "{}://{}{rewrited_path}",
+                self.scheme,
+                endpoint.http_authority()
+            );
 
             url.parse::<Url>()
                 .with_context(|| format!("Not a valid URL: {url}"))
@@ -255,7 +334,8 @@ impl StatusProvider for OHttpSecurityLayer {
 mod tests {
     use super::client::ServerStatusEntry;
     use super::{fallback_outer_path, ServersStatus};
-    use crate::config::ingress::PathDefault;
+    use crate::config::ingress::{OHttpArgs, PathDefault};
+    use anyhow::Result;
 
     #[test]
     fn test_servers_status_collection() {
@@ -311,5 +391,109 @@ mod tests {
             fallback_outer_path(PathDefault::Original, "/foo/bar"),
             "/foo/bar"
         );
+    }
+
+    #[test]
+    fn scheme_from_tls_maps_correctly() {
+        assert_eq!(super::scheme_from_tls(None), "http");
+        assert_eq!(super::scheme_from_tls(Some(false)), "http");
+        assert_eq!(super::scheme_from_tls(Some(true)), "https");
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn build_client_with_valid_ca_bundle_succeeds() -> Result<()> {
+        // A self-signed CA cert (PEM). `from_pem_bundle` parses it; adding it as
+        // a root must not error.
+        const CA_PEM: &[u8] = include_bytes!("tls_test_ca.pem");
+        let dir = tempfile::tempdir()?;
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, CA_PEM)?;
+
+        let ohttp_args = OHttpArgs {
+            tls: Some(true),
+            tls_ca_certs: vec![ca_path.to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        let _client = super::build_ohttp_http_client(
+            &ohttp_args,
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            None,
+        )?;
+        Ok(())
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn build_client_missing_ca_path_errors_with_context() {
+        let ohttp_args = OHttpArgs {
+            tls: Some(true),
+            tls_ca_certs: vec!["/definitely/does/not/exist/ca.pem".to_string()],
+            ..Default::default()
+        };
+
+        let error = super::build_ohttp_http_client(
+            &ohttp_args,
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            None,
+        )
+        .unwrap_err();
+
+        // The label must mention the path AND preserve a source (io::Error) in the chain.
+        let msg = format!("{:#}", error);
+        assert!(
+            msg.contains("/definitely/does/not/exist/ca.pem"),
+            "missing path label: {msg}"
+        );
+        assert!(
+            error.source().is_some(),
+            "error source chain dropped: {error:?}"
+        );
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn build_client_malformed_pem_errors_with_context() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let bad = dir.path().join("bad.pem");
+        // A PEM block with valid CERTIFICATE markers but an invalid base64 body
+        // is rejected by `from_pem_bundle` — exercising the parse-error context.
+        std::fs::write(
+            &bad,
+            b"-----BEGIN CERTIFICATE-----\n!!!not valid base64!!!\n-----END CERTIFICATE-----\n",
+        )?;
+
+        let ohttp_args = OHttpArgs {
+            tls: Some(true),
+            tls_ca_certs: vec![bad.to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        let error = super::build_ohttp_http_client(
+            &ohttp_args,
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            None,
+        )
+        .unwrap_err();
+        let msg = format!("{:#}", error);
+        assert!(
+            msg.contains("Failed to parse TLS CA cert bundle"),
+            "missing parse label: {msg}"
+        );
+        Ok(())
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn build_client_no_ca_uses_webpki_roots() -> Result<()> {
+        // No tls_ca_certs → must not attempt any file reads; builds fine.
+        let ohttp_args = OHttpArgs::default();
+        let _client = super::build_ohttp_http_client(
+            &ohttp_args,
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            None,
+        )?;
+        Ok(())
     }
 }

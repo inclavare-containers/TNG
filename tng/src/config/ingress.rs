@@ -342,6 +342,35 @@ pub struct OHttpArgs {
     /// outer OHTTP POST request.
     #[serde(default)]
     pub header_passthrough: Option<IngressHeaderPassthroughConfig>,
+
+    /// Whether to wrap the OHTTP-encrypted request in TLS (HTTPS) when forwarding
+    /// to the upstream (the egress, or a TLS-terminating gateway in front of it).
+    ///
+    /// `Some(true)` sends the OHTTP POST over `https://host:port/path` so a
+    /// gateway can terminate TLS before the OHTTP ciphertext reaches the egress.
+    /// `None` or `Some(false)` keeps plain `http://` (the default, backward
+    /// compatible). Applies to every ingress mode (Mapping / HttpProxy / Socks5 /
+    /// Netfilter / Hook) because it is a property of the OHTTP forwarding layer.
+    ///
+    /// On `wasm` builds the browser performs TLS once the URL scheme is `https`;
+    /// there is no `tls_ca_certs` field on wasm (the browser controls trust stores).
+    #[serde(default = "Option::default")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<bool>,
+
+    /// PEM file paths of trusted CA certificates used to verify the upstream
+    /// TLS certificate when `tls` is `Some(true)`. Each file may contain a
+    /// single certificate or a PEM bundle (multiple concatenated certs). Empty
+    /// (the default) → rely on the built-in webpki roots.
+    ///
+    /// Non-wasm only: a browser/wasm runtime has no filesystem, so the field
+    /// does not exist there. Providing `tls_ca_certs` in a wasm config is a
+    /// parse error (the struct uses `deny_unknown_fields`) — on wasm the
+    /// browser controls the TLS trust store, driven by the `https://` scheme.
+    #[cfg(not(wasm))]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tls_ca_certs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1082,5 +1111,37 @@ mod tests {
         let result: anyhow::Result<OHttpArgs> =
             serde_json::from_str(r#"{"path_defualt": "original"}"#).map_err(Into::into);
         assert!(result.is_err(), "typo'd field name must be rejected");
+    }
+
+    #[test]
+    fn test_ohttp_args_tls_defaults_off() -> Result<()> {
+        let args: super::OHttpArgs = serde_json::from_value(json!({}))?;
+        assert_eq!(args.tls, None);
+        assert!(args.tls_ca_certs.is_empty());
+        // round-trip: default-off fields must NOT be serialized
+        let rt = serde_json::to_value(&args)?;
+        assert!(rt.get("tls").is_none());
+        assert!(rt.get("tls_ca_certs").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ohttp_args_tls_round_trip() -> Result<()> {
+        let args: super::OHttpArgs = serde_json::from_value(json!({
+            "tls": true,
+            "tls_ca_certs": ["/etc/tng/ca.pem", "/etc/tng/extra.pem"]
+        }))?;
+        assert_eq!(args.tls, Some(true));
+        assert_eq!(
+            args.tls_ca_certs,
+            vec!["/etc/tng/ca.pem", "/etc/tng/extra.pem"]
+        );
+        let rt = serde_json::to_value(&args)?;
+        assert_eq!(rt["tls"], true);
+        assert_eq!(rt["tls_ca_certs"][0], "/etc/tng/ca.pem");
+        // Some(false) is not skipped (only None is), but stays false:
+        let args2: super::OHttpArgs = serde_json::from_value(json!({"tls": false}))?;
+        assert_eq!(args2.tls, Some(false));
+        Ok(())
     }
 }

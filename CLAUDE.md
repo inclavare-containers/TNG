@@ -35,6 +35,8 @@ This project maintains paired English/Chinese documentation throughout the repo.
 
 Do not update one language and leave the other stale. If a section is added/removed on one side, mirror it on the other.
 
+- **Do not hard-wrap prose lines in human-readable Markdown.** In `docs/*.md`, `*_zh.md`, and crate `README.md`/`README_zh.md`, keep each paragraph (and each list item / blockquote line) as a single unbounded line — do not insert manual line breaks at a fixed column (e.g. ~70 chars for EN, ~36 chars for ZH). Markdown reflows to the reader's viewport automatically; manual wrapping only produces noisy diffs, mismatched EN/ZH line counts, and awkward editing. One sentence may run as long as it needs. Code blocks, tables, and frontmatter are exempt (their line structure is semantic).
+
 ## TODO.md Discipline
 
 **Never add, remove, or edit entries in `TODO.md` automatically** — not as a "test coverage note", not to record deferred work, not for any reason — unless the user explicitly asks for it. `TODO.md` is a human-curated tracking file; auto-generated entries there are noise. If you discover deferred work or a coverage gap worth tracking, mention it in your reply and let the user decide whether to put it in `TODO.md`.

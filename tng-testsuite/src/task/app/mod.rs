@@ -13,6 +13,7 @@ mod http_server;
 mod load_balancer;
 mod tcp_client;
 mod tcp_server;
+mod tls_tcp_proxy;
 mod udp_client;
 mod udp_server;
 
@@ -51,6 +52,14 @@ pub enum AppType {
         rewrite_to: &'static str,
     },
     #[allow(dead_code)]
+    TlsTcpProxy {
+        listen_port: u16,
+        upstream_host: &'static str,
+        upstream_port: u16,
+        cert_pem: &'static str,
+        key_pem: &'static str,
+    },
+    #[allow(dead_code)]
     TcpServer { port: u16 },
     #[allow(dead_code)]
     TcpClient {
@@ -74,6 +83,7 @@ impl Task for AppType {
             | AppType::HttpClientWithReverseProxy { .. }
             | AppType::TcpClient { .. } => "app_client",
             AppType::LoadBalancer { .. } => "load_balancer",
+            AppType::TlsTcpProxy { .. } => "tls_tcp_proxy",
             #[cfg(feature = "js-sdk")]
             AppType::BrowserClient { .. } => "browser_client",
         }
@@ -89,6 +99,7 @@ impl Task for AppType {
             | AppType::TcpClient { .. } => NodeType::Client,
             AppType::UdpClient { .. } => NodeType::Client,
             AppType::LoadBalancer { .. } => NodeType::Middleware,
+            AppType::TlsTcpProxy { .. } => NodeType::Middleware,
             #[cfg(feature = "js-sdk")]
             AppType::BrowserClient { .. } => NodeType::Client,
         }
@@ -163,6 +174,23 @@ impl Task for AppType {
                     upstream_servers,
                     path_matcher,
                     rewrite_to,
+                )
+                .await
+            }
+            AppType::TlsTcpProxy {
+                listen_port,
+                upstream_host,
+                upstream_port,
+                cert_pem,
+                key_pem,
+            } => {
+                tls_tcp_proxy::launch_tls_tcp_proxy(
+                    token,
+                    *listen_port,
+                    upstream_host,
+                    *upstream_port,
+                    cert_pem,
+                    key_pem,
                 )
                 .await
             }

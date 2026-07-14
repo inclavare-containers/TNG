@@ -1621,6 +1621,17 @@ Example:
 ```
 
 
+##### `tls` (optional, `bool`)
+
+Whether to wrap the OHTTP-encrypted request in TLS (HTTPS) when forwarding to the upstream — the egress, or a TLS-terminating gateway in front of it. Set to `true` to send the outer OHTTP POST over `https://host:port/path` so a gateway can terminate TLS before the OHTTP ciphertext reaches the egress. Default (`null`/omitted, or `false`) keeps plain `http://`, preserving pre-existing behavior. Applies to every ingress mode (Mapping / HttpProxy / Socks5 / Netfilter / Hook).
+
+> On `wasm` builds the browser performs TLS once the scheme is `https`; the `tls_ca_certs` field does not exist on wasm (the browser controls trust stores) — providing it in a wasm config is a parse error.
+
+##### `tls_ca_certs` (optional, list of `string`)
+
+PEM file paths of trusted CA certificates used to verify the upstream's TLS certificate when `tls: true`. Each file may contain a single certificate or a PEM bundle (multiple concatenated certs). Useful for self-signed or internal-CA gateways. Empty (the default) relies on the built-in webpki roots. Ignored unless `tls: true`.
+
+
 <a name="ohttp-egress-side-configuration"></a>
 
 ### Egress Side Configuration

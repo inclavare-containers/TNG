@@ -29,11 +29,13 @@ regex = {workspace = true}
 reqwest = {workspace = true, features = ["stream"]}
 rtnetlink = {workspace = true}
 rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "ring", "brotli"]}
+rustls-pemfile = {workspace = true}
 scopeguard = {workspace = true}
 serde_json = {workspace = true}
 thirtyfour = {workspace = true, optional = true}
 tng = {path = "../tng", optional = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "sync", "process", "signal", "macros"]}
+tokio-rustls = {workspace = true}
 tokio-util = {workspace = true}
 tower-http = {workspace = true, features = ["fs"]}
 tracing = {workspace = true}
@@ -42,6 +44,7 @@ which = {workspace = true}
 
 [dev-dependencies]
 serial_test = {workspace = true}
+tempfile = {workspace = true}
 
 [features]
 default = ["on-source-code"]
@@ -168,6 +171,10 @@ path = "tests/ohttp/ohttp_path_default.rs"
 [[test]]
 name = "ohttp_cors_passthrough"
 path = "tests/ohttp/ohttp_cors_passthrough.rs"
+
+[[test]]
+name = "ohttp_tls"
+path = "tests/ohttp/ohttp_tls.rs"
 
 [[test]]
 name = "server_netfilter"
