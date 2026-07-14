@@ -19,6 +19,19 @@ When creating or amending commits:
 
 - **Author and committer** must always be taken from the local git config (`git config user.name` / `git config user.email`). Never use Claude's own identity.
 - **Never** add `Co-Authored-By:` trailers of any kind.
+- **Always** add an `Assisted-by:` trailer to every commit message that Claude authored or co-authored. The trailer is the *only* accepted form of AI attribution. Format:
+
+  ```
+  Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2] ...
+  ```
+
+  Where `AGENT_NAME` is the AI tool name (e.g. `Claude`), `MODEL_VERSION` is the specific model version used (e.g. `claude-opus-4-8`), and the optional bracketed `[TOOL]` entries are specialized analysis tools employed in producing the change (e.g. `coccinelle`, `sparse`, `smatch`, `clang-tidy`). Basic development tools (`git`, `gcc`, `make`, editors) must **not** be listed. Place the trailer as the last line(s) of the commit message body, separated by a blank line from the rest of the message. Example:
+
+  ```
+  Assisted-by: Claude:claude-opus-4-8 clang-tidy
+  ```
+
+  Only one `Assisted-by:` trailer per commit. If no specialized tool was used, omit the bracketed list entirely (`Assisted-by: Claude:claude-opus-4-8`).
 - **Never** include any Claude session URLs, session IDs, or links to claude.ai in commit messages or PR descriptions. Commit messages should only describe the code changes.
 - **Never** include "🤖 Generated with [Claude Code](https://claude.com/claude-code)" or similar AI attribution footers in PR descriptions or commit messages.
 - **Always** use `--no-gpg-sign` to avoid GPG signing.
@@ -137,6 +150,8 @@ git filter-branch -f --msg-filter 'sed "/Co-Authored-By:/d"' --env-filter '
   fi
 ' <base-commit>..HEAD
 ```
+
+This rewrites `Co-Authored-By` trailers (forbidden) but **preserves** `Assisted-by:` trailers (expected) — the `sed` only deletes `Co-Authored-By:` lines, so `Assisted-by:` survives untouched. After rewriting, confirm every AI-authored commit still carries its `Assisted-by:` trailer before pushing.
 
 
 ## GitHub Actions Workflow Triggers
