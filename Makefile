@@ -193,6 +193,27 @@ create-tarball:
 	# copy untracked (new) files that are not ignored
 	if [ -n "$$(git ls-files --others --exclude-standard)" ] ; then git ls-files --others --exclude-standard -z | xargs -0 tar -c -f - | tar -x -f - -C /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/ ; fi
 
+	# attestation-service is a git dep (trustee) that `cargo vendor` packages as just
+	# its crate dir (vendor/attestation-service-0.1.0/). Its build.rs compiles
+	# ../protos/reference.proto, but protos/ lives outside the package in the trustee
+	# repo, so `cargo vendor` omits it and the offline (vendored) build then fails with
+	# "protoc failed: ../protos/reference.proto: No such file or directory". Extract
+	# protos/ at the exact rev pinned in Cargo.lock from cargo's trustee git db into
+	# the vendor dir, so ../protos/ resolves from the vendored crate dir. (Non-vendored
+	# builds work because the full git checkout keeps protos/ as a sibling.)
+	@TRUSTEE_REV=$$(sed -n 's|.*trustee/?rev=\([a-f0-9]\{40\}\).*|\1|p' Cargo.lock | head -1); \
+	PROTOS_OK=0; \
+	for db in $${CARGO_HOME:-$$HOME/.cargo}/git/db/trustee-*; do \
+		[ -d "$$db" ] || continue; \
+		if git --git-dir="$$db" cat-file -e "$$TRUSTEE_REV" 2>/dev/null; then \
+			git --git-dir="$$db" archive "$$TRUSTEE_REV" protos \
+				| tar -x -C /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/ \
+				&& PROTOS_OK=1 && break; \
+		fi; \
+	done; \
+	[ "$$PROTOS_OK" = 1 ] && [ -f /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/vendor/protos/reference.proto ] \
+		|| { echo "ERROR: could not extract trustee protos/ for vendored attestation-service (rev $$TRUSTEE_REV)"; exit 1; }
+
 	# delete all checksum (this is required due to previous patch work)
 	sed -i 's/checksum = ".*//g' /tmp/trusted-network-gateway-tarball/trusted-network-gateway-${VERSION}/src/Cargo.lock
 
