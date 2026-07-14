@@ -4,23 +4,11 @@ on:
   push:
     branches:
       - "master"
-      - "sdk-go"
-    paths:
-      - "tng-go/**"
-      - "tng/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/go-sdk.yml"
+    tags:
+      - "v*.*.*"
   pull_request:
     branches:
       - "master"
-      - "sdk-go"
-    paths:
-      - "tng-go/**"
-      - "tng/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/go-sdk.yml"
 
 jobs:
   go-sdk-tests:

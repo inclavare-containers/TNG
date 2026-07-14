@@ -139,6 +139,27 @@ git filter-branch -f --msg-filter 'sed "/Co-Authored-By:/d"' --env-filter '
 ```
 
 
+## GitHub Actions Workflow Triggers
+
+When creating or editing `.github/workflows/*.yml`, follow the repo-wide trigger convention: every workflow triggers on `push` to `master` (and tags `v*.*.*`) and on `pull_request` targeting `master` — **without** a `paths:` filter.
+
+**Never add a `paths:` filter** to gate a workflow on a subset of changed files. A `paths` filter silently skips the job when a change lands outside the listed globs — and because tests transitively depend on files outside their own directory (e.g. the Go SDK tests run `cargo test --package tng-testsuite --features go-sdk`, so they also depend on `tng-testsuite/`, `rats-cert/`, the `tng` binary, etc.), a `paths` filter limited to `tng-go/**` lets a real regression ship undetected. Triggering on every push/PR to `master` costs more CI minutes but closes that gap — the tradeoff is intentional.
+
+Do not add per-feature legacy branch triggers (e.g. `sdk-go`) either; `master` is the only branch these workflows target. The canonical `on:` block is:
+
+```yaml
+on:
+  push:
+    branches:
+      - "master"
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - "master"
+```
+
+
 ## API Compatibility
 
 When designing public APIs (REST endpoints, config fields, trait methods, public structs/traits), always design the full namespace structure upfront — do not defer naming decisions. Retrofitting a namespace layer later (e.g. inserting `/ohttp/` into an existing path like `/status/egress/<id>/keys` → `/status/egress/<id>/ohttp/keys`) breaks backward compatibility and is extremely costly. If a category of resources might grow multiple sub-resources in the future, include that category's namespace from day one.
