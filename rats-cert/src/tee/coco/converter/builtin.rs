@@ -272,6 +272,7 @@ impl BuiltinCocoConverter {
                     .to_string(),
                 ..Default::default()
             }),
+            challenge_key_path: None,
         };
 
         // Create AttestationService instance

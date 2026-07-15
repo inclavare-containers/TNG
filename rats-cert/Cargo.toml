@@ -121,7 +121,7 @@ builtin-as-tdx-ffi = ["__builtin-as", "attestation-service/tdx-verifier"]
 # never enable both in a single build (a compile error is the backstop).
 builtin-as-tdx-rust = ["__builtin-as", "attestation-service/tdx-dcap-rust"]
 
-default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "__builtin-as"]
+default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "builtin-as-tdx-rust"]
 
 [dev-dependencies]
 ctor = {workspace = true}
@@ -138,3 +138,4 @@ wiremock = "0.6"
 [build-dependencies]
 tonic-prost-build = {workspace = true, optional = true}
 ttrpc-codegen = {workspace = true, optional = true}
+

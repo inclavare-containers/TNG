@@ -160,6 +160,7 @@ default = [
   "ingress-all",
   "egress-mapping",
   "egress-all",
+  "builtin-as-tdx-rust",
 ]
 
 __egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid", "dep:pkcs8"]
