@@ -41,6 +41,10 @@ pub async fn launch_browser_client(
             caps.set_headless()?;
             caps.set_no_sandbox()?; // We need to run with root user
             caps.add_arg("--disable-web-security")?; // enable this to allow cross-origin requests
+            // Accept self-signed TLS gateways in the OHTTP-over-TLS wasm tests
+            // (--disable-web-security only bypasses CORS, not certificate validation).
+            // A no-op for plain-http tests where no TLS handshake occurs.
+            caps.add_arg("--ignore-certificate-errors")?;
 
             // Launch chromedriver on port 9515
             let driver_port = portpicker::pick_unused_port()

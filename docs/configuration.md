@@ -1628,7 +1628,7 @@ Example:
 
 Whether to wrap the OHTTP-encrypted request in TLS (HTTPS) when forwarding to the upstream — the egress, or a TLS-terminating gateway in front of it. Set to `true` to send the outer OHTTP POST over `https://host:port/path` so a gateway can terminate TLS before the OHTTP ciphertext reaches the egress. Default (`null`/omitted, or `false`) keeps plain `http://`, preserving pre-existing behavior. Applies to every ingress mode (Mapping / HttpProxy / Socks5 / Netfilter / Hook).
 
-> On `wasm` builds the browser performs TLS once the scheme is `https`; the `tls_ca_certs` field does not exist on wasm (the browser controls trust stores) — providing it in a wasm config is a parse error.
+> On `wasm` builds neither `tls` nor `tls_ca_certs` exists: the browser performs TLS, and the outer OHTTP POST scheme is taken from the URL passed to the wasm `fetch` interface (`https://…` ⇒ `https`, `http://…` ⇒ `http`). Providing either field in a wasm config is a parse error (`deny_unknown_fields`).
 
 ##### `tls_ca_certs` (optional, list of `string`)
 

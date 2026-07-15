@@ -177,6 +177,11 @@ name = "ohttp_tls"
 path = "tests/ohttp/ohttp_tls.rs"
 
 [[test]]
+name = "ohttp_tls_wasm"
+path = "tests/ohttp/ohttp_tls_wasm.rs"
+required-features = ["js-sdk"]
+
+[[test]]
 name = "server_netfilter"
 path = "tests/netfilter/server_netfilter.rs"
 

@@ -159,6 +159,7 @@ In this repository, integration tests are mainly concentrated in the `tng-testsu
 - **`tcp_two_way_ra.rs`**: Verifies TCP scenarios where both the client and server have remote attestation enabled (mutual RA).
 - **`http_encapulation_with_ingress_httpproxy.rs`**: Verifies encrypted HTTP scenarios where the client accesses via HTTP proxy and the server uses netfilter.
 - **`js_sdk_http.rs`**: Verifies scenarios using the browser-side JavaScript SDK (`tng-wasm`) with OHTTP and remote attestation.
+- **`ohttp_tls_wasm.rs`**: Verifies the wasm ingress deriving the outer OHTTP POST scheme from the fetch URL's scheme (`https` over a TLS-terminating gateway, `http` direct to the egress). Requires `make wasm-build-debug` (pre-built `tng-wasm/pkg`) plus `make test-dep-aa` / `make test-dep-as` (the wasm fetch path mandates a real attestation result, so `no_ra` is not usable here).
 
 ### Running attestation-agent
 

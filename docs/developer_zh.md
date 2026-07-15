@@ -161,6 +161,7 @@ yum install -y <rpm包在目标环境中的路径>
 - **`tcp_two_way_ra.rs`**：验证客户端和服务端都开启远程证明（双向 RA）的 TCP 场景。
 - **`http_encapulation_with_ingress_httpproxy.rs`**：验证客户端通过 HTTP 代理接入、服务端使用 netfilter 的加密 HTTP 场景。
 - **`js_sdk_http.rs`**：验证浏览器侧 JavaScript SDK（`tng-wasm`）配合 OHTTP 和远程证明的场景。
+- **`ohttp_tls_wasm.rs`**：验证 wasm ingress 从 fetch URL 的 scheme 派生外层 OHTTP POST 的 scheme（`https` 走 TLS 终止网关，`http` 直连 egress）。需要先 `make wasm-build-debug`（预构建 `tng-wasm/pkg`），并启动 `make test-dep-aa` / `make test-dep-as`（wasm fetch 路径强制要求真实的远程证明结果，因此此处不能用 `no_ra`）。
 
 ### 运行attestation-agent
 

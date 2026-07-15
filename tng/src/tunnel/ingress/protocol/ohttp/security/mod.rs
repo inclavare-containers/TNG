@@ -50,8 +50,10 @@ struct ServersStatus {
     servers: Vec<ServerStatusEntry>,
 }
 
-/// Derive the URL scheme for the outer OHTTP POST from the `tls` config flag.
-/// `Some(true)` ⇒ `https`, anything else ⇒ `http` (the default, pre-feature behavior).
+/// Derive the URL scheme for the outer OHTTP POST from the `tls` config flag
+/// (native ingress only). `Some(true)` ⇒ `https`, anything else ⇒ `http`
+/// (the default, pre-feature behavior).
+#[cfg(not(wasm))]
 fn scheme_from_tls(tls: Option<bool>) -> &'static str {
     match tls {
         Some(true) => "https",
@@ -118,8 +120,9 @@ fn build_ohttp_http_client(
 
 /// wasm build of the OHTTP reqwest client. The browser controls TLS and the
 /// trust store, so no CA configuration is applied here; the `https://` URL
-/// scheme (driven by `scheme_from_tls`) is what engages browser TLS. Takes no
-/// `ohttp_args` because `tls_ca_certs` does not exist on wasm.
+/// scheme (driven by `OHttpSecurityLayer::scheme_from_url` from the fetch URL,
+/// NOT from a config field) is what engages browser TLS. Takes no `ohttp_args`
+/// because neither `tls` nor `tls_ca_certs` exists on wasm.
 #[cfg(wasm)]
 fn build_ohttp_http_client() -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
@@ -140,7 +143,9 @@ pub struct OHttpSecurityLayer {
     ohttp_clients: OhttpClientCache,
     path_rewrite_group: PathRewriteGroup,
     path_default: PathDefault,
-    /// Outer-POST URL scheme: `"http"` (default) or `"https"` when `ohttp.tls` is enabled.
+    /// Outer-POST URL scheme: `"http"` (default) or `"https"`. On native this is
+    /// derived from `ohttp.tls`; on wasm it mirrors the fetch URL's scheme
+    /// (see `scheme_from_url`).
     scheme: &'static str,
     runtime: TokioRuntime,
     /// Headers to copy from the inner (plaintext) request to the outer (ciphertext) POST.
@@ -154,10 +159,25 @@ impl OHttpSecurityLayer {
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         ohttp_args: &OHttpArgs,
+        // Outer OHTTP POST scheme already normalized via
+        // `OHttpSecurityLayer::scheme_from_url` from the URL the caller passed
+        // to the wasm `fetch` interface. Native builds ignore this and derive
+        // the scheme from `ohttp.tls` instead. (Plain `//`, not `///`: doc
+        // comments are not allowed on function parameters.)
+        #[cfg(wasm)] url_scheme: &'static str,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
     ) -> Result<Self> {
-        let scheme = scheme_from_tls(ohttp_args.tls);
+        let scheme = {
+            #[cfg(not(wasm))]
+            {
+                scheme_from_tls(ohttp_args.tls)
+            }
+            #[cfg(wasm)]
+            {
+                url_scheme
+            }
+        };
 
         let http_client = {
             #[cfg(not(wasm))]
@@ -203,6 +223,24 @@ impl OHttpSecurityLayer {
             passthrough_request_headers,
             passthrough_response_headers,
         })
+    }
+
+    /// Derive the URL scheme for the outer OHTTP POST from the scheme of the URL
+    /// the caller passed to the wasm `fetch` interface. `Some("https")` ⇒ `https`,
+    /// anything else (a non-`https` scheme or `None`) ⇒ `http`.
+    ///
+    /// On wasm the browser performs TLS once the outer URL is `https://`; the
+    /// scheme is taken verbatim from the fetch URL, so no `tls` config exists
+    /// there. Cfg-agnostic (no `#[cfg(wasm)]`) so it can be unit-tested on the
+    /// native test target AND called from the wasm fetch path. Returns a
+    /// `&'static str` literal — NO allocation, and the result does NOT borrow
+    /// the (temporary) input, so it can outlive the parsed URI it was derived
+    /// from.
+    pub fn scheme_from_url(scheme: Option<&str>) -> &'static str {
+        match scheme {
+            Some("https") => "https",
+            _ => "http",
+        }
     }
 
     pub async fn forward_http_request(
@@ -393,11 +431,27 @@ mod tests {
         );
     }
 
+    // scheme_from_tls is native-only (#[cfg(not(wasm))]); gate this test to match.
+    #[cfg(not(wasm))]
     #[test]
     fn scheme_from_tls_maps_correctly() {
         assert_eq!(super::scheme_from_tls(None), "http");
         assert_eq!(super::scheme_from_tls(Some(false)), "http");
         assert_eq!(super::scheme_from_tls(Some(true)), "https");
+    }
+
+    #[test]
+    fn scheme_from_url_maps_correctly() {
+        // The outer OHTTP POST scheme mirrors the fetch URL's scheme.
+        use super::OHttpSecurityLayer;
+        assert_eq!(OHttpSecurityLayer::scheme_from_url(Some("https")), "https");
+        assert_eq!(OHttpSecurityLayer::scheme_from_url(Some("http")), "http");
+        assert_eq!(
+            OHttpSecurityLayer::scheme_from_url(Some("HTTPS")),
+            "http",
+            "only lowercase https engages TLS"
+        );
+        assert_eq!(OHttpSecurityLayer::scheme_from_url(None), "http");
     }
 
     #[cfg(not(wasm))]

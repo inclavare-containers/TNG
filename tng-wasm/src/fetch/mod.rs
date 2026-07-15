@@ -77,10 +77,18 @@ async fn dispatch_request(
     // TODO: note that in wasm mode, this field should be same as the http request in the body
     let endpoint = upstream_endpoint(&request_uri)?;
 
-    // 4. Build the http::Request (origin-form URI + Host header, matching the
+    // 4. The outer OHTTP POST scheme mirrors the fetch URL's scheme (https ⇒
+    //    TLS, else plain http). Normalize it to a &'static str BEFORE
+    //    build_http_request moves `request_uri` — build_http_request strips
+    //    scheme+authority (so the origin-form URI no longer carries the scheme
+    //    afterwards), and scheme_from_url returns a &'static str literal that
+    //    does not borrow the URI, so it survives the move with no allocation.
+    let url_scheme = OHttpSecurityLayer::scheme_from_url(request_uri.scheme_str());
+
+    // 5. Build the http::Request (origin-form URI + Host header, matching the
     //    daemon's http_proxy forwarding) and forward it through the OHTTP layer.
     let http_request = build_http_request(web_request, request_uri).await?;
-    forward_request(&endpoint, ohttp, ra_args, http_request)
+    forward_request(&endpoint, ohttp, url_scheme, ra_args, http_request)
         .await
         .map_err(to_js_error)
 }
@@ -90,6 +98,10 @@ async fn dispatch_request(
 async fn forward_request(
     endpoint: &TngEndpoint,
     ohttp: &OHttpArgs,
+    // Outer OHTTP POST scheme, pre-normalized via OHttpSecurityLayer::scheme_from_url
+    // from the fetch URL's scheme (https ⇒ https, else http). Native builds ignore this
+    // and derive the scheme from ohttp.tls instead.
+    url_scheme: &'static str,
     ra_args: &RaArgs,
     request: axum::extract::Request,
 ) -> Result<(axum::response::Response, AttestationResult)> {
@@ -109,7 +121,8 @@ async fn forward_request(
     let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
 
     let ra_context = Arc::new(RaContext::from_ra_args(ra_args).await?);
-    let ohttp_security_layer = OHttpSecurityLayer::new(ohttp, ra_context, runtime.clone()).await?;
+    let ohttp_security_layer =
+        OHttpSecurityLayer::new(ohttp, url_scheme, ra_context, runtime.clone()).await?;
 
     let (response, attestation_result) = ohttp_security_layer
         .forward_http_request(endpoint, request)

@@ -352,8 +352,13 @@ pub struct OHttpArgs {
     /// compatible). Applies to every ingress mode (Mapping / HttpProxy / Socks5 /
     /// Netfilter / Hook) because it is a property of the OHTTP forwarding layer.
     ///
-    /// On `wasm` builds the browser performs TLS once the URL scheme is `https`;
-    /// there is no `tls_ca_certs` field on wasm (the browser controls trust stores).
+    /// Non-wasm only. On `wasm` builds this field does not exist: the browser
+    /// performs TLS and the outer OHTTP POST scheme is taken from the URL the
+    /// caller passes to the wasm `fetch` interface (`https://…` ⇒ `https`,
+    /// `http://…` ⇒ `http`). There is also no `tls_ca_certs` field on wasm (the
+    /// browser controls trust stores). Providing either in a wasm config is a
+    /// parse error (the struct uses `deny_unknown_fields`).
+    #[cfg(not(wasm))]
     #[serde(default = "Option::default")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<bool>,
