@@ -21,7 +21,7 @@ RUN . "$HOME/.cargo/env" && rustup show
 
 COPY . .
 
-RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --features 'builtin-as-tdx-rust' --path ./tng/ --root /usr/local/cargo/
+RUN . "$HOME/.cargo/env" && env RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root /usr/local/cargo/
 
 # Build libtng_hook.so (LD_PRELOAD hook for tng exec)
 RUN . "$HOME/.cargo/env" && cargo build --release -p tng-hook-cdylib
