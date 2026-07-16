@@ -31,11 +31,6 @@ BuildRequires: binutils-devel
 BuildRequires: protobuf-devel
 BuildRequires: clang
 BuildRequires: jq
-# openssl-sys compiles OpenSSL from source (vendored); OpenSSL 3.5.x's build
-# scripts need the IPC::Cmd and Time::Piece Perl modules, which on an8/al8
-# ship in perl-IPC-Cmd and perl-Time-Piece respectively.
-BuildRequires: perl(IPC::Cmd)
-BuildRequires: perl(Time::Piece)
 
 %{!?with_rustup:%global use_system_rust 1}
 %if 0%{?use_system_rust}
@@ -58,7 +53,7 @@ A tool for establishing secure communication tunnels in confidential computing.
 %build
 # Build tng
 pushd src/
-RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --features 'builtin-as-tdx-rust' --root %{_builddir}/%{name}-%{version}/install/tng/
+RUSTFLAGS="--cfg tokio_unstable" cargo install --locked --path ./tng/ --root %{_builddir}/%{name}-%{version}/install/tng/
 # Build libtng_hook.so (LD_PRELOAD hook for transparent TNG tunneling)
 cargo build -p tng-hook-cdylib --release
 popd

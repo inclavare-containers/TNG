@@ -64,7 +64,7 @@ jobs:
       - name: Build tng binary (Linux)
         if: runner.os == 'Linux' && matrix.target != 'x86_64-pc-windows-gnu'
         run: |
-          cargo zigbuild -p tng --release --target ${{ matrix.target }} --features 'builtin-as-tdx-rust'
+          cargo zigbuild -p tng --release --target ${{ matrix.target }}
           mkdir -p tng-python/bin/scripts
           cp target/${{ matrix.target }}/release/tng tng-python/bin/scripts/tng
           chmod +x tng-python/bin/scripts/tng
