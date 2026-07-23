@@ -1,8 +1,5 @@
 use std::any::Any;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use serde_json::json;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -171,7 +168,6 @@ where
 /// Enum representing report data type.
 #[derive(Debug, PartialEq, EnumIter, Clone)]
 pub enum ReportData {
-    Raw(Vec<u8>),
     Claims(Claims),
 }
 
@@ -179,9 +175,6 @@ pub enum ReportData {
 /// into TEE REPORTDATA.  Used by both CoCo and ITA attesters/verifiers.
 pub(crate) fn wrap_runtime_data_as_structed(report_data: &ReportData) -> Result<serde_json::Value> {
     match report_data {
-        ReportData::Raw(report_data) => {
-            Ok(json!({"rats-rs.raw_runtime_data": URL_SAFE_NO_PAD.encode(report_data)}))
-        }
         ReportData::Claims(claims) => {
             serde_json::to_value(claims).map_err(Error::SerializeClaimsToJsonFailed)
         }
