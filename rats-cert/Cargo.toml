@@ -9,6 +9,7 @@ version.workspace = true
 anyhow = {workspace = true}
 as-any = {workspace = true}
 async-trait = {workspace = true}
+attestation-service = {workspace = true, default-features = false, optional = true}
 base64 = {workspace = true}
 bitflags = {workspace = true}
 bytes = {workspace = true}
@@ -45,7 +46,6 @@ x509-cert = {workspace = true, optional = true}
 zeroize = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
-attestation-service = {workspace = true, default-features = false, optional = true}
 rcgen = {workspace = true, optional = true}
 reference-value-provider-service = {workspace = true, default-features = false, optional = true}
 rustls-webpki = {workspace = true, optional = true, features = ["alloc", "aws-lc-rs"]}
@@ -121,7 +121,7 @@ builtin-as-tdx-ffi = ["__builtin-as", "attestation-service/tdx-verifier"]
 # never enable both in a single build (a compile error is the backstop).
 builtin-as-tdx-rust = ["__builtin-as", "attestation-service/tdx-dcap-rust"]
 
-default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "__builtin-as"]
+default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "builtin-as-tdx-rust"]
 
 [dev-dependencies]
 ctor = {workspace = true}
@@ -138,3 +138,4 @@ wiremock = "0.6"
 [build-dependencies]
 tonic-prost-build = {workspace = true, optional = true}
 ttrpc-codegen = {workspace = true, optional = true}
+

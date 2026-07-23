@@ -27,15 +27,7 @@ jobs:
           set -x
           sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
           sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-          # openssl-sys builds OpenSSL from source (vendored) because the
-          # builtin-as-tdx-rust (dcap-qvl) backend pulls it in; OpenSSL 3.5.x's
-          # `Configure` requires the IPC::Cmd and Time::Piece Perl modules,
-          # which on alinux (an8-based) live in their own `perl-IPC-Cmd` and
-          # `perl-Time-Piece` packages (FindBin / File::Compare / File::Copy
-          # ship with the base perl-interpreter already present). Without these,
-          # `perl ./Configure` aborts with "Can't locate IPC/Cmd.pm" /
-          # "Can't locate Time/Piece.pm".
-          yum install -y git make tar clang protobuf-devel jq iptables perl-IPC-Cmd perl-Time-Piece
+          yum install -y git make tar clang protobuf-devel jq iptables
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
@@ -49,7 +41,7 @@ jobs:
           go-version: "1.21"
 
       - name: Build TNG binary
-        run: cargo build --release -p tng --features 'builtin-as-tdx-rust'
+        run: cargo build --release -p tng
 
       - name: Run Go unit tests
         run: cd tng-go && go test -v ./...
