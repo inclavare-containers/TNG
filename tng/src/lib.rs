@@ -80,17 +80,9 @@ pub(crate) mod tests {
     #[ctor::ctor]
     fn init() {
         // Initialize rustls crypto provider
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let provider = rustls::crypto::aws_lc_rs::default_provider();
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         let provider = rustls::crypto::ring::default_provider();
         provider
             .install_default()

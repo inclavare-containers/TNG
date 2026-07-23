@@ -14,17 +14,9 @@ use tokio::time as tokio_time;
 #[cfg(wasm)]
 use tokio_with_wasm::alias::time as tokio_time;
 
-#[cfg(not(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-)))]
+#[cfg(not(wasm))]
 use std::time::SystemTime;
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-))]
+#[cfg(wasm)]
 use web_time::SystemTime;
 
 use crate::error::TngError;

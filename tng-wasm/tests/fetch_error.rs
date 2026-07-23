@@ -3,7 +3,7 @@
 //! browser-opacity hint. Exercises the patched reqwest fork's
 //! `crate::error::wasm()` end-to-end via the real `reqwest` wasm client.
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 extern crate wasm_bindgen_test;
 

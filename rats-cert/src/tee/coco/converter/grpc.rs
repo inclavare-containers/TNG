@@ -139,11 +139,7 @@ impl CocoGrpcConverter {
 
         let mut client =
             {
-                #[cfg(not(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                )))]
+                #[cfg(not(wasm))]
                 {
                     let endpoint = tonic::transport::Endpoint::new(self.as_addr.to_string())
                         .map_err(|e| Error::GrpcEndpointCreateFailed {
@@ -160,11 +156,7 @@ impl CocoGrpcConverter {
                             })?,
                     )
                 }
-                #[cfg(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                ))]
+                #[cfg(wasm)]
                 as_api::v1_6_0::attestation_service_client::AttestationServiceClient::new(
                     tonic_web_wasm_client::Client::new(self.as_addr.to_string()),
                 )
@@ -181,20 +173,12 @@ impl CocoGrpcConverter {
             Ok::<_, Error>(response)
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let response = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(Error::TaskSpawnFailed)??;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let response = fut.await?;
 
         let attestation_token = response.attestation_token;
@@ -232,11 +216,7 @@ impl CocoGrpcConverter {
 
         let mut client =
             {
-                #[cfg(not(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                )))]
+                #[cfg(not(wasm))]
                 {
                     let endpoint = tonic::transport::Endpoint::new(self.as_addr.to_string())
                         .map_err(|e| Error::GrpcEndpointCreateFailed {
@@ -253,11 +233,7 @@ impl CocoGrpcConverter {
                             })?,
                     )
                 }
-                #[cfg(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                ))]
+                #[cfg(wasm)]
                 as_api::v1_5_2::attestation_service_client::AttestationServiceClient::new(
                     tonic_web_wasm_client::Client::new(self.as_addr.to_string()),
                 )
@@ -274,20 +250,12 @@ impl CocoGrpcConverter {
             Ok::<_, Error>(response)
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let response = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(Error::TaskSpawnFailed)??;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let response = fut.await?;
 
         let attestation_token = response.attestation_token;

@@ -2,19 +2,11 @@ use std::future::Future;
 use std::time::Duration;
 
 async fn sleep(duration: Duration) {
-    #[cfg(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    ))]
+    #[cfg(wasm)]
     {
         tokio_with_wasm::alias::time::sleep(duration).await;
     }
-    #[cfg(not(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    )))]
+    #[cfg(not(wasm))]
     {
         tokio::time::sleep(duration).await;
     }

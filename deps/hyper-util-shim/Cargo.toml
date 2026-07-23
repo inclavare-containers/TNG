@@ -16,6 +16,9 @@ hyper-util = {git = "https://github.com/inclavare-containers/hyper-util.git", re
 # The wasm patched version of hyper-util.
 hyper-util-wasm = {git = "https://github.com/r58Playz/hyper-util-wasm.git", rev = "c582f05daa6529a75f6838a26ebf29ff09f62921", default-features = false}
 
+[build-dependencies]
+cfg_aliases = {workspace = true}
+
 [features]
 client = ["hyper-util/client", "hyper-util-wasm/client"]
 client-legacy = ["hyper-util/client-legacy", "hyper-util-wasm/client-legacy"]

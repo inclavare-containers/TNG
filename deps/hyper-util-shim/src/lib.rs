@@ -1,13 +1,5 @@
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-))]
+#[cfg(wasm)]
 pub use hyper_util_wasm::*;
 
-#[cfg(not(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-)))]
+#[cfg(not(wasm))]
 pub use hyper_util::*;

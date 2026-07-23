@@ -179,20 +179,12 @@ impl GenericConverter for CocoRestfulConverter {
             Ok::<_, Error>((status, text))
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let (status, text) = fut.await?;
 
         let body_text = match status {
@@ -276,20 +268,12 @@ impl CocoRestfulConverter {
             Ok::<_, Error>((status, text))
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let (status, text) = fut.await?;
 
         let attestation_token = match status {
@@ -357,20 +341,12 @@ impl CocoRestfulConverter {
             Ok::<_, Error>((status, text))
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
         let (status, text) = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let (status, text) = fut.await?;
 
         let attestation_token = match status {

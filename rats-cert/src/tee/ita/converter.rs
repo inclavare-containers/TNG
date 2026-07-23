@@ -141,20 +141,12 @@ impl ItaConverter {
             Ok(body)
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         let result = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| Error::ItaError(format!("Failed to spawn ITA request task: {e}")))
             .and_then(|e| e);
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let result = fut.await;
 
         result

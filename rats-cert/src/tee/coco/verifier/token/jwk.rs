@@ -14,20 +14,12 @@ use jsonwebtoken::{decode, decode_header, jwk, Algorithm, DecodingKey, Header, V
 use reqwest::Url;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
-#[cfg(not(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown",
-)))]
+#[cfg(not(wasm))]
 use rustls_webpki::aws_lc_rs::{
     ECDSA_P256_SHA256, ECDSA_P256_SHA384, ECDSA_P384_SHA256, ECDSA_P384_SHA384,
     RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
 };
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown",
-))]
+#[cfg(wasm)]
 use rustls_webpki::ring::{
     ECDSA_P256_SHA256, ECDSA_P256_SHA384, ECDSA_P384_SHA256, ECDSA_P384_SHA384,
     RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
@@ -78,11 +70,7 @@ async fn get_jwks_from_file_or_url(
         "https" => {
             url.set_path(OPENID_CONFIG_URL_SUFFIX);
 
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
+            #[cfg(wasm)]
             let client = client.clone(); // Fix compile lifetime error
 
             let fut = async move {
@@ -107,30 +95,18 @@ async fn get_jwks_from_file_or_url(
                 Ok(jwkset)
             };
 
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
+            #[cfg(wasm)]
             // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
             let ret = tokio_with_wasm::task::spawn(fut)
                 .await
                 .map_err(|e| JwksGetError::AccessFailed(e.to_string()))
                 .and_then(|e| e);
-            #[cfg(not(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            )))]
+            #[cfg(not(wasm))]
             let ret = fut.await;
             ret
         }
         "file" => {
-            #[cfg(not(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            )))]
+            #[cfg(not(wasm))]
             {
                 let file_content = tokio::fs::read(url.path()).await.map_err(|e| {
                     JwksGetError::AccessFailed(format!("open {}: {}", url.path(), e))
@@ -139,11 +115,7 @@ async fn get_jwks_from_file_or_url(
                 serde_json::from_slice(&file_content)
                     .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))
             }
-            #[cfg(all(
-                target_arch = "wasm32",
-                target_vendor = "unknown",
-                target_os = "unknown"
-            ))]
+            #[cfg(wasm)]
             {
                 Err(JwksGetError::AccessFailed(format!(
                     "open {}: file access is not supported in wasm",
@@ -195,11 +167,7 @@ impl JwkAttestationTokenVerifier {
 
             // Load certificates from file paths
             for path in &config.trusted_certs_paths {
-                #[cfg(not(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                )))]
+                #[cfg(not(wasm))]
                 {
                     let cert_content = tokio::fs::read(path).await.map_err(|e| {
                         JwksGetError::AccessFailed(format!(
@@ -212,11 +180,7 @@ impl JwkAttestationTokenVerifier {
 
                     trusted_certs.push(cert_der);
                 }
-                #[cfg(all(
-                    target_arch = "wasm32",
-                    target_vendor = "unknown",
-                    target_os = "unknown"
-                ))]
+                #[cfg(wasm)]
                 {
                     Err(JwksGetError::AccessFailed(format!(
                         "failed to read certificate {path}: not supported in wasm"
@@ -248,11 +212,7 @@ impl JwkAttestationTokenVerifier {
 
         let url = format!("{}/certificate", as_addr.trim_end_matches('/'));
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         let client = client.clone(); // Fix compile lifetime error
 
         let fut = async move {
@@ -277,21 +237,13 @@ impl JwkAttestationTokenVerifier {
             Ok(cert_ders)
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         let ret = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| anyhow!("Failed to spawn task: {}", e))
             .and_then(|r| r);
 
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let ret = fut.await;
 
         ret

@@ -3615,6 +3615,7 @@ dependencies = [
 name = "hyper-util"
 version = "0.1.7"
 dependencies = [
+ "cfg_aliases",
  "hyper-util 0.1.7 (git+https://github.com/inclavare-containers/hyper-util.git?rev=4854ab5e5d67ff38a038ab22a1bd25087456bc84)",
  "hyper-util-wasm",
 ]
@@ -6272,6 +6273,7 @@ dependencies = [
  "bitflags 2.11.0",
  "bytes",
  "canon-json",
+ "cfg_aliases",
  "ciborium",
  "const-oid",
  "ctor",
@@ -8156,6 +8158,7 @@ dependencies = [
  "anyhow",
  "axum 0.8.4",
  "bytes",
+ "cfg_aliases",
  "console_error_panic_hook",
  "futures",
  "getrandom 0.2.15",

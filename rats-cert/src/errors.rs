@@ -49,11 +49,7 @@ pub enum Error {
     NoTrustSource,
 
     // gRPC AS related errors
-    #[cfg(not(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    )))]
+    #[cfg(not(wasm))]
     #[error("Failed to create gRPC endpoint for AS address `{as_addr}`")]
     GrpcEndpointCreateFailed {
         as_addr: String,
@@ -61,11 +57,7 @@ pub enum Error {
         source: tonic::transport::Error,
     },
 
-    #[cfg(not(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    )))]
+    #[cfg(not(wasm))]
     #[error("Failed to connect to gRPC AS address `{as_addr}`")]
     GrpcConnectFailed {
         as_addr: String,
@@ -265,19 +257,11 @@ pub enum Error {
     },
 
     // Task spawning
-    #[cfg(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    ))]
+    #[cfg(wasm)]
     #[error("Failed to spawn async task")]
     TaskSpawnFailed(#[source] tokio_with_wasm::task::JoinError),
 
-    #[cfg(not(all(
-        target_arch = "wasm32",
-        target_vendor = "unknown",
-        target_os = "unknown"
-    )))]
+    #[cfg(not(wasm))]
     #[error("Failed to spawn async task")]
     TaskSpawnFailed(#[source] tokio::task::JoinError),
 

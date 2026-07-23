@@ -144,20 +144,12 @@ impl ItaVerifier {
                 .collect::<Vec<CachedKey>>())
         };
 
-        #[cfg(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        ))]
+        #[cfg(wasm)]
         let keys = tokio_with_wasm::task::spawn(fut)
             .await
             .map_err(|e| Error::ItaError(format!("Failed to spawn JWKS refresh task: {e}")))
             .and_then(|e| e)?;
-        #[cfg(not(all(
-            target_arch = "wasm32",
-            target_vendor = "unknown",
-            target_os = "unknown"
-        )))]
+        #[cfg(not(wasm))]
         let keys = fut.await?;
 
         let mut cache = JWKS_CACHE.write().await;

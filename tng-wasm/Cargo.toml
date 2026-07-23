@@ -55,6 +55,9 @@ tokio_with_wasm_proc = {workspace = true}
 reqwest = {workspace = true}
 wasm-bindgen-test = "0.3.76"
 
+[build-dependencies]
+cfg_aliases = {workspace = true}
+
 # https://github.com/rustwasm/wasm-pack/issues/1351#issuecomment-2100231587
 [package.metadata.wasm-pack.profile.dev.wasm-bindgen]
 # this works the same as `--keep-debug` in wasm-bindgen

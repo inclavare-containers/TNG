@@ -5,17 +5,9 @@ use bytes::BytesMut;
 use http::{uri::Authority, Uri};
 use scopeguard::defer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
-#[cfg(not(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-)))]
+#[cfg(not(wasm))]
 use tokio::time as tokio_time;
-#[cfg(all(
-    target_arch = "wasm32",
-    target_vendor = "unknown",
-    target_os = "unknown"
-))]
+#[cfg(wasm)]
 use tokio_with_wasm::alias::time as tokio_time;
 
 const HTTP_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
