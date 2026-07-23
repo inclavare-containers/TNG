@@ -38,6 +38,14 @@
             <option value="ita" data-i18n="tng.as_provider.ita"></option>
           </select>
         </label>
+        <label id="tng-as-type-wrap" hidden>
+          <span data-i18n="tng.as_type"></span>
+          <select id="tng-as-type">
+            <option value="restful" data-i18n="tng.as_type.restful"></option>
+            <option value="grpc" data-i18n="tng.as_type.grpc"></option>
+            <option value="builtin" data-i18n="tng.as_type.builtin"></option>
+          </select>
+        </label>
         <label id="tng-as-addr-wrap">
           <span data-i18n="tng.as_addr"></span>
           <input type="text" id="tng-as-addr" name="tng-as-addr" autocomplete="off" list="dl-tng-as-addr" data-i18n-placeholder="tng.as_addr.placeholder" />
@@ -68,6 +76,31 @@
         <input type="checkbox" id="tng-skip-as-token-cert-verify" />
         <span data-i18n="tng.skip_as_token_cert_verify"></span>
       </label>
+
+      <div id="tng-builtin-settings" hidden>
+        <h3 class="card-subhead" data-i18n="tng.builtin.title"></h3>
+        <div class="grid">
+          <label id="tng-builtin-policy-wrap">
+            <span data-i18n="tng.builtin.policy"></span>
+            <select id="tng-builtin-policy">
+              <option value="hardware_only" data-i18n="tng.builtin.policy.hardware_only"></option>
+              <option value="hardware_with_reference_values" data-i18n="tng.builtin.policy.hardware_with_reference_values"></option>
+              <option value="trust_all" data-i18n="tng.builtin.policy.trust_all"></option>
+              <option value="inline" data-i18n="tng.builtin.policy.inline"></option>
+            </select>
+          </label>
+        </div>
+        <label id="tng-builtin-policy-content-wrap" hidden>
+          <span data-i18n="tng.builtin.policy.content"></span>
+          <textarea id="tng-builtin-policy-content" rows="4" spellcheck="false" data-i18n-placeholder="tng.builtin.policy.content.placeholder"></textarea>
+        </label>
+        <div class="field">
+          <span class="field-label" data-i18n="tng.builtin.reference_values"></span>
+          <div id="tng-builtin-rvs" class="headers-list"></div>
+          <button type="button" id="tng-builtin-add-rv" data-i18n="tng.builtin.reference_values.add"></button>
+        </div>
+        <p class="hint" data-i18n="tng.builtin.hint"></p>
+      </div>
 
       <h3 class="card-subhead" data-i18n="ohttp.title"></h3>
       <label>
