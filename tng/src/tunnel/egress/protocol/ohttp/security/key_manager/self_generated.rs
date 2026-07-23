@@ -9,7 +9,7 @@ use crate::tunnel::utils::runtime::TokioRuntime;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use web_time_compat::{Duration, SystemTime, SystemTimeExt};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -96,8 +96,8 @@ impl RandomKeyManagerInner {
     /// Calculate when the next key refresh should happen
     ///
     /// Returns the duration until the next refresh is needed
-    async fn calculate_next_refresh_time(&self) -> std::time::Duration {
-        let now = SystemTime::now();
+    async fn calculate_next_refresh_time(&self) -> Duration {
+        let now = SystemTime::get();
         let mut earliest_time = now + Duration::from_secs(self.rotation_interval);
 
         let keys = self.keys.read().await;
@@ -127,7 +127,7 @@ impl RandomKeyManagerInner {
     /// - Expired keys are removed
     /// - A new key is generated if no active key exists, with a lifetime of 2 * `rotation_interval`.
     async fn refresh_keys(&self) -> Result<(), TngError> {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let mut keys = self.keys.write().await;
 
         // Remove expired keys

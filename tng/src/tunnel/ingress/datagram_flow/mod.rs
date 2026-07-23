@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time_compat::{Duration, Instant, InstantExt};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -164,7 +164,7 @@ impl RegistedService for DatagramIngressFlow {
                             let access_established =
                                 access_routed.into_established(None, false);
 
-                            let last_activity = Arc::new(Mutex::new(Instant::now()));
+                            let last_activity = Arc::new(Mutex::new(Instant::get()));
 
                             let metrics = self.metrics.clone();
                             let active_cx = metrics.new_cx();
@@ -194,7 +194,7 @@ impl RegistedService for DatagramIngressFlow {
                                                             "Failed to send datagram to client"
                                                         );
                                                     } else {
-                                                        *last_activity_clone.lock().await = Instant::now();
+                                                        *last_activity_clone.lock().await = Instant::get();
                                                         success = true;
                                                     }
                                                 }
@@ -228,7 +228,7 @@ impl RegistedService for DatagramIngressFlow {
                     };
 
                     // Update activity and forward
-                    *session.last_activity.lock().await = Instant::now();
+                    *session.last_activity.lock().await = Instant::get();
                     if let Err(e) = session.tunnel.send_datagram(payload) {
                         tracing::warn!(
                             %client_src,

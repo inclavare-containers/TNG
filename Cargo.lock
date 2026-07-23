@@ -8078,7 +8078,7 @@ dependencies = [
  "url",
  "uuid",
  "wasm-bindgen-futures",
- "web-time",
+ "web-time-compat",
  "which 7.0.3",
  "ws_stream_tungstenite",
  "ws_stream_wasm",
@@ -9365,6 +9365,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time-compat"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39819265f219f60a92312f2755262dba9fff180a4ec281556863d69fa36adc59"
+dependencies = [
+ "web-time",
 ]
 
 [[package]]

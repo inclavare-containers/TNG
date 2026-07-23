@@ -5,7 +5,7 @@ use anyhow::Context as _;
 use itertools::Itertools as _;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
+use web_time_compat::{SystemTime, SystemTimeExt};
 
 /// Cluster key set containing all keys indexed by public_key.
 ///
@@ -238,7 +238,7 @@ impl ClusterKeySet {
             .filter(|k| k.status == KeyStatus::Active)
             .map(|k| k.stale_at)
             .max()
-            .unwrap_or_else(SystemTime::now);
+            .unwrap_or_else(SystemTime::get);
 
         // Generate new pending key
         let pending_key = KeyInfo::generate(
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_remove_expired_keys() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         // Create an active key that is NOT expired (to maintain Vec1 invariant)
         let active_key = KeyInfo {
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn test_get_client_visible_key_multiple_active_tiebreaker() {
         // Create two active keys with different expire_at
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let key1 = KeyInfo {
             key_config: ohttp::KeyConfig::new(
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_get_client_visible_key_ignores_pending_and_stale() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let active_key = KeyInfo {
             key_config: ohttp::KeyConfig::new(
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_merge_overlapping_keys_local_wins() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         // Create two keys with same public key (same underlying key pair) but different metadata
         let key1_old = KeyInfo {
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_next_deadline_mixed_statuses() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let pending_key = KeyInfo {
             key_config: ohttp::KeyConfig::new(
@@ -839,7 +839,7 @@ mod tests {
             notify: None,
         };
 
-        // Should still generate a pending key (actived_at defaults to SystemTime::now)
+        // Should still generate a pending key (actived_at defaults to SystemTime::get)
         let result = cks.generate_pending_key_if_none();
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_transition_active_to_stale_preserves_last_active() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         // Create a single active key whose stale_at is in the past
         let active_key = KeyInfo {
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_transition_active_to_stale_with_multiple_active() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let key1 = KeyInfo {
             key_config: ohttp::KeyConfig::new(
@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_transition_pending_to_active_boundary() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let pending_key_at_boundary = KeyInfo {
             key_config: ohttp::KeyConfig::new(
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_remove_expired_keys_all_active_expired_preserves_latest_stale() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
 
         let key1 = KeyInfo {
             key_config: ohttp::KeyConfig::new(

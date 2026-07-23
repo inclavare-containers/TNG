@@ -32,7 +32,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::SystemTime;
+use web_time_compat::{SystemTime, SystemTimeExt};
 
 use crate::tunnel::ra_context::RaContext;
 
@@ -384,7 +384,7 @@ impl PeerSharedKeyManager {
 
         // Bootstrap: create initial active key
         let initial_key =
-            KeyInfo::generate(0, KeyStatus::Active, SystemTime::now(), rotation_interval).map_err(
+            KeyInfo::generate(0, KeyStatus::Active, SystemTime::get(), rotation_interval).map_err(
                 |e| {
                     TngError::KeyUpdateMessageDecodeError(
                         anyhow::Error::from(e).context("Failed to generate initial key"),
@@ -417,7 +417,7 @@ impl PeerSharedKeyManager {
             tracing::info!("Starting key watcher");
 
             loop {
-                let now = SystemTime::now();
+                let now = SystemTime::get();
 
                 let should_check_rotation = {
                     let mut cks = inner.cluster_key_set.write().await;
@@ -1092,7 +1092,7 @@ mod tests {
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
     use anyhow::{anyhow, Result};
     use hex;
-    use std::time::Duration;
+    use web_time_compat::{Duration, Instant, InstantExt};
 
     // -----------------------------------------------------------------------
     // Helper functions
@@ -1125,7 +1125,7 @@ mod tests {
         expected: usize,
         timeout: Duration,
     ) -> Result<()> {
-        let start = std::time::Instant::now();
+        let start = Instant::get();
         loop {
             if start.elapsed() > timeout {
                 let members = target.serf.members().await;
@@ -1156,7 +1156,7 @@ mod tests {
         expected_pk: &PublicKeyData,
         timeout: Duration,
     ) -> Result<()> {
-        let start = std::time::Instant::now();
+        let start = Instant::get();
         loop {
             if start.elapsed() > timeout {
                 return Err(anyhow!(
@@ -1180,7 +1180,7 @@ mod tests {
         expected_count: usize,
         timeout: Duration,
     ) -> Result<()> {
-        let start = std::time::Instant::now();
+        let start = Instant::get();
         loop {
             if start.elapsed() > timeout {
                 let cks = target.inner.cluster_key_set.read().await;
@@ -1301,7 +1301,7 @@ mod tests {
         removed_pk: &PublicKeyData,
         timeout: Duration,
     ) -> Result<()> {
-        let start = std::time::Instant::now();
+        let start = Instant::get();
         loop {
             if start.elapsed() > timeout {
                 let cks = target.inner.cluster_key_set.read().await;

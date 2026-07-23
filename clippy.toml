@@ -4,4 +4,6 @@ disallowed-methods = [
   {path = "tokio::task::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
   {path = "tokio::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
   {path = "tokio::runtime::handle::Handle::spawn", reason = "please use 'TokioRuntime::spawn_*()' methods instaed"},
+  {path = "std::time::SystemTime::now", reason = "use 'web_time_compat::SystemTimeExt::get()' instead — it is wasm-safe (std::time::SystemTime::now panics on wasm32-unknown-unknown)"},
+  {path = "std::time::Instant::now", reason = "use 'web_time_compat::InstantExt::get()' instead — it is wasm-safe (std::time::Instant::now panics on wasm32-unknown-unknown)"},
 ]

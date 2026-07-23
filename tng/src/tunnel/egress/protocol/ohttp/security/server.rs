@@ -13,6 +13,7 @@ use tower_http::{
     },
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer, ExposeHeaders},
 };
+use web_time_compat::{Instant, InstantExt};
 
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::ra_context::RaContext;
@@ -285,7 +286,7 @@ pub async fn log_request(
     let method = req.method().clone();
     let uri = req.uri().clone();
     let version = req.version();
-    let start = std::time::Instant::now();
+    let start = Instant::get();
 
     let ohttp_api = req
         .headers()

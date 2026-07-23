@@ -8,7 +8,7 @@
 use crate::status::StatusProvider;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 use crate::{error::TngError, tunnel::ohttp::key_config::KeyConfigExtend};
-use std::time::SystemTime;
+use web_time_compat::{SystemTime, SystemTimeExt};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -121,7 +121,7 @@ impl KeyInfo {
         )
         .map_err(TngError::from)?;
 
-        let actived_at = SystemTime::now();
+        let actived_at = SystemTime::get();
         // For file-based keys, we set rotation_interval to 30 years (in seconds)
         // to make stale_at and expire_at far in the future
         let rotation_interval = 86400u64 * 365 * 30;
@@ -159,19 +159,11 @@ impl std::fmt::Debug for KeyInfo {
 
 /// Format a `SystemTime` for debug output.
 ///
-/// On unix we use `chrono` for a human-readable string, but on wasm the
-/// `SystemTime` may be `web_time::SystemTime` which chrono doesn't know
-/// about, so we fall back to printing the unix timestamp.
-#[cfg(not(wasm))]
+/// `SystemTime` is `std::time::SystemTime` on both native and wasm (via
+/// `web-time-compat`), so `chrono::DateTime<Utc>::from()` works everywhere —
+/// no need for a wasm-specific fallback path.
 fn format_system_time(t: SystemTime) -> String {
     chrono::DateTime::<chrono::Utc>::from(t).to_string()
-}
-#[cfg(wasm)]
-fn format_system_time(t: SystemTime) -> String {
-    match t.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
-        Err(_) => "before-epoch".to_string(),
-    }
 }
 
 /// Trait for managing OHTTP key configurations
@@ -197,7 +189,7 @@ pub trait KeyManager: StatusProvider + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use web_time_compat::Duration;
 
     fn make_test_key_info(key_id: u8) -> KeyInfo {
         KeyInfo {
@@ -211,9 +203,9 @@ mod tests {
             )
             .expect("create key config"),
             status: KeyStatus::Active,
-            actived_at: SystemTime::now(),
-            stale_at: SystemTime::now() + Duration::from_secs(300),
-            expire_at: SystemTime::now() + Duration::from_secs(600),
+            actived_at: SystemTime::get(),
+            stale_at: SystemTime::get() + Duration::from_secs(300),
+            expire_at: SystemTime::get() + Duration::from_secs(600),
         }
     }
 
