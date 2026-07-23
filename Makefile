@@ -317,6 +317,23 @@ wasm-unit-test: wasm-unit-test-chrome
 .PHONE: wasm-unit-test-chrome
 wasm-unit-test-chrome: install-wasm-build-dependencies
 	if ! command -v google-chrome; then echo -e '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub' | tee /etc/yum.repos.d/google-chrome.repo; yum install google-chrome-stable -y ; fi
+	@# Install a chromedriver whose major version matches the installed
+	@# google-chrome, and expose it on PATH. wasm-pack's chromedriver fetcher
+	@# checks `which chromedriver` first and uses it instead of downloading the
+	@# latest Chrome-for-Testing stable, which is a *separate* release channel
+	@# from the RPM "stable" channel that yum installs Chrome from. Left
+	@# unsynced, the two drift apart (e.g. Chrome 150 from yum vs. chromedriver
+	@# 151 from CfT) and ChromeDriver refuses to drive the installed Chrome.
+	@# https://github.com/rustwasm/wasm-pack/blob/master/src/test/webdriver/chromedriver.rs
+	command -v unzip >/dev/null || yum install -y unzip ; \
+	CHROME_VERSION=$$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+') ; \
+	CHROME_MAJOR=$$(echo $$CHROME_VERSION | cut -d. -f1) ; \
+	CDR_VERSION=$$(curl -fsSL "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$$CHROME_MAJOR") ; \
+	echo "Installed Chrome $$CHROME_VERSION -> matching chromedriver $$CDR_VERSION" ; \
+	curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/$$CDR_VERSION/linux64/chromedriver-linux64.zip" -o /tmp/chromedriver.zip && \
+	unzip -o -q /tmp/chromedriver.zip -d /tmp/chromedriver-tmp && \
+	install -m 0755 /tmp/chromedriver-tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
+	rm -rf /tmp/chromedriver.zip /tmp/chromedriver-tmp
 	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
 .PHONE: wasm-unit-test-firefox
