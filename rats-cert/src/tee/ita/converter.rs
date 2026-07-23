@@ -100,16 +100,16 @@ impl ItaConverter {
     async fn ita_request(&self, request: reqwest::RequestBuilder, label: &str) -> Result<String> {
         let label = label.to_string();
 
-        let fut = async move {
-            let policy = RetryPolicy::exponential(ITA_RETRY_INITIAL_DELAY)
-                .with_max_delay(ITA_RETRY_MAX_DELAY)
-                .with_max_retries(ITA_MAX_RETRIES);
+        let policy = RetryPolicy::exponential(ITA_RETRY_INITIAL_DELAY)
+            .with_max_delay(ITA_RETRY_MAX_DELAY)
+            .with_max_retries(ITA_MAX_RETRIES);
 
-            let (status, body) = policy
-                .retry(|| async {
+        let (status, body) = policy
+            .retry(|| {
+                let request = request.try_clone().expect("request must be cloneable");
+                let label = label.clone();
+                async move {
                     let resp = request
-                        .try_clone()
-                        .expect("request must be cloneable")
                         .send()
                         .await
                         .map_err(|e| Error::ItaHttpRequestFailed {
@@ -121,39 +121,30 @@ impl ItaConverter {
                     if Self::is_retryable_error(status, &body) {
                         tracing::warn!(%status, body = %body, "{label} failed (retrying)");
                         return Err(Error::ItaHttpResponseError {
-                            endpoint: label.clone(),
+                            endpoint: label,
                             status_code: status.as_u16(),
                             response_body: body,
                         });
                     }
                     Ok((status, body))
-                })
-                .await?;
+                }
+            })
+            .await?;
 
-            if !status.is_success() {
-                return Err(Error::ItaHttpResponseError {
-                    endpoint: label,
-                    status_code: status.as_u16(),
-                    response_body: body,
-                });
-            }
+        if !status.is_success() {
+            return Err(Error::ItaHttpResponseError {
+                endpoint: label,
+                status_code: status.as_u16(),
+                response_body: body,
+            });
+        }
 
-            Ok(body)
-        };
-
-        #[cfg(wasm)]
-        let result = tokio_with_wasm::task::spawn(fut)
-            .await
-            .map_err(|e| Error::ItaError(format!("Failed to spawn ITA request task: {e}")))
-            .and_then(|e| e);
-        #[cfg(not(wasm))]
-        let result = fut.await;
-
-        result
+        Ok(body)
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericConverter for ItaConverter {
     type InEvidence = ItaEvidence;
     type OutEvidence = ItaToken;

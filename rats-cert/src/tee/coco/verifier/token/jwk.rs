@@ -69,41 +69,25 @@ async fn get_jwks_from_file_or_url(
     match url.scheme() {
         "https" => {
             url.set_path(OPENID_CONFIG_URL_SUFFIX);
-
-            #[cfg(wasm)]
-            let client = client.clone(); // Fix compile lifetime error
-
-            let fut = async move {
-                let oidc = client
-                    .get(url.as_str())
-                    .send()
-                    .await
-                    .map_err(|e| JwksGetError::AccessFailed(e.to_string()))?
-                    .json::<OpenIDConfig>()
-                    .await
-                    .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))?;
-
-                let jwkset = client
-                    .get(oidc.jwks_uri)
-                    .send()
-                    .await
-                    .map_err(|e| JwksGetError::AccessFailed(e.to_string()))?
-                    .json::<jwk::JwkSet>()
-                    .await
-                    .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))?;
-
-                Ok(jwkset)
-            };
-
-            #[cfg(wasm)]
-            // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-            let ret = tokio_with_wasm::task::spawn(fut)
+            let oidc = client
+                .get(url.as_str())
+                .send()
                 .await
-                .map_err(|e| JwksGetError::AccessFailed(e.to_string()))
-                .and_then(|e| e);
-            #[cfg(not(wasm))]
-            let ret = fut.await;
-            ret
+                .map_err(|e| JwksGetError::AccessFailed(e.to_string()))?
+                .json::<OpenIDConfig>()
+                .await
+                .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))?;
+
+            let jwkset = client
+                .get(oidc.jwks_uri)
+                .send()
+                .await
+                .map_err(|e| JwksGetError::AccessFailed(e.to_string()))?
+                .json::<jwk::JwkSet>()
+                .await
+                .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))?;
+
+            Ok(jwkset)
         }
         "file" => {
             #[cfg(not(wasm))]
@@ -249,42 +233,24 @@ impl JwkAttestationTokenVerifier {
         }
 
         let url = format!("{}/certificate", as_addr.trim_end_matches('/'));
+        let response = client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| format!("HTTP error when fetching certificates from {}", url))?;
 
-        #[cfg(wasm)]
-        let client = client.clone(); // Fix compile lifetime error
-
-        let fut = async move {
-            let response = client
-                .get(&url)
-                .headers(headers)
-                .send()
-                .await?
-                .error_for_status()
-                .with_context(|| format!("HTTP error when fetching certificates from {}", url))?;
-
-            let cert_pem_chain = response.text().await.with_context(|| {
-                format!("Failed to read certificate chain response from {}", url)
-            })?;
-
-            let cert_ders = CertificateDer::pem_slice_iter(cert_pem_chain.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .with_context(|| {
-                    format!("Failed to parse PEM certificate chain from AS {}", url)
-                })?;
-
-            Ok(cert_ders)
-        };
-
-        #[cfg(wasm)]
-        let ret = tokio_with_wasm::task::spawn(fut)
+        let cert_pem_chain = response
+            .text()
             .await
-            .map_err(|e| anyhow!("Failed to spawn task: {}", e))
-            .and_then(|r| r);
+            .with_context(|| format!("Failed to read certificate chain response from {}", url))?;
 
-        #[cfg(not(wasm))]
-        let ret = fut.await;
+        let cert_ders = CertificateDer::pem_slice_iter(cert_pem_chain.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to parse PEM certificate chain from AS {}", url))?;
 
-        ret
+        Ok(cert_ders)
     }
 
     fn verify_jwk_endorsement(&self, key: &Jwk) -> anyhow::Result<()> {

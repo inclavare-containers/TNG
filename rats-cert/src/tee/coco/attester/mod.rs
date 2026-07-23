@@ -28,7 +28,8 @@ impl CocoAttester {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericAttester for CocoAttester {
     type Evidence = CocoEvidence;
 

@@ -133,7 +133,8 @@ mod as_api {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericConverter for CocoRestfulConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
@@ -153,40 +154,23 @@ impl GenericConverter for CocoRestfulConverter {
 
         let url = format!("{}/challenge", self.as_addr);
 
-        let client = self.client.clone();
-
-        let fut = async move {
-            let response = client
-                .post(url)
-                .json(&json!({}))
-                .send()
-                .await
-                .map_err(|e| {
-                    Error::AttestationServiceChallengeHttpRequestSendFailed(
-                        RestfulAsApiVersion::V1_6_0,
-                        e,
-                    )
-                })?;
-
-            let status = response.status();
-            let text = response.text().await.map_err(|e| {
-                Error::AttestationServiceChallengeHttpResponseReadFailed(
+        let response = self
+            .client
+            .post(&url)
+            .json(&json!({}))
+            .send()
+            .await
+            .map_err(|e| {
+                Error::AttestationServiceChallengeHttpRequestSendFailed(
                     RestfulAsApiVersion::V1_6_0,
                     e,
                 )
             })?;
 
-            Ok::<_, Error>((status, text))
-        };
-
-        #[cfg(wasm)]
-        // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-        let (status, text) = tokio_with_wasm::task::spawn(fut)
-            .await
-            .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(wasm))]
-        let (status, text) = fut.await?;
-
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            Error::AttestationServiceChallengeHttpResponseReadFailed(RestfulAsApiVersion::V1_6_0, e)
+        })?;
         let body_text = match status {
             reqwest::StatusCode::OK => text,
             _ => {
@@ -248,33 +232,26 @@ impl CocoRestfulConverter {
             .collect::<Vec<_>>(),
             policy_ids: self.policy_ids.clone(),
         };
-        let client = self.client.clone();
-
-        let fut = async move {
-            let response = client.post(url).json(&body).send().await.map_err(|e| {
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
                 Error::AttestationServiceAttestationHttpRequestSendFailed(
                     RestfulAsApiVersion::V1_6_0,
                     e,
                 )
             })?;
 
-            let status = response.status();
-            let text = response.text().await.map_err(|e| {
-                Error::AttestationServiceAttestationHttpResponseReadFailed(
-                    RestfulAsApiVersion::V1_6_0,
-                    e,
-                )
-            })?;
-            Ok::<_, Error>((status, text))
-        };
-
-        #[cfg(wasm)]
-        // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Send. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-        let (status, text) = tokio_with_wasm::task::spawn(fut)
-            .await
-            .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(wasm))]
-        let (status, text) = fut.await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            Error::AttestationServiceAttestationHttpResponseReadFailed(
+                RestfulAsApiVersion::V1_6_0,
+                e,
+            )
+        })?;
 
         let attestation_token = match status {
             reqwest::StatusCode::OK => text,
@@ -321,33 +298,27 @@ impl CocoRestfulConverter {
             )),
             runtime_data_hash_algorithm: Some(runtime_data_hash_algorithm.into()),
         };
-        let client = self.client.clone();
 
-        let fut = async move {
-            let response = client.post(url).json(&body).send().await.map_err(|e| {
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
                 Error::AttestationServiceAttestationHttpRequestSendFailed(
                     RestfulAsApiVersion::V1_5_2,
                     e,
                 )
             })?;
 
-            let status = response.status();
-            let text = response.text().await.map_err(|e| {
-                Error::AttestationServiceAttestationHttpResponseReadFailed(
-                    RestfulAsApiVersion::V1_5_2,
-                    e,
-                )
-            })?;
-            Ok::<_, Error>((status, text))
-        };
-
-        #[cfg(wasm)]
-        // In wasm32 (web), the reqwest Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-        let (status, text) = tokio_with_wasm::task::spawn(fut)
-            .await
-            .map_err(|e| Error::TaskSpawnFailed(e))??;
-        #[cfg(not(wasm))]
-        let (status, text) = fut.await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            Error::AttestationServiceAttestationHttpResponseReadFailed(
+                RestfulAsApiVersion::V1_5_2,
+                e,
+            )
+        })?;
 
         let attestation_token = match status {
             reqwest::StatusCode::OK => text,

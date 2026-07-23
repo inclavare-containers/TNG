@@ -17,7 +17,8 @@ pub enum CocoVerifier {
     Builtin(builtin::BuiltinCocoVerifier),
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericVerifier for CocoVerifier {
     type Evidence = CocoAsToken;
 

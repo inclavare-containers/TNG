@@ -73,7 +73,8 @@ pub trait GenericEvidence: Any + Send {
 }
 
 /// Trait representing a generic attester.
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 pub trait GenericAttester {
     type Evidence: GenericEvidence;
 
@@ -82,7 +83,8 @@ pub trait GenericAttester {
 }
 
 /// Blanket implementation for references to attesters.
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl<A: GenericAttester + Sync> GenericAttester for &A {
     type Evidence = A::Evidence;
 
@@ -92,7 +94,8 @@ impl<A: GenericAttester + Sync> GenericAttester for &A {
 }
 
 /// Trait representing a generic verifier.
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 pub trait GenericVerifier {
     type Evidence: GenericEvidence;
 
@@ -104,7 +107,8 @@ pub trait GenericVerifier {
     ) -> Result<()>;
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 pub trait GenericConverter {
     type InEvidence: GenericEvidence;
     type OutEvidence: GenericEvidence;
@@ -116,7 +120,8 @@ pub trait GenericConverter {
 }
 
 /// Blanket implementation for references to attesters.
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl<A: GenericConverter + Sync> GenericConverter for &A
 where
     <A as GenericConverter>::InEvidence: Sync,
@@ -148,7 +153,8 @@ impl<A: GenericAttester, C: GenericConverter<InEvidence = A::Evidence>> Attester
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl<A, C> GenericAttester for AttesterPipeline<A, C>
 where
     A: GenericAttester + Sync,
