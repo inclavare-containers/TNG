@@ -1786,6 +1786,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ita_api_key_defaults_from_env() {
         let env_key = "env-key-456";
         let json = json!({
@@ -1845,6 +1846,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ita_background_check_verify_into_checked_rejects_missing_api_key() {
         std::env::remove_var(ITA_API_KEY_ENV);
         let json = json!({
@@ -1873,6 +1875,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_ita_passport_attest_into_checked_rejects_missing_api_key() {
         std::env::remove_var(ITA_API_KEY_ENV);
         let json = json!({
