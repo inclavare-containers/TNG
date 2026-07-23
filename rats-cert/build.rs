@@ -1,7 +1,6 @@
+use cfg_aliases::cfg_aliases;
 #[cfg(feature = "attester-coco")]
 use ttrpc_codegen::{Codegen, Customize, ProtobufCustomize};
-
-use cfg_aliases::cfg_aliases;
 
 fn main() {
     cfg_aliases! {
