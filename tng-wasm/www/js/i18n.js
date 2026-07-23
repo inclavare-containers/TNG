@@ -115,8 +115,8 @@ const STRINGS = {
     "tng.ita_jwks_addr.placeholder": "https://portal.trustauthority.intel.com",
     "tng.policy_ids": "Policy ID（逗号分隔）",
     "tng.model": "证明模型",
-    "tng.model.background_check": "background_check",
-    "tng.model.passport": "passport",
+    "tng.model.background_check": "背调模型",
+    "tng.model.passport": "护照模型",
     "tng.skip_as_token_cert_verify": "跳过 AS token 证书校验",
     "tng.view_config": "查看 JSON 配置",
 
