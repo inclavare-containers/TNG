@@ -38,7 +38,8 @@ pub enum CoCoNonce {
     Jwt(String),
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 
 impl GenericConverter for CocoConverter {
     type InEvidence = CocoEvidence;

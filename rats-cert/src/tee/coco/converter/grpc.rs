@@ -69,7 +69,8 @@ impl CocoGrpcConverter {
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericConverter for CocoGrpcConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
@@ -162,24 +163,13 @@ impl CocoGrpcConverter {
                 )
             };
 
-        let fut = async move {
-            let response: as_api::v1_6_0::AttestationResponse = client
-                .attestation_evaluate(request)
-                .await
-                .map_err(|e| {
-                    Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_6_0, e)
-                })?
-                .into_inner();
-            Ok::<_, Error>(response)
-        };
-
-        #[cfg(wasm)]
-        // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-        let response = tokio_with_wasm::task::spawn(fut)
+        let response: as_api::v1_6_0::AttestationResponse = client
+            .attestation_evaluate(request)
             .await
-            .map_err(Error::TaskSpawnFailed)??;
-        #[cfg(not(wasm))]
-        let response = fut.await?;
+            .map_err(|e| {
+                Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_6_0, e)
+            })?
+            .into_inner();
 
         let attestation_token = response.attestation_token;
 
@@ -239,25 +229,13 @@ impl CocoGrpcConverter {
                 )
             };
 
-        let fut = async move {
-            let response: as_api::v1_5_2::AttestationResponse = client
-                .attestation_evaluate(request)
-                .await
-                .map_err(|e| {
-                    Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_5_2, e)
-                })?
-                .into_inner();
-            Ok::<_, Error>(response)
-        };
-
-        #[cfg(wasm)]
-        // In wasm32 (web), the tonic Response future is not `Send` but #[async_trait::async_trait] requires the function body to be Sen. So we have to spawn it with tokio_with_wasm::task::spawn and await for it.
-        let response = tokio_with_wasm::task::spawn(fut)
+        let response: as_api::v1_5_2::AttestationResponse = client
+            .attestation_evaluate(request)
             .await
-            .map_err(Error::TaskSpawnFailed)??;
-        #[cfg(not(wasm))]
-        let response = fut.await?;
-
+            .map_err(|e| {
+                Error::AttestationServiceGrpcAttestationEvaluateFailed(GrpcAsVersion::V1_5_2, e)
+            })?
+            .into_inner();
         let attestation_token = response.attestation_token;
 
         CocoAsToken::new(attestation_token)
