@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time_compat::{Duration, Instant, InstantExt};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -191,7 +191,7 @@ impl DatagramEgressFlow {
         }
 
         let idle_timeout = Duration::from_secs(idle_timeout_secs);
-        let last_activity = Arc::new(Mutex::new(Instant::now()));
+        let last_activity = Arc::new(Mutex::new(Instant::get()));
         let check_interval = Duration::from_secs(5);
 
         let conn_clone = connection.clone();
@@ -208,7 +208,7 @@ impl DatagramEgressFlow {
                         match datagram_result {
                             Ok(payload) => {
                                 let _ = backend_socket_a.send(&payload).await;
-                                *last_act_a.lock().await = Instant::now();
+                                *last_act_a.lock().await = Instant::get();
                             }
                             Err(_) => break,
                         }
@@ -243,7 +243,7 @@ impl DatagramEgressFlow {
                                     tracing::warn!(error = %e, "Failed to send datagram to QUIC");
                                     break;
                                 }
-                                *last_act_b.lock().await = Instant::now();
+                                *last_act_b.lock().await = Instant::get();
                             }
                             Err(_) => break,
                         }

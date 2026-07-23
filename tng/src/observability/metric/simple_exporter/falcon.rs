@@ -202,7 +202,7 @@ impl SimpleMetricExporter for FalconExporter {
 #[cfg(test)]
 mod tests {
 
-    use std::time::SystemTime;
+    use web_time_compat::{SystemTime, SystemTimeExt};
 
     use crate::{config::TngConfig, runtime::TngRuntime};
     use axum::{extract::State, routing::post, Json, Router};
@@ -273,7 +273,7 @@ mod tests {
             value: 1.into(),
             value_type: ValueType::Gauge,
             attributes: Default::default(),
-            time: SystemTime::now(),
+            time: SystemTime::get(),
         })?;
         assert!(falcon_metric.timestamp > 0);
         falcon_metric.timestamp = timestamp; // Let's ignore the timestamp difference
@@ -299,7 +299,7 @@ mod tests {
             value: 256.into(),
             value_type: ValueType::Counter,
             attributes: [("ingress_id".to_string(), "10".to_string())].into(),
-            time: SystemTime::now(),
+            time: SystemTime::get(),
         })?;
         assert!(falcon_metric.timestamp > 0);
         falcon_metric.timestamp = timestamp; // Let's ignore the timestamp difference
@@ -325,7 +325,7 @@ mod tests {
             value: 20.into(),
             value_type: ValueType::Gauge,
             attributes: [("ingress_id".to_string(), "5".to_string())].into(),
-            time: SystemTime::now(),
+            time: SystemTime::get(),
         })?;
 
         assert!(falcon_metric.timestamp > 0);

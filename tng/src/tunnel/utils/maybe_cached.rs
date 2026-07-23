@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use futures::FutureExt as _;
 use std::cmp::{Ord, Ordering, PartialOrd};
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc};
 use tokio::select;
 
 #[cfg(not(wasm))]
@@ -14,10 +14,12 @@ use tokio::time as tokio_time;
 #[cfg(wasm)]
 use tokio_with_wasm::alias::time as tokio_time;
 
-#[cfg(not(wasm))]
-use std::time::SystemTime;
-#[cfg(wasm)]
-use web_time::SystemTime;
+// `web-time-compat` provides `SystemTime`/`Duration` (aliases for the `std`
+// types) and the `SystemTimeExt::get()` method, which is the wasm-safe
+// replacement for `SystemTime::get()` (the latter panics on
+// `wasm32-unknown-unknown`). Using a single, non-cfg-gated import means the
+// same code path works on both native and wasm.
+use web_time_compat::{Duration, SystemTime, SystemTimeExt};
 
 use crate::error::TngError;
 use crate::tunnel::utils::runtime::{
@@ -26,19 +28,11 @@ use crate::tunnel::utils::runtime::{
 
 /// Format a `SystemTime` as a human-readable string.
 ///
-/// On unix we can use `chrono::DateTime<Utc>::from()`, but on wasm the
-/// `SystemTime` is `web_time::SystemTime` which chrono doesn't know about,
-/// so we fall back to printing the unix timestamp.
-#[cfg(not(wasm))]
+/// `SystemTime` is `std::time::SystemTime` on both native and wasm (via
+/// `web-time-compat`), so `chrono::DateTime<Utc>::from()` works everywhere —
+/// no need for a wasm-specific fallback path.
 fn format_system_time(t: SystemTime) -> String {
     chrono::DateTime::<chrono::Utc>::from(t).to_string()
-}
-#[cfg(wasm)]
-fn format_system_time(t: SystemTime) -> String {
-    match t.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => format!("{}.{:09}", d.as_secs(), d.subsec_nanos()),
-        Err(_) => "before-epoch".to_string(),
-    }
 }
 
 /// Represents an optional expiration time.
@@ -73,7 +67,7 @@ impl Ord for Expire {
 impl Expire {
     pub fn from_timestamp(timestamp_seconds: u64) -> Result<Self, TngError> {
         let input_system_time = SystemTime::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs(timestamp_seconds))
+            .checked_add(Duration::from_secs(timestamp_seconds))
             .with_context(|| {
                 format!(
                     "the expire timestamp is too far in the future to be represented: {timestamp_seconds}"
@@ -81,12 +75,9 @@ impl Expire {
             }).map_err(TngError::BadExpireTimeStamp)?;
 
         // Sanity check
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         if input_system_time < now.checked_sub(Duration::from_secs(120)).unwrap_or(now) {
             // Just log there instead of throw an error
-            // Use duration_since_unix_epoch to work on both unix (std::time::SystemTime)
-            // and wasm (web_time::SystemTime), since chrono::DateTime<Utc> only
-            // implements From<std::time::SystemTime>.
             tracing::warn!(
                 expire = format_system_time(input_system_time),
                 now = format_system_time(now),
@@ -178,7 +169,7 @@ impl<
                                         fut
                                     }
                                     Expire::ExpireAt(expire_time) => {
-                                        let now = SystemTime::now();
+                                        let now = SystemTime::get();
                                         let duration =
                                             expire_time.duration_since(now).unwrap_or_default(); // If already expired, set the duration to 0
                                                                                                  // Force a minimum sleep interval to prevent busy-wait loops
@@ -292,12 +283,11 @@ mod tests {
 
     use super::*;
     use crate::tests::run_test_with_tokio_runtime;
-    use std::time::Duration;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use web_time_compat::{Instant, InstantExt};
 
     #[test]
     fn test_expire_min_max() {
-        let now = SystemTime::now();
+        let now = SystemTime::get();
         let past = now - Duration::from_secs(3600);
         let future = now + Duration::from_secs(3600);
 
@@ -319,8 +309,8 @@ mod tests {
     #[test]
     fn test_expire_from_timestamp_valid_future() {
         // Create a future timestamp (current time + 100 seconds)
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let now = SystemTime::get()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let future_timestamp = now + 100;
@@ -338,8 +328,8 @@ mod tests {
     #[test]
     fn test_expire_from_timestamp_current_time() {
         // Use current timestamp
-        let current_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let current_timestamp = SystemTime::get()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
@@ -352,8 +342,8 @@ mod tests {
     #[test]
     fn test_expire_from_timestamp_past_time() {
         // Create a past timestamp (current time - 100 seconds)
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let now = SystemTime::get()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let past_timestamp = now - 100;
@@ -495,7 +485,7 @@ mod tests {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
-                        let expire_at = SystemTime::now() + tokio_time::Duration::from_millis(1000);
+                        let expire_at = SystemTime::get() + tokio_time::Duration::from_millis(1000);
                         Ok((format!("value{count}"), Expire::ExpireAt(expire_at)))
                     })
                 },
@@ -556,7 +546,7 @@ mod tests {
                         let count =
                             call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         // Expire after 100ms
-                        let expire_at = SystemTime::now() + tokio_time::Duration::from_secs(1000); // Long expire time, rely on refresh interval instead.
+                        let expire_at = SystemTime::get() + tokio_time::Duration::from_secs(1000); // Long expire time, rely on refresh interval instead.
                         Ok((format!("value{count}"), Expire::ExpireAt(expire_at)))
                     })
                 },
@@ -633,10 +623,10 @@ mod tests {
                 move || {
                     let call_times_clone = call_times_clone.clone();
                     Box::pin(async move {
-                        call_times_clone.lock().unwrap().push(std::time::Instant::now());
+                        call_times_clone.lock().unwrap().push(Instant::get());
                         // Return a PAST expire time (1 hour ago) to simulate
                         // a server returning an outdated timestamp.
-                        let past = SystemTime::now() - Duration::from_secs(3600);
+                        let past = SystemTime::get() - Duration::from_secs(3600);
                         Ok(("value".to_string(), Expire::ExpireAt(past)))
                     })
                 },
