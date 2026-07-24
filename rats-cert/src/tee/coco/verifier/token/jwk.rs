@@ -138,6 +138,44 @@ fn new_http_client() -> reqwest::Client {
     builder.build().unwrap()
 }
 
+/// Field size (in bytes) for the NIST EC curves supported in a JWK.
+///
+/// Returns `None` for non-NIST curves (e.g. Ed25519), whose JWK encoding is
+/// not an uncompressed `(x, y)` point.
+fn ec_field_size(curve: &EllipticCurve) -> Option<usize> {
+    match curve {
+        EllipticCurve::P256 => Some(32),
+        EllipticCurve::P384 => Some(48),
+        EllipticCurve::P521 => Some(66),
+        EllipticCurve::Ed25519 => None,
+    }
+}
+
+/// Left-zero-pad `bytes` to exactly `field_size` bytes.
+///
+/// Per RFC 7518 §6.3.1.1, the JWK `x`/`y` coordinates MUST be the base64url
+/// encoding of the octet string left-padded with zeros to the curve field
+/// size. Some attestation services (e.g. older Trustee `ear_broker`, which
+/// encodes coordinates via OpenSSL `BN_bn2bin` / `BigNum::to_vec`) emit the
+/// minimal-length representation and drop leading zero bytes. Reconstructing
+/// `0x04 || x || y` from such an unpadded JWK yields fewer bytes than the
+/// certificate's SPKI point (always field-size padded), so a naive byte
+/// comparison would falsely report a mismatch whenever the key happens to have
+/// a coordinate with a leading zero byte. This helper normalizes the JWK
+/// coordinates to the field size before comparison.
+fn pad_ec_coordinate(bytes: &[u8], field_size: usize) -> anyhow::Result<Vec<u8>> {
+    if bytes.len() > field_size {
+        bail!(
+            "EC coordinate length {} exceeds field size {}",
+            bytes.len(),
+            field_size
+        );
+    }
+    let mut padded = vec![0u8; field_size - bytes.len()];
+    padded.extend_from_slice(bytes);
+    Ok(padded)
+}
+
 impl JwkAttestationTokenVerifier {
     pub async fn new(config: &AttestationTokenVerifierConfig) -> anyhow::Result<Self> {
         let client = new_http_client();
@@ -342,13 +380,35 @@ impl JwkAttestationTokenVerifier {
                 }
             }
             AlgorithmParameters::EllipticCurve(ec) => {
-                // For EC, construct the uncompressed point and compare
+                // For EC, construct the uncompressed point and compare.
+                //
+                // Per RFC 7518 §6.3.1.1, the JWK `x`/`y` coordinates MUST be
+                // left-zero-padded to the curve field size. Some attestation
+                // services (e.g. older Trustee `ear_broker`, which encodes
+                // coordinates via OpenSSL `BN_bn2bin` / `BigNum::to_vec`) emit
+                // the minimal-length representation and drop leading zero
+                // bytes. A naive byte comparison would then falsely report a
+                // mismatch whenever the key happens to have a coordinate with a
+                // leading zero byte (intermittent, ~1/128 generated keys).
+                // Normalize the JWK coordinates to the field size before
+                // reconstructing the uncompressed point. See `pad_ec_coordinate`
+                // for details.
+                let field_size = ec_field_size(&ec.curve).with_context(|| {
+                    format!(
+                        "EC curve {:?} in JWK is not a supported NIST curve (P-256/P-384/P-521)",
+                        ec.curve
+                    )
+                })?;
+
                 let x = URL_SAFE_NO_PAD
                     .decode(&ec.x)
                     .context("decode EC public key parameter x")?;
                 let y = URL_SAFE_NO_PAD
                     .decode(&ec.y)
                     .context("decode EC public key parameter y")?;
+
+                let x = pad_ec_coordinate(&x, field_size).context("EC public key parameter x")?;
+                let y = pad_ec_coordinate(&y, field_size).context("EC public key parameter y")?;
 
                 let mut point_bytes = vec![0x04]; // Uncompressed point marker
                 point_bytes.extend_from_slice(&x);
@@ -426,7 +486,8 @@ impl JwkAttestationTokenVerifier {
 
 #[cfg(test)]
 mod tests {
-    use super::get_jwks_from_file_or_url;
+    use super::{ec_field_size, get_jwks_from_file_or_url, pad_ec_coordinate};
+    use jsonwebtoken::jwk::EllipticCurve;
     use rstest::rstest;
 
     #[rstest]
@@ -461,7 +522,7 @@ mod tests {
         let tmp_dir = tempfile::tempdir().expect("to get tmpdir");
         let jwks_file = tmp_dir.path().join("test.jwks");
 
-        let _ = tokio::fs::write(&jwks_file, json)
+        tokio::fs::write(&jwks_file, json)
             .await
             .expect("to get testdata written to tmpdir");
 
@@ -471,5 +532,81 @@ mod tests {
             expect_error,
             get_jwks_from_file_or_url(&client, &p).await.is_err()
         )
+    }
+
+    #[test]
+    fn test_ec_field_size_known_curves() {
+        assert_eq!(ec_field_size(&EllipticCurve::P256), Some(32));
+        assert_eq!(ec_field_size(&EllipticCurve::P384), Some(48));
+        assert_eq!(ec_field_size(&EllipticCurve::P521), Some(66));
+    }
+
+    #[test]
+    fn test_ec_field_size_ed25519_unsupported() {
+        // Ed25519 JWK is not an uncompressed (x, y) point.
+        assert_eq!(ec_field_size(&EllipticCurve::Ed25519), None);
+    }
+
+    #[test]
+    fn test_pad_ec_coordinate_already_full_size() {
+        let bytes = vec![0xAA; 32];
+        assert_eq!(pad_ec_coordinate(&bytes, 32).unwrap(), bytes);
+    }
+
+    #[test]
+    fn test_pad_ec_coordinate_pads_leading_zero() {
+        // Simulate an AS that emits a P-256 coordinate whose leading zero byte
+        // was stripped (OpenSSL `BN_bn2bin` / `BigNum::to_vec`): the JWK x is
+        // 31 bytes, while the certificate SPKI stores the full 32-byte padded
+        // coordinate. Padding must restore the missing leading zero.
+        let stripped = vec![0x01, 0x02, 0x03]; // 3 bytes, leading zero dropped
+        let padded = pad_ec_coordinate(&stripped, 32).unwrap();
+        assert_eq!(padded.len(), 32);
+        assert_eq!(&padded[0..29], &[0u8; 29]);
+        assert_eq!(&padded[29..], &stripped[..]);
+    }
+
+    #[test]
+    fn test_pad_ec_coordinate_strips_then_matches_cert_spki() {
+        // Reproduces the "EC point from JWK does not match certificate" failure:
+        // a P-256 key whose x coordinate has a leading zero byte. The AS emits the
+        // JWK with the *unpadded* (31-byte) x, while the cert SPKI point stores the
+        // padded 32-byte x. Without padding, `0x04 || x || y` is 64 bytes and
+        // differs from the cert's 65-byte SPKI point; after padding they match.
+        let x_full = {
+            // 32-byte coordinate whose first byte is 0x00.
+            let mut v = vec![0u8; 32];
+            v[31] = 0x7F;
+            v
+        };
+        let y_full = vec![0x11; 32];
+
+        // cert SPKI point: 0x04 || x(32) || y(32)
+        let mut cert_spki = vec![0x04];
+        cert_spki.extend_from_slice(&x_full);
+        cert_spki.extend_from_slice(&y_full);
+
+        // JWK coordinates as the AS emitted them (leading zero stripped).
+        let x_jwk = &x_full[1..]; // 31 bytes
+        let y_jwk = &y_full[..]; // 32 bytes
+
+        let x_norm = pad_ec_coordinate(x_jwk, 32).unwrap();
+        let y_norm = pad_ec_coordinate(y_jwk, 32).unwrap();
+        let mut point_bytes = vec![0x04];
+        point_bytes.extend_from_slice(&x_norm);
+        point_bytes.extend_from_slice(&y_norm);
+
+        assert_eq!(cert_spki.len(), 65);
+        assert_eq!(point_bytes.len(), 65);
+        assert_eq!(
+            cert_spki, point_bytes,
+            "padded JWK point must match cert SPKI"
+        );
+    }
+
+    #[test]
+    fn test_pad_ec_coordinate_too_long_errors() {
+        let bytes = vec![0xAA; 33];
+        assert!(pad_ec_coordinate(&bytes, 32).is_err());
     }
 }

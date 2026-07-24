@@ -1124,7 +1124,7 @@ default file_system := 2"#;
             ReferenceValueConfig::Sample { payload } => match payload {
                 SampleProvenancePayloadConfig::Inline { content } => {
                     // Provenance uses flattened HashMap, verify it has the expected key
-                    assert!(content.rvs.get("example-key").is_some());
+                    assert!(content.rvs.contains_key("example-key"));
                 }
                 _ => panic!("Expected Inline payload"),
             },

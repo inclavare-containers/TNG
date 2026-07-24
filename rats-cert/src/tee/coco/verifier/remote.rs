@@ -95,7 +95,7 @@ mod tests {
         trusted_certs_paths: Option<Vec<String>>,
     ) {
         let token = CocoAsToken::new(token_str.trim().to_string())
-            .expect(&format!("Failed to create CocoAsToken from {}", test_name));
+            .unwrap_or_else(|_| panic!("Failed to create CocoAsToken from {}", test_name));
 
         let report_data = ReportData::Claims(Claims::default());
 
