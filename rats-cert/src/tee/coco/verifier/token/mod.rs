@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use jwk::JwkAttestationTokenVerifier;
+use rustls_pki_types::CertificateDer;
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::debug;
@@ -14,26 +15,26 @@ pub(crate) mod jwk;
 pub use error::Error as TokenError;
 pub use error::*;
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AttestationTokenVerifierConfig {
     /// File paths of trusted certificates in PEM format used to verify
     /// the signature of the Attestation Token.
-    #[serde(default)]
+    #[cfg(not(wasm))]
     pub trusted_certs_paths: Vec<String>,
+
+    /// Additional trusted certificates used to verify the signature of the Attestation Token.
+    pub trusted_certs: Vec<CertificateDer<'static>>,
 
     /// URLs (file:// and https:// schemes accepted) pointing to a local JWKSet file
     /// or to an OpenID configuration url giving a pointer to JWKSet certificates
     /// (for "Jwk") to verify Attestation Token Signature.
-    #[serde(default)]
     pub trusted_jwk_sets: Vec<String>,
 
     /// Optional AS address to fetch trusted certificates from.
     /// If provided, certificates will be fetched from this endpoint.
-    #[serde(default)]
     pub as_addr: Option<String>,
 
     /// Custom headers to be sent with attestation service requests
-    #[serde(default)]
     pub as_headers: Option<HashMap<String, String>>,
 
     /// Whether the token signing key is (not) validated.
@@ -46,7 +47,6 @@ pub struct AttestationTokenVerifierConfig {
     /// specified above.
     ///
     /// Default: false
-    #[serde(default = "bool::default")]
     pub insecure_key: bool,
 
     /// Skip certificate verification for the AS token.
@@ -56,7 +56,6 @@ pub struct AttestationTokenVerifierConfig {
     ///
     /// When true, `as_addr` (for cert fetching) and `trusted_certs_paths`
     /// are ignored during initialization.
-    #[serde(default = "bool::default")]
     pub skip_cert_verify: bool,
 }
 

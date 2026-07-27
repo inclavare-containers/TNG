@@ -51,22 +51,27 @@ pub(super) fn attach_attestation_info(
     if let Some(verify_args) = verify_args {
         match verify_args {
             VerifyArgs::Passport { verifier } => match verifier {
-                VerifierArgs::Coco(coco) => match coco {
-                    CocoVerifierArgs::Restful {
-                        as_addr,
-                        policy_ids,
-                        ..
+                VerifierArgs::Coco(coco) => {
+                    attest_info.as_provider = Some("coco".into());
+                    match coco {
+                        CocoVerifierArgs::Restful {
+                            as_addr,
+                            policy_ids,
+                            ..
+                        }
+                        | CocoVerifierArgs::Grpc {
+                            as_addr,
+                            policy_ids,
+                            ..
+                        } => {
+                            attest_info.as_addr = as_addr.clone();
+                            attest_info.policy_ids = Some(policy_ids.clone());
+                        }
+                        CocoVerifierArgs::Builtin { .. } => {
+                            // Nothing to do
+                        }
                     }
-                    | CocoVerifierArgs::Grpc {
-                        as_addr,
-                        policy_ids,
-                        ..
-                    } => {
-                        attest_info.as_provider = Some("coco".into());
-                        attest_info.as_addr = as_addr.clone();
-                        attest_info.policy_ids = Some(policy_ids.clone());
-                    }
-                },
+                }
                 VerifierArgs::Ita(ita) => {
                     attest_info.as_provider = Some("ita".into());
                     attest_info.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
@@ -77,22 +82,27 @@ pub(super) fn attach_attestation_info(
                 converter,
                 verifier,
             } => match converter {
-                ConverterArgs::Coco(coco) => match coco {
-                    CocoConverterArgs::Restful {
-                        as_addr,
-                        policy_ids,
-                        ..
+                ConverterArgs::Coco(coco) => {
+                    attest_info.as_provider = Some("coco".into());
+                    match coco {
+                        CocoConverterArgs::Restful {
+                            as_addr,
+                            policy_ids,
+                            ..
+                        }
+                        | CocoConverterArgs::Grpc {
+                            as_addr,
+                            policy_ids,
+                            ..
+                        } => {
+                            attest_info.as_addr = Some(as_addr.clone());
+                            attest_info.policy_ids = Some(policy_ids.clone());
+                        }
+                        CocoConverterArgs::Builtin { .. } => {
+                            // Nothing to do
+                        }
                     }
-                    | CocoConverterArgs::Grpc {
-                        as_addr,
-                        policy_ids,
-                        ..
-                    } => {
-                        attest_info.as_provider = Some("coco".into());
-                        attest_info.as_addr = Some(as_addr.clone());
-                        attest_info.policy_ids = Some(policy_ids.clone());
-                    }
-                },
+                }
                 ConverterArgs::Ita(ita) => {
                     attest_info.as_provider = Some("ita".into());
                     attest_info.as_addr = Some(ita.as_addr.clone());

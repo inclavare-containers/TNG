@@ -188,26 +188,16 @@ impl JwkAttestationTokenVerifier {
             }
 
             // Load certificates from file paths
+            #[cfg(not(wasm))]
             for path in &config.trusted_certs_paths {
-                #[cfg(not(wasm))]
-                {
-                    let cert_content = tokio::fs::read(path).await.map_err(|e| {
-                        JwksGetError::AccessFailed(format!(
-                            "failed to read certificate {path}: {e:?}"
-                        ))
-                    })?;
+                let cert_content = tokio::fs::read(path).await.map_err(|e| {
+                    JwksGetError::AccessFailed(format!("failed to read certificate {path}: {e:?}"))
+                })?;
 
-                    let cert_der = CertificateDer::from_pem_slice(&cert_content)
-                        .with_context(|| format!("Failed to parse PEM certificate {}", path))?;
+                let cert_der = CertificateDer::from_pem_slice(&cert_content)
+                    .with_context(|| format!("Failed to parse PEM certificate {}", path))?;
 
-                    trusted_certs.push(cert_der);
-                }
-                #[cfg(wasm)]
-                {
-                    Err(JwksGetError::AccessFailed(format!(
-                        "failed to read certificate {path}: not supported in wasm"
-                    )))?
-                }
+                trusted_certs.push(cert_der);
             }
         }
 

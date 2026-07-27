@@ -27,6 +27,8 @@ pkcs8 = {workspace = true, optional = true}
 prost = {workspace = true, optional = true}
 protobuf = {workspace = true, optional = true}
 rand = "0.8.5"
+rcgen = {workspace = true, optional = true}
+reference-value-provider-service = {workspace = true, default-features = false, optional = true}
 reqwest = {workspace = true, optional = true}
 rsa = {workspace = true, optional = true}
 rustls-pki-types = {workspace = true, optional = true}
@@ -46,8 +48,12 @@ x509-cert = {workspace = true, optional = true}
 zeroize = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
-rcgen = {workspace = true, optional = true}
-reference-value-provider-service = {workspace = true, default-features = false, optional = true}
+# Enable the attestation-service `fs` feature on native builds so the builtin
+# converter supports `file://` provenance sources (and on-disk RV storage /
+# signer key/cert paths). This is a target-specific re-declaration: cargo merges
+# it with the `[dependencies]` entry for non-wasm only, so wasm keeps the
+# fs-free, pure-library build (no sled / tokio/fs on wasm32-unknown-unknown).
+attestation-service = {workspace = true, default-features = false, features = ["fs"], optional = true}
 rustls-webpki = {workspace = true, optional = true, features = ["alloc", "aws-lc-rs"]}
 tempfile = {workspace = true, optional = true}
 time = {workspace = true, features = ["std", "parsing"]}
@@ -139,4 +145,3 @@ wiremock = "0.6"
 cfg_aliases = {workspace = true}
 tonic-prost-build = {workspace = true, optional = true}
 ttrpc-codegen = {workspace = true, optional = true}
-

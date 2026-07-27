@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use rustls_pki_types::CertificateDer;
+
 use super::super::converter::builtin::DEFAULT_POLICY_ID;
 use super::super::evidence::{CocoAsToken, CocoEvidence};
-use crate::tee::coco::converter::builtin::AttestationServiceWorkDir;
 use crate::tee::coco::verifier::common::CommonCocoVerifier;
 use crate::tee::coco::verifier::token::{AttestationTokenVerifierConfig, TokenVerifier};
 use crate::tee::ReportData;
@@ -10,14 +11,14 @@ use crate::{errors::*, tee::GenericVerifier};
 
 pub struct BuiltinCocoVerifier {
     inner: CommonCocoVerifier,
-    #[allow(dead_code)]
-    work_dir: Arc<AttestationServiceWorkDir>,
 }
 
 impl BuiltinCocoVerifier {
-    pub async fn new(work_dir: Arc<AttestationServiceWorkDir>) -> Result<Self> {
+    pub async fn new(trusted_certs: Vec<CertificateDer<'static>>) -> Result<Self> {
         let config = AttestationTokenVerifierConfig {
-            trusted_certs_paths: vec![work_dir.cert_chain_path().to_string_lossy().to_string()],
+            #[cfg(not(wasm))]
+            trusted_certs_paths: Default::default(),
+            trusted_certs,
             trusted_jwk_sets: Default::default(),
             as_addr: None,
             as_headers: None,
@@ -36,12 +37,12 @@ impl BuiltinCocoVerifier {
                 // Builtin AS does not support signer transparency verification
                 verify_signer_transparency: false,
             },
-            work_dir,
         })
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericVerifier for BuiltinCocoVerifier {
     type Evidence = CocoAsToken;
 

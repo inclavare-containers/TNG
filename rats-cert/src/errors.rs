@@ -318,6 +318,9 @@ pub enum Error {
     #[error("Failed to parse private key from pkcs8 pem format")]
     FromPkcs8PemFailed(#[source] pkcs8::Error),
 
+    #[error("Failed to parse private key from pkcs8 der format")]
+    FromPkcs8DerFailed(#[source] pkcs8::Error),
+
     #[error("DER encoding/decoding error")]
     DerError(#[source] pkcs8::der::Error),
 

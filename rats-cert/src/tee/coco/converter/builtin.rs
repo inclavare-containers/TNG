@@ -10,22 +10,21 @@ use attestation_service::rvps::{RvpsConfig, RvpsCrateConfig};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use pkcs8::DecodePrivateKey;
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
 };
 use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
-use reference_value_provider_service::storage::{local_json, ReferenceValueStorageConfig};
+use reference_value_provider_service::storage::ReferenceValueStorageConfig;
+use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 use attestation_service::{
-    config::Config,
-    token::{ear_broker, AttestationTokenConfig},
-    AttestationService, HashAlgorithm, Tee,
+    config::Config, token::AttestationTokenConfig, AttestationService, HashAlgorithm, Tee,
 };
 
 use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
@@ -41,121 +40,93 @@ pub const DEFAULT_POLICY_ID: &str = "default";
 /// Certificate validity period in days (10 years)
 const CERT_VALIDITY_DAYS: i64 = 365 * 10;
 
-/// Working directory for builtin Attestation Service
-///
-/// This struct manages the lifecycle of a temporary directory used by the
-/// attestation service, including generated certificates for token signing.
-/// The directory and all its contents are automatically cleaned up when dropped.
-pub struct AttestationServiceWorkDir {
-    /// Temporary directory (cleaned up on drop)
-    temp_dir: TempDir,
-    /// Path to the certificate chain file (AS cert + CA cert)
-    cert_chain_path: PathBuf,
-    /// Path to the AS private key file
-    key_path: PathBuf,
+struct SelfSignedSigner {
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    private_key: p256::SecretKey,
 }
 
-impl AttestationServiceWorkDir {
-    /// Create a new working directory with generated certificates
-    async fn new() -> Result<Self> {
-        let temp_dir =
-            tempfile::tempdir().map_err(Error::BuilinAttestationServiceCreateWorkDirFailed)?;
-
-        let (cert_chain_path, key_path) = Self::generate_certificates(temp_dir.path()).await?;
-
-        tracing::debug!(work_dir = ?temp_dir.path(), "Created builtin AS working directory");
-
+impl SelfSignedSigner {
+    fn new() -> Result<Self> {
+        let (cert_chain, private_key) = generate_certificates()?;
         Ok(Self {
-            temp_dir,
-            cert_chain_path,
-            key_path,
+            cert_chain,
+            private_key,
         })
     }
+}
 
-    /// Get the path to the working directory
-    fn path(&self) -> &Path {
-        self.temp_dir.path()
+impl attestation_service::token::signer::SignKeyProvider<p256::SecretKey> for SelfSignedSigner {
+    fn private_key(&self) -> &p256::SecretKey {
+        &self.private_key
     }
-
-    /// Get the path to the certificate chain file
-    pub fn cert_chain_path(&self) -> &Path {
-        &self.cert_chain_path
+    fn cert_chain(&self) -> Option<anyhow::Result<Vec<CertificateDer<'static>>>> {
+        Some(Ok(self.cert_chain.clone()))
     }
-
-    /// Get the path to the private key file
-    fn key_path(&self) -> &Path {
-        &self.key_path
+    fn cert_url(&self) -> Option<&str> {
+        None
     }
-
-    /// Generate CA and AS certificates using rcgen
-    async fn generate_certificates(work_dir: &Path) -> Result<(PathBuf, PathBuf)> {
-        // Generate CA key pair
-        let ca_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
-            .map_err(Error::CaCertGenerationFailed)?;
-
-        // Create CA certificate parameters
-        let mut ca_params = CertificateParams::default();
-        ca_params
-            .distinguished_name
-            .push(DnType::OrganizationName, "Builtin AS CA");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-            KeyUsagePurpose::DigitalSignature,
-        ];
-        ca_params.not_before = time::OffsetDateTime::now_utc();
-        ca_params.not_after = ca_params.not_before + time::Duration::days(CERT_VALIDITY_DAYS);
-
-        // Generate CA certificate
-        let ca_cert = ca_params
-            .self_signed(&ca_key_pair)
-            .map_err(Error::CaCertGenerationFailed)?;
-
-        // Generate AS key pair
-        let as_key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
-            .map_err(Error::AsCertGenerationFailed)?;
-
-        // Create AS certificate parameters
-        let mut as_params = CertificateParams::default();
-        as_params
-            .distinguished_name
-            .push(DnType::CommonName, "Builtin AS");
-        as_params
-            .distinguished_name
-            .push(DnType::OrganizationName, "Builtin AS CA");
-        as_params.is_ca = IsCa::NoCa;
-        as_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        as_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Any];
-        as_params.not_before = time::OffsetDateTime::now_utc();
-        as_params.not_after = as_params.not_before + time::Duration::days(CERT_VALIDITY_DAYS);
-
-        // Sign AS certificate with CA
-        let as_cert = as_params
-            .signed_by(&as_key_pair, &ca_cert, &ca_key_pair)
-            .map_err(Error::AsCertGenerationFailed)?;
-
-        // Write AS private key
-        let key_path = work_dir.join("as.key");
-        tokio::fs::write(&key_path, as_key_pair.serialize_pem())
-            .await
-            .map_err(|e| Error::WriteAsPrivateKeyFailed {
-                path: key_path.to_string_lossy().to_string(),
-                source: e,
-            })?;
-
-        // Write certificate chain (AS cert + CA cert)
-        let cert_chain_path = work_dir.join("as-chain.pem");
-        let cert_chain = format!("{}{}", as_cert.pem(), ca_cert.pem());
-        tokio::fs::write(&cert_chain_path, cert_chain)
-            .await
-            .map_err(|e| Error::WriteCertChainFailed {
-                path: cert_chain_path.to_string_lossy().to_string(),
-                source: e,
-            })?;
-
-        Ok((cert_chain_path, key_path))
+    fn cert_pem_raw(&self) -> Option<anyhow::Result<Vec<u8>>> {
+        // Return None here since this function will not be called actually
+        None
     }
+}
+
+/// Generate CA and AS certificates using rcgen
+fn generate_certificates() -> Result<(Vec<CertificateDer<'static>>, p256::SecretKey)> {
+    // Generate CA key pair
+    let ca_key_pair =
+        KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(Error::CaCertGenerationFailed)?;
+
+    // Create CA certificate parameters
+    let mut ca_params = CertificateParams::default();
+    ca_params
+        .distinguished_name
+        .push(DnType::OrganizationName, "Builtin AS CA");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
+    ca_params.not_before = time::OffsetDateTime::now_utc();
+    ca_params.not_after = ca_params.not_before + time::Duration::days(CERT_VALIDITY_DAYS);
+
+    // Generate CA certificate
+    let ca_cert = ca_params
+        .self_signed(&ca_key_pair)
+        .map_err(Error::CaCertGenerationFailed)?;
+
+    // Generate AS key pair
+    let as_key_pair =
+        KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(Error::AsCertGenerationFailed)?;
+
+    // Create AS certificate parameters
+    let mut as_params = CertificateParams::default();
+    as_params
+        .distinguished_name
+        .push(DnType::CommonName, "Builtin AS");
+    as_params
+        .distinguished_name
+        .push(DnType::OrganizationName, "Builtin AS CA");
+    as_params.is_ca = IsCa::NoCa;
+    as_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    as_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::Any];
+    as_params.not_before = time::OffsetDateTime::now_utc();
+    as_params.not_after = as_params.not_before + time::Duration::days(CERT_VALIDITY_DAYS);
+
+    // Sign AS certificate with CA
+    let as_cert = as_params
+        .signed_by(&as_key_pair, &ca_cert, &ca_key_pair)
+        .map_err(Error::AsCertGenerationFailed)?;
+
+    // Build certificate chain (AS cert + CA cert)
+    let cert_chain = vec![CertificateDer::from(as_cert), CertificateDer::from(ca_cert)];
+
+    // BuildAS private key
+    let as_private_key = p256::SecretKey::from_pkcs8_der(as_key_pair.serialized_der())
+        .map_err(Error::FromPkcs8DerFailed)?;
+
+    Ok((cert_chain, as_private_key))
 }
 
 /// Configuration for policy loading
@@ -182,6 +153,7 @@ pub enum PolicyConfig {
     /// Base64 encoded policy content
     Inline { content: String },
     /// Path to policy file
+    #[cfg(not(wasm))]
     Path { path: String },
 }
 
@@ -192,6 +164,7 @@ pub enum SampleProvenancePayloadConfig {
     /// Inline JSON content (Provenance)
     Inline { content: Provenance },
     /// Path to payload file
+    #[cfg(not(wasm))]
     Path { path: String },
 }
 
@@ -202,6 +175,7 @@ pub enum SlsaReferenceValuePayloadConfig {
     /// Inline JSON content (ReferenceValueListPayload)
     Inline { content: ReferenceValueListPayload },
     /// Path to payload file
+    #[cfg(not(wasm))]
     Path { path: String },
 }
 
@@ -228,14 +202,11 @@ pub enum ReferenceValueConfig {
 /// Converts CocoEvidence to CocoAsToken using an embedded attestation-service instance.
 /// This provides local evidence verification without requiring a remote AS.
 pub struct BuiltinCocoConverter {
+    self_signed_signer: Arc<SelfSignedSigner>,
     /// Embedded attestation service instance
     ///
     /// Note the attestation service is boxed to save the stack space and avoid large memory copy.
     attestation_service: Box<AttestationService>,
-
-    /// Working directory for attestation service (cleaned up on drop)
-    #[allow(dead_code)]
-    work_dir: Arc<AttestationServiceWorkDir>,
 }
 
 impl BuiltinCocoConverter {
@@ -244,43 +215,46 @@ impl BuiltinCocoConverter {
         policy: &PolicyConfig,
         reference_values: &[ReferenceValueConfig],
     ) -> Result<Self> {
-        // Create a working directory with generated certificates
-        let work_dir = Arc::new(AttestationServiceWorkDir::new().await?);
-
-        // Create AS config with token signer configuration
-        let config = Config {
-            work_dir: work_dir.path().to_owned(),
-            rvps_config: RvpsConfig::BuiltIn(RvpsCrateConfig {
-                storage: ReferenceValueStorageConfig::LocalJson(local_json::Config {
-                    file_path: work_dir
-                        .path()
-                        .join("reference_values.json")
-                        .to_string_lossy()
-                        .to_string(),
-                }),
-            }),
-            attestation_token_broker: AttestationTokenConfig::Ear(ear_broker::Configuration {
-                signer: Some(ear_broker::TokenSignerConfig {
-                    key_path: work_dir.key_path().to_string_lossy().to_string(),
-                    cert_url: None,
-                    cert_path: Some(work_dir.cert_chain_path().to_string_lossy().to_string()),
-                }),
-                policy_dir: work_dir
-                    .path()
-                    .join("token/ear/policies")
-                    .to_string_lossy()
-                    .to_string(),
-                ..Default::default()
-            }),
-            challenge_key_path: None,
-        };
-
         // Create AttestationService instance
-        let mut attestation_service = Box::new(
-            AttestationService::new(config)
-                .await
-                .map_err(Error::AttestationServiceCreateFailed)?,
-        );
+        let (self_signed_signer, mut attestation_service) = {
+            let self_signed_signer = Arc::new(SelfSignedSigner::new()?);
+
+            let rvps = Box::new(attestation_service::rvps::builtin::BuiltinRvps::new(
+                reference_value_provider_service::config::Config {
+                    storage:
+                        reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
+                            reference_value_provider_service::storage::in_memory::Config {},
+                        ),
+                },
+            )
+            .map_err(attestation_service::ServiceError::Rvps)
+            .map_err(Error::AttestationServiceCreateFailed)?) as Box<dyn attestation_service::rvps::RvpsApi + Send + Sync>;
+
+            let token_broker = Box::new(
+                attestation_service::token::ear_broker::EarAttestationTokenBroker::from_components(
+                    attestation_service::token::ear_broker::TokenBrokerSettings::default(),
+                    self_signed_signer.clone(),
+                    Arc::new(
+                        attestation_service::policy_engine::opa_in_memory::InMemoryPolicyEngine::with_raw_default_policy(
+                            attestation_service::token::ear_broker::DEFAULT_POLICY,
+                            DEFAULT_POLICY_ID,
+                        ),
+                    ),
+                ),
+            )
+            as Box<dyn attestation_service::token::AttestationTokenBroker + Send + Sync>;
+
+            let challenger = Box::new(attestation_service::challenge::LocalNonceChallenger::new());
+
+            (
+                self_signed_signer,
+                Box::new(AttestationService::from_components(
+                    rvps,
+                    token_broker,
+                    challenger,
+                )),
+            )
+        };
 
         // Load policy (skip to use AS built-in default policy for Default)
         if let Some(policy_content) = Self::load_policy_as_base64_url_safe_no_pad(policy).await? {
@@ -294,8 +268,8 @@ impl BuiltinCocoConverter {
         Self::load_reference_values(&mut attestation_service, reference_values).await?;
 
         Ok(Self {
+            self_signed_signer,
             attestation_service,
-            work_dir,
         })
     }
 
@@ -328,6 +302,7 @@ impl BuiltinCocoConverter {
                     .map_err(Error::DecodePolicyContentFailed)?;
                 Ok(Some(URL_SAFE_NO_PAD.encode(decoded)))
             }
+            #[cfg(not(wasm))]
             PolicyConfig::Path { path } => {
                 let content_str = tokio::fs::read_to_string(path).await.map_err(|e| {
                     Error::ReadPolicyFileFailed {
@@ -350,6 +325,7 @@ impl BuiltinCocoConverter {
                 ReferenceValueConfig::Sample { payload } => {
                     let provenance = match payload {
                         SampleProvenancePayloadConfig::Inline { content } => Ok(content.clone()),
+                        #[cfg(not(wasm))]
                         SampleProvenancePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -395,6 +371,7 @@ impl BuiltinCocoConverter {
                 ReferenceValueConfig::Slsa { payload } => {
                     let payload_value = match payload {
                         SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
+                        #[cfg(not(wasm))]
                         SlsaReferenceValuePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -421,6 +398,7 @@ impl BuiltinCocoConverter {
                 ReferenceValueConfig::ReleaseManifest { payload } => {
                     let payload_value = match payload {
                         SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
+                        #[cfg(not(wasm))]
                         SlsaReferenceValuePayloadConfig::Path { path } => {
                             let content_str =
                                 tokio::fs::read_to_string(path).await.map_err(|e| {
@@ -459,11 +437,12 @@ impl BuiltinCocoConverter {
     }
 
     pub async fn new_verifier(&self) -> Result<BuiltinCocoVerifier> {
-        BuiltinCocoVerifier::new(self.work_dir.clone()).await
+        BuiltinCocoVerifier::new(self.self_signed_signer.cert_chain.clone()).await
     }
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(wasm, async_trait::async_trait(?Send))]
+#[cfg_attr(not(wasm), async_trait::async_trait)]
 impl GenericConverter for BuiltinCocoConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
@@ -532,6 +511,7 @@ impl GenericConverter for BuiltinCocoConverter {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use attestation_service::policy_engine::PolicyEngine as _;
     use reference_value_provider_service::rv_list::{
         ReferenceValueListItem, ReferenceValueProvenanceInfo, ReferenceValueProvenanceSource,
     };
@@ -614,122 +594,6 @@ default file_system := 2"#;
         let content = String::from_utf8(decoded).expect("Invalid UTF-8");
         assert!(content.contains("package policy"));
         assert!(content.contains("default hardware := 2"));
-    }
-
-    #[tokio::test]
-    async fn test_attestation_service_work_dir_creation() {
-        let work_dir = AttestationServiceWorkDir::new()
-            .await
-            .expect("Failed to create work dir");
-
-        // Verify directory exists
-        assert!(work_dir.path().exists());
-        assert!(work_dir.path().is_dir());
-
-        // Verify certificate files exist
-        assert!(work_dir.cert_chain_path().exists());
-        assert!(work_dir.key_path().exists());
-
-        // Verify file names
-        assert_eq!(
-            work_dir.cert_chain_path().file_name().unwrap(),
-            "as-chain.pem"
-        );
-        assert_eq!(work_dir.key_path().file_name().unwrap(), "as.key");
-    }
-
-    #[tokio::test]
-    async fn test_attestation_service_work_dir_cert_chain_valid_pem() {
-        let work_dir = AttestationServiceWorkDir::new()
-            .await
-            .expect("Failed to create work dir");
-
-        // Read certificate chain
-        let cert_chain_pem = tokio::fs::read_to_string(work_dir.cert_chain_path())
-            .await
-            .expect("Failed to read cert chain");
-
-        // Verify it contains two PEM blocks (AS cert + CA cert)
-        let cert_count = cert_chain_pem
-            .matches("-----BEGIN CERTIFICATE-----")
-            .count();
-        assert_eq!(
-            cert_count, 2,
-            "Certificate chain should contain 2 certificates"
-        );
-
-        let end_count = cert_chain_pem.matches("-----END CERTIFICATE-----").count();
-        assert_eq!(end_count, 2, "Certificate chain should have 2 END markers");
-    }
-
-    #[tokio::test]
-    async fn test_attestation_service_work_dir_key_valid_pem() {
-        let work_dir = AttestationServiceWorkDir::new()
-            .await
-            .expect("Failed to create work dir");
-
-        // Read private key
-        let key_pem = tokio::fs::read_to_string(work_dir.key_path())
-            .await
-            .expect("Failed to read key");
-
-        // Verify it's a valid PEM private key
-        assert!(
-            key_pem.contains("-----BEGIN PRIVATE KEY-----"),
-            "Key should be PKCS#8 PEM format"
-        );
-        assert!(
-            key_pem.contains("-----END PRIVATE KEY-----"),
-            "Key should have END marker"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_attestation_service_work_dir_cleanup_on_drop() {
-        let path;
-        let cert_path;
-        let key_path;
-
-        {
-            let work_dir = AttestationServiceWorkDir::new()
-                .await
-                .expect("Failed to create work dir");
-            path = work_dir.path().to_path_buf();
-            cert_path = work_dir.cert_chain_path().to_path_buf();
-            key_path = work_dir.key_path().to_path_buf();
-
-            // Verify files exist before drop
-            assert!(path.exists());
-            assert!(cert_path.exists());
-            assert!(key_path.exists());
-        }
-        // work_dir is dropped here
-
-        // Verify directory and files are cleaned up
-        assert!(
-            !path.exists(),
-            "Work directory should be cleaned up on drop"
-        );
-        assert!(
-            !cert_path.exists(),
-            "Cert chain should be cleaned up on drop"
-        );
-        assert!(!key_path.exists(), "Key file should be cleaned up on drop");
-    }
-
-    #[tokio::test]
-    async fn test_attestation_service_work_dir_unique_paths() {
-        let work_dir1 = AttestationServiceWorkDir::new()
-            .await
-            .expect("Failed to create work dir 1");
-        let work_dir2 = AttestationServiceWorkDir::new()
-            .await
-            .expect("Failed to create work dir 2");
-
-        // Each instance should have unique paths
-        assert_ne!(work_dir1.path(), work_dir2.path());
-        assert_ne!(work_dir1.cert_chain_path(), work_dir2.cert_chain_path());
-        assert_ne!(work_dir1.key_path(), work_dir2.key_path());
     }
 
     // === Reference value loading tests ===
@@ -1305,10 +1169,10 @@ default file_system := 2"#,
     async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
         use attestation_service::policy_engine::PolicyEngineType;
 
-        let dir = tempfile::tempdir().expect("create temp work dir");
-        let engine = PolicyEngineType::OPA
-            .to_policy_engine(dir.path(), policy, "default.rego")
-            .expect("create OPA policy engine");
+        let engine = attestation_service::policy_engine::opa_in_memory::InMemoryPolicyEngine::with_raw_default_policy(
+            policy,
+            DEFAULT_POLICY_ID,
+        );
         // The four rules our templates define. The real AS also queries four more
         // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
         // skipped when a policy leaves them undefined, so they need not be queried.

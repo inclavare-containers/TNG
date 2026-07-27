@@ -69,6 +69,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 as_addr,
                 policy_ids,
                 as_headers,
+                #[cfg(not(wasm))]
                 trusted_certs_paths,
                 verify_signer_transparency,
                 skip_as_token_cert_verify,
@@ -83,6 +84,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 Ok(TngVerifier::Coco(CocoVerifier::Remote(
                     CocoRemoteVerifier::new(
                         &as_addr_config,
+                        #[cfg(not(wasm))]
                         trusted_certs_paths,
                         policy_ids,
                         *verify_signer_transparency,
@@ -95,6 +97,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 as_addr,
                 policy_ids,
                 as_headers,
+                #[cfg(not(wasm))]
                 trusted_certs_paths,
                 verify_signer_transparency,
                 skip_as_token_cert_verify,
@@ -109,6 +112,7 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
                 Ok(TngVerifier::Coco(CocoVerifier::Remote(
                     CocoRemoteVerifier::new(
                         &as_addr_config,
+                        #[cfg(not(wasm))]
                         trusted_certs_paths,
                         policy_ids,
                         *verify_signer_transparency,

@@ -12,7 +12,7 @@ pub struct CocoRemoteVerifier {
 impl CocoRemoteVerifier {
     pub async fn new(
         as_addr_config: &Option<AttestationServiceAddrArgs>,
-        trusted_certs_paths: &Option<Vec<String>>,
+        #[cfg(not(wasm))] trusted_certs_paths: &Option<Vec<String>>,
         policy_ids: &Vec<String>,
         verify_signer_transparency: bool,
         skip_as_token_cert_verify: bool,
@@ -23,18 +23,24 @@ impl CocoRemoteVerifier {
             }
         }
 
+        #[cfg(not(wasm))]
         let trusted_certs_paths = trusted_certs_paths.clone().unwrap_or_default();
 
         // Check if any trust source is provided (skip when skip_as_token_cert_verify is true)
         if !skip_as_token_cert_verify {
+            #[cfg(not(wasm))]
             let has_trust_source = !trusted_certs_paths.is_empty() || as_addr_config.is_some();
+            #[cfg(wasm)]
+            let has_trust_source = as_addr_config.is_some();
             if !has_trust_source {
                 Err(Error::NoTrustSource)?
             }
         }
 
         let config = AttestationTokenVerifierConfig {
+            #[cfg(not(wasm))]
             trusted_certs_paths,
+            trusted_certs: Default::default(),
             trusted_jwk_sets: Default::default(),
             as_addr: if skip_as_token_cert_verify {
                 // Don't pass as_addr to token verifier when skipping cert verify

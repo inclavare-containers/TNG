@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(not(wasm))]
 use std::path::Path;
 
 use anyhow::{anyhow, Context as _, Result};
@@ -218,65 +219,76 @@ impl RaArgsUnchecked {
                 VerifyArgs::Passport { verifier }
                 | VerifyArgs::BackgroundCheck { verifier, .. } => {
                     match verifier {
-                        VerifierArgs::Coco(coco_verifier) => match coco_verifier {
-                            CocoVerifierArgs::Restful {
-                                as_addr,
-                                as_headers,
-                                trusted_certs_paths,
-                                skip_as_token_cert_verify,
-                                ..
-                            }
-                            | CocoVerifierArgs::Grpc {
-                                as_addr,
-                                as_headers,
-                                trusted_certs_paths,
-                                skip_as_token_cert_verify,
-                                ..
-                            } => {
-                                if as_addr.is_none() && !as_headers.is_empty() {
-                                    return Err(TngError::InvalidParameter(anyhow!(
-                                        "'as_headers' cannot be set without 'as_addr'"
-                                    )));
+                        VerifierArgs::Coco(coco_verifier) => {
+                            match coco_verifier {
+                                CocoVerifierArgs::Restful {
+                                    as_addr,
+                                    as_headers,
+                                    #[cfg(not(wasm))]
+                                    trusted_certs_paths,
+                                    skip_as_token_cert_verify,
+                                    ..
                                 }
-
-                                // Validation for skip_as_token_cert_verify
-                                if *skip_as_token_cert_verify {
-                                    if trusted_certs_paths.is_some() {
+                                | CocoVerifierArgs::Grpc {
+                                    as_addr,
+                                    as_headers,
+                                    #[cfg(not(wasm))]
+                                    trusted_certs_paths,
+                                    skip_as_token_cert_verify,
+                                    ..
+                                } => {
+                                    if as_addr.is_none() && !as_headers.is_empty() {
                                         return Err(TngError::InvalidParameter(anyhow!(
+                                            "'as_headers' cannot be set without 'as_addr'"
+                                        )));
+                                    }
+
+                                    // Validation for skip_as_token_cert_verify
+                                    if *skip_as_token_cert_verify {
+                                        #[cfg(not(wasm))]
+                                        if trusted_certs_paths.is_some() {
+                                            return Err(TngError::InvalidParameter(anyhow!(
                                             "'trusted_certs_paths' cannot be set when 'skip_as_token_cert_verify' is true"
                                         )));
-                                    }
+                                        }
 
-                                    // In Passport mode, as_addr must also be None when skipping
-                                    if matches!(verify_args, VerifyArgs::Passport { .. })
-                                        && as_addr.is_some()
-                                    {
-                                        return Err(TngError::InvalidParameter(anyhow!(
+                                        // In Passport mode, as_addr must also be None when skipping
+                                        if matches!(verify_args, VerifyArgs::Passport { .. })
+                                            && as_addr.is_some()
+                                        {
+                                            return Err(TngError::InvalidParameter(anyhow!(
                                             "'as_addr' cannot be set in Passport mode when 'skip_as_token_cert_verify' is true"
                                         )));
+                                        }
                                     }
-                                }
 
-                                // Additional checks for Passport mode (skip when skip_as_token_cert_verify is true)
-                                if matches!(verify_args, VerifyArgs::Passport { .. })
-                                    && !skip_as_token_cert_verify
-                                    && as_addr.is_none()
-                                    && trusted_certs_paths.is_none()
-                                {
-                                    return Err(TngError::InvalidParameter(anyhow!("At least one of 'as_addr' or 'trusted_certs_paths' must be set to verify attestation token")));
-                                }
+                                    // Additional checks for Passport mode (skip when skip_as_token_cert_verify is true)
+                                    if matches!(verify_args, VerifyArgs::Passport { .. })
+                                        && !skip_as_token_cert_verify
+                                    {
+                                        #[cfg(not(wasm))]
+                                        if as_addr.is_none() && trusted_certs_paths.is_none() {
+                                            return Err(TngError::InvalidParameter(anyhow!("At least one of 'as_addr' or 'trusted_certs_paths' must be set to verify attestation token")));
+                                        }
+                                        #[cfg(wasm)]
+                                        if as_addr.is_none() {
+                                            return Err(TngError::InvalidParameter(anyhow!("The 'as_addr' must be set to verify attestation token")));
+                                        }
+                                    }
 
-                                if let Some(paths) = trusted_certs_paths {
-                                    for path in paths {
-                                        if !Path::new(path).exists() {
-                                            return Err(TngError::InvalidParameter(anyhow!("Attestation service trusted certificate path does not exist: {}", path)));
+                                    #[cfg(not(wasm))]
+                                    if let Some(paths) = trusted_certs_paths {
+                                        for path in paths {
+                                            if !Path::new(path).exists() {
+                                                return Err(TngError::InvalidParameter(anyhow!("Attestation service trusted certificate path does not exist: {}", path)));
+                                            }
                                         }
                                     }
                                 }
+                                #[cfg(feature = "__builtin-as")]
+                                CocoVerifierArgs::Builtin => {}
                             }
-                            #[cfg(feature = "__builtin-as")]
-                            CocoVerifierArgs::Builtin => {}
-                        },
+                        }
                         VerifierArgs::Ita(_) => {
                             // ITA verifier fetches JWKS from the portal URL; no additional checks needed here
                         }
@@ -299,6 +311,11 @@ impl RaArgsUnchecked {
                         }
                         // Validate builtin configuration
                         #[cfg(feature = "__builtin-as")]
+                        #[cfg(wasm)]
+                        CocoConverterArgs::Builtin { .. } => {}
+                        // Validate builtin configuration
+                        #[cfg(feature = "__builtin-as")]
+                        #[cfg(not(wasm))]
                         CocoConverterArgs::Builtin {
                             attestation_policy,
                             reference_values,
@@ -568,6 +585,7 @@ pub enum CocoVerifierArgs {
         as_headers: HashMap<String, String>,
         /// Trusted certificate paths list (optional)
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg(not(wasm))]
         trusted_certs_paths: Option<Vec<String>>,
         /// Verify signer transparency claim in JWT token (optional, default: false)
         #[serde(default)]
@@ -588,6 +606,7 @@ pub enum CocoVerifierArgs {
         as_headers: HashMap<String, String>,
         /// Trusted certificate paths list (optional)
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg(not(wasm))]
         trusted_certs_paths: Option<Vec<String>>,
         /// Verify signer transparency claim in JWT token (optional, default: false)
         #[serde(default)]
