@@ -50,6 +50,23 @@ Do not update one language and leave the other stale. If a section is added/remo
 
 - **Do not hard-wrap prose lines in human-readable Markdown.** In `docs/*.md`, `*_zh.md`, and crate `README.md`/`README_zh.md`, keep each paragraph (and each list item / blockquote line) as a single unbounded line — do not insert manual line breaks at a fixed column (e.g. ~70 chars for EN, ~36 chars for ZH). Markdown reflows to the reader's viewport automatically; manual wrapping only produces noisy diffs, mismatched EN/ZH line counts, and awkward editing. One sentence may run as long as it needs. Code blocks, tables, and frontmatter are exempt (their line structure is semantic).
 
+## Configuration Documentation Style
+
+When documenting configuration fields (notably the field tables in `docs/configuration.md` / `docs/configuration_zh.md`, and crate `README.md` / `README_zh.md` where relevant), write for the **operator who configures TNG**, not the developer who wrote it. Each field's doc cell should be:
+
+- **User-facing, concise, accurate, actionable.**
+- Cover, where relevant: 功能作用 (what it does), 使用方法 (how to enable/use it), 配置含义 (what the field means), 默认行为 (the default and whether existing configs are affected), 适用场景 (when to use it), 限制条件 (prerequisites / mutual exclusions / platform limits), 失败表现 (what happens when a prerequisite is unmet — does traffic still flow? does it fall back?).
+
+**Avoid** in user-facing config docs:
+- Internal implementation: which crate / struct / trait performs the work, the per-connection task model, syscall names and errno codes (e.g. `splice(2)`, `recvmsg`, `EINVAL`, `EIO`), kernel RX/TX path internals, buffer or user-space-copy counts, code structure (modules, forward tasks, boxed streams).
+- Error codes, dev process, or how the feature was built.
+
+**Wording:**
+- If a capability is a platform-gated default (not a cargo feature), describe it that way — do **not** mention a "cargo feature" that no longer exists.
+- No absolute claims like "无回归" / "无法避免" / "guaranteed" — state the observed behavior and the fallback concretely instead (e.g. "falls back to the standard TLS data plane; traffic still flows, just without the kTLS speedup").
+
+Update both languages together (see Bilingual Documentation Convention) and do not hard-wrap prose.
+
 ## TODO.md Discipline
 
 **Never add, remove, or edit entries in `TODO.md` automatically** — not as a "test coverage note", not to record deferred work, not for any reason — unless the user explicitly asks for it. `TODO.md` is a human-curated tracking file; auto-generated entries there are noise. If you discover deferred work or a coverage gap worth tracking, mention it in your reply and let the user decide whether to put it in `TODO.md`.
