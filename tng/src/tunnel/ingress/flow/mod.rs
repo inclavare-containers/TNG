@@ -16,6 +16,7 @@ use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::stream::PreludedStream;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
@@ -29,7 +30,7 @@ pub struct IngressFlow {
     ingress: Box<dyn IngressTrait>,
     trusted_stream_manager: Arc<TrustedStreamManager>,
     unprotected_stream_manager: Arc<UnprotectedStreamManager>,
-    metrics: ServiceMetrics,
+    metrics: Arc<ServiceMetrics>, // Use Arc here for cheaper cloning
     runtime: TokioRuntime,
 }
 
@@ -53,9 +54,52 @@ pub(super) trait IngressTrait: Sync + Send {
 
 pub(super) type Incomming<'a> = Pin<Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>>;
 
+/// The accepted downstream stream.
+/// - `Raw`: a concrete `TcpStream` plus an optional HTTP over-read prelude.
+///   Produced by accept types that surface a raw socket (netfilter, mapping,
+///   socks5, http_proxy CONNECT after upgrade downcast); the raw fd is what
+///   the kTLS ULP installs on, so this is the only variant eligible for the
+///   kTLS splice data plane.
+/// - `Opaque`: an erased stream that must use the rustls data plane. Produced
+///   when no raw socket is available (http_proxy reverse-proxy `duplex`,
+///   datagram/UDP).
+///
+/// The flow resolves the `Ktls` policy and picks the arm per variant — the
+/// variant itself carries no policy. The prelude is `None` except on the
+/// http_proxy CONNECT upgrade, where hyper over-reads request bytes before the
+/// handshake; the kTLS forward flushes it into the send direction before
+/// splicing.
+///
+/// `encrypted` is decided at accept time (`should_forward_via_tunnel(&dst)`).
+/// socks5/http_proxy yield `Raw` even when `encrypted` is `false`, so the
+/// `!encrypted` guard routes a plaintext `Raw` to the unprotected stream
+/// manager before the kTLS dispatch is reached — plaintext never enters the
+/// kTLS arm.
+pub(super) enum IncomingStream {
+    Raw(tokio::net::TcpStream, Option<bytes::Bytes>),
+    Opaque(Box<dyn CommonStreamTrait + 'static>),
+}
+
+impl IncomingStream {
+    pub fn into_dyn(self) -> Box<dyn CommonStreamTrait + 'static> {
+        match self {
+            IncomingStream::Raw(tcp_stream, prelude) => {
+                let prelude = prelude.unwrap_or_default();
+
+                Box::new(PreludedStream {
+                    prelude,
+                    prelude_pos: 0,
+                    stream: tcp_stream,
+                })
+            }
+            IncomingStream::Opaque(common_stream_trait) => common_stream_trait,
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(super) struct AcceptedStream {
-    pub stream: Box<dyn CommonStreamTrait + Send>,
+    pub stream: IncomingStream,
     pub src: SocketAddr,
     pub dst: Arc<TngEndpoint>,
     pub encrypted: bool,
@@ -75,7 +119,7 @@ impl IngressFlow {
         let ingress = Box::new(ingress);
 
         let metric_attributes = ingress.metric_attributes();
-        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
+        let metrics = Arc::new(service_metrics_creator.new_service_metrics(metric_attributes));
 
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         let transport_so_mark = ingress.transport_so_mark();
@@ -159,7 +203,6 @@ impl IngressFlow {
 
                     // TODO: merge .new_cx() and .new_wrapped_stream()
                     let active_cx = metrics.new_cx();
-                    let stream = metrics.new_wrapped_stream(stream);
 
                     // Transition to AccessRouted: dst and encrypted are known here
                     let access_routed = access_accepted.into_routed(&dst, encrypted);
@@ -169,7 +212,7 @@ impl IngressFlow {
                     let forward_stream_task = if !encrypted {
                         // Forward via unprotected tcp
                         let (forward_stream_task, att, up_local) = unprotected_stream_manager
-                            .forward_stream(&dst, Box::new(stream))
+                            .forward_stream(&dst, stream, metrics)
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via unprotected tcp")
@@ -181,7 +224,7 @@ impl IngressFlow {
                     } else {
                         // Forward via trusted tunnel
                         let (forward_stream_task, att, up_local) = trusted_stream_manager
-                            .forward_stream(&dst, Box::new(stream))
+                            .forward_stream(&dst, stream, metrics)
                             .await
                             .with_context(|| {
                                 format!("Failed to connect to upstream {dst} via trusted tunnel")

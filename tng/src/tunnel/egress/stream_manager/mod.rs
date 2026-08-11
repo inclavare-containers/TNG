@@ -1,21 +1,25 @@
 use anyhow::Result;
 use futures::stream::BoxStream;
+use tokio::net::TcpStream;
 
-use crate::{tunnel::stream::CommonStreamTrait, AttestationState};
+use crate::{
+    tunnel::{egress::flow::IncomingStream, stream::CommonStreamTrait, stream::PreludedStream},
+    AttestationState,
+};
 
 pub mod trusted;
 
 pub trait StreamManager {
     async fn consume_stream(
         &self,
-        stream: Box<dyn CommonStreamTrait + std::marker::Sync + 'static>,
+        in_stream: IncomingStream,
         peer: Option<std::net::SocketAddr>,
     ) -> Result<BoxStream<'static, Result<NextStream>>>;
 }
 
 pub enum NextStream {
-    Secured(Box<dyn CommonStreamTrait>, AttestationState),
-    DirectlyForward(Box<dyn CommonStreamTrait>),
+    Secured(DecodedStream, AttestationState),
+    DirectlyForward(PreludedStream<TcpStream>),
 }
 
 // `DirectlyForward` has no attestation; returning a reference to a unit
@@ -31,17 +35,16 @@ impl NextStream {
         }
     }
 
-    pub fn into_stream(self) -> Box<dyn CommonStreamTrait> {
-        match self {
-            NextStream::Secured(stream, _) => stream,
-            NextStream::DirectlyForward(stream) => stream,
-        }
-    }
-
     pub fn attestation_state(&self) -> &AttestationState {
         match self {
             NextStream::Secured(_, state) => state,
             NextStream::DirectlyForward(_) => &UNATTESTED,
         }
     }
+}
+
+pub enum DecodedStream {
+    #[cfg(target_os = "linux")]
+    Ktls(ktls::KtlsStream<tokio::net::TcpStream>),
+    Opaque(Box<dyn CommonStreamTrait + Sync>),
 }

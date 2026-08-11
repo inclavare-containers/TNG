@@ -18,6 +18,7 @@ use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::socket::TCP_CONNECT_SO_MARK_DEFAULT;
 
+use super::flow::IncomingStream;
 use super::flow::Incomming;
 use super::flow::IngressTrait;
 
@@ -137,8 +138,9 @@ impl IngressTrait for NetfilterIngress {
                     listen_addr,
                     IngressAccessMode::Netfilter,
                 );
+
                 Ok::<_, anyhow::Error>(AcceptedStream{
-                    stream: Box::new(crate::ContextualStream::new(stream, "ingress-netfilter")),
+                    stream: IncomingStream::Raw(stream,None),
                     src: peer_addr,
                     dst: Arc::new(orig_dst),
                     encrypted: true,

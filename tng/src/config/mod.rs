@@ -9,6 +9,8 @@ pub mod egress;
 pub mod egress_hook;
 pub mod header_passthrough;
 pub mod ingress;
+#[cfg(target_os = "linux")]
+pub mod ktls;
 pub mod mapping_rule;
 pub mod match_rule;
 pub mod observability;

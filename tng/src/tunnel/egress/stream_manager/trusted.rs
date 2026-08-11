@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::egress::flow::IncomingStream;
+use crate::tunnel::egress::protocol::common::transport::TngTransportStream;
+use crate::tunnel::egress::stream_manager::DecodedStream;
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
@@ -14,7 +17,6 @@ use crate::{
             stream_manager::NextStream,
         },
         ra_context::RaContext,
-        stream::CommonStreamTrait,
         utils::runtime::TokioRuntime,
     },
     AttestationState,
@@ -30,13 +32,13 @@ use futures::StreamExt;
 use super::StreamManager;
 
 pub type ProtocolStreamDecoderOutput =
-    BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, AttestationState)>>;
+    BoxStream<'static, Result<(DecodedStream, AttestationState)>>;
 
 #[async_trait]
 pub trait ProtocolStreamDecoder: StatusProvider {
     async fn decode_stream(
         &self,
-        input: Box<dyn CommonStreamTrait + Sync + 'static>,
+        input: TngTransportStream,
         peer: Option<std::net::SocketAddr>,
     ) -> Result<ProtocolStreamDecoderOutput>;
 }
@@ -98,13 +100,9 @@ impl TrustedStreamManager {
                         .await?,
                 ),
                 None => {
-                    let multiplex = common_args
-                        .rats_tls
-                        .as_ref()
-                        .unwrap_or(&Default::default())
-                        .multiplex;
+                    let rats_tls = common_args.rats_tls.unwrap_or_default();
                     Box::new(
-                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), multiplex).await?,
+                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), &rats_tls).await?,
                     )
                 }
             },
@@ -116,7 +114,7 @@ impl TrustedStreamManager {
 impl StreamManager for TrustedStreamManager {
     async fn consume_stream(
         &self,
-        in_stream: Box<dyn CommonStreamTrait + Sync + 'static>,
+        in_stream: IncomingStream,
         peer: Option<std::net::SocketAddr>,
     ) -> Result<BoxStream<'static, Result<NextStream>>> {
         let maybe_direct_forward = self
@@ -140,7 +138,7 @@ impl StreamManager for TrustedStreamManager {
                 .boxed())
             }
             MaybeDirectlyForward::DirectlyForward(stream) => Ok(stream! {
-                yield Ok(NextStream::DirectlyForward(Box::new(stream)));
+                yield Ok(NextStream::DirectlyForward(stream));
             }
             .boxed()),
         }

@@ -11,6 +11,14 @@ use crate::tunnel::utils::rustls::config::TlsConfigGeneratorMode;
 #[cfg(not(wasm))]
 use crate::tunnel::utils::rustls::config::{alpn::Alpn, TlsConfigGenerator};
 
+#[cfg(target_os = "linux")]
+pub fn enable_secret_extraction_client(config: &mut rustls::ClientConfig) {
+    config.enable_secret_extraction = true;
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn enable_secret_extraction_client(_config: &mut rustls::ClientConfig) {}
+
 #[cfg(not(wasm))]
 impl TlsConfigGenerator {
     pub async fn get_lazy_one_time_rustls_client_config(
@@ -47,6 +55,13 @@ impl TlsConfigGenerator {
         tls_client_config
             .dangerous()
             .set_certificate_verifier(self.client_server_cert_verifier.clone());
+
+        // kTLS needs the negotiated key material extractable so it can be
+        // installed in-kernel via `setsockopt(TLS_TX/TLS_RX)`. Set
+        // unconditionally on Linux: the config is built once and shared
+        // across connections before per-link kTLS resolution, so the tier is
+        // not known here.
+        enable_secret_extraction_client(&mut tls_client_config);
 
         // Carry the brotli LRU across handshakes for the client-presented
         // cert (Attest/AttestAndVerify). The builder assigns a fresh empty

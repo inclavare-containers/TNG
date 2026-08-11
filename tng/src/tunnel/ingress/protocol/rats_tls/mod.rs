@@ -1,17 +1,24 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::tunnel::ingress::protocol::rats_tls::security::AllocatedSecuredStream;
 use crate::{
+    config::ingress::RatsTlsArgs,
     error::TngError,
     status::{StatusProvider, StatusQueryResult},
     tunnel::{
         endpoint::TngEndpoint,
-        ingress::protocol::{
-            rats_tls::security::RatsTlsSecurityLayer, ProtocolStreamForwarder,
-            ProtocolStreamForwarderOutput,
+        ingress::{
+            flow::IncomingStream,
+            protocol::{
+                rats_tls::security::RatsTlsSecurityLayer, ForwardTask, ProtocolStreamForwarder,
+                ProtocolStreamForwarderOutput,
+            },
         },
         ra_context::RaContext,
-        utils,
+        service_metrics::ServiceMetrics,
+        stream::PreludedStream,
+        utils::{self, rustls::TlsOutcome},
     },
     AttestationState, CommonStreamTrait, ContextualStream, TokioRuntime,
 };
@@ -33,9 +40,7 @@ impl RatsTlsStreamForwarder {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
-        multiplex_max_streams_per_connection: Option<std::num::NonZeroU32>,
-        multiplex_max_connections: Option<std::num::NonZeroU32>,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
@@ -43,9 +48,7 @@ impl RatsTlsStreamForwarder {
                 transport_so_mark,
                 ra_context,
                 runtime,
-                multiplex,
-                multiplex_max_streams_per_connection,
-                multiplex_max_connections,
+                rats_tls,
             )
             .await?,
         })
@@ -75,52 +78,102 @@ impl RatsTlsStreamForwarder {
 
 #[async_trait]
 impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
-        mut downstream: Box<dyn CommonStreamTrait + 'static>,
+        endpoint: &TngEndpoint,
+        downstream: IncomingStream,
+        metrics: Arc<ServiceMetrics>,
     ) -> Result<ProtocolStreamForwarderOutput> {
-        if !self.security_layer.is_multiplex() {
-            // Non-multiplex: send the first downstream chunk as 0-RTT early
-            // data, complete the handshake, then classify attestation from the
-            // negotiated handshake kind. The handshake completes during
-            // prime's first write/flush, so handshake_kind() is only valid
-            // after prime; reading it before would report the unfinished
-            // EarlyData state. On a resumed handshake rustls skips cert
-            // verification, so a fresh RA result is neither produced nor
-            // needed; trust the PSK binding (Resumed) instead of erroring.
-            let (mut tls_stream, verifier_opt, local_addr) =
-                self.security_layer.connect_0rtt(endpoint).await?;
-            security::prime_0rtt(&mut tls_stream, &mut downstream).await?;
-            let handshake_kind = tls_stream.get_mut().1.handshake_kind();
-            let attestation_state = crate::tunnel::utils::rustls::ra::common::classify_attestation(
-                verifier_opt.as_ref().map(|v| v.lazy_verifier()),
-                handshake_kind,
-                tls_stream.get_mut().1.peer_certificates(),
-            )
-            .await?;
-            let upstream: Box<dyn CommonStreamTrait + Sync> =
-                Box::new(ContextualStream::new(tls_stream, "ingress-rats-tls-direct"));
-            Ok((
-                Box::pin(async move {
-                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
-                    Ok(())
-                }),
-                attestation_state,
-                local_addr,
-            ))
-        } else {
-            // Multiplex: single long-lived TLS connection; 0-RTT does not apply.
-            let (upstream, local_addr, attestation_state, _session_id) =
-                self.connect(endpoint.clone()).await?;
-            Ok((
-                Box::pin(async move {
-                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
-                    Ok(())
-                }),
-                attestation_state,
-                local_addr,
-            ))
+        match downstream {
+            IncomingStream::Opaque(opaque) => {
+                // When downstream is Opaque, it is not possible to use KTLS
+                // (kTLS installs on a raw fd, which an erased stream has no
+                // access to). Apply the policy: `required` bails the connection;
+                // `best-effort`/`disabled` fall back to the rustls data plane.
+                #[cfg(target_os = "linux")]
+                self.security_layer.check_opaque_downstream()?;
+
+                if self.security_layer.is_multiplex() {
+                    // Multiplex: single long-lived TLS connection; 0-RTT does not apply.
+                    let (upstream, local_addr, attestation_state, _session_id) =
+                        self.connect(endpoint.clone()).await?;
+                    let task: ForwardTask = Box::pin(async move {
+                        let opaque = metrics.new_wrapped_stream(opaque); // for counting bytes
+                        let _: () = utils::forward::normal::forward_stream(upstream, opaque).await;
+                        Ok(())
+                    });
+                    Ok((task, attestation_state, local_addr))
+                } else {
+                    // Non-multiplex: send the first downstream chunk as 0-RTT early
+                    // data, complete the handshake, then classify attestation from the
+                    // negotiated handshake kind. The handshake completes during
+                    // prime's first write/flush, so handshake_kind() is only valid
+                    // after prime; reading it before would report the unfinished
+                    // EarlyData state. On a resumed handshake rustls skips cert
+                    // verification, so a fresh RA result is neither produced nor
+                    // needed; trust the PSK binding (Resumed) instead of erroring.
+                    let (mut tls_stream, verifier_opt, local_addr) =
+                        self.security_layer.connect_0rtt(endpoint).await?;
+                    // Wrap before priming so the early-data chunk is also counted.
+                    let mut opaque = Box::new(metrics.new_wrapped_stream(opaque))
+                        as Box<dyn CommonStreamTrait>;
+                    security::prime_0rtt(&mut tls_stream, &mut opaque).await?;
+                    let handshake_kind = tls_stream.get_mut().1.handshake_kind();
+                    let attestation_state = crate::tunnel::utils::rustls::ra::common::classify_attestation(
+                        verifier_opt.as_ref().map(|v| v.lazy_verifier()),
+                        handshake_kind,
+                        tls_stream.get_mut().1.peer_certificates(),
+                    )
+                    .await?;
+                    let upstream = ContextualStream::new(tls_stream, "ingress-rats-tls-direct");
+                    let task: ForwardTask = Box::pin(async move {
+                        let _: () = utils::forward::normal::forward_stream(upstream, opaque).await;
+                        Ok(())
+                    });
+                    Ok((task, attestation_state, local_addr))
+                }
+            }
+            IncomingStream::Raw(tcp, prelude) => {
+                // When downstream is Raw, we can try to use KTLS
+                let (upstream, local_addr, attestation_state) = self
+                    .security_layer
+                    .allocate_secured_stream_try_ktls(endpoint.clone())
+                    .await?;
+
+                // Check if KTLS was used
+                let task: ForwardTask = match upstream {
+                    #[cfg(target_os = "linux")]
+                    AllocatedSecuredStream::Raw(TlsOutcome::Ktls(upstream)) => {
+                        Box::pin(async move {
+                            use crate::tunnel::service_metrics::ByteCounters;
+
+                            let ByteCounters { tx, rx } = metrics.new_byte_counter();
+                            let _: () = utils::forward::ktls_splice::forward_ktls_stream_bi(
+                                upstream, tcp, prelude, tx, rx,
+                            )
+                            .await;
+                            Ok(())
+                        })
+                    }
+                    AllocatedSecuredStream::Raw(TlsOutcome::Rustls(upstream))
+                    | AllocatedSecuredStream::Multiplexed(upstream) => {
+                        let upstream = ContextualStream::new(upstream, "ingress-rats-tls");
+                        Box::pin(async move {
+                            let downstream = PreludedStream {
+                                prelude: prelude.unwrap_or_default(),
+                                prelude_pos: 0,
+                                stream: tcp,
+                            };
+                            let downstream = metrics.new_wrapped_stream(downstream); // for counting bytes
+                            let _: () =
+                                utils::forward::normal::forward_stream(upstream, downstream).await;
+                            Ok(())
+                        })
+                    }
+                };
+
+                Ok((task, attestation_state, local_addr))
+            }
         }
     }
 }

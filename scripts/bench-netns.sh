@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Benchmark: raw TCP vs stunnel vs TNG in isolated ip netns
 # Usage: make bench
-# Dependencies: ip, iptables, iperf3, stunnel4, openssl, python3, curl
+# Dependencies: ip, iptables, iperf3, stunnel4, openssl, python3, curl, jq
 set -euo pipefail
 
 ###############################################################################
@@ -32,6 +32,34 @@ TNG_MULTIPLEX="${TNG_MULTIPLEX:-false}"  # "false" = raw-TLS (no H2), "true" = H
 # upload rate; `down` (server→client via `iperf3 -R`, read sum_received) is the
 # client's download rate. Unset = up.
 IPERF_DIR="${IPERF_DIR:-up}"
+
+# kTLS data plane: when TNG_KTLS=true, engage the in-kernel AEAD data plane on
+# BOTH ends of the tunnel — the ingress (client) upstream socket AND the egress
+# (server) downstream socket (kTLS is a default Linux capability — no cargo
+# feature is needed, only the kernel `tls` module loaded via `modprobe tls`).
+# The egress server-side kTLS is the larger throughput lever: the server does
+# the send-direction AEAD, which the ingress-only path left in user space.
+# kTLS is mutually exclusive with H2 multiplexing (the kTLS path produces a
+# forward task, not a multiplexable boxed stream), so ktls="best-effort" forces
+# multiplex=false on both sides regardless of TNG_MULTIPLEX. The two kTLS ends
+# interoperate over standard TLS records on the wire.
+TNG_KTLS="${TNG_KTLS:-false}"
+# Per-side overrides (for isolating which kTLS end is the bottleneck): when set,
+# `ingress`/`egress` take precedence over the symmetric `TNG_KTLS`. An unset side
+# falls back to `TNG_KTLS` so the default stays symmetric.
+TNG_KTLS_INGRESS="${TNG_KTLS_INGRESS:-$TNG_KTLS}"
+TNG_KTLS_EGRESS="${TNG_KTLS_EGRESS:-$TNG_KTLS}"
+if [ "$TNG_KTLS_INGRESS" = "true" ] || [ "$TNG_KTLS_EGRESS" = "true" ]; then
+    EFFECTIVE_MULTIPLEX="false"
+else
+    EFFECTIVE_MULTIPLEX="$TNG_MULTIPLEX"
+fi
+# Per-side kTLS policy value fed to jq below: "best-effort" when the side is
+# enabled, otherwise "disabled" (explicit, so TNG_KTLS=false really keeps kTLS
+# off instead of relying on the best-effort default).
+ktls_kv() { [ "$1" = "true" ] && echo "best-effort" || echo "disabled"; }
+KTLS_KV_INGRESS=$(ktls_kv "$TNG_KTLS_INGRESS")
+KTLS_KV_EGRESS=$(ktls_kv "$TNG_KTLS_EGRESS")
 BENCH_TMP=""
 
 ###############################################################################
@@ -121,7 +149,7 @@ cleanup() {
 if [ "$(id -u)" -ne 0 ]; then
     echo "Error: must run as root" >&2; exit 1
 fi
-for cmd in ip iperf3 openssl python3; do
+for cmd in ip iperf3 openssl python3 jq; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: $cmd not found" >&2; exit 1
     fi
@@ -201,46 +229,39 @@ client = yes
 verifyPeer = no
 EOF
 
-# TNG egress config (server side)
-cat > "${BENCH_TMP}/egress.json" << EGRESS_EOF
-{
-    "add_egress": [
+# TNG egress config (server side). The rats_tls block (ktls + multiplex) is
+# assembled by jq from KTLS_KV_EGRESS / EFFECTIVE_MULTIPLEX instead of
+# hand-rolled string concatenation, so the rendered JSON cannot be broken by
+# leading-whitespace or quoting bugs in the injected fragment.
+jq -nc --arg ktls "$KTLS_KV_EGRESS" --argjson mux "$EFFECTIVE_MULTIPLEX" '{
+    add_egress: [
         {
-            "netfilter": {
-                "capture_dst": [
-                    {"port": 5201}
-                ],
-                "capture_local_traffic": true,
-                "listen_port": 40000
+            netfilter: {
+                capture_dst: [{port:5201}],
+                capture_local_traffic: true,
+                listen_port: 40000
             },
-            "rats_tls": {
-                "multiplex": ${TNG_MULTIPLEX}
-            },
-            "no_ra": true
+            rats_tls: {ktls:$ktls, multiplex:$mux},
+            no_ra: true
         }
     ]
-}
-EGRESS_EOF
+}' > "${BENCH_TMP}/egress.json"
 
-# TNG ingress config (client side)
-cat > "${BENCH_TMP}/ingress.json" << INGRESS_EOF
-{
-    "add_ingress": [
+# TNG ingress config (client side). `ktls: "best-effort"` is injected on both
+# sides when TNG_KTLS=true (both ingress client and egress server run the
+# in-kernel kTLS data plane).
+jq -nc --arg ktls "$KTLS_KV_INGRESS" --argjson mux "$EFFECTIVE_MULTIPLEX" '{
+    add_ingress: [
         {
-            "netfilter": {
-                "capture_dst": [
-                    {"host": "10.200.1.2", "port": 5201}
-                ],
-                "listen_port": 50000
+            netfilter: {
+                capture_dst: [{host:"10.200.1.2", port:5201}],
+                listen_port: 50000
             },
-            "rats_tls": {
-                "multiplex": ${TNG_MULTIPLEX}
-            },
-            "no_ra": true
+            rats_tls: {ktls:$ktls, multiplex:$mux},
+            no_ra: true
         }
     ]
-}
-INGRESS_EOF
+}' > "${BENCH_TMP}/ingress.json"
 
 c_ns "$SERVER_NS" mkdir -p /tmp/tng-bench
 c_ns "$CLIENT_NS" mkdir -p /tmp/tng-bench
@@ -294,7 +315,7 @@ for streams in "${STREAM_COUNTS[@]}"; do
     ###########################################################################
     # Benchmark 3: TNG (no_ra)
     ###########################################################################
-    log "=== Benchmark 3: TNG (rats-TLS, multiplex=${TNG_MULTIPLEX}) ==="
+    log "=== Benchmark 3: TNG (rats-TLS, multiplex=${EFFECTIVE_MULTIPLEX}, ktls=ingress:${TNG_KTLS_INGRESS}/egress:${TNG_KTLS_EGRESS}) ==="
 
     # Egress config (server side)
     c_ns "$SERVER_NS" cp "${BENCH_TMP}/egress.json" /tmp/tng-bench/egress.json
@@ -370,7 +391,7 @@ if stunnel > 0:
     tng_st = f'{tng/stunnel*100:.0f}%'
 else:
     tng_st = 'N/A'
-tng_label="TNG (multiplex=${TNG_MULTIPLEX})"
+tng_label="TNG (mux=${EFFECTIVE_MULTIPLEX}, ktls=i:${TNG_KTLS_INGRESS}/e:${TNG_KTLS_EGRESS})"
 print(f"  {tng_label:<{w}} {f'{tng} Gbps':<{w}} {tng_raw:<{w}} {tng_st}")
 print()
 

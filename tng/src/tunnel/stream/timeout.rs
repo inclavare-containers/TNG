@@ -48,15 +48,20 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>
     /// The caller **must** ensure that the first byte read has logically
     /// completed before calling this method. Blindly unwrapping the stream
     /// before the first byte is read will bypass the timeout check.
-    // The type is crate-private, so without this the lib build (which excludes
-    // the unit tests below) reports the method as dead code.
-    #[allow(dead_code)]
-    pub fn assume_first_byte_completed(self) -> T {
-        debug_assert!(
-            matches!(self.state, State::AfterFirstRead),
-            "first byte read has not completed"
-        );
+    pub fn into_inner(self) -> T {
         self.inner
+    }
+
+    /// Returns a reference to the underlying stream.
+    ///
+    /// # Warning
+    ///
+    /// The caller **must** ensure that the first byte read has logically
+    /// completed before calling this method. Blindly unwrapping the stream
+    /// before the first byte is read will bypass the timeout check.
+    #[cfg_attr(not(target_os = "linux"), allow(unused))]
+    pub fn get_ref(&self) -> &T {
+        &self.inner
     }
 }
 
@@ -230,18 +235,11 @@ mod tests {
     #[tokio::test]
     async fn into_inner_returns_inner_stream() {
         let (mut server, client) = tokio::io::duplex(64);
-        server.write_all(b"xy").await.unwrap();
-        let mut stream = FirstByteReadTimeoutStream::new(client, Duration::from_millis(100));
-        // The first-byte read MUST complete through the wrapper before
-        // `assume_first_byte_completed()` is sound (it asserts state ==
-        // AfterFirstRead). Read one byte, then unwrap and drain the rest from
-        // the recovered inner stream.
-        let mut first = [0u8; 1];
-        stream.read_exact(&mut first).await.unwrap();
-        assert_eq!(&first, b"x");
-        let mut inner = stream.assume_first_byte_completed();
-        let mut rest = [0u8; 1];
-        inner.read_exact(&mut rest).await.unwrap();
-        assert_eq!(&rest, b"y");
+        server.write_all(b"x").await.unwrap();
+        let stream = FirstByteReadTimeoutStream::new(client, Duration::from_millis(100));
+        let mut inner = stream.into_inner();
+        let mut buf = [0u8; 1];
+        inner.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"x");
     }
 }

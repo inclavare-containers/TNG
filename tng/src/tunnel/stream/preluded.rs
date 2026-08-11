@@ -26,7 +26,7 @@ pub struct PreludedStream<T> {
 impl<T> PreludedStream<T> {
     /// Returns `true` once every byte of `prelude` has been consumed by reads,
     /// so the next read will be served directly from `stream`.
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "linux"), allow(unused))]
     pub(crate) fn prelude_consumed(&self) -> bool {
         self.prelude_pos >= self.prelude.len()
     }
