@@ -13,13 +13,17 @@ mod ohttp_stream_forwarder {
         status::{StatusProvider, StatusQueryResult},
         tunnel::{
             endpoint::TngEndpoint,
-            ingress::protocol::{
-                ohttp::security::OHttpSecurityLayer, ProtocolStreamForwarder,
-                ProtocolStreamForwarderOutput,
+            ingress::{
+                flow::IncomingStream,
+                protocol::{
+                    ohttp::security::OHttpSecurityLayer, ProtocolStreamForwarder,
+                    ProtocolStreamForwarderOutput,
+                },
             },
             ra_context::RaContext,
+            service_metrics::ServiceMetrics,
         },
-        CommonStreamTrait, TokioIo, TokioRuntime,
+        TokioIo, TokioRuntime,
     };
 
     use anyhow::{anyhow, Result};
@@ -65,7 +69,8 @@ mod ohttp_stream_forwarder {
         async fn forward_stream<'a>(
             &self,
             endpoint: &'a TngEndpoint,
-            downstream: Box<dyn CommonStreamTrait + 'static>,
+            downstream: IncomingStream,
+            metrics: Arc<ServiceMetrics>,
         ) -> Result<ProtocolStreamForwarderOutput> {
             async {
                 let endpoint = Arc::new(endpoint.clone());
@@ -96,6 +101,8 @@ mod ohttp_stream_forwarder {
 
                 Ok((
                     Box::pin(async move {
+                        let downstream = downstream.into_dyn();
+                        let downstream = metrics.new_wrapped_stream(downstream); // for counting bytes
                         hyper_util::server::conn::auto::Builder::new(runtime)
                             .serve_connection_with_upgrades(TokioIo::new(downstream), hyper_service)
                             .await

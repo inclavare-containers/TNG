@@ -103,6 +103,12 @@ The following fields are shared between Ingress and Egress, describing transport
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `multiplex` | boolean | `false` | When `true`, uses HTTP/2 CONNECT to multiplex multiple TCP streams over a single TLS connection, suitable for many short-lived connections; when `false`, each connection has an independent TLS session with higher single-stream throughput, recommended for high-bandwidth scenarios |
+| `ktls` | string | `best-effort` | In-kernel TLS record layer for this rats-TLS link (Linux only): offloads TLS record processing into the kernel on links that can use it. `disabled` never uses kTLS; `best-effort` (the default) uses kTLS when the link supports it and transparently falls back to the standard TLS data plane otherwise; `required` fails the setup instead of falling back. |
+
+> [!NOTE]
+> - kTLS only applies to link types that expose a raw TCP socket at accept time — netfilter, mapping (TCP), socks5, hook, and the http_proxy/hook CONNECT tunnel. The http_proxy reverse-proxy path and the UDP/datagram `mapping_udp` mode have no raw socket, so on those links `best-effort` falls back to userspace TLS and `required` fails.
+> - kTLS is incompatible with H2 multiplexing (`multiplex: true`): `best-effort` falls back (silently disabling kTLS) and `required` fails the setup.
+> - On Linux kernels whose kTLS receive path is unsupported, `best-effort` falls back to the standard TLS data plane (traffic still flows, just without the kTLS speedup) and `required` fails the setup.
 
 ---
 

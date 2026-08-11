@@ -1,10 +1,13 @@
-use std::{future::Future, net::SocketAddr, pin::Pin};
+use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc};
 
 use anyhow::{Context as _, Result};
 
 use crate::{
-    tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint, utils},
-    CommonStreamTrait, ContextualStream,
+    tunnel::{
+        attestation_result::AttestationResult, endpoint::TngEndpoint,
+        ingress::flow::IncomingStream, service_metrics::ServiceMetrics, utils,
+    },
+    ContextualStream,
 };
 
 use super::StreamManager;
@@ -37,7 +40,8 @@ impl StreamManager for UnprotectedStreamManager {
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
-        downstream: Box<dyn CommonStreamTrait + 'static>,
+        downstream: IncomingStream,
+        metrics: Arc<ServiceMetrics>,
     ) -> Result<(
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
@@ -57,8 +61,10 @@ impl StreamManager for UnprotectedStreamManager {
         let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 
         Ok((
-            Box::pin(async {
-                let _: () = utils::forward::forward_stream(upstream, downstream).await;
+            Box::pin(async move {
+                let downstream = downstream.into_dyn();
+                let downstream = metrics.new_wrapped_stream(downstream); // for counting bytes
+                let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
                 Ok(())
             }) as Pin<Box<_>>,
             None,

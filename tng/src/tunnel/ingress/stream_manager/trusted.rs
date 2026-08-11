@@ -8,12 +8,13 @@ use async_trait::async_trait;
 
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::ingress::flow::IncomingStream;
 use crate::tunnel::ingress::protocol::ohttp::OHttpStreamForwarder;
 use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
 use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
 use crate::tunnel::ra_context::RaContext;
-use crate::CommonStreamTrait;
+use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::{
     config::ingress::CommonArgs,
     tunnel::{attestation_result::AttestationResult, utils::runtime::TokioRuntime},
@@ -94,11 +95,7 @@ impl TrustedStreamManager {
                     ),
 
                     None => {
-                        let multiplex = common_args
-                            .rats_tls
-                            .as_ref()
-                            .unwrap_or(&Default::default())
-                            .multiplex;
+                        let rats_tls = common_args.rats_tls.unwrap_or_default();
                         Box::new(
                             RatsTlsStreamForwarder::new(
                                 #[cfg(any(
@@ -109,7 +106,7 @@ impl TrustedStreamManager {
                                 transport_so_mark,
                                 ra_context,
                                 runtime.clone(),
-                                multiplex,
+                                &rats_tls,
                             )
                             .await?,
                         )
@@ -125,14 +122,15 @@ impl StreamManager for TrustedStreamManager {
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
-        downstream: Box<dyn CommonStreamTrait + 'static>,
+        downstream: IncomingStream,
+        metrics: Arc<ServiceMetrics>,
     ) -> Result<(
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
         Option<AttestationResult>,
         /* upstream_local */ Option<SocketAddr>,
     )> {
         self.stream_forwarder
-            .forward_stream(endpoint, downstream)
+            .forward_stream(endpoint, downstream, metrics)
             .await
     }
 }

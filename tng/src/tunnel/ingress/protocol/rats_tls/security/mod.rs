@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use tracing::{Instrument, Span};
 
 use crate::{
+    config::ingress::RatsTlsArgs,
     tunnel::{
         attestation_result::AttestationResult,
         endpoint::{EndpointAddr, TngEndpoint},
@@ -28,7 +29,10 @@ use crate::{
         ra_context::RaContext,
         utils::{
             runtime::TokioRuntime,
-            rustls::config::{alpn::Alpn, TlsConfigGenerator},
+            rustls::{
+                config::{alpn::Alpn, TlsConfigGenerator},
+                TlsOutcome,
+            },
             tokio::TokioIo,
         },
     },
@@ -50,6 +54,14 @@ pub struct RatsTlsSecurityLayer {
     tls_config_generator: Arc<TlsConfigGenerator>,
     runtime: TokioRuntime,
     multiplex: bool,
+    // Read only on the Linux kTLS handshake path; unused (but stored) elsewhere.
+    #[cfg(target_os = "linux")]
+    ktls: crate::config::ktls::EnvCheckedKtls,
+}
+
+pub enum AllocatedSecuredStream {
+    Raw(TlsOutcome),
+    Multiplexed(Box<dyn CommonStreamTrait + Sync>),
 }
 
 impl RatsTlsSecurityLayer {
@@ -58,7 +70,7 @@ impl RatsTlsSecurityLayer {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -67,13 +79,23 @@ impl RatsTlsSecurityLayer {
         let tls_config_generator =
             Arc::new(TlsConfigGenerator::new(ra_context, runtime.clone()).await?);
 
+        // Resolve the kTLS policy once here against the link constraints
+        #[cfg(target_os = "linux")]
+        let ktls = rats_tls
+            .ktls
+            .resolve(&crate::config::ktls::KtlsEnvConstraints::link(
+                rats_tls.multiplex,
+            ))?;
+
         Ok(Self {
             next_id: AtomicU64::new(0),
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
             runtime,
-            multiplex,
+            multiplex: rats_tls.multiplex,
+            #[cfg(target_os = "linux")]
+            ktls,
         })
     }
 
@@ -156,34 +178,50 @@ impl RatsTlsSecurityLayer {
         Ok(client)
     }
 
-    pub async fn allocate_secured_stream(
+    pub async fn allocate_secured_stream_try_ktls(
         &self,
         endpoint: TngEndpoint,
     ) -> Result<(
-        Box<dyn CommonStreamTrait + Sync>,
+        AllocatedSecuredStream,
         /* local_addr */ Option<SocketAddr>,
         Option<AttestationResult>,
-        /* session_id */ u64,
     )> {
         if !self.multiplex {
-            let (stream, local_addr, att, session_id) = RatsTlsWrappingLayer::create_stream_raw(
+            // Try to create a raw stream and fallback to rustls if ktls failed
+            let (stream, local_addr, att) = RatsTlsWrappingLayer::create_stream_raw(
                 &self.transport_layer_creator,
                 &self.tls_config_generator,
                 &endpoint,
-                &self.runtime,
+                #[cfg(target_os = "linux")]
+                self.ktls,
             )
             .instrument(tracing::info_span!("wrapping", mode = "rats-tls"))
             .await?;
-            Ok((Box::new(stream), local_addr, att, session_id))
+            Ok((AllocatedSecuredStream::Raw(stream), local_addr, att))
         } else {
-            let pool_key = PoolKey::new(endpoint);
-            let client = self.get_client(&pool_key).await?;
-            let (stream, local_addr, att, session_id) =
-                RatsTlsWrappingLayer::create_stream_from_hyper(&client)
-                    .instrument(tracing::info_span!("wrapping", mode = "h2"))
-                    .await?;
-            Ok((Box::new(stream), local_addr, att, session_id))
+            let (stream, local_addr, att) = self.allocate_secured_stream_rustls(endpoint).await?;
+            Ok((
+                AllocatedSecuredStream::Multiplexed(Box::new(stream)),
+                local_addr,
+                att,
+            ))
         }
+    }
+
+    pub async fn allocate_secured_stream_rustls(
+        &self,
+        endpoint: TngEndpoint,
+    ) -> Result<(
+        impl CommonStreamTrait + Sync,
+        /* local_addr */ Option<SocketAddr>,
+        Option<AttestationResult>,
+    )> {
+        let pool_key = PoolKey::new(endpoint);
+        let client = self.get_client(&pool_key).await?;
+        let (stream, local_addr, att) = RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+            .instrument(tracing::info_span!("wrapping", mode = "h2"))
+            .await?;
+        Ok((stream, local_addr, att))
     }
 }
 

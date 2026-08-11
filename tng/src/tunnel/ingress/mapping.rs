@@ -12,7 +12,7 @@ use tokio::net::TcpListener;
 use crate::config::ingress::IngressMappingArgs;
 use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
-use crate::tunnel::ingress::flow::AcceptedStream;
+use crate::tunnel::ingress::flow::{AcceptedStream, IncomingStream};
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::socket::SetListenerSockOpts;
 
@@ -141,7 +141,7 @@ impl IngressTrait for MappingIngress {
                                     IngressAccessMode::Mapping,
                                 );
                                 yield Ok(AcceptedStream {
-                                    stream: Box::new(crate::ContextualStream::new(stream, "ingress-mapping")),
+                                    stream: IncomingStream::Raw(stream, None),
                                     src: peer_addr,
                                     dst: Arc::clone(&target.out_ep),
                                     encrypted: true,

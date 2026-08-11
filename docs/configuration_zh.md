@@ -103,6 +103,12 @@
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `multiplex` | boolean | `false` | `true` 时使用 HTTP/2 CONNECT 在单条 TLS 连接上复用多个 TCP 流，适合大量短连接；`false` 时每条连接独立 TLS 会话，单流吞吐量更高，推荐高带宽场景 |
+| `ktls` | string | `best-effort` | 该 rats-TLS 链路的内核 TLS 记录层（仅 Linux）：在可使用的链路上将 TLS 记录处理卸载到内核。`disabled` 从不使用 kTLS；`best-effort`（默认）在链路支持时启用 kTLS，不支持时透明回退到标准 TLS 数据面；`required` 不回退，直接令启动失败。|
+
+> [!NOTE]
+> - kTLS 仅适用于在 accept 时暴露原始 TCP socket 的链路类型，包括netfilter、mapping（TCP）、socks5、hook 以及 http_proxy/hook CONNECT 隧道。http_proxy 反向代理路径与 UDP/数据报 `mapping_udp` 模式没有原始 socket，因此在这些链路上 `best-effort`将回退到用户态TLS，`required`将导致失败。
+> - kTLS 与 H2 多路复用（`multiplex: true`）配置不兼容，此时`best-effort` 回退（静默关闭 kTLS），`required` 令启动失败。
+> - 在 kTLS 接收路径不支持的Linux内核上，`best-effort` 回退到标准 TLS 数据面（流量仍正常转发，只是没有 kTLS 的加速），`required` 令启动失败。
 
 ---
 

@@ -266,7 +266,7 @@ impl EgressTrait for HookEgress {
                                 let encrypted = self.encrypted(peer_addr, local);
 
                                 yield Ok(AcceptedStream {
-                                    stream: Box::new(crate::ContextualStream::new(stream, "egress-hook")),
+                                    stream: super::flow::IncomingStream::Raw(stream),
                                     src: peer_addr,
                                     dst,
                                     listener_addr: info.local_addr,

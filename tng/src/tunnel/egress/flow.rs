@@ -13,10 +13,12 @@ use crate::config::egress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
+use crate::tunnel::egress::stream_manager::DecodedStream;
+use crate::tunnel::egress::stream_manager::NextStream;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
-use crate::{service::RegistedService, CommonStreamTrait, ContextualStream};
+use crate::{service::RegistedService, ContextualStream};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 use crate::tunnel::endpoint::TngEndpoint;
@@ -25,7 +27,7 @@ use crate::tunnel::utils::runtime::TokioRuntime;
 pub struct EgressFlow {
     egress: Box<dyn EgressTrait>,
     trusted_stream_manager: Arc<TrustedStreamManager>,
-    metrics: ServiceMetrics,
+    metrics: Arc<ServiceMetrics>, // Use Arc here for cheaper cloning
     runtime: TokioRuntime,
 }
 
@@ -45,9 +47,25 @@ pub(super) trait EgressTrait: Sync + Send {
 
 pub(super) type Incomming<'a> = Box<dyn Stream<Item = Result<AcceptedStream>> + Send + 'a>;
 
+/// The accepted downstream stream. Egress accept types (netfilter, mapping,
+/// hook) always surface a raw `TcpStream`, so this carries only `Raw` — no
+/// erased variant, no HTTP over-read prelude (egress has no http_proxy
+/// reverse-proxy over-read). The raw fd is what the kTLS ULP installs on; an
+/// erased trait object would hide it.
+///
+/// The `Ktls` policy is resolved later by the trusted stream manager, not
+/// carried here: the handshake yields a `DecodedStream::Ktls` for the splice
+/// data plane when kTLS engages, or a `DecodedStream::Opaque` for the rustls
+/// path otherwise. The hook egress yields `Raw` even when `encrypted` is
+/// `false` (IPv6 / loopback / no host-match), so a plaintext hook connection
+/// takes the `!encrypted` direct-forward arm and bypasses kTLS entirely.
+pub enum IncomingStream {
+    Raw(tokio::net::TcpStream),
+}
+
 #[allow(dead_code)]
 pub(super) struct AcceptedStream {
-    pub stream: Box<dyn CommonStreamTrait + Sync>,
+    pub stream: IncomingStream,
     pub src: SocketAddr,
     pub dst: Arc<TngEndpoint>,
     pub listener_addr: SocketAddr,
@@ -69,7 +87,7 @@ impl EgressFlow {
         let egress = Box::new(egress);
 
         let metric_attributes = egress.metric_attributes();
-        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
+        let metrics = Arc::new(service_metrics_creator.new_service_metrics(metric_attributes));
 
         let trusted_stream_manager =
             Arc::new(TrustedStreamManager::new(common_args, runtime.clone()).await?);
@@ -158,7 +176,11 @@ impl EgressFlow {
                     &metrics,
                     access_accepted,
                     &dst,
-                    stream,
+                    {
+                        match stream {
+                            IncomingStream::Raw(tcp) => DecodedStream::Opaque(Box::new(tcp)),
+                        }
+                    },
                     false,
                     false,
                     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -168,74 +190,79 @@ impl EgressFlow {
                 {
                     tracing::error!(?error, "Failed to forward stream");
                 }
-                return;
-            }
-
-            // Existing trusted stream path
-            let mut pending = match trusted_stream_manager.consume_stream(stream).await {
-                Ok(pending) => pending,
-                Err(error) => {
-                    tracing::error!(?error, "Failed to consume stream from client");
-                    return;
-                }
-            };
-
-            while let Some(next_stream) = pending.next().await {
-                let next_stream = match next_stream {
-                    Ok(next_stream) => next_stream,
+            } else {
+                // Existing trusted stream path
+                let mut pending = match trusted_stream_manager.consume_stream(stream).await {
+                    Ok(pending) => pending,
                     Err(error) => {
-                        tracing::error!(?error, "Failed to get next stream");
-                        continue;
+                        tracing::error!(?error, "Failed to consume stream from client");
+                        return;
                     }
                 };
 
-                // Spawn a task to handle the connection
-                runtime_cloned.spawn_supervised_task_current_span({
-                    let dst = dst.clone();
-                    let access_accepted = access_accepted.clone_for_multiplexing();
-                    let metrics = metrics.clone();
-
-                    async move {
-                        // Protocol-level direct forward: determined by TransportLayer
-                        // inside consume_stream. The first bytes of the stream are inspected
-                        // as HTTP; if the path matches a configured direct_forward regex
-                        // (common_args.direct_forward_rules), the request bypasses OHTTP
-                        // decryption entirely and is forwarded as plain HTTP to upstream.
-                        //
-                        // This is a per-request decision, distinct from the transport-level
-                        // decision above. A connection can pass the transport-level IP/ifname
-                        // check (encrypted=true, entering the trusted stream path) yet
-                        // still yield DirectlyForward NextStreams when individual request
-                        // paths match the direct_forward rules.
-                        //
-                        // Three sub-stream outcomes:
-                        // - Secured(stream, Some(attestation)): OHTTP decrypted + attested
-                        // - Secured(stream, None): OHTTP/RATS-TLS decrypted, no attestation
-                        // - DirectlyForward(stream): plain HTTP matched by direct_forward rule
-                        let encrypted = next_stream.is_secured();
-                        let attested = next_stream.attestation_result().is_some();
-                        let downstream = next_stream.into_stream();
-
-                        if let Err(error) = forward_to_upstream(
-                            &metrics,
-                            access_accepted,
-                            &dst,
-                            downstream,
-                            encrypted,
-                            attested,
-                            #[cfg(any(
-                                target_os = "android",
-                                target_os = "fuchsia",
-                                target_os = "linux"
-                            ))]
-                            transport_so_mark,
-                        )
-                        .await
-                        {
-                            tracing::error!(?error, "Failed to forward stream");
+                while let Some(next_stream) = pending.next().await {
+                    let next_stream = match next_stream {
+                        Ok(next_stream) => next_stream,
+                        Err(error) => {
+                            tracing::error!(?error, "Failed to get next stream");
+                            continue;
                         }
-                    }
-                });
+                    };
+
+                    // Spawn a task to handle the connection
+                    runtime_cloned.spawn_supervised_task_current_span({
+                        let dst = dst.clone();
+                        let access_accepted = access_accepted.clone_for_multiplexing();
+                        let metrics = metrics.clone();
+
+                        async move {
+                            // Protocol-level direct forward: determined by TransportLayer
+                            // inside consume_stream. The first bytes of the stream are inspected
+                            // as HTTP; if the path matches a configured direct_forward regex
+                            // (common_args.direct_forward_rules), the request bypasses OHTTP
+                            // decryption entirely and is forwarded as plain HTTP to upstream.
+                            //
+                            // This is a per-request decision, distinct from the transport-level
+                            // decision above. A connection can pass the transport-level IP/ifname
+                            // check (encrypted=true, entering the trusted stream path) yet
+                            // still yield DirectlyForward NextStreams when individual request
+                            // paths match the direct_forward rules.
+                            //
+                            // Three sub-stream outcomes:
+                            // - Secured(stream, Some(attestation)): OHTTP decrypted + attested
+                            // - Secured(stream, None): OHTTP/RATS-TLS decrypted, no attestation
+                            // - DirectlyForward(stream): plain HTTP matched by direct_forward rule
+                            let encrypted = next_stream.is_secured();
+                            let attested = next_stream.attestation_result().is_some();
+                            let downstream = match next_stream {
+                                NextStream::Secured(decoded_stream, ..) => decoded_stream,
+                                NextStream::DirectlyForward(preluded_stream) => {
+                                    DecodedStream::Opaque(Box::new(preluded_stream))
+                                    // TODO: speed up with splice()
+                                }
+                            };
+
+                            if let Err(error) = forward_to_upstream(
+                                &metrics,
+                                access_accepted,
+                                &dst,
+                                downstream,
+                                encrypted,
+                                attested,
+                                #[cfg(any(
+                                    target_os = "android",
+                                    target_os = "fuchsia",
+                                    target_os = "linux"
+                                ))]
+                                transport_so_mark,
+                            )
+                            .await
+                            {
+                                tracing::error!(?error, "Failed to forward stream");
+                            }
+                        }
+                    });
+                }
             }
         });
     }
@@ -249,7 +276,7 @@ async fn forward_to_upstream(
     metrics: &ServiceMetrics,
     access_accepted: AccessAccepted,
     dst: &TngEndpoint,
-    downstream: Box<dyn CommonStreamTrait>,
+    downstream: DecodedStream,
     encrypted: bool,
     attested: bool,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -267,14 +294,31 @@ async fn forward_to_upstream(
         .await
         .context("Failed to connect to upstream")?;
     let egress_local = upstream.local_addr().context("Failed to get local addr")?;
-    let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
 
     // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
     access_routed.into_established(Some(egress_local), attested);
 
-    let downstream = metrics.new_wrapped_stream(downstream);
+    match downstream {
+        #[cfg(target_os = "linux")]
+        DecodedStream::Ktls(ktls_stream) => {
+            use crate::tunnel::service_metrics::ByteCounters;
 
-    utils::forward::forward_stream(upstream, downstream).await;
+            let ByteCounters { tx, rx } = metrics.new_byte_counter();
+            let _: () = utils::forward::ktls_splice::forward_ktls_stream_bi(
+                ktls_stream,
+                upstream,
+                None,
+                rx,
+                tx,
+            )
+            .await;
+        }
+        DecodedStream::Opaque(opaque) => {
+            let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
+            let downstream = metrics.new_wrapped_stream(opaque);
+            utils::forward::normal::forward_stream(upstream, downstream).await;
+        }
+    }
 
     active_cx.mark_finished_successfully();
     Ok(())

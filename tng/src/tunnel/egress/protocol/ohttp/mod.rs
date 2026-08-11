@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::egress::protocol::common::transport::TngTransportStream;
+use crate::tunnel::egress::stream_manager::DecodedStream;
 use crate::{
     config::egress::OHttpArgs,
     tunnel::{
@@ -10,7 +12,7 @@ use crate::{
         },
         ra_context::RaContext,
     },
-    CommonStreamTrait, TokioRuntime,
+    TokioRuntime,
 };
 
 use anyhow::Result;
@@ -44,21 +46,31 @@ impl OHttpStreamDecoder {
 impl ProtocolStreamDecoder for OHttpStreamDecoder {
     async fn decode_stream(
         &self,
-        input: Box<dyn CommonStreamTrait + Sync + 'static>,
+        input: TngTransportStream,
     ) -> Result<ProtocolStreamDecoderOutput> {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
         // Should be spawned as background task
         let security_layer = self.security_layer.clone();
         self.runtime.spawn_supervised_task(async move {
-            if let Err(error) = security_layer.handle_stream(input, sender).await {
+            let result = match input {
+                TngTransportStream::Inspected(preluded_stream) => {
+                    security_layer.handle_stream(preluded_stream, sender).await
+                }
+                TngTransportStream::Uninspected(first_byte_read_timeout_stream) => {
+                    security_layer
+                        .handle_stream(first_byte_read_timeout_stream, sender)
+                        .await
+                }
+            };
+            if let Err(error) = result {
                 tracing::error!(?error, "Failed to handle OHTTP stream")
             }
         });
 
         Ok(stream! {
-            while let Some(value) = receiver.recv().await {
-                yield Ok(value); // TODO: replace the handle_stream above with return stream directly and pass error here
+            while let Some((stream, attestation_result)) = receiver.recv().await {
+                yield Ok((DecodedStream::Opaque(stream), attestation_result)); // TODO: replace the handle_stream above with return stream directly and pass error here
             }
         }
         .boxed())

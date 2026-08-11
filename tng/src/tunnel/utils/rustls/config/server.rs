@@ -1,3 +1,9 @@
+// The `enable_secret_extraction` field (set on Linux, where kTLS is built) is
+// the only consumer of `mut` on the server config bindings. On non-Linux
+// targets kTLS is absent, so the `mut` is unused — silence `unused_mut`
+// there.
+#![cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -11,6 +17,17 @@ use crate::tunnel::utils::rustls::{
     ra::client_cert_verifier::LazyClientCertVerifier,
 };
 
+/// Server-side counterpart of [`enable_secret_extraction_client`] — flips
+/// `enable_secret_extraction` on a `ServerConfig` for the egress (server-side)
+/// kTLS install. No-op on non-Linux.
+#[cfg(target_os = "linux")]
+pub fn enable_secret_extraction_server(config: &mut rustls::ServerConfig) {
+    config.enable_secret_extraction = true;
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn enable_secret_extraction_server(_config: &mut rustls::ServerConfig) {}
+
 impl TlsConfigGenerator {
     pub async fn get_lazy_one_time_rustls_server_config(
         &self,
@@ -18,39 +35,43 @@ impl TlsConfigGenerator {
     ) -> Result<LazyOnetimeTlsServerConfig> {
         let mut config = match self {
             TlsConfigGenerator::NoRa => {
-                let tls_server_config =
+                let mut tls_server_config =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
+                enable_secret_extraction_server(&mut tls_server_config);
                 LazyOnetimeTlsServerConfig(tls_server_config, None)
             }
             TlsConfigGenerator::Verify(verify_ctx) => {
                 let verifier = Arc::new(LazyClientCertVerifier::new(verify_ctx.clone())?);
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
+                enable_secret_extraction_server(&mut tls_server_config);
                 LazyOnetimeTlsServerConfig(tls_server_config, Some(verifier))
             }
             #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager) => {
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
                         .with_cert_resolver(Arc::new(DynamicCertResolver::new(
                             cert_manager.clone(),
                         )));
+                enable_secret_extraction_server(&mut tls_server_config);
                 LazyOnetimeTlsServerConfig(tls_server_config, None)
             }
             #[cfg(unix)]
             TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
                 let verifier = Arc::new(LazyClientCertVerifier::new(verify_ctx.clone())?);
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier.clone())
                         .with_cert_resolver(Arc::new(DynamicCertResolver::new(
                             cert_manager.clone(),
                         )));
+                enable_secret_extraction_server(&mut tls_server_config);
                 LazyOnetimeTlsServerConfig(tls_server_config, Some(verifier))
             }
         };
@@ -107,39 +128,43 @@ impl TlsConfigGenerator {
 
         let mut config = match self {
             TlsConfigGenerator::NoRa => {
-                let tls_server_config =
+                let mut tls_server_config =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
+                enable_secret_extraction_server(&mut tls_server_config);
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
             TlsConfigGenerator::Verify(verify_ctx) => {
                 let verifier = Arc::new(BlockingClientCertVerifier::new(verify_ctx.clone())?);
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier)
                         .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
+                enable_secret_extraction_server(&mut tls_server_config);
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
             #[cfg(unix)]
             TlsConfigGenerator::Attest(cert_manager) => {
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_no_client_auth()
                         .with_cert_resolver(Arc::new(DynamicCertResolver::new(
                             cert_manager.clone(),
                         )));
+                enable_secret_extraction_server(&mut tls_server_config);
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
             #[cfg(unix)]
             TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
                 let verifier = Arc::new(BlockingClientCertVerifier::new(verify_ctx.clone())?);
-                let tls_server_config: ServerConfig =
+                let mut tls_server_config: ServerConfig =
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(verifier)
                         .with_cert_resolver(Arc::new(DynamicCertResolver::new(
                             cert_manager.clone(),
                         )));
+                enable_secret_extraction_server(&mut tls_server_config);
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
         };

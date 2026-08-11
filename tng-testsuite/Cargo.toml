@@ -117,6 +117,34 @@ name = "ingress_netfilter_cgroup"
 path = "tests/netfilter/ingress_netfilter_cgroup.rs"
 
 [[test]]
+name = "ktls_e2e"
+path = "tests/netfilter/ktls_e2e.rs"
+
+[[test]]
+name = "mapping_ktls_e2e"
+path = "tests/mapping_ktls_e2e.rs"
+
+[[test]]
+name = "socks5_ktls_e2e"
+path = "tests/socks5_ktls_e2e.rs"
+
+[[test]]
+name = "socks5_ktls_plaintext_bypass"
+path = "tests/socks5_ktls_plaintext_bypass.rs"
+
+[[test]]
+name = "http_proxy_connect_ktls_e2e"
+path = "tests/http_proxy_connect_ktls_e2e.rs"
+
+[[test]]
+name = "http_proxy_connect_ktls_required_e2e"
+path = "tests/http_proxy_connect_ktls_required_e2e.rs"
+
+[[test]]
+name = "ktls_required_multiplex"
+path = "tests/netfilter/ktls_required_multiplex.rs"
+
+[[test]]
 name = "js_sdk_http"
 path = "tests/js_sdk_http.rs"
 required-features = ["js-sdk"]
@@ -277,6 +305,11 @@ required-features = ["on-bin"]
 [[test]]
 name = "egress_hook_capture_local_traffic"
 path = "tests/hook/egress_hook_capture_local_traffic.rs"
+required-features = ["on-bin"]
+
+[[test]]
+name = "egress_hook_ktls_bypass"
+path = "tests/hook/egress_hook_ktls_bypass.rs"
 required-features = ["on-bin"]
 
 [[test]]

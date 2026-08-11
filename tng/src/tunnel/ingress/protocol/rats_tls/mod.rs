@@ -1,19 +1,25 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::tunnel::ingress::protocol::rats_tls::security::AllocatedSecuredStream;
 use crate::{
+    config::ingress::RatsTlsArgs,
     error::TngError,
     status::{StatusProvider, StatusQueryResult},
     tunnel::{
         endpoint::TngEndpoint,
-        ingress::protocol::{
-            rats_tls::security::RatsTlsSecurityLayer, ProtocolStreamForwarder,
-            ProtocolStreamForwarderOutput,
+        ingress::{
+            flow::IncomingStream,
+            protocol::{
+                rats_tls::security::RatsTlsSecurityLayer, ForwardTask, ProtocolStreamForwarder,
+                ProtocolStreamForwarderOutput,
+            },
         },
         ra_context::RaContext,
-        utils,
+        service_metrics::ServiceMetrics,
+        stream::PreludedStream,
+        utils::{self, rustls::TlsOutcome},
     },
-    AttestationResult, CommonStreamTrait, ContextualStream, TokioRuntime,
+    ContextualStream, TokioRuntime,
 };
 
 use anyhow::Result;
@@ -33,7 +39,7 @@ impl RatsTlsStreamForwarder {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
@@ -41,31 +47,10 @@ impl RatsTlsStreamForwarder {
                 transport_so_mark,
                 ra_context,
                 runtime,
-                multiplex,
+                rats_tls,
             )
             .await?,
         })
-    }
-
-    pub async fn connect(
-        &self,
-        endpoint: TngEndpoint,
-    ) -> Result<(
-        Box<dyn CommonStreamTrait + Sync>,
-        /* local_addr */ Option<SocketAddr>,
-        Option<AttestationResult>,
-        /* session_id */ u64,
-    )> {
-        let (stream, local_addr, attestation_result, session_id) = self
-            .security_layer
-            .allocate_secured_stream(endpoint)
-            .await?;
-        Ok((
-            Box::new(ContextualStream::new(stream, "ingress-rats-tls")),
-            local_addr,
-            attestation_result,
-            session_id,
-        ))
     }
 }
 
@@ -74,18 +59,68 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
     async fn forward_stream<'a>(
         &self,
         endpoint: &'a TngEndpoint,
-        downstream: Box<dyn CommonStreamTrait + 'static>,
+        downstream: IncomingStream,
+        metrics: Arc<ServiceMetrics>,
     ) -> Result<ProtocolStreamForwarderOutput> {
-        let (upstream, local_addr, attestation_result, _session_id) =
-            self.connect(endpoint.clone()).await?;
-        Ok((
-            Box::pin(async {
-                let _: () = utils::forward::forward_stream(upstream, downstream).await;
-                Ok(())
-            }),
-            attestation_result,
-            local_addr,
-        ))
+        match downstream {
+            IncomingStream::Opaque(opaque) => {
+                // When downstream is Opaque, it is not possible to use KTLS
+                let (upstream, local_addr, attestation_result) = self
+                    .security_layer
+                    .allocate_secured_stream_rustls(endpoint.clone())
+                    .await?;
+
+                let upstream = ContextualStream::new(upstream, "ingress-rats-tls");
+                let task: ForwardTask = Box::pin(async move {
+                    let opaque = metrics.new_wrapped_stream(opaque); // for counting bytes
+                    let _: () = utils::forward::normal::forward_stream(upstream, opaque).await;
+                    Ok(())
+                });
+
+                Ok((task, attestation_result, local_addr))
+            }
+            IncomingStream::Raw(tcp, prelude) => {
+                // When downstream is Raw, we can try to use KTLS
+                let (upstream, local_addr, attestation_result) = self
+                    .security_layer
+                    .allocate_secured_stream_try_ktls(endpoint.clone())
+                    .await?;
+
+                // Check if KTLS was used
+                let task: ForwardTask = match upstream {
+                    #[cfg(target_os = "linux")]
+                    AllocatedSecuredStream::Raw(TlsOutcome::Ktls(upstream)) => {
+                        Box::pin(async move {
+                            use crate::tunnel::service_metrics::ByteCounters;
+
+                            let ByteCounters { tx, rx } = metrics.new_byte_counter();
+                            let _: () = utils::forward::ktls_splice::forward_ktls_stream_bi(
+                                upstream, tcp, prelude, tx, rx,
+                            )
+                            .await;
+                            Ok(())
+                        })
+                    }
+                    AllocatedSecuredStream::Raw(TlsOutcome::Rustls(upstream))
+                    | AllocatedSecuredStream::Multiplexed(upstream) => {
+                        let upstream = ContextualStream::new(upstream, "ingress-rats-tls");
+                        Box::pin(async move {
+                            let downstream = PreludedStream {
+                                prelude: prelude.unwrap_or_default(),
+                                prelude_pos: 0,
+                                stream: tcp,
+                            };
+                            let downstream = metrics.new_wrapped_stream(downstream); // for counting bytes
+                            let _: () =
+                                utils::forward::normal::forward_stream(upstream, downstream).await;
+                            Ok(())
+                        })
+                    }
+                };
+
+                Ok((task, attestation_result, local_addr))
+            }
+        }
     }
 }
 
