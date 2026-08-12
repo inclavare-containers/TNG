@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::{
     io,
@@ -5,9 +6,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use tokio::io::{unix::AsyncFd, AsyncWrite};
+use tokio::io::{unix::AsyncFd, AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
-use tokio_splice2::{AsyncWriteFd, IsNotFile};
+use tokio_splice2::{AsyncReadFd, AsyncWriteFd, IsNotFile};
 
 use ktls_core::{tls::Peer, Error, ProtocolVersion, TlsCryptoInfoRx, TlsCryptoInfoTx, TlsSession};
 
@@ -74,6 +75,156 @@ impl TlsSession for Session {
     fn handle_new_session_ticket(&mut self, _payload: &[u8]) -> Result<(), Error> {
         // Ignore the ticket — do NOT abort. (TLS 1.3 NST post-handshake.)
         Ok(())
+    }
+}
+
+/// `tokio_splice2`-compatible zero-copy adapter around an installed-kTLS
+/// socket. Holds the single `TcpStream` (the kTLS socket; its mio
+/// registration from the handshake drives BOTH directions — no `dup`, no
+/// second `AsyncFd`, no `EEXIST`) and a `RefCell<Context>` (the state machine
+/// + cmsg `EIO` drain + `close_notify` shutdown, owned by `ktls-core`).
+///
+/// `RefCell` is required because `tokio_splice2`'s trait methods are `&self`
+/// while `Context::handle_io_error`/`shutdown` take `&mut self`. The splice
+/// transfer runs in one task, so `RefCell` (`!Sync`) is sound.
+///
+/// `ktls_stream::Stream` is NOT wrapped: its `inner` is private and its
+/// `AsyncRead`/`AsyncWrite` are user-space `poll_read`/`poll_write`, the
+/// opposite of what splice needs; but `ktls_core::Context` is public, so the
+/// adapter holds `TcpStream + Context` directly (spec §3.1).
+#[allow(dead_code)]
+pub(crate) struct KtlsSpliceStream {
+    tcp: TcpStream,
+    ctx: RefCell<ktls_core::Context<Session>>,
+}
+
+#[allow(dead_code)]
+impl KtlsSpliceStream {
+    pub(crate) fn new(tcp: TcpStream, ctx: ktls_core::Context<Session>) -> Self {
+        Self {
+            tcp,
+            ctx: RefCell::new(ctx),
+        }
+    }
+
+    /// Borrow the `Context` (e.g. to drain the corked-tail buffer before the
+    /// splice loop). Single-task, so a `RefCell` borrow is sound.
+    pub(crate) fn ctx(&self) -> std::cell::Ref<'_, ktls_core::Context<Session>> {
+        self.ctx.borrow()
+    }
+
+    pub(crate) fn ctx_mut(&self) -> std::cell::RefMut<'_, ktls_core::Context<Session>> {
+        self.ctx.borrow_mut()
+    }
+}
+
+impl AsFd for KtlsSpliceStream {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.tcp.as_fd()
+    }
+}
+
+impl AsyncReadFd for KtlsSpliceStream {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.tcp.poll_read_ready(cx)
+    }
+
+    fn try_io_read<R>(&self, f: impl FnOnce() -> io::Result<R>) -> io::Result<R> {
+        // EIO interception contract (spec §2.1): splice's EIO (a non-application
+        // control record) MUST be turned into WouldBlock here, because
+        // poll_splice_drain faults on every non-WouldBlock/Interrupted error.
+        if self.ctx.borrow().state().is_read_closed() {
+            // EOF -> the drain closure's Ok(None) path (splice returned 0). We
+            // surface this as WouldBlock so the drain loop re-enters and the
+            // next splice returns 0 -> Drained::Done. (Read-closed is set by
+            // handle_io_error on a close_notify / BrokenPipe.)
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        match f() {
+            Ok(r) => Ok(r),
+            Err(e) => match self.ctx.borrow_mut().handle_io_error(&self.tcp, e) {
+                Ok(()) => Err(io::ErrorKind::WouldBlock.into()), // recovered -> retry
+                Err(e) => Err(e),                                // unrecoverable -> Fault
+            },
+        }
+    }
+}
+
+impl AsyncWriteFd for KtlsSpliceStream {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.tcp.poll_write_ready(cx)
+    }
+
+    fn try_io_write<R>(&self, f: impl FnOnce() -> io::Result<R>) -> io::Result<R> {
+        if self.ctx.borrow().state().is_write_closed() {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        match f() {
+            Ok(r) => Ok(r),
+            Err(e) => match self.ctx.borrow_mut().handle_io_error(&self.tcp, e) {
+                Ok(()) => Err(io::ErrorKind::WouldBlock.into()),
+                Err(e) => Err(e),
+            },
+        }
+    }
+}
+
+impl IsNotFile for KtlsSpliceStream {}
+
+impl AsyncRead for KtlsSpliceStream {
+    // Not on the splice hot path (copy_bidirectional uses try_io_read); serves
+    // only any out-of-band user-space read. Delegates to the Context buffer
+    // then the TcpStream, mirroring ktls_stream::Stream::poll_read.
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let mut ctx = this.ctx.borrow_mut();
+        if ctx.state().is_read_closed() {
+            return Poll::Ready(Ok(()));
+        }
+        // Serve any buffered corked-tail bytes first.
+        let read_from_buffer = ctx.buffer_mut().read(|data| {
+            let amt = buf.remaining().min(data.len());
+            buf.put_slice(&data[..amt]);
+            amt
+        });
+        if read_from_buffer.is_some() {
+            return Poll::Ready(Ok(()));
+        }
+        drop(ctx);
+        Pin::new(&mut this.tcp).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for KtlsSpliceStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if this.ctx.borrow().state().is_write_closed() {
+            return Poll::Ready(Ok(0));
+        }
+        Pin::new(&mut this.tcp).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.tcp).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        // Emit close_notify (Context::shutdown -> send_tls_control_message
+        // ALERT close_notify) then TCP half-close. Replaces the hand-rolled
+        // send_close_notify. Best-effort: a failure here is no worse than a
+        // bare FIN.
+        this.ctx.borrow_mut().shutdown(&this.tcp);
+        Pin::new(&mut this.tcp).poll_shutdown(cx)
     }
 }
 
