@@ -25,7 +25,7 @@ images:
     build: true
     test: true
     region: cn-hongkong
-    platform: [linux/amd64]
+    platform: [linux/amd64, linux/arm64]
     docker_file:
       path: Dockerfile
       scene:
