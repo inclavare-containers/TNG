@@ -505,6 +505,22 @@ impl RatsTlsSecurityLayer {
             Ok((AllocatedSecuredStream::Multiplexed(stream), local_addr, att))
         }
     }
+
+    /// An `IncomingStream::Opaque` downstream has no raw socket, so kTLS (which
+    /// installs on a raw fd) is impossible. Apply the policy: `required` bails
+    /// the connection, `best-effort`/`disabled` fall back to the rustls data
+    /// plane (0-RTT or multiplex path).
+    #[cfg(target_os = "linux")]
+    pub(super) fn check_opaque_downstream(&self) -> Result<()> {
+        use crate::config::ktls::{FallbackDecision, KtlsConnUnavailable};
+        match self
+            .ktls
+            .on_connection_unavailable(KtlsConnUnavailable::OpaqueDownstream)
+        {
+            FallbackDecision::Bail(error) => Err(error),
+            FallbackDecision::FallBack => Ok(()),
+        }
+    }
 }
 
 /// Max bytes attempted as 0-RTT early data from the first downstream read.
