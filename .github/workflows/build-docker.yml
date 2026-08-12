@@ -16,88 +16,47 @@ jobs:
       fail-fast: false
       matrix:
         variant: [alinux3, ubuntu2404]
-    runs-on: oracle-vm-16cpu-64gb-x86-64
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Docker Setup Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          driver-opts: image=moby/buildkit:master,network=host
+        # No driver-opts: network=host and moby/buildkit:master were Oracle-Cloud
+        # self-hosted workarounds (iptables FORWARD DROP + MTU mismatch break the
+        # default bridge). Public Ubuntu runners have a clean bridge — defaults win.
 
-      # Suffixed metadata — all variants
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/inclavare-containers/tng
-          labels: |
-            org.opencontainers.image.title=tng
-            org.opencontainers.image.description=Trusted Network Gateway
-          flavor: |
-            suffix=-${{ matrix.variant }},onlatest=true
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
-            # set latest tag for default branch
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # Alias metadata — alinux3 only (produces unsuffixed tags for backward compat)
-      - name: Docker meta (alias)
-        id: meta-alias
-        if: matrix.variant == 'alinux3'
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/inclavare-containers/tng
-          labels: |
-            org.opencontainers.image.title=tng
-            org.opencontainers.image.description=Trusted Network Gateway
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
-            # set latest tag for default branch
-            type=raw,value=latest,enable={{is_default_branch}}
-
+      # Build each arch natively on its matched runner. No QEMU, no cross-compile.
+      # Output a single-arch tar (no registry push here); the push job assembles the
+      # multi-arch manifest list from both arches' digests.
       - name: Build and export
         uses: docker/build-push-action@v6.9.0
         with:
           file: ${{ matrix.variant == 'alinux3' && 'Dockerfile' || 'Dockerfile.ubuntu2404' }}
           target: release
           context: .
-          tags: |
-            tng:test
-            ${{ steps.meta.outputs.tags }}
-            ${{ steps.meta-alias.outputs.tags || '' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=docker,dest=${{ runner.temp }}/container-image-${{ matrix.variant }}.tar
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: tng:build-${{ matrix.variant }}-${{ matrix.arch }}
+          outputs: type=docker,dest=${{ runner.temp }}/container-image-${{ matrix.variant }}-${{ matrix.arch }}.tar
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }},mode=max
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: container-image-${{ matrix.variant }}
-          path: ${{ runner.temp }}/container-image-${{ matrix.variant }}.tar
+          name: container-image-${{ matrix.variant }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/container-image-${{ matrix.variant }}-${{ matrix.arch }}.tar
 
   test:
+    # Phase 1: amd64 only. arm64 integration tests are deferred to Phase 2
+    # (arm64 image is built+pushed but not integration-tested yet — same gap as
+    # build-binary.yml's aarch64 release tarballs).
     strategy:
       fail-fast: false
       matrix:
         variant: [alinux3, ubuntu2404]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -124,12 +83,13 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
-          name: container-image-${{ matrix.variant }}
+          name: container-image-${{ matrix.variant }}-amd64
           path: ${{ runner.temp }}
 
       - name: Load image
         run: |
-          podman load --input ${RUNNER_TEMP}/container-image-${{ matrix.variant }}.tar
+          podman load --input "${RUNNER_TEMP}/container-image-${{ matrix.variant }}-amd64.tar"
+          podman tag tng:build-${{ matrix.variant }}-amd64 tng:test
 
       - uses: dtolnay/rust-toolchain@1.89.0
 
@@ -149,7 +109,7 @@ jobs:
           # Wait for ASR TCP :8006 (max 5 minutes)
           echo "Waiting for ASR (PID: $AA_PID)..."
           for i in $(seq 1 300); do
-            if ! kill -0 $AA_PID 2>/dev/null; then
+            if ! kill -0 "$AA_PID" 2>/dev/null; then
               echo "Attestation Agent / ASR process exited unexpectedly"
               cat /tmp/aa.log
               exit 1
@@ -158,7 +118,7 @@ jobs:
               echo "ASR is ready"
               break
             fi
-            if [ $i -eq 300 ]; then
+            if [ "$i" -eq 300 ]; then
               echo "Timeout waiting for ASR"
               cat /tmp/aa.log
               exit 1
@@ -169,7 +129,7 @@ jobs:
           # Wait for Attestation Agent socket (max 5 minutes)
           echo "Waiting for Attestation Agent socket..."
           for i in $(seq 1 300); do
-            if ! kill -0 $AA_PID 2>/dev/null; then
+            if ! kill -0 "$AA_PID" 2>/dev/null; then
               echo "Attestation Agent / ASR process exited unexpectedly"
               cat /tmp/aa.log
               exit 1
@@ -178,7 +138,7 @@ jobs:
               echo "Attestation Agent is ready"
               break
             fi
-            if [ $i -eq 300 ]; then
+            if [ "$i" -eq 300 ]; then
               echo "Timeout waiting for Attestation Agent"
               cat /tmp/aa.log
               exit 1
@@ -193,12 +153,12 @@ jobs:
               echo "Attestation Service is ready"
               break
             fi
-            if [ $i -gt 60 ] && ! kill -0 $AS_PID 2>/dev/null; then
+            if [ "$i" -gt 60 ] && ! kill -0 "$AS_PID" 2>/dev/null; then
               echo "Attestation Service process exited unexpectedly"
               cat /tmp/as.log
               exit 1
             fi
-            if [ $i -eq 300 ]; then
+            if [ "$i" -eq 300 ]; then
               echo "Timeout waiting for Attestation Service"
               cat /tmp/as.log
               exit 1
@@ -225,7 +185,6 @@ jobs:
           echo "=== Attestation Service Log ==="
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
-
   push:
     strategy:
       fail-fast: false
@@ -234,18 +193,30 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Download artifacts
+      - name: Download amd64 artifact
         uses: actions/download-artifact@v8
         with:
-          name: container-image-${{ matrix.variant }}
-          path: ${{ runner.temp }}
+          name: container-image-${{ matrix.variant }}-amd64
+          path: ${{ runner.temp }}/amd64
 
-      - name: Load image
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: container-image-${{ matrix.variant }}-arm64
+          path: ${{ runner.temp }}/arm64
+
+      - name: Load images
         run: |
-          docker load --input ${RUNNER_TEMP}/container-image-${{ matrix.variant }}.tar
+          set -euo pipefail
+          docker load --input "${RUNNER_TEMP}/amd64/container-image-${{ matrix.variant }}-amd64.tar"
+          docker load --input "${RUNNER_TEMP}/arm64/container-image-${{ matrix.variant }}-arm64.tar"
+          docker images | grep "tng:build-${{ matrix.variant }}"
 
-      # Suffixed metadata — all variants
+      # Suffixed metadata — all variants (same rules as before the change)
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -293,19 +264,88 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push Image
+      # imagetools create needs a buildx context (works with the default docker driver).
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Assemble a multi-arch manifest list under every final tag. Strategy:
+      #  1. Land both arches in the registry by pushing each to the deterministic
+      #     sha tag (type=sha is always present, event-agnostic). Push amd64 first,
+      #     capture its manifest digest D1; push arm64 (overwrites the sha tag),
+      #     capture D2. D1's manifest blob stays in the registry (untagged, not GC'd
+      #     within the job) and is referenced by digest below.
+      #  2. For every final tag T, `imagetools create -t T repo@D1 repo@D2` writes a
+      #     manifest list atomically to T. No extra/intermediate tags are ever
+      #     created — only the final tags the metadata action produced.
+      # Caveat: each T has a brief single-arch window (amd64 push done → imagetools
+      # done). Accepted for CI publish; documented in the design spec.
+      - name: Assemble and push multi-arch manifest
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
+          ALIAS_TAGS: ${{ steps.meta-alias.outputs.tags }}
+          VARIANT: ${{ matrix.variant }}
         run: |
-          set -e
+          set -euo pipefail
           set -x
 
-          # docker/metadata-action outputs.tags is newline-separated;
-          # convert to space-separated so bash word-splits correctly in a for loop.
-          tags=$(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ')
+          REPO="ghcr.io/inclavare-containers/tng"
+
+          # Collect all final tags: suffixed set (all variants) + unsuffixed alias (alinux3 only).
+          tags=$(echo "$META_TAGS" | tr '\n' ' ')
           alias_tags=""
           if [ "${{ steps.meta-alias.outcome }}" = "success" ]; then
-              alias_tags=$(echo "${{ steps.meta-alias.outputs.tags }}" | tr '\n' ' ')
+            alias_tags=$(echo "$ALIAS_TAGS" | tr '\n' ' ')
           fi
-          for tag in $tags $alias_tags; do
-              docker tag tng:test ${tag}
-              docker push ${tag}
+          all_tags="$tags $alias_tags"
+
+          # Sanity: we must have at least one final tag.
+          landing_tag=$(echo "$all_tags" | tr ' ' '\n' | grep -E 'sha-' | head -n 1 || true)
+          if [ -z "$landing_tag" ]; then
+            landing_tag=$(echo "$all_tags" | tr ' ' '\n' | grep -vE '^[[:space:]]*$' | head -n 1)
+          fi
+          if [ -z "$landing_tag" ]; then
+            echo "ERROR: no final tags produced by metadata action" >&2
+            exit 1
+          fi
+          echo "Landing tag (for digest capture): $landing_tag"
+
+          # Push amd64 under the landing tag, capture the manifest digest from push output.
+          # docker push's final line is "<tag>: digest: sha256:<64hex> size: <n>"; the only
+          # "sha256:" substring in non-tty push output is that manifest digest (layer lines
+          # use 12-char IDs, not full sha256:). tail -1 defends against any future layer-digest lines.
+          docker tag "tng:build-${VARIANT}-amd64" "$landing_tag"
+          docker push "$landing_tag" > /tmp/push_amd64.log 2>&1
+          cat /tmp/push_amd64.log
+          D1=$(grep -oE 'sha256:[a-f0-9]+' /tmp/push_amd64.log | tail -n 1)
+          if [ -z "$D1" ]; then
+            echo "ERROR: could not capture amd64 manifest digest" >&2
+            exit 1
+          fi
+          echo "amd64 digest: $D1"
+
+          # Push arm64 under the same landing tag (overwrites the tag; amd64 manifest D1
+          # remains in the registry blob store, referenced by digest below).
+          docker tag "tng:build-${VARIANT}-arm64" "$landing_tag"
+          docker push "$landing_tag" > /tmp/push_arm64.log 2>&1
+          cat /tmp/push_arm64.log
+          D2=$(grep -oE 'sha256:[a-f0-9]+' /tmp/push_arm64.log | tail -n 1)
+          if [ -z "$D2" ]; then
+            echo "ERROR: could not capture arm64 manifest digest" >&2
+            exit 1
+          fi
+          echo "arm64 digest: $D2"
+
+          # Assemble a multi-arch manifest list under every final tag, referencing both
+          # arches by digest (so no extra tags are ever created).
+          for T in $all_tags; do
+            [ -n "$T" ] || continue
+            echo "Creating multi-arch manifest for: $T"
+            docker buildx imagetools create -t "$T" "${REPO}@${D1}" "${REPO}@${D2}"
+          done
+
+          echo "=== Final manifest inspection ==="
+          for T in $all_tags; do
+            [ -n "$T" ] || continue
+            echo "--- $T ---"
+            docker buildx imagetools inspect "$T" || true
           done
