@@ -30,9 +30,9 @@ pub type ProtocolStreamForwarderOutput = (
 #[cfg(not(wasm))]
 #[async_trait]
 pub(super) trait ProtocolStreamForwarder: StatusProvider {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         downstream: IncomingStream,
         metrics: std::sync::Arc<ServiceMetrics>,
     ) -> Result<ProtocolStreamForwarderOutput>;

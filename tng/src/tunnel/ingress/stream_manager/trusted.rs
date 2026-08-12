@@ -119,9 +119,9 @@ impl TrustedStreamManager {
 }
 
 impl StreamManager for TrustedStreamManager {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         downstream: IncomingStream,
         metrics: Arc<ServiceMetrics>,
     ) -> Result<(

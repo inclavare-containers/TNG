@@ -37,9 +37,9 @@ impl Default for UnprotectedStreamManager {
 }
 
 impl StreamManager for UnprotectedStreamManager {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         downstream: IncomingStream,
         metrics: Arc<ServiceMetrics>,
     ) -> Result<(

@@ -56,9 +56,9 @@ impl RatsTlsStreamForwarder {
 
 #[async_trait]
 impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         downstream: IncomingStream,
         metrics: Arc<ServiceMetrics>,
     ) -> Result<ProtocolStreamForwarderOutput> {

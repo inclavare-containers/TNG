@@ -66,9 +66,9 @@ mod ohttp_stream_forwarder {
 
     #[async_trait]
     impl ProtocolStreamForwarder for OHttpStreamForwarder {
-        async fn forward_stream<'a>(
+        async fn forward_stream(
             &self,
-            endpoint: &'a TngEndpoint,
+            endpoint: &TngEndpoint,
             downstream: IncomingStream,
             metrics: Arc<ServiceMetrics>,
         ) -> Result<ProtocolStreamForwarderOutput> {

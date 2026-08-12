@@ -1,5 +1,5 @@
 pub(crate) mod protocol;
-pub(self) mod stream_manager;
+mod stream_manager;
 
 pub(crate) mod flow;
 pub mod hook;

@@ -21,9 +21,9 @@ pub type StreamManagerOutput = (
 
 #[allow(async_fn_in_trait)]
 pub(super) trait StreamManager {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
+        endpoint: &TngEndpoint,
         downstream: IncomingStream,
         metrics: Arc<ServiceMetrics>,
     ) -> Result<StreamManagerOutput>;
