@@ -121,6 +121,10 @@ name = "ktls_e2e"
 path = "tests/netfilter/ktls_e2e.rs"
 
 [[test]]
+name = "ktls_hanyu_nst"
+path = "tests/ktls_hanyu_nst.rs"
+
+[[test]]
 name = "mapping_ktls_e2e"
 path = "tests/mapping_ktls_e2e.rs"
 
