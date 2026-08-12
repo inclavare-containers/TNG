@@ -605,3 +605,18 @@ pub async fn forward_ktls_stream_bi(
     // drain its in-flight data before tearing down.
     tokio::join!(send, recv);
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod _api_check {
+    // If this fails to compile, the patched rustls fork does NOT expose
+    // dangerous_extract_secrets / ExtractedSecrets — see spec §5.4. Block here.
+    #[allow(dead_code)]
+    fn _check(c: rustls::ClientConnection) {
+        let _ = c.dangerous_extract_secrets();
+    }
+    #[allow(dead_code)]
+    fn _conv(s: rustls::ExtractedSecrets) -> Result<(), ktls_core::Error> {
+        let _: ktls_core::ExtractedSecrets = s.try_into()?;
+        Ok(())
+    }
+}
