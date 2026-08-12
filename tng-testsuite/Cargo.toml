@@ -141,6 +141,10 @@ name = "http_proxy_connect_ktls_required_e2e"
 path = "tests/http_proxy_connect_ktls_required_e2e.rs"
 
 [[test]]
+name = "http_proxy_reverse_ktls_required_bails"
+path = "tests/http_proxy_reverse_ktls_required_bails.rs"
+
+[[test]]
 name = "ktls_required_multiplex"
 path = "tests/netfilter/ktls_required_multiplex.rs"
 

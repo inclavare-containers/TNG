@@ -45,14 +45,20 @@ pub enum KtlsEnvUnavailable {
     KernelSpliceUnsupported { kernel_version: String },
 }
 
-/// Per-connection, handshake-time reasons kTLS cannot be used, evaluated after
-/// the rustls handshake but before kTLS is installed. Both variants leave the
-/// rustls `TlsStream` intact, so a `best-effort`/`disabled` link can still fall
-/// back to the rustls data plane. A failure *during* `config_ktls_*` install
-/// is different — the stream is already consumed there, so it is surfaced as a
-/// hard error regardless of the policy tier.
+/// Per-connection reasons kTLS cannot be used. Some are evaluated at dispatch
+/// time (before any handshake), the rest after the rustls handshake but before
+/// kTLS is installed. In every case a `best-effort`/`disabled` link can still
+/// fall back to the rustls data plane; only `required` bails (see
+/// [`EnvCheckedKtls::on_connection_unavailable`]). A failure *during*
+/// `config_ktls_*` install is different — the stream is already consumed
+/// there, so it is surfaced as a hard error regardless of the policy tier.
 #[derive(Debug, thiserror::Error)]
 pub enum KtlsConnUnavailable {
+    /// The downstream is an erased trait object, not a raw socket — kTLS
+    /// installs on a raw fd, so it is impossible here. Evaluated at dispatch
+    /// time (before any handshake); the rustls path is the fallback.
+    #[error("kTLS impossible: downstream is an opaque (non-raw) stream, no socket to install the ULP on")]
+    OpaqueDownstream,
     #[error("kTLS ({side}): negotiated cipher {suite} is not in the kernel kTLS support set")]
     InfeasibleCipher { side: Side, suite: String },
     #[error("kTLS ({side}): no cipher negotiated, cannot probe kernel kTLS support")]
@@ -403,6 +409,33 @@ mod tests {
                 .resolve(&link(false))
                 .unwrap()
                 .on_connection_unavailable(infeasible()),
+            FallbackDecision::FallBack
+        ));
+    }
+
+    #[test]
+    fn on_connection_unavailable_opaque_downstream_required_bails() {
+        // An opaque downstream has no raw socket, so kTLS is impossible —
+        // `required` bails, the fall-back tiers route it to the rustls plane.
+        assert!(matches!(
+            Ktls::Required
+                .resolve(&link(false))
+                .unwrap()
+                .on_connection_unavailable(KtlsConnUnavailable::OpaqueDownstream),
+            FallbackDecision::Bail(_)
+        ));
+        assert!(matches!(
+            Ktls::BestEffort
+                .resolve(&link(false))
+                .unwrap()
+                .on_connection_unavailable(KtlsConnUnavailable::OpaqueDownstream),
+            FallbackDecision::FallBack
+        ));
+        assert!(matches!(
+            Ktls::Disabled
+                .resolve(&link(false))
+                .unwrap()
+                .on_connection_unavailable(KtlsConnUnavailable::OpaqueDownstream),
             FallbackDecision::FallBack
         ));
     }

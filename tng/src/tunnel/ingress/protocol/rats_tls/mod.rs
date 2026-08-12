@@ -65,6 +65,12 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
         match downstream {
             IncomingStream::Opaque(opaque) => {
                 // When downstream is Opaque, it is not possible to use KTLS
+                // (kTLS installs on a raw fd, which an erased stream has no
+                // access to). Apply the policy: `required` bails the connection;
+                // `best-effort`/`disabled` fall back to the rustls data plane.
+                #[cfg(target_os = "linux")]
+                self.security_layer.check_opaque_downstream()?;
+
                 let (upstream, local_addr, attestation_result) = self
                     .security_layer
                     .allocate_secured_stream_rustls(endpoint.clone())

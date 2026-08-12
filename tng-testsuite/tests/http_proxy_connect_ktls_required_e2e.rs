@@ -14,18 +14,19 @@ use tng_testsuite::{
 /// `rats_tls.ktls = "required"` on >= 5.16 (the CONNECT downcast succeeds →
 /// `IncomingStream::Raw` → kTLS engages → traffic flows).
 ///
+/// This also guards the http_proxy CONNECT downcast: a failed downcast yields
+/// `IncomingStream::Opaque`, and under `required` the Opaque arm bails the
+/// connection (kTLS installs on a raw fd, which an erased stream has none), so
+/// the echo would fail and this test would go red. Under `best-effort` the
+/// same downcast break would silently fall back to rustls (the best-effort
+/// companion would stay green), so the `required` tier is what makes the
+/// downcast regression observable here.
+///
 /// `required` resolves at setup via `Ktls::resolve`: on < 5.16 the
 /// `KernelSpliceUnsupported` constraint makes `required` bail →
 /// `add_egress`/`add_ingress` return `Err` → `run_test!` fails. That is the
 /// expected behavior on an older kernel, not a regression — so this test skips
 /// on < 5.16 (returns `Ok(())` early) and only runs the assertion on >= 5.16.
-///
-/// NOTE: this does **not** guard a `downcast_http1_upgraded` regression. A
-/// failed downcast yields `IncomingStream::Opaque`, which the rats_tls
-/// forwarder routes to the rustls path directly
-/// (`allocate_secured_stream_rustls`) regardless of the `ktls` policy — so
-/// `required` would not bail on a downcast break. This test asserts the
-/// working kTLS path under `required`, not a downcast failure.
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_http_proxy_connect_ktls_required_e2e() -> Result<()> {
