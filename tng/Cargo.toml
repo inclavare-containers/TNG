@@ -152,6 +152,11 @@ ws_stream_wasm = {workspace = true}
 # exclude it via the `cfg(target_os = "linux")` target gate, not a cargo
 # feature.
 ktls = {version = "6"}
+# hanyu-dev kTLS: public `Context` (state machine + cmsg/shutdown) for splice
+# interop — replaces the official `ktls` crate's data-plane types on the
+# zero-copy path. `ktls = "6"` is kept ONLY for `ktls::CorkStream`.
+ktls-core = {workspace = true, features = ["shim-rustls"]}
+ktls-stream = {workspace = true, features = ["shim-rustls"]}
 # Zero-copy `splice(2)` data plane for the kTLS send direction (plain -> ktls
 # upstream): the kernel encrypts pipe pages without a user-space copy. The recv
 # direction stays on `KtlsStream::poll_read` (upstream kTLS RX has no
