@@ -39,6 +39,6 @@ impl NextStream {
 
 pub enum DecodedStream {
     #[cfg(target_os = "linux")]
-    Ktls(ktls::KtlsStream<tokio::net::TcpStream>),
+    Ktls(crate::tunnel::utils::forward::ktls_splice::KtlsSpliceStream),
     Opaque(Box<dyn CommonStreamTrait + Sync>),
 }
