@@ -214,7 +214,7 @@ jobs:
           set -euo pipefail
           docker load --input "${RUNNER_TEMP}/amd64/container-image-${{ matrix.variant }}-amd64.tar"
           docker load --input "${RUNNER_TEMP}/arm64/container-image-${{ matrix.variant }}-arm64.tar"
-          docker images | grep "tng:build-${{ matrix.variant }}"
+          docker images --format '{{.Repository}}:{{.Tag}}' | grep "tng:build-${{ matrix.variant }}"
 
       # Suffixed metadata — all variants (same rules as before the change)
       - name: Docker meta
