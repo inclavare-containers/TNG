@@ -1,38 +1,28 @@
 //! kTLS handshake helper + outcome types for the ingress client and egress
 //! server paths.
 //!
-//! Wraps the official `ktls` crate: CorkStream-wraps a `TcpStream`, runs the
+//! Wraps `tokio_rustls`: `CorkStream`-wraps a `TcpStream`, runs the
 //! tokio_rustls handshake (reusing
 //! `LazyOnetimeTlsClientConfig`/`LazyOnetimeTlsServerConfig::handshake_with_stream`,
 //! which also runs lazy attestation via `verity_pending_cert`), probes the
 //! negotiated cipher against the kernel's kTLS support set (cached
-//! `CompatibleCiphers`), and on success calls `ktls::config_ktls_client`/
-//! `config_ktls_server` to install the kTLS keys in-kernel. On an infeasible
-//! cipher (or a failed probe) it transparently falls back to a boxed rustls
-//! `TlsStream`, so the existing `forward_stream` data plane handles it.
+//! `CompatibleCiphers`), and on success installs the kTLS keys in-kernel via
+//! `dangerous_extract_secrets` -> `ktls_core::setup_ulp` +
+//! `setup_tls_params`. On an infeasible cipher (or a failed probe) it
+//! transparently falls back to a boxed rustls `TlsStream`, so the existing
+//! `forward_stream` data plane handles it.
 //!
 //! # Data plane
 //!
 //! Once kTLS is installed, [`forward_ktls_stream_bi`] forwards both directions
-//! with zero-copy `splice(2)`: send splices into the kTLS TX socket (the kernel
-//! encrypts the pipe pages), recv relays the kTLS RX socket through a pipe (see
-//! [`ktls_recv_splice`]). Non-application TLS records (`NewSessionTicket`,
-//! `close_notify`) make splice return an error because it cannot surface the
-//! `TLS_GET_RECORD_TYPE` cmsg; the relay drains each via `recvmsg`+cmsg (see
-//! [`drain_ktls_control_record`]) and resumes — these are rare, so the bulk
-//! path stays zero-copy.
-//!
-//! The send and recv loops cannot share a `TcpStream` value:
-//! - the send direction drives its `TcpStream` through `tokio_splice2` (which
-//!   impls `AsyncWriteFd` only for whole `TcpStream` values), while the recv
-//!   direction drives its own `dup`'d fds through `AsyncFd` directly — each
-//!   direction owns separately `dup`'d fds so neither shares a mio
-//!   registration with the other (registering the same fd twice fails with
-//!   `EEXIST`).
-//! - `dup(2)` yields a fresh fd number referring to the same kTLS socket, so
-//!   splice into a `dup`'d fd is encrypted in-kernel exactly as the original
-//!   would be, and a `dup`'d kTLS RX fd decrypts in-kernel exactly as the
-//!   original would.
+//! with zero-copy `splice(2)` over a single `KtlsSpliceStream` driven by
+//! `tokio_splice2::copy_bidirectional`. The same `TcpStream` fd (and mio
+//! registration) drives both directions; non-application TLS records
+//! (`NewSessionTicket`, `close_notify`) make splice return `EIO`, which is
+//! intercepted by `ktls_core::Context::handle_io_error` (the cmsg drain lives in
+//! `ktls-core`) and surfaced as `WouldBlock` so the splice loop retries. The
+//! send-direction `close_notify` on teardown is emitted by
+//! `KtlsSpliceStream::poll_shutdown` -> `Context::shutdown`.
 //!
 //! # Performance
 //!
@@ -48,27 +38,19 @@
 //!
 //! The kTLS RX splice path needs kernel ≥ v5.16: on 5.10.y,
 //! `tls_sw_splice_read` does not advance the read pointer (re-delivers the
-//! first record), fixed in v5.16 by `e062fe99cccd` and never backported. The
-//! `best-effort` policy probes the kernel at setup and falls back to rustls on
-//! an older kernel (so a 5.10 dev box cannot exercise the splice path — it
+//! first record), fixed in v5.16 by `e062fe99cccd`
+//! <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e062fe99cccd>.
+//! The `best-effort` policy probes the kernel at setup and falls back to rustls
+//! on an older kernel (so a 5.10 dev box cannot exercise the splice path — it
 //! transparently uses the rustls data plane instead); `required` fails setup.
 //! A separately transparent rustls fallback covers an infeasible cipher for
 //! `best-effort` (and a hard failure for `required`).
-//!
-//! The close_notify alert on send-direction teardown (see [`KtlsSendStream`])
-//! is a correctness fix independent of throughput — a `splice`-driven send
-//! would otherwise emit a bare TCP FIN, tripping the peer's
-//! "closed without close_notify" warning.
 // The whole module is gated on Linux by `config/mod.rs`
 // (`#[cfg(target_os = "linux")] pub mod ktls;`); an inner `#![cfg]` would be a
 // duplicated attribute (clippy::duplicated_attributes).
 
 use std::format;
 use std::os::fd::{AsRawFd, RawFd};
-use std::{
-    io,
-    task::{Context, Poll},
-};
 
 use anyhow::{Context as _, Result};
 use tokio::net::TcpStream;
@@ -78,8 +60,9 @@ use crate::tunnel::attestation_result::AttestationResult;
 use crate::tunnel::endpoint::EndpointAddr;
 use crate::tunnel::stream::PreludedStream;
 use crate::tunnel::stream::{CommonStreamTrait, FirstByteReadTimeoutStream};
-#[cfg(target_os = "linux")]
+use crate::tunnel::utils::forward::ktls_splice::{KtlsSpliceStream, Session};
 use crate::tunnel::utils::rustls::TlsOutcome;
+use ktls_core::TlsSession;
 
 use super::client::LazyOnetimeTlsClientConfig;
 use super::server::LazyOnetimeTlsServerConfig;
@@ -109,6 +92,7 @@ async fn compatible_ciphers() -> &'static ktls::CompatibleCiphers {
         })
         .await
 }
+
 /// Trait unifying the ingress client config (`LazyOnetimeTlsClientConfig`,
 /// which needs the peer `EndpointAddr` as the rustls `ServerName`) and the
 /// egress server config (`LazyOnetimeTlsServerConfig`, which has no peer name).
@@ -235,7 +219,7 @@ impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
     /// Install the kTLS keys in-kernel (`config_ktls_client`/`config_ktls_server`
     /// consume the stream). On failure the stream is gone — see
     /// [`install_failed_bail`].
-    async fn config_ktls(self) -> Result<ktls::KtlsStream<TcpStream>> {
+    async fn config_ktls(self) -> Result<KtlsSpliceStream> {
         Ok(match self {
             Self::Client(s) => StreamForKtls::config_ktls_client(s).await?,
             Self::Server(s) => StreamForKtls::config_ktls_server(s).await?,
@@ -249,39 +233,119 @@ pub trait StreamForKtls:
 {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>>;
+    ) -> Result<KtlsSpliceStream>;
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>>;
+    ) -> Result<KtlsSpliceStream>;
+}
+
+/// Recover the inner `TcpStream` from the various IO wrappers used during the
+/// kTLS handshake. Each wrapper ultimately owns a `TcpStream`; this trait lets
+/// the setup helper extract it without knowing the concrete wrapper type.
+trait IntoTcpStream {
+    fn into_tcp_stream(self) -> TcpStream;
+}
+
+impl IntoTcpStream for TcpStream {
+    fn into_tcp_stream(self) -> TcpStream {
+        self
+    }
+}
+
+impl IntoTcpStream for PreludedStream<TcpStream> {
+    fn into_tcp_stream(self) -> TcpStream {
+        self.stream
+    }
+}
+
+impl IntoTcpStream for FirstByteReadTimeoutStream<TcpStream> {
+    fn into_tcp_stream(self) -> TcpStream {
+        self.into_inner()
+    }
+}
+
+/// Shared body of client/server kTLS installation.
+macro_rules! install_ktls_body {
+    ($cork_io:ident, $conn:ident, $make_session:expr, $prelude:ident) => {{
+        use ktls_core::{
+            setup_tls_params, setup_ulp, Buffer, Context, ExtractedSecrets, TlsCryptoInfoRx,
+            TlsCryptoInfoTx,
+        };
+
+        let tcp: TcpStream = $cork_io.io.into_tcp_stream();
+        let session = $make_session(&$conn);
+        let rustls_secrets = $conn
+            .dangerous_extract_secrets()
+            .context("kTLS: dangerous_extract_secrets failed")?;
+        let secrets: ExtractedSecrets = rustls_secrets
+            .try_into()
+            .context("kTLS: secret conversion failed")?;
+        let ktls_core::ExtractedSecrets {
+            tx: (seq_tx, secrets_tx),
+            rx: (seq_rx, secrets_rx),
+        } = secrets;
+        let info_tx = TlsCryptoInfoTx::new(session.protocol_version(), secrets_tx, seq_tx)
+            .context("kTLS: TlsCryptoInfoTx failed")?;
+        let info_rx = TlsCryptoInfoRx::new(session.protocol_version(), secrets_rx, seq_rx)
+            .context("kTLS: TlsCryptoInfoRx failed")?;
+        setup_ulp(&tcp).context("kTLS: setup_ulp failed")?;
+        setup_tls_params(&tcp, &info_tx, &info_rx).context("kTLS: setup_tls_params failed")?;
+        let buffer = if $prelude.is_empty() {
+            None
+        } else {
+            Some(Buffer::from(std::mem::take(&mut $prelude)))
+        };
+        let ctx = Context::new(session, buffer);
+        Ok(KtlsSpliceStream::new(tcp, ctx))
+    }};
+}
+
+/// Inline hanyu-ktls setup for the client side (replaces the official
+/// `ktls::config_ktls_client`): `tokio-rustls into_inner` -> extract secrets ->
+/// `setup_ulp` + `setup_tls_params` -> `Context::new` -> `KtlsSpliceStream`.
+async fn install_ktls_client<IO: IntoTcpStream>(
+    this: tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>,
+    make_session: fn(&rustls::ClientConnection) -> Session,
+    mut prelude: Vec<u8>,
+) -> Result<KtlsSpliceStream> {
+    let (cork_io, conn) = this.into_inner();
+    install_ktls_body!(cork_io, conn, make_session, prelude)
+}
+
+/// Inline hanyu-ktls setup for the server side (replaces the official
+/// `ktls::config_ktls_server`). See [`install_ktls_client`].
+async fn install_ktls_server<IO: IntoTcpStream>(
+    this: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
+    make_session: fn(&rustls::ServerConnection) -> Session,
+    mut prelude: Vec<u8>,
+) -> Result<KtlsSpliceStream> {
+    let (cork_io, conn) = this.into_inner();
+    install_ktls_body!(cork_io, conn, make_session, prelude)
 }
 
 #[async_trait::async_trait]
 impl StreamForKtls for TcpStream {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        // Just call the ktls::config_ktls_* function.
-        Ok(ktls::config_ktls_client(this).await?)
+    ) -> Result<KtlsSpliceStream> {
+        install_ktls_client(this, Session::new_client, Vec::new()).await
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        // Just call the ktls::config_ktls_* function.
-        Ok(ktls::config_ktls_server(this).await?)
+    ) -> Result<KtlsSpliceStream> {
+        install_ktls_server(this, Session::new_server, Vec::new()).await
     }
 }
 
 /// Shared body of [`StreamForKtls::config_ktls_client`] /
 /// [`StreamForKtls::config_ktls_server`] on `PreludedStream<TcpStream>`:
-/// drain the rustls prelude, call the side-specific `ktls::config_ktls_*`, then
-/// prepend the drained bytes to the resulting `KtlsStream`. The two side methods
-/// differ only in which `ktls::config_ktls_*` function installs the kTLS keys,
-/// passed here as `$config_fn`; everything else (prelude drain, raw-stream
-/// recovery, drained-bytes prepend) is identical.
+/// drain the rustls prelude, then install kTLS in-kernel with the drained
+/// bytes folded into the `Context` buffer. The two side methods differ only
+/// in which `Session` constructor is used, passed here as `$session_fn`.
 macro_rules! preluded_config_ktls_body {
-    ($this:ident, $config_fn:path) => {{
+    ($this:ident, $install_ktls:path, $session_fn:path) => {{
         // 1. drain Tcp stream until prelude is empty, save the drained bytes on stack.
         //
         // The prelude is the over-read buffered in the `prelude` field of the
@@ -290,9 +354,9 @@ macro_rules! preluded_config_ktls_body {
         // stopped reading (early data, a `NewSessionTicket` echo, etc.); once it
         // is exhausted every further read goes straight to the `TcpStream`. We
         // drive rustls reads until the prelude is fully consumed, collecting the
-        // decrypted bytes locally so step 3 can prepend them to the `KtlsStream`
-        // — the kTLS RX path cannot surface these user-space bytes itself, so
-        // they must be drained through rustls here.
+        // decrypted bytes locally so step 2 can fold them into the `Context`
+        // buffer — the kTLS RX path cannot surface these user-space bytes itself,
+        // so they must be drained through rustls here.
         use tokio::io::AsyncReadExt as _;
         let mut this = $this;
         let mut drained: Vec<u8> = Vec::new();
@@ -307,7 +371,7 @@ macro_rules! preluded_config_ktls_body {
             // `prelude` buffer rather than the underlying `TcpStream` — but
             // that is a side effect, not the goal. The purpose of this loop is
             // to reach exactly the state where the prelude has been fully
-            // consumed by rustls, so that step 3 can hand kTLS a clean stream
+            // consumed by rustls, so that step 2 can hand kTLS a clean stream
             // with no residual user-space bytes.
             let n = this.read(&mut buf).await?;
             if n == 0 {
@@ -329,18 +393,9 @@ macro_rules! preluded_config_ktls_body {
             tracing::trace!(drained_len = drained.len(), "kTLS: drained prelude bytes");
         }
 
-        // 2. call the ktls::config_ktls_* function.
-        let ktls_stream = $config_fn(this).await?;
-
-        // 3. prepend the drained bytes to the ktls::KtlsStream
-        let (drained_part2, io) = ktls_stream.into_raw();
-        let PreludedStream { stream, .. } = io; // It is safe to unwrap the PreludedStream here because we have made sure the prelude is drained.
-        let drained = if let Some(drained_part2) = drained_part2 {
-            [drained, drained_part2].concat()
-        } else {
-            drained
-        };
-        Ok(ktls::KtlsStream::new(stream, Some(drained)))
+        // 2. Inline the hanyu-ktls setup, folding the drained prelude bytes into
+        //    the Context buffer so the splice data plane can flush them.
+        $install_ktls(this, $session_fn, drained).await
     }};
 }
 
@@ -348,46 +403,20 @@ macro_rules! preluded_config_ktls_body {
 impl StreamForKtls for PreludedStream<TcpStream> {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        preluded_config_ktls_body!(this, ktls::config_ktls_client)
+    ) -> Result<KtlsSpliceStream> {
+        preluded_config_ktls_body!(this, install_ktls_client, Session::new_client)
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        preluded_config_ktls_body!(this, ktls::config_ktls_server)
+    ) -> Result<KtlsSpliceStream> {
+        preluded_config_ktls_body!(this, install_ktls_server, Session::new_server)
     }
 }
 
 impl AsRawFd for PreludedStream<TcpStream> {
     fn as_raw_fd(&self) -> RawFd {
         self.stream.as_raw_fd()
-    }
-}
-
-// `ktls::config_ktls_server` (and `KtlsStream<IO>::AsyncRead`) carry a
-// `IO: AsyncReadReady` bound that the body never actually exercises — see the
-// analysis in `preluded_config_ktls_body!`. TNG immediately `.into_raw()`s the
-// resulting `KtlsStream`, so this impl exists to satisfy the bound, not to be
-// driven on the hot path. It is still correct: while the prelude holds
-// unread user-space bytes a read returns immediately, so report readiness
-// without polling the socket; once the prelude is exhausted defer to the
-// inner `TcpStream`'s readiness.
-impl ktls::AsyncReadReady for PreludedStream<TcpStream> {
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if !self.prelude_consumed() {
-            return Poll::Ready(Ok(()));
-        }
-        ktls::AsyncReadReady::poll_read_ready(&self.stream, cx)
-    }
-}
-
-// Same redundant bound-satisfier as above for the egress/server side. The
-// first-byte timeout is enforced in `poll_read`, not at readiness time, so
-// `poll_read_ready` simply reports the inner socket's readability.
-impl ktls::AsyncReadReady for FirstByteReadTimeoutStream<TcpStream> {
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        ktls::AsyncReadReady::poll_read_ready(self.get_ref(), cx)
     }
 }
 
@@ -400,18 +429,14 @@ impl ktls::AsyncReadReady for FirstByteReadTimeoutStream<TcpStream> {
 impl StreamForKtls for FirstByteReadTimeoutStream<TcpStream> {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        let ktls_stream = ktls::config_ktls_client(this).await?;
-        let (drained, io) = ktls_stream.into_raw();
-        Ok(ktls::KtlsStream::new(io.into_inner(), drained))
+    ) -> Result<KtlsSpliceStream> {
+        install_ktls_client(this, Session::new_client, Vec::new()).await
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
-    ) -> Result<ktls::KtlsStream<TcpStream>> {
-        let ktls_stream = ktls::config_ktls_server(this).await?;
-        let (drained, io) = ktls_stream.into_raw();
-        Ok(ktls::KtlsStream::new(io.into_inner(), drained))
+    ) -> Result<KtlsSpliceStream> {
+        install_ktls_server(this, Session::new_server, Vec::new()).await
     }
 }
 impl AsRawFd for FirstByteReadTimeoutStream<TcpStream> {
@@ -434,7 +459,8 @@ impl AsRawFd for FirstByteReadTimeoutStream<TcpStream> {
 ///    (which also runs lazy attestation via `verity_pending_cert`).
 /// 3. Read the negotiated cipher from the rustls `Connection` and probe the
 ///    cached `CompatibleCiphers`.
-/// 4. Feasible → `config_ktls_*` (consumes the stream) → `KtlsStream`.
+/// 4. Feasible → inline kTLS install (consume the stream, extract secrets,
+///    `setup_ulp` + `setup_tls_params`) → `KtlsSpliceStream`.
 ///    Infeasible → box the `TlsStream<CorkStream<TcpStream>>` (blanket-impls
 ///    `CommonStreamTrait`) as the rustls fallback.
 ///
@@ -485,6 +511,8 @@ pub async fn handshake_ktls<IO: StreamForKtls + 'static, C: KtlsHandshakeConfig>
         "kTLS ({side}): config_ktls_* install failed (stream consumed, no rustls fallback possible)"
     ))?;
 
-    tracing::info!("kTLS ({side}): installed in-kernel; forwarding via KtlsStream (kernel AEAD)");
+    tracing::info!(
+        "kTLS ({side}): installed in-kernel; forwarding via KtlsSpliceStream (kernel AEAD)"
+    );
     Ok((TlsOutcome::Ktls(ktls_stream), attestation_result))
 }
