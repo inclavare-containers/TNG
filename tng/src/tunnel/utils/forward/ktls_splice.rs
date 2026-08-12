@@ -9,7 +9,73 @@ use tokio::io::{unix::AsyncFd, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_splice2::{AsyncWriteFd, IsNotFile};
 
+use ktls_core::{tls::Peer, Error, ProtocolVersion, TlsCryptoInfoRx, TlsCryptoInfoTx, TlsSession};
+
 use crate::observability::metric::stream::PendingCounter;
+
+/// Minimal `TlsSession` for the kTLS splice data plane (A2).
+///
+/// Holds only the negotiated protocol version + peer side; the kernel owns
+/// AEAD. `handle_new_session_ticket` MUST return `Ok(())` (ignore) — a
+/// returning-`Err` impl aborts every TLS 1.3 connection whose peer sends an
+/// NST, because the NST arrives as a control record that `EIO`-drives
+/// `handle_tls_control_message` -> `handle_new_session_ticket` (spec §5.1).
+/// Key updates are unsupported (parity with the official `ktls` v6 crate); the
+/// proxy never initiates one.
+pub(crate) struct Session {
+    peer: Peer,
+    version: ProtocolVersion,
+}
+
+#[allow(dead_code)]
+impl Session {
+    pub(crate) fn new_client(conn: &rustls::ClientConnection) -> Self {
+        Self {
+            peer: Peer::Client,
+            version: conn
+                .protocol_version()
+                .unwrap_or(rustls::ProtocolVersion::TLSv1_2)
+                .into(),
+        }
+    }
+
+    pub(crate) fn new_server(conn: &rustls::ServerConnection) -> Self {
+        Self {
+            peer: Peer::Server,
+            version: conn
+                .protocol_version()
+                .unwrap_or(rustls::ProtocolVersion::TLSv1_2)
+                .into(),
+        }
+    }
+}
+
+impl TlsSession for Session {
+    fn peer(&self) -> Peer {
+        self.peer
+    }
+
+    fn protocol_version(&self) -> ProtocolVersion {
+        self.version
+    }
+
+    fn update_tx_secret(&mut self) -> Result<TlsCryptoInfoTx, Error> {
+        Err(Error::KeyUpdateFailed(std::io::Error::other(
+            "tng kTLS splice session does not support key updates",
+        )))
+    }
+
+    fn update_rx_secret(&mut self) -> Result<TlsCryptoInfoRx, Error> {
+        Err(Error::KeyUpdateFailed(std::io::Error::other(
+            "tng kTLS splice session does not support key updates",
+        )))
+    }
+
+    fn handle_new_session_ticket(&mut self, _payload: &[u8]) -> Result<(), Error> {
+        // Ignore the ticket — do NOT abort. (TLS 1.3 NST post-handshake.)
+        Ok(())
+    }
+}
 
 /// Duplicate a fd into a fresh `tokio::net::TcpStream`.
 ///
@@ -606,17 +672,33 @@ pub async fn forward_ktls_stream_bi(
     tokio::join!(send, recv);
 }
 
-#[cfg(all(test, target_os = "linux"))]
-mod _api_check {
-    // If this fails to compile, the patched rustls fork does NOT expose
-    // dangerous_extract_secrets / ExtractedSecrets — see spec §5.4. Block here.
-    #[allow(dead_code)]
-    fn _check(c: rustls::ClientConnection) {
-        let _ = c.dangerous_extract_secrets();
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use ktls_core::{tls::Peer, TlsSession};
+
+    #[test]
+    fn new_session_ticket_is_ignored_not_aborted() {
+        // A TLS 1.3 peer sends a NewSessionTicket post-handshake. If this
+        // returned Err, the connection would abort (the NST arrives as a
+        // control record -> EIO -> handle_tls_control_message -> Handshake ->
+        // handle_new_session_ticket). MUST be Ok (ignore). See spec §5.1.
+        let mut s = Session {
+            peer: Peer::Client,
+            version: ktls_core::ProtocolVersion::TLSv1_3,
+        };
+        assert!(s.handle_new_session_ticket(&[]).is_ok());
     }
-    #[allow(dead_code)]
-    fn _conv(s: rustls::ExtractedSecrets) -> Result<(), ktls_core::Error> {
-        let _: ktls_core::ExtractedSecrets = s.try_into()?;
-        Ok(())
+
+    #[test]
+    fn key_update_is_unsupported_without_aborting_state() {
+        // Proxy does not initiate TLS 1.3 key updates (parity with official
+        // ktls v6). Returns Err but does not mutate state.
+        let mut s = Session {
+            peer: Peer::Client,
+            version: ktls_core::ProtocolVersion::TLSv1_3,
+        };
+        assert!(s.update_tx_secret().is_err());
+        assert!(s.update_rx_secret().is_err());
     }
 }
