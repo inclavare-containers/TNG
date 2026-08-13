@@ -14,12 +14,14 @@ use tng_testsuite::{
 /// The `$1` placeholder should be replaced with the actual request payload.
 fn call_api_fn() -> &'static str {
     r#"call_api() {
-        curl -s -X POST http://192.168.1.1:30001 \
+        response=$(curl -sS -X POST http://192.168.1.1:30001 \
             -H "x-tng-ohttp-api: /tng/key-config" \
             -H "Content-Type: application/json" \
             -H "Accept: */*" \
             -H "User-Agent: tng/2.2.6" \
-            -d "$1"
+            -d "$1")
+        echo "$response" | jq -e '.hpke_key_config.encoded_key_config_list | length > 0' >/dev/null
+        printf '%s\n' "$response"
     }
 "#
 }
@@ -892,12 +894,13 @@ MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
 
                     # Function to call the key config API
                     call_api() {{
-                        curl -X POST http://192.168.1.1:30001 \
+                        response=$(curl -sS -X POST http://192.168.1.1:30001 \
                             -H "x-tng-ohttp-api: /tng/key-config" \
                             -H "Content-Type: application/json" \
                             -H "Accept: */*" \
                             -H "User-Agent: tng/2.2.6" \
-                            -d '{{"attestation_request":{{"model":"background_check","challenge_token":"dummy token"}}}}' | jq -c '.hpke_key_config.encoded_key_config_list'
+                            -d '{{"attestation_request":{{"model":"background_check","challenge_token":"dummy token"}}}}')
+                        echo "$response" | jq -e -c '.hpke_key_config.encoded_key_config_list | select(length > 0)'
                     }}
 
                     # Wait a moment for server to fully start
