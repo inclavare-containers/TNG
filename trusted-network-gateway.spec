@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.7.3
+Version: 2.8.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,63 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Thu Aug 13 2026 Kun Lai <laikun@linux.alibaba.com> - 2.8.0-1
+- test: harden curl-based integration checks
+- fix(ci): pin rv-release-tool to fixed trustee commit 28ce0c6
+- fix(ci): use repo:tag format when grepping docker images in push
+- feat(buildspec): add linux/arm64 to Tng image platform target
+- feat(ci): publish amd64+arm64 multi-arch docker images
+- feat(rats-cert): enable builtin verifier for wasm JS SDK via refactored trustee
+- refactor(rats-cert): drop unused Raw report data variant
+- fix(www-demo): translate attestation model options to Chinese (background-check/passport)
+- build(rats-cert): use cfg_alias `wasm` + `async_trait(?Send)` to drop tokio_with_wasm spawn workarounds
+- feat(www-demo): add CoCo as_type selector + builtin policy/RV editor
+- build: drop libgit2-sys via trustee shadow-rs git2 feature fix
+- build: enable builtin-as-tdx-rust as default feature, drop openssl build deps
+- build: drop openssl-sys from attestation-service via pure-Rust crypto
+- test(tng): mark ITA env-var tests serial to avoid env races
+- build(rats-cert): use cfg_alias `wasm` + `async_trait(?Send)` to drop tokio_with_wasm spawn workarounds
+- refactor(time): switch to web-time-compat for wasm-safe SystemTime/Instant
+- fix(rats-cert): left-zero-pad JWK EC coordinates before cert comparison
+- refactor(cfg): unify wasm target cfg via cfg_aliases across all crates
+- fix(ci): install chromedriver matching installed Chrome major version
+- feat(ohttp): derive wasm OHTTP outer scheme from fetch URL + integration tests
+- fix(ci): install perl-Time-Piece for vendored OpenSSL 3.5.x in CI
+- docs(claude): require Assisted-by trailer for AI-authored commits
+- fix(rpm): vendor trustee protos/ for attestation-service build.rs
+- fix(rpm): install perl(Time::Piece) for vendored OpenSSL 3.5.x build
+- fix(ci): align go-sdk.yml triggers with other workflows, drop paths filter
+- fix(ci): install perl-IPC-Cmd for vendored OpenSSL build
+- chore(tdx): drop setup-vendor-config, document PCCS_URL env var
+- feat(ohttp): forward ingress OHTTP over TLS to a gateway
+- feat(tdx): replace FFI DCAP verifier with pure-Rust dcap-qvl backend
+- docs(claude): forbid manually editing spec Version/Release and changelog
+- ci(wasm-sdk): run make www-test in build-and-release
+- feat(tng-wasm/www): add ITA provider support to the Pages demo
+- test(tng-wasm): handle firefox-specific fetch error message in render test
+- chore(deps): bump reqwest rev for cleaner wasm js_sys::Error printing
+- fix(tng-wasm): pin wasm-bindgen-test to fix firefox "no tests to run"
+- chore(wasm): drop redundant wasm-unit-test invocation
+- test(tng-wasm): assert clean rendering of browser fetch failures
+- tng: attach URL/method context to AS fetch failures
+- feat(ohttp): unified header passthrough + CORS preflight fallback for browser OHTTP
+- docs: add live demo links and Go SDK references
+- test(hook): stabilize echo server startup in ingress capture test
+- feat(tng-wasm/www): add Pages demo site with SSE streaming and TNG config
+- refactor(tng-wasm): move static example into example/ directory
+- test(scenarios): add 4-method access test harness for 05-vllm-ohttp-cluster
+- docs(scenarios): rename scenario.md files to README.md
+- refactor(tng-wasm): split fetch module into request/response/attestation
+- fix(wasm): add Host header to OHTTP plaintext requests
+- test(ohttp): add path_default integration test
+- docs: document ohttp.path_default option
+- docs(python-sdk): document ohttp.path_default option
+- feat(ohttp): honor path_default fallback in construct_base_url
+- feat(config): add ohttp.path_default enum (root|original)
+- fix(go-sdk): preserve request path when forwarding through TNG http_proxy
+- docs(python-sdk): remove maturin leftovers, fix make python-wheel-install path
+- fix(python-sdk): infer host platform tag for local wheel builds
+
 * Tue Jul 07 2026 Kun Lai <laikun@linux.alibaba.com> - 2.7.3-1
 - fix(python-sdk): tag wheels per platform so all 5 ship to PyPI
 
