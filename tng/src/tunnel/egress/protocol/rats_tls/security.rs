@@ -66,6 +66,19 @@ impl RatsTlsSecurityLayer {
         &self,
         stream: TngTransportStream,
     ) -> Result<(TlsOutcome, Option<AttestationResult>)> {
+        // Engagement gate — mirrors ingress `wrapping::create_stream_raw`.
+        // When kTLS is not engaged (policy `disabled`, or the kernel < 5.16
+        // floor resolved `best-effort` to `disabled`), do NOT attempt kTLS at
+        // all: go straight to the user-space rustls data plane. Without this
+        // gate the egress side installs kTLS even when the operator disabled
+        // it (the cipher is kernel-compatible on 6.6), so `kTLS=disabled`
+        // still hits the kTLS splice path instead of the intended rustls
+        // fallback — asymmetry vs ingress, which has always gated here.
+        if !self.ktls.engages() {
+            let (tls_stream, attestation_result) = self.handshake_rustls(stream).await?;
+            return Ok((TlsOutcome::Rustls(tls_stream), attestation_result));
+        }
+
         use crate::tunnel::utils::rustls::config::ktls::KtlsServerHandshakeConfig;
 
         let tls_server_config = self.prepare_tls_config().await?;
