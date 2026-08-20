@@ -746,7 +746,7 @@ mod tests {
             use std::collections::HashMap;
             // Sample reference value payload (inline Provenance)
             let mut rvs = HashMap::new();
-            rvs.insert("example-measurement".to_string(), vec![]);
+            rvs.insert("example-measurement".to_string(), serde_json::json!([]));
             let provenance = Provenance { rvs };
             let verify_args = make_verify_builtin_args(
                 PolicyConfig::HardwareWithReferenceValues,
@@ -994,11 +994,11 @@ mod tests {
             use std::collections::HashMap;
 
             let mut rvs1 = HashMap::new();
-            rvs1.insert("component-a".to_string(), vec![]);
+            rvs1.insert("component-a".to_string(), serde_json::json!([]));
             let provenance1 = Provenance { rvs: rvs1 };
 
             let mut rvs2 = HashMap::new();
-            rvs2.insert("component-b".to_string(), vec![]);
+            rvs2.insert("component-b".to_string(), serde_json::json!([]));
             let provenance2 = Provenance { rvs: rvs2 };
 
             let verify_args = make_verify_builtin_args(

@@ -61,6 +61,15 @@ tokio = {workspace = true, default-features = true, features = ["fs"]}
 tonic = {workspace = true, default-features = false, features = ["codegen", "channel"], optional = true}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
+# Web Crypto API deps for the builtin-as challenger keygen path. On wasm the
+# rustcrypto `rsa` prime generation (used by `JwtChallenger::new`) is pure
+# software and slow; instead we ask the host (hardware-accelerated) WebCrypto
+# `SubtleCrypto::generateKey` for an RSA-2048 key, export it as PKCS#8, and feed
+# it to `JwtChallenger::new_with_private_key`. Only pulled on wasm targets.
+js-sys = {workspace = true}
+wasm-bindgen = {workspace = true}
+wasm-bindgen-futures = {workspace = true}
+web-sys = {workspace = true, features = ["Crypto", "SubtleCrypto", "Window", "CryptoKey"]}
 ring = {workspace = true, features = ["wasm32_unknown_unknown_js"]}
 rustls-webpki = {workspace = true, optional = true, features = ["alloc", "ring"]}
 time = {workspace = true, features = ["std", "wasm-bindgen", "parsing"]}

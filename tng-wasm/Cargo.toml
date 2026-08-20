@@ -53,6 +53,10 @@ tokio_with_wasm_proc = {workspace = true}
 
 [dev-dependencies]
 reqwest = {workspace = true}
+# Direct access to the builtin-as converter so a wasm-bindgen-test can exercise
+# the WebCrypto challenger keygen path (`build_challenger_webcrypto`). The
+# features unify with the ones already enabled via `tng`'s rats-cert dep.
+rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "builtin-as-tdx-rust"]}
 wasm-bindgen-test = "0.3.76"
 
 [build-dependencies]

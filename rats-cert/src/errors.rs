@@ -202,12 +202,20 @@ pub enum Error {
     AttestationServiceCreateFailed(#[source] attestation_service::ServiceError),
 
     #[cfg(feature = "__builtin-as")]
+    #[error("Failed to create attestation service challenger")]
+    AttestationServiceChallengerCreateFailed(#[source] anyhow::Error),
+
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to set attestation policy")]
     AttestationServiceSetPolicyFailed(#[source] anyhow::Error),
 
     #[cfg(feature = "__builtin-as")]
     #[error("Failed to generate attestation challenge")]
     AttestationServiceGenerateChallengeFailed(#[source] anyhow::Error),
+
+    #[cfg(feature = "__builtin-as")]
+    #[error("Failed to parse attestation challenge response")]
+    AttestationServiceChallengeParseFailed(#[source] anyhow::Error),
 
     #[cfg(feature = "__builtin-as")]
     #[error("Attestation evidence verification failed")]

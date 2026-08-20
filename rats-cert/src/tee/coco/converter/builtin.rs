@@ -65,7 +65,7 @@ impl attestation_service::token::signer::SignKeyProvider<p256::SecretKey> for Se
     fn cert_url(&self) -> Option<&str> {
         None
     }
-    fn cert_pem_raw(&self) -> Option<anyhow::Result<Vec<u8>>> {
+    fn cert_pem_live(&self) -> Option<anyhow::Result<Vec<u8>>> {
         // Return None here since this function will not be called actually
         None
     }
@@ -219,7 +219,7 @@ impl BuiltinCocoConverter {
         let (self_signed_signer, mut attestation_service) = {
             let self_signed_signer = Arc::new(SelfSignedSigner::new()?);
 
-            let rvps = Box::new(attestation_service::rvps::builtin::BuiltinRvps::new(
+            let rvps = Arc::new(attestation_service::rvps::builtin::BuiltinRvps::new(
                 reference_value_provider_service::config::Config {
                     storage:
                         reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
@@ -228,14 +228,14 @@ impl BuiltinCocoConverter {
                 },
             )
             .map_err(attestation_service::ServiceError::Rvps)
-            .map_err(Error::AttestationServiceCreateFailed)?) as Box<dyn attestation_service::rvps::RvpsApi + Send + Sync>;
+            .map_err(Error::AttestationServiceCreateFailed)?) as Arc<dyn attestation_service::rvps::RvpsApi>;
 
             let token_broker = Box::new(
                 attestation_service::token::ear_broker::EarAttestationTokenBroker::from_components(
                     attestation_service::token::ear_broker::TokenBrokerSettings::default(),
                     self_signed_signer.clone(),
                     Arc::new(
-                        attestation_service::policy_engine::opa_in_memory::InMemoryPolicyEngine::with_raw_default_policy(
+                        attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
                             attestation_service::token::ear_broker::DEFAULT_POLICY,
                             DEFAULT_POLICY_ID,
                         ),
@@ -244,7 +244,15 @@ impl BuiltinCocoConverter {
             )
             as Box<dyn attestation_service::token::AttestationTokenBroker + Send + Sync>;
 
-            let challenger = Box::new(attestation_service::challenge::LocalNonceChallenger::new());
+            // The builtin AS now stores the challenger by value as a concrete
+            // `JwtChallenger` (the old `Challenger` trait / `LocalNonceChallenger`
+            // were removed upstream). On non-wasm we let rustcrypto generate the
+            // RSA-2048 key; on wasm that prime generation is pure software and
+            // slow, so we ask the host Web Crypto API to generate the key
+            // (hardware-accelerated) and feed it in via `new_with_private_key`.
+            let challenger = Self::build_challenger()
+                .await
+                .map_err(Error::AttestationServiceChallengerCreateFailed)?;
 
             (
                 self_signed_signer,
@@ -271,6 +279,105 @@ impl BuiltinCocoConverter {
             self_signed_signer,
             attestation_service,
         })
+    }
+
+    /// Construct the [`JwtChallenger`] used by the embedded attestation service.
+    ///
+    /// The builtin AS stores the challenger by value as a concrete
+    /// `JwtChallenger` (the `Challenger` trait and `LocalNonceChallenger` were
+    /// removed upstream in favor of a single JWT-based challenger).
+    ///
+    /// `JwtChallenger::new` generates a fresh RSA-2048 key with rustcrypto.
+    /// That is fine on native, but on wasm rustcrypto prime generation is pure
+    /// software and prohibitively slow, so on wasm we ask the host Web Crypto
+    /// API (`SubtleCrypto::generateKey`, hardware-accelerated) to produce the
+    /// RSA key, export it as PKCS#8, and feed it to `new_with_private_key`.
+    /// The actual RS384 signing in the challenger still uses rustcrypto; only
+    /// key generation is offloaded to WebCrypto.
+    async fn build_challenger() -> anyhow::Result<attestation_service::JwtChallenger> {
+        #[cfg(wasm)]
+        {
+            Self::build_challenger_webcrypto().await
+        }
+        #[cfg(not(wasm))]
+        {
+            attestation_service::JwtChallenger::new()
+        }
+    }
+
+    /// wasm path: generate the challenger's RSA key via the Web Crypto API.
+    #[cfg(wasm)]
+    async fn build_challenger_webcrypto() -> anyhow::Result<attestation_service::JwtChallenger> {
+        use rsa::pkcs8::DecodePrivateKey as _;
+        use rsa::RsaPrivateKey;
+        use wasm_bindgen::JsCast as _;
+        use wasm_bindgen_futures::JsFuture;
+
+        // Helper to convert a thrown `JsValue` into an `anyhow::Error`. A
+        // `JsValue` carries no Rust error chain, so there is nothing to preserve
+        // via `.context()`; rendering its Debug form is the only option.
+        fn js_err(msg: &str, value: wasm_bindgen::JsValue) -> anyhow::Error {
+            anyhow::Error::msg(format!("{msg}: {value:?}"))
+        }
+
+        let window = web_sys::window().ok_or_else(|| {
+            anyhow::anyhow!("no global `window` available (not a browser/WASM worker context)")
+        })?;
+        let crypto = window.crypto().map_err(|e| js_err("window.crypto", e))?;
+        let subtle = crypto.subtle();
+
+        // RSASSA-PKCS1-v1_5 with SHA-384 == RS384, the scheme JwtChallenger
+        // signs with. modulusLength 2048, publicExponent 65537 ([1,0,1]).
+        let algorithm = js_sys::Object::new();
+        js_sys::Reflect::set(&algorithm, &"name".into(), &"RSASSA-PKCS1-v1_5".into())
+            .map_err(|e| js_err("set algorithm.name", e))?;
+        js_sys::Reflect::set(&algorithm, &"modulusLength".into(), &2048u32.into())
+            .map_err(|e| js_err("set algorithm.modulusLength", e))?;
+        let public_exponent = js_sys::Uint8Array::from(&[1u8, 0, 1][..]);
+        js_sys::Reflect::set(&algorithm, &"publicExponent".into(), &public_exponent)
+            .map_err(|e| js_err("set algorithm.publicExponent", e))?;
+        let hash = js_sys::Object::new();
+        js_sys::Reflect::set(&hash, &"name".into(), &"SHA-384".into())
+            .map_err(|e| js_err("set algorithm.hash.name", e))?;
+        js_sys::Reflect::set(&algorithm, &"hash".into(), &hash)
+            .map_err(|e| js_err("set algorithm.hash", e))?;
+
+        // extractable=true so we can export the private key material as PKCS#8.
+        let key_usages = js_sys::Array::new();
+        key_usages.push(&"sign".into());
+        let key_gen_promise = subtle
+            .generate_key_with_object(&algorithm, true, &key_usages)
+            .map_err(|e| js_err("SubtleCrypto::generateKey", e))?;
+        let key_pair_value = JsFuture::from(key_gen_promise)
+            .await
+            .map_err(|e| js_err("await SubtleCrypto::generateKey", e))?;
+
+        // `generateKey` for an asymmetric algorithm resolves to a JS object
+        // `{ privateKey: CryptoKey, publicKey: CryptoKey }`. web-sys models
+        // `CryptoKeyPair` as a write-only dictionary (setters, no getters), so
+        // read the `privateKey` property off the raw value via Reflect instead.
+        let private_key_value = js_sys::Reflect::get(&key_pair_value, &"privateKey".into())
+            .map_err(|e| js_err("read CryptoKeyPair.privateKey", e))?;
+        let private_key: web_sys::CryptoKey = private_key_value
+            .dyn_into()
+            .map_err(|_| anyhow::anyhow!("CryptoKeyPair.privateKey is not a CryptoKey"))?;
+
+        let export_promise = subtle
+            .export_key("pkcs8", &private_key)
+            .map_err(|e| js_err("SubtleCrypto::exportKey", e))?;
+        let exported = JsFuture::from(export_promise)
+            .await
+            .map_err(|e| js_err("await SubtleCrypto::exportKey", e))?;
+        let buffer: js_sys::ArrayBuffer = exported.dyn_into().map_err(|_| {
+            anyhow::anyhow!("SubtleCrypto::exportKey did not return an ArrayBuffer")
+        })?;
+        let der = js_sys::Uint8Array::new(&buffer).to_vec();
+
+        let rsa_key = RsaPrivateKey::from_pkcs8_der(&der)
+            .map_err(|e| anyhow::Error::from(e).context("parse WebCrypto RSA key as PKCS#8"))?;
+        Ok(attestation_service::JwtChallenger::new_with_private_key(
+            rsa_key,
+        ))
     }
 
     /// Builtin converters run the attestation service in-process and have no
@@ -498,12 +605,33 @@ impl GenericConverter for BuiltinCocoConverter {
     }
 
     async fn get_nonce(&self) -> Result<Self::Nonce> {
-        // Generate a challenge nonce for the attestation
-        self.attestation_service
+        // The builtin AS issues the challenge as a JSON object
+        // `{"nonce": <b64>, "extra-params": {"jwt": <signed jwt>}}` (see
+        // `JwtChallenger::generate_challenge_json`). The client echoes only the
+        // JWT back as `runtime_data["challenge_token"]`, which the AS verifies via
+        // `verify_challenge_token` (signature + `exp` — it splits on `.` and treats
+        // the value as a bare JWT, NOT the wrapper JSON). So extract the bare JWT
+        // here, mirroring the REST converter (`challenge_response.extra_params.jwt`).
+        let challenge_json = self
+            .attestation_service
             .generate_challenge(None, None)
             .await
-            .map_err(Error::AttestationServiceGenerateChallengeFailed)
-            .map(CoCoNonce::Jwt)
+            .map_err(Error::AttestationServiceGenerateChallengeFailed)?;
+        let challenge: serde_json::Value = serde_json::from_str(&challenge_json).map_err(|e| {
+            Error::AttestationServiceChallengeParseFailed(
+                anyhow::Error::from(e).context("parse attestation challenge response"),
+            )
+        })?;
+        let jwt = challenge
+            .get("extra-params")
+            .and_then(|p| p.get("jwt"))
+            .and_then(|j| j.as_str())
+            .ok_or_else(|| {
+                Error::AttestationServiceChallengeParseFailed(anyhow::anyhow!(
+                    "missing `extra-params.jwt` in attestation challenge response"
+                ))
+            })?;
+        Ok(CoCoNonce::Jwt(jwt.to_string()))
     }
 }
 
@@ -602,7 +730,7 @@ default file_system := 2"#;
     #[serial]
     async fn test_converter_new_with_sample_inline_reference() {
         let mut rvs = std::collections::HashMap::new();
-        rvs.insert("example-measurement".to_string(), vec![]);
+        rvs.insert("example-measurement".to_string(), json!([]));
         let provenance = Provenance { rvs };
         let reference = ReferenceValueConfig::Sample {
             payload: SampleProvenancePayloadConfig::Inline {
@@ -754,11 +882,11 @@ default file_system := 2"#;
     #[serial]
     async fn test_converter_new_with_multiple_references() {
         let mut rvs1 = std::collections::HashMap::new();
-        rvs1.insert("component-a".to_string(), vec![]);
+        rvs1.insert("component-a".to_string(), json!([]));
         let provenance1 = Provenance { rvs: rvs1 };
 
         let mut rvs2 = std::collections::HashMap::new();
-        rvs2.insert("component-b".to_string(), vec![]);
+        rvs2.insert("component-b".to_string(), json!([]));
         let provenance2 = Provenance { rvs: rvs2 };
 
         let references = vec![
@@ -816,10 +944,7 @@ default file_system := 2"#;
         let mut rvs = std::collections::HashMap::new();
         rvs.insert(
             "my-component".to_string(),
-            vec![
-                "expected-value-1".to_string(),
-                "expected-value-2".to_string(),
-            ],
+            json!(["expected-value-1", "expected-value-2"]),
         );
         let provenance = Provenance { rvs };
 
@@ -1167,9 +1292,7 @@ default file_system := 2"#,
     /// Evaluate a bundled rego policy against `input` and return the four AR4SI
     /// trust-vector values as (executables, hardware, configuration, file_system).
     async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
-        use attestation_service::policy_engine::PolicyEngineType;
-
-        let engine = attestation_service::policy_engine::opa_in_memory::InMemoryPolicyEngine::with_raw_default_policy(
+        let engine = attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
             policy,
             DEFAULT_POLICY_ID,
         );
@@ -1182,15 +1305,32 @@ default file_system := 2"#,
             "configuration".to_string(),
             "file_system".to_string(),
         ];
+        // The upstream `PolicyEngine::evaluate` now resolves Rego
+        // `query_reference_value(...)` calls through a `ReferenceValueResolver`
+        // (backed by an `RvpsApi` implementor). None of these policy templates
+        // query reference values, so an empty in-memory RVPS resolver suffices.
+        let resolver = Arc::new(attestation_service::rvps::ReferenceValueResolver::new(
+            Arc::new(
+                attestation_service::rvps::builtin::BuiltinRvps::new(
+                    reference_value_provider_service::config::Config {
+                        storage: reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
+                            reference_value_provider_service::storage::in_memory::Config {},
+                        ),
+                    },
+                )
+                .expect("create in-memory RVPS for policy test"),
+            ) as Arc<dyn attestation_service::rvps::RvpsApi>,
+        ));
         let result = engine
-            .evaluate("{}", input, "default", rules)
+            .evaluate(input, DEFAULT_POLICY_ID, rules, resolver)
             .await
             .expect("evaluate policy");
         let get = |name: &str| -> i8 {
             result
                 .rules_result
                 .get(name)
-                .and_then(|v| v.as_i8().ok())
+                .and_then(|v| v.as_i64())
+                .and_then(|n| i8::try_from(n).ok())
                 .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
         };
         (

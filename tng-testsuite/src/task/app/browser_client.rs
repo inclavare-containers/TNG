@@ -75,6 +75,19 @@ pub async fn launch_browser_client(
                 .await
                 .context(if log_level_all { "Failed to connect to chromedriver" } else {"Failed to connect to chromedriver. Set TNG_WASM_TEST_CHROMEDRIVER_LOG_ALL=true to see all chromedriver logs"})?;
 
+            // Navigate to the static file server's localhost root before running
+            // any JS. Chrome otherwise sits on its initial blank page, which is
+            // NOT a secure context — so `window.crypto.subtle` (the WebCrypto
+            // API, used by the builtin-as challenger keygen path) is `undefined`
+            // there. A page served from `http://127.0.0.1:<port>/` is a secure
+            // context (localhost is a trustworthy origin), making `crypto.subtle`
+            // available to the wasm SDK. Harmless for tests that don't use
+            // WebCrypto; required for the builtin-as wasm integration test.
+            driver
+                .goto(format!("http://127.0.0.1:{listen_port}/tng_wasm.js"))
+                .await
+                .context("Failed to navigate browser to the static file server root (secure context needed for WebCrypto)")?;
+
             let res = async {
                 for i in 1..6 {
                     // repeat 5 times

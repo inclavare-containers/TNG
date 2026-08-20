@@ -26,3 +26,53 @@ pub fn init_tng() {
 
     tng::show_banner("wasm");
 }
+
+#[cfg(all(
+    test,
+    target_arch = "wasm32",
+    target_vendor = "unknown",
+    target_os = "unknown"
+))]
+mod tests {
+    use wasm_bindgen_test::*;
+
+    use rats_cert::cert::verify::PolicyConfig;
+    use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
+    use rats_cert::tee::coco::converter::CoCoNonce;
+    use rats_cert::tee::GenericConverter;
+
+    // Run these in a real browser so `window.crypto.subtle` (the Web Crypto API
+    // used by `build_challenger_webcrypto`) is available. Run with:
+    //   make wasm-unit-test-chrome
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    // Constructing the builtin attestation-service converter on wasm must drive
+    // the WebCrypto RSA keygen path (`build_challenger_webcrypto`) rather than
+    // the slow pure-software `rsa` prime generation, and then produce a
+    // challenge nonce that is a bare 3-segment JWT. This exercises that whole
+    // flow end-to-end in a headless browser.
+    #[wasm_bindgen_test]
+    async fn builtin_challenger_webcrypto_keygen_and_nonce() {
+        let converter = match BuiltinCocoConverter::new(
+            &PolicyConfig::HardwareWithReferenceValues,
+            &[],
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(error) => panic!("failed to build builtin converter: {error:?}"),
+        };
+
+        let nonce = match converter.get_nonce().await {
+            Ok(n) => n,
+            Err(error) => panic!("failed to get nonce: {error:?}"),
+        };
+
+        let CoCoNonce::Jwt(jwt) = nonce;
+        assert_eq!(
+            jwt.split('.').count(),
+            3,
+            "builtin challenge nonce should be a bare 3-segment JWT, got: {jwt}"
+        );
+    }
+}
