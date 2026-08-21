@@ -147,6 +147,9 @@ pub enum PolicyConfig {
     #[default]
     #[serde(alias = "default")]
     HardwareOnly,
+    /// tng-bundled template: keeps the hardware-only posture for reference
+    /// values, but TDX evidence must be non-debug and include an event log.
+    HardwareOnlyStrict,
     /// tng-bundled template: every trustworthiness dimension is affirming
     /// regardless of input. **For development and testing only.**
     TrustAll,
@@ -407,6 +410,9 @@ impl BuiltinCocoConverter {
             PolicyConfig::HardwareWithReferenceValues => Ok(None),
             PolicyConfig::HardwareOnly => Ok(Some(
                 URL_SAFE_NO_PAD.encode(include_str!("policies/hardware_only.rego")),
+            )),
+            PolicyConfig::HardwareOnlyStrict => Ok(Some(
+                URL_SAFE_NO_PAD.encode(include_str!("policies/hardware_only_strict.rego")),
             )),
             PolicyConfig::TrustAll => Ok(Some(
                 URL_SAFE_NO_PAD.encode(include_str!("policies/trust_all.rego")),
@@ -714,6 +720,24 @@ default file_system := 2"#;
         assert!(content.contains("default hardware := 97"));
         assert!(content.contains("input.tdx.quote.header.tee_type"));
         assert!(content.contains(r#"vendor_id == "939a7233f79c4ca9940a0db3957f0607""#));
+    }
+
+    #[tokio::test]
+    async fn test_load_hardware_only_strict_policy() {
+        let policy_config = PolicyConfig::HardwareOnlyStrict;
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
+        assert!(result.is_ok());
+        let encoded = result
+            .unwrap()
+            .expect("Should return Some for HardwareOnlyStrict policy");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("Failed to decode policy");
+        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
+        assert!(content.contains("package policy"));
+        assert!(content.contains("tdx_debug_disabled"));
+        assert!(content.contains("tdx_eventlog_present"));
     }
 
     #[tokio::test]
@@ -1390,6 +1414,23 @@ default file_system := 2"#,
 
         // No TEE evidence at all -> hardware stays unrecognized.
         assert_eq!(eval_policy_vector(policy, "{}").await, (2, 97, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_strict_requires_non_debug_tdx_eventlog() {
+        let policy = include_str!("policies/hardware_only_strict.rego");
+
+        let valid_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(policy, valid_tdx).await, (2, 2, 2, 2));
+
+        let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 97, 2, 2));
+
+        let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
+        assert_eq!(
+            eval_policy_vector(policy, missing_eventlog).await,
+            (2, 97, 2, 2)
+        );
     }
 
     #[tokio::test]

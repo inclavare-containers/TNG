@@ -53,6 +53,8 @@ function buildBuiltinReferenceValue(row) {
 // default (hardware_only) / empty inline — omitted per the minimal-config rule.
 function buildBuiltinPolicy(policy, content) {
   switch (policy) {
+    case "hardware_only_strict":
+      return { type: "hardware_only_strict" };
     case "hardware_with_reference_values":
       return { type: "hardware_with_reference_values" };
     case "trust_all":

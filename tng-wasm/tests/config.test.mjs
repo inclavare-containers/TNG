@@ -257,6 +257,20 @@ test("coco builtin background_check: trust_all policy emits attestation_policy",
   });
 });
 
+test("coco builtin background_check: hardware_only_strict policy", () => {
+  const cfg = buildTngConfig({
+    ...base,
+    provider: "coco",
+    asType: "builtin",
+    builtinPolicy: "hardware_only_strict",
+  });
+  assert.deepEqual(cfg.verify, {
+    model: "background_check",
+    as_type: "builtin",
+    attestation_policy: { type: "hardware_only_strict" },
+  });
+});
+
 test("coco builtin background_check: hardware_with_reference_values policy", () => {
   const cfg = buildTngConfig({
     ...base,
