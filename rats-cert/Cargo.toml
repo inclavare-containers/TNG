@@ -50,10 +50,18 @@ zeroize = {workspace = true}
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
 # Enable the attestation-service `fs` feature on native builds so the builtin
 # converter supports `file://` provenance sources (and on-disk RV storage /
-# signer key/cert paths). This is a target-specific re-declaration: cargo merges
-# it with the `[dependencies]` entry for non-wasm only, so wasm keeps the
-# fs-free, pure-library build (no sled / tokio/fs on wasm32-unknown-unknown).
-attestation-service = {workspace = true, default-features = false, features = ["fs"], optional = true}
+# signer key/cert paths). `policy-rvps` is also required: the upstream
+# default policy (`ear_broker::DEFAULT_POLICY`, which the builtin converter
+# loads) calls the rego builtin `query_reference_value(...)`, which is only
+# registered under attestation-service's `policy-rvps` feature. Without it,
+# policy appraisal fails with "could not find function query_reference_value".
+# wasm omits it (the wasm verify path uses `trust_all.rego`, which does not
+# query reference values, and `policy-rvps` uses tokio's multi-thread
+# runtime / `spawn_blocking`, unavailable on wasm32-unknown-unknown).
+# This is a target-specific re-declaration: cargo merges it with the
+# `[dependencies]` entry for non-wasm only, so wasm keeps the fs-free,
+# pure-library build (no sled / tokio/fs on wasm32-unknown-unknown).
+attestation-service = {workspace = true, default-features = false, features = ["fs", "policy-rvps"], optional = true}
 rustls-webpki = {workspace = true, optional = true, features = ["alloc", "aws-lc-rs"]}
 tempfile = {workspace = true, optional = true}
 time = {workspace = true, features = ["std", "parsing"]}
