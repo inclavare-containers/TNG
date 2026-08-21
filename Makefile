@@ -445,6 +445,10 @@ test-dep-aa:
 # All steps share a single shell block so the backgrounded `crane` process
 # stays alive until `restful-as` (the last foreground command) exits — see
 # commit 422c112.
+# The AS token-signer key (/tmp/as.key) uses `openssl ecparam -genkey -noout`:
+# without -noout, openssl prepends an EC PARAMETERS block, yielding a two-block
+# PEM that trustee >= 1.9.0's token-signer PKCS#8 parser rejects with
+# "PEM error in post-encapsulation boundary" (older trustee tolerated it).
 .PHONY: test-dep-as
 test-dep-as:
 	@set -e; \
@@ -528,7 +532,7 @@ test-dep-as:
 	openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key; \
 	openssl req -x509 -sha256 -nodes -days 365 -key /tmp/as-ca.key -out /tmp/as-ca.pem -subj "/O=Trustee CA" \
 		-addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature; \
-	openssl ecparam -genkey -name prime256v1 -out /tmp/as.key; \
+	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/as.key; \
 	openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"; \
 	echo '[v3_req]' > /tmp/as-ext.cnf; \
 	echo 'subjectKeyIdentifier = hash' >> /tmp/as-ext.cnf; \
