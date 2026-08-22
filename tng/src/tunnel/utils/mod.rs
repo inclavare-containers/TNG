@@ -16,6 +16,8 @@ pub mod runtime;
 pub mod rustls;
 pub mod socket;
 pub mod tokio;
+#[cfg(target_os = "linux")]
+pub mod udp;
 
 #[cfg(not(wasm))]
 pub mod file_watcher;

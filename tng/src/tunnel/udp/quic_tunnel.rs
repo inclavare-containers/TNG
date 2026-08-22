@@ -30,18 +30,72 @@ pub struct QuicDatagramTunnelClient {
 
 impl QuicDatagramTunnelClient {
     /// Connect to egress QUIC endpoint with RA-based TLS config.
+    /// Connect to egress QUIC endpoint with RA-based TLS config.
+    ///
+    /// When `so_mark` is `Some(mark)`, the underlying UDP socket is created
+    /// with `SO_MARK` set so that its outgoing packets carry the given mark.
+    /// This is required by `netfilter_udp` ingress: the ingress installs an
+    /// iptables OUTPUT rule that captures packets matching `capture_dst`, plus
+    /// an escape-hatch `--mark {so_mark} -j RETURN`. Without `SO_MARK` the
+    /// ingress's own QUIC handshake packets (destined to the egress, which is
+    /// exactly a `capture_dst`) would be captured and fed back into the local
+    /// TPROXY socket — the QUIC connection could never leave the host.
+    /// `mapping_udp` ingress passes `None` since it installs no such rules.
     pub async fn connect(
         target: &Endpoint,
         _alpn: Alpn,
         max_datagram_size: Option<usize>,
         tls_config: BlockingOnetimeTlsClientConfig,
+        so_mark: Option<u32>,
     ) -> Result<Self> {
-        let listen_addr: SocketAddr = "0.0.0.0:0".parse()?;
-
-        let mut endpoint = quinn::Endpoint::client(listen_addr)?;
         let quinn_config =
             quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config.0)?));
-        endpoint.set_default_client_config(quinn_config);
+
+        let endpoint = match so_mark {
+            Some(mark) => {
+                // Build a UDP socket with SO_MARK so egress-bound QUIC packets
+                // bypass the local netfilter_udp OUTPUT capture rule.
+                let std_socket = socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::DGRAM,
+                    Some(socket2::Protocol::UDP),
+                )
+                .context("Failed to create QUIC client socket")?;
+                // SO_MARK is Linux-only. `so_mark = Some(_)` is only ever passed
+                // by netfilter_udp ingress, which is itself Linux-only, so this
+                // branch is unreachable on non-Linux — consume `mark` to keep
+                // the binding used without actually setting the option.
+                #[cfg(not(any(
+                    target_os = "android",
+                    target_os = "fuchsia",
+                    target_os = "linux"
+                )))]
+                let _ = mark;
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                std_socket.set_mark(mark).with_context(|| {
+                    format!("Failed to set SO_MARK={mark} on QUIC client socket")
+                })?;
+                std_socket.set_nonblocking(true)?;
+                const ANY: SocketAddr =
+                    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0);
+                std_socket.bind(&ANY.into())?;
+                let std_socket: std::net::UdpSocket = std_socket.into();
+                let mut endpoint = quinn::Endpoint::new(
+                    quinn::EndpointConfig::default(),
+                    None,
+                    std_socket,
+                    Arc::new(quinn::TokioRuntime),
+                )?;
+                endpoint.set_default_client_config(quinn_config);
+                endpoint
+            }
+            None => {
+                let listen_addr: SocketAddr = "0.0.0.0:0".parse()?;
+                let mut endpoint = quinn::Endpoint::client(listen_addr)?;
+                endpoint.set_default_client_config(quinn_config);
+                endpoint
+            }
+        };
 
         let server_name = target
             .host

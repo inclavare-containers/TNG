@@ -107,6 +107,21 @@ The following failures are pre-existing environment issues, not caused by code c
   apt-get install protobuf-compiler
   ```
 
+### Cross-Platform / Cross-Compile Verification
+
+TNG is built for non-Linux targets in CI (macOS `aarch64`/`x86_64-apple-darwin`, Windows `x86_64-pc-windows-gnu`, and `wasm32-unknown-unknown`). Code that depends on Linux-only facilities — **netfilter / iptables / TPROXY / `SO_MARK` (`socket2::Socket::set_mark`) / raw `libc` recvmsg ancillary data (`IP_ORIGDSTADDR`)** — must be `#[cfg(target_os = "linux")]`-gated so the crate still compiles on macOS/Windows/wasm. The `netfilter`, `netfilter_udp`, and `utils/udp` (TPROXY) modules are already Linux-gated; when adding a new Linux-only mode, mirror that gating and use the runtime `#[cfg(not(target_os = "linux"))]` bail pattern (see `IngressMode::Netfilter`/`NetfilterUdp` arms in `tng/src/runtime.rs`) so enum `match`es stay exhaustive on every platform.
+
+Do **not** use plain `cargo check --target <non-linux>` to verify these — `aws-lc-sys` runs a C build script that `cargo check` cannot cross-compile (no target sysroot for clang). Use the Makefile cross-compile targets, which drive the C toolchain through `zig` via `cargo-zigbuild`:
+
+```bash
+make mac-cross-build        # cargo zigbuild --target aarch64-apple-darwin
+make windows-cross-build    # cargo zigbuild --target x86_64-pc-windows-gnu --release (runs install-windows-build-deps first)
+make wasm-build-debug       # wasm-pack build --dev --target web ./tng-wasm
+make wasm-build-release     # wasm-pack build --release --target web ./tng-wasm
+```
+
+Any change touching `cfg(target_os = ...)` gates, `socket2` usage, or the `netfilter_udp`/`utils/udp` modules should be verified with at least `make mac-cross-build` and `make windows-cross-build` before pushing — CI builds all of these on every PR.
+
 ## Running Tests with Service Dependencies
 
 Several integration tests require external services to be running. Before running `cargo test`, start the following in the background and wait for them to be ready:

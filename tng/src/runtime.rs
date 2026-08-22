@@ -174,8 +174,7 @@ impl TngRuntime {
                         use crate::tunnel::ingress::datagram_flow::DatagramIngressFlow;
                         use crate::tunnel::ingress::mapping_udp::MappingUdpIngress;
 
-                        let mut ingress = MappingUdpIngress::new(id, mapping_udp_args).await?;
-                        ingress.set_max_datagram_size(add_ingress.common.quic.as_ref().and_then(|q| q.max_datagram_size));
+                        let ingress = MappingUdpIngress::new(id, mapping_udp_args).await?;
 
                         Arc::new(
                             DatagramIngressFlow::new(
@@ -186,6 +185,35 @@ impl TngRuntime {
                             )
                             .await?,
                         ) as Arc<_>
+                    }
+                    #[cfg(feature = "ingress-netfilter-udp")]
+                    IngressMode::NetfilterUdp(netfilter_udp_args) => {
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            let _ = netfilter_udp_args;
+                            anyhow::bail!(
+                                "Using ingress with 'netfilter_udp' type is not supported on OS other than Linux"
+                            );
+                        }
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            use crate::tunnel::ingress::datagram_flow::DatagramIngressFlow;
+                            use crate::tunnel::ingress::netfilter_udp::NetfilterUdpIngress;
+
+                            let ingress =
+                                NetfilterUdpIngress::new(id, netfilter_udp_args).await?;
+
+                            Arc::new(
+                                DatagramIngressFlow::new(
+                                    ingress,
+                                    &add_ingress.common,
+                                    &service_metrics_creator,
+                                    runtime.clone(),
+                                )
+                                .await?,
+                            ) as Arc<_>
+                        }
                     }
                 })
             }.instrument(span.clone()).await?;
@@ -246,8 +274,7 @@ impl TngRuntime {
                         use crate::tunnel::egress::datagram_flow::DatagramEgressFlow;
                         use crate::tunnel::egress::mapping_udp::MappingUdpEgress;
 
-                        let mut egress = MappingUdpEgress::new(id, mapping_udp_args).await?;
-                        egress.set_max_datagram_size(add_egress.common.quic.as_ref().and_then(|q| q.max_datagram_size));
+                        let egress = MappingUdpEgress::new(id, mapping_udp_args).await?;
 
                         Arc::new(
                             DatagramEgressFlow::new(
@@ -258,6 +285,40 @@ impl TngRuntime {
                             )
                             .await?,
                         ) as Arc<_>
+                    }
+                    #[cfg(feature = "egress-netfilter-udp")]
+                    EgressMode::NetfilterUdp(netfilter_udp_args) => {
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            let _ = netfilter_udp_args;
+                            anyhow::bail!(
+                                "Using egress with 'netfilter_udp' type is not supported on OS other than Linux"
+                            );
+                        }
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            use crate::tunnel::egress::datagram_flow::DatagramEgressFlow;
+                            use crate::tunnel::egress::netfilter_udp::NetfilterUdpEgress;
+
+                            let egress = NetfilterUdpEgress::new(
+                                id,
+                                netfilter_udp_args,
+                                &add_egress.common,
+                                runtime.clone(),
+                            )
+                            .await?;
+
+                            Arc::new(
+                                DatagramEgressFlow::new(
+                                    egress,
+                                    &add_egress.common,
+                                    &service_metrics_creator,
+                                    runtime.clone(),
+                                )
+                                .await?,
+                            ) as Arc<_>
+                        }
                     }
                 })
             }.instrument(span.clone()).await?;

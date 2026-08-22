@@ -2,16 +2,16 @@ use std::path::Path;
 
 use crate::{
     config::ingress::IngressNetfilterCaptureDst,
-    tunnel::utils::iptables::{format_dport, IptablesRuleGenerator},
+    tunnel::utils::iptables::{
+        format_dport, IptablesRuleGenerator, NETFILTER_TCP_INGRESS_FW_MARK_BASE,
+        NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE,
+    },
 };
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 
 use super::NetfilterIngress;
-
-const IPTABLES_FW_MARK_BASE: u32 = 566;
-const IP_ROUTE_TABLE_NUM_BASE: u32 = 239;
 
 fn is_cgroup_v2() -> bool {
     // https://rootlesscontaine.rs/getting-started/common/cgroup2/#checking-whether-cgroup-v2-is-already-enabled
@@ -29,8 +29,8 @@ impl IptablesRuleGenerator for NetfilterIngress {
         let id = self.id;
         // Use per-instance fw_mark and route_table to avoid conflicts
         // when multiple ingress netfilter instances run concurrently.
-        let fw_mark = IPTABLES_FW_MARK_BASE + id as u32;
-        let route_table = IP_ROUTE_TABLE_NUM_BASE + id as u32;
+        let fw_mark = NETFILTER_TCP_INGRESS_FW_MARK_BASE + id as u32;
+        let route_table = NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE + id as u32;
         let listen_port = self.listen_port;
 
         if self.capture_dst.is_empty() {
