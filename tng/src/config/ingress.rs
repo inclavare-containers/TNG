@@ -75,6 +75,10 @@ pub enum IngressMode {
     #[cfg(feature = "ingress-mapping-udp")]
     #[serde(rename = "mapping_udp")]
     MappingUdp(IngressMappingUdpArgs),
+
+    #[cfg(feature = "ingress-netfilter-udp")]
+    #[serde(rename = "netfilter_udp")]
+    NetfilterUdp(IngressNetfilterUdpArgs),
 }
 
 impl IngressMode {
@@ -87,6 +91,8 @@ impl IngressMode {
             IngressMode::Hook(_) => IngressAccessMode::Hook,
             #[cfg(feature = "ingress-mapping-udp")]
             IngressMode::MappingUdp(_) => IngressAccessMode::MappingUdp,
+            #[cfg(feature = "ingress-netfilter-udp")]
+            IngressMode::NetfilterUdp(_) => IngressAccessMode::NetfilterUdp,
         }
     }
 }
@@ -141,6 +147,51 @@ pub struct IngressMappingUdpArgs {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngressNetfilterUdpArgs {
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_dst: Vec<IngressNetfilterCaptureDstArgs>,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_cgroup: Vec<String>,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nocapture_cgroup: Vec<String>,
+
+    /// The local port the TPROXY interception socket (QUIC client tunnel
+    /// listener) binds to.
+    ///
+    /// Optional: when omitted, a free port is picked randomly. This is the
+    /// iptables interception machine's receive port — it receives packets
+    /// redirected by the TPROXY rule. **It must not overlap any
+    /// `capture_dst` port**; otherwise the listener would intercept its own
+    /// traffic and recurse. Letting it default to a random port avoids this
+    /// by construction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub so_mark: Option<u32>,
+
+    /// Idle timeout in seconds for the UDP session.
+    ///
+    /// This is a bidirectional timeout — both directions must be idle for the
+    /// timeout to trigger. Any activity in either direction resets the timer.
+    ///
+    /// On the ingress side, if no new datagram is received from the client AND
+    /// no response datagram is received from the QUIC connection for this
+    /// duration, the QUIC connection is closed and the entry is removed.
+    ///
+    /// Similar to NAT UDP session timeout. Defaults to 30s if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u64>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngressHttpProxyArgs {
     pub proxy_listen: Endpoint,
 
@@ -168,6 +219,15 @@ pub struct IngressNetfilterArgs {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nocapture_cgroup: Vec<String>,
 
+    /// The local port the TPROXY interception socket (QUIC client tunnel
+    /// listener) binds to.
+    ///
+    /// Optional: when omitted, a free port is picked randomly. This is the
+    /// iptables interception machine's receive port — it receives packets
+    /// redirected by the TPROXY rule. **It must not overlap any
+    /// `capture_dst` port**; otherwise the listener would intercept its own
+    /// traffic and recurse. Letting it default to a random port avoids this
+    /// by construction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listen_port: Option<u16>,
 
@@ -293,6 +353,22 @@ pub enum IngressNetfilterCaptureDst {
         port: u16,
         port_end: Option<u16>,
     },
+}
+
+impl IngressNetfilterCaptureDst {
+    /// Return the (start, end) port range matched by this rule, inclusive.
+    /// Returns `None` for host/ipset-only rules that match all ports.
+    pub fn port_range(&self) -> Option<(u16, u16)> {
+        match self {
+            IngressNetfilterCaptureDst::HostOnly { .. }
+            | IngressNetfilterCaptureDst::IpSetOnly { .. } => None,
+            IngressNetfilterCaptureDst::PortOnly { port, port_end }
+            | IngressNetfilterCaptureDst::HostAndPort { port, port_end, .. }
+            | IngressNetfilterCaptureDst::IpSetAndPort { port, port_end, .. } => {
+                Some((*port, port_end.unwrap_or(*port)))
+            }
+        }
+    }
 }
 
 #[serde_as]
@@ -1147,6 +1223,45 @@ mod tests {
         // Some(false) is not skipped (only None is), but stays false:
         let args2: super::OHttpArgs = serde_json::from_value(json!({"tls": false}))?;
         assert_eq!(args2.tls, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_netfilter_udp() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "netfilter_udp": {
+                            "capture_dst": [
+                                { "port": 30001 },
+                                { "host": "10.0.0.0/24", "port": 443 }
+                            ],
+                            "listen_port": 50000
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        let json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_ingress_netfilter_udp_capture_all() -> Result<()> {
+        let _config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    { "netfilter_udp": {}, "no_ra": true }
+                ]
+            }
+        ))?;
         Ok(())
     }
 }

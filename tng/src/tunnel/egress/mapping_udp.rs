@@ -9,7 +9,7 @@ use quinn::crypto::rustls::QuicServerConfig;
 
 use crate::config::egress::EgressMappingUdpArgs;
 use crate::tunnel::egress::datagram_flow::{
-    EgressDatagramConnection, EgressDatagramListener, EgressDatagramTrait,
+    AcceptedConnection, EgressDatagramConnection, EgressDatagramListener, EgressDatagramTrait,
 };
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::rustls::config::alpn::Alpn;
@@ -61,6 +61,7 @@ impl EgressDatagramConnection for QuicEgressConnection {
 struct QuicEgressListener {
     endpoint: quinn::Endpoint,
     max_datagram_size: Option<usize>,
+    backend_ep: TngEndpoint,
 }
 
 #[async_trait]
@@ -71,7 +72,9 @@ impl EgressDatagramListener for QuicEgressListener {
             .context("Failed to get QUIC local address")
     }
 
-    async fn accept(&self) -> Result<Arc<dyn EgressDatagramConnection>> {
+    async fn accept(&self) -> Result<AcceptedConnection> {
+        use super::datagram_flow::AcceptedConnection;
+
         let connecting = self
             .endpoint
             .accept()
@@ -80,10 +83,14 @@ impl EgressDatagramListener for QuicEgressListener {
         let connection = connecting
             .await
             .context("QUIC connection handshake failed")?;
-        Ok(Arc::new(QuicEgressConnection {
-            inner: connection,
-            max_datagram_size: self.max_datagram_size,
-        }))
+
+        Ok(AcceptedConnection {
+            connection: Arc::new(QuicEgressConnection {
+                inner: connection,
+                max_datagram_size: self.max_datagram_size,
+            }),
+            backend_addr: self.backend_ep.clone(),
+        })
     }
 }
 
@@ -97,7 +104,6 @@ pub struct MappingUdpEgress {
     pub listen_port: u16,
     pub backend_addr: String,
     pub backend_port: u16,
-    pub max_datagram_size: Option<usize>,
     pub idle_timeout_secs: u64,
 }
 
@@ -121,14 +127,8 @@ impl MappingUdpEgress {
                 .to_owned(),
             backend_port: mapping_args.out.port,
 
-            max_datagram_size: None,
             idle_timeout_secs: mapping_args.idle_timeout_secs.unwrap_or(30),
         })
-    }
-
-    /// Set max_datagram_size from top-level quic config.
-    pub fn set_max_datagram_size(&mut self, size: Option<usize>) {
-        self.max_datagram_size = size;
     }
 
     pub fn metric_attributes(&self) -> IndexMap<String, String> {
@@ -154,8 +154,8 @@ impl EgressDatagramTrait for MappingUdpEgress {
         self.metric_attributes()
     }
 
-    fn backend_endpoint(&self) -> TngEndpoint {
-        TngEndpoint::new(self.backend_addr.clone(), self.backend_port)
+    fn access_mode(&self) -> crate::tunnel::access_log::EgressAccessMode {
+        crate::tunnel::access_log::EgressAccessMode::MappingUdp
     }
 
     fn idle_timeout_secs(&self) -> u64 {
@@ -165,6 +165,7 @@ impl EgressDatagramTrait for MappingUdpEgress {
     async fn bind_listener(
         &self,
         tls_gen: &TlsConfigGenerator,
+        max_datagram_size: Option<usize>,
     ) -> Result<Arc<dyn EgressDatagramListener>> {
         let listen_addr: SocketAddr =
             format!("{}:{}", self.listen_addr, self.listen_port).parse()?;
@@ -180,7 +181,8 @@ impl EgressDatagramTrait for MappingUdpEgress {
 
         Ok(Arc::new(QuicEgressListener {
             endpoint,
-            max_datagram_size: self.max_datagram_size,
+            max_datagram_size,
+            backend_ep: TngEndpoint::new(self.backend_addr.clone(), self.backend_port),
         }))
     }
 }

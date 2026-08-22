@@ -171,3 +171,43 @@ where
 
     last_result.unwrap_or_else(|| Err(anyhow::anyhow!("No address resolved")))
 }
+
+/// Resolve a `host:port` to the first IPv4 `SocketAddr`.
+///
+/// The netfilter_udp / TPROXY / datagram_flow UDP paths are IPv4-only
+/// (iptables, raw-socket spoofing, TPROXY recv, and the backend DGRAM socket
+/// all force IPv4), so IPv6 results are skipped and a v6-only host errors out.
+/// Mirrors the IPv4-only behavior of `tcp_connect` (which also forces
+/// `socket2::Domain::IPV4`).
+#[cfg(not(wasm))]
+pub async fn resolve_ipv4_addr(host: &str, port: u16) -> Result<std::net::SocketAddr> {
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .with_context(|| format!("Failed to resolve domain {host:?} via dns"))?;
+    for addr in addrs {
+        if addr.is_ipv4() {
+            tracing::debug!(?addr, "resolved domain to IPv4 address");
+            return Ok(addr);
+        }
+        tracing::debug!(?addr, "skipping non-IPv4 address for IPv4-only UDP path");
+    }
+    Err(anyhow::anyhow!(
+        "no IPv4 address resolved for domain {host:?}"
+    ))
+}
+
+#[cfg(all(not(wasm), test))]
+mod tests {
+    use super::resolve_ipv4_addr;
+
+    /// `localhost` is resolved from `/etc/hosts` (no network dependency), so
+    /// this is CI-safe. It must yield the IPv4 loopback address.
+    #[tokio::test]
+    async fn resolve_ipv4_addr_localhost() {
+        let addr = resolve_ipv4_addr("localhost", 0)
+            .await
+            .expect("localhost resolves");
+        assert!(addr.is_ipv4(), "expected an IPv4 address, got {addr}");
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    }
+}

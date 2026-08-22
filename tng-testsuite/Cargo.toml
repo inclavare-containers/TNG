@@ -32,6 +32,7 @@ rustls = {workspace = true, default-features = false, features = ["logging", "st
 rustls-pemfile = {workspace = true}
 scopeguard = {workspace = true}
 serde_json = {workspace = true}
+socket2 = {workspace = true}
 thirtyfour = {workspace = true, optional = true}
 tng = {path = "../tng", optional = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "sync", "process", "signal", "macros"]}
@@ -152,6 +153,10 @@ path = "tests/http/mapping_port_range.rs"
 [[test]]
 name = "mapping_udp"
 path = "tests/mapping_udp.rs"
+
+[[test]]
+name = "netfilter_udp"
+path = "tests/netfilter_udp.rs"
 
 [[test]]
 name = "mapping_multi_rule"

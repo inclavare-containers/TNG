@@ -10,5 +10,8 @@ pub mod mapping_udp;
 #[cfg(all(feature = "egress-netfilter", target_os = "linux"))]
 pub mod netfilter;
 
+#[cfg(all(feature = "egress-netfilter-udp", target_os = "linux"))]
+pub mod netfilter_udp;
+
 #[cfg(feature = "egress-mapping-udp")]
 pub(crate) mod datagram_flow;

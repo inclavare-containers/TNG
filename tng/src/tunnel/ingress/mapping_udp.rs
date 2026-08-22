@@ -5,34 +5,19 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use indexmap::IndexMap;
+use tokio::net::UdpSocket;
 
 use crate::config::ingress::IngressMappingUdpArgs;
-use crate::tunnel::endpoint::TngEndpoint;
-use crate::tunnel::ingress::datagram_flow::{IngressDatagramTrait, IngressDatagramTunnel};
+use crate::tunnel::access_log::IngressAccessMode;
+use crate::tunnel::endpoint::EndpointAddr;
+use crate::tunnel::ingress::datagram_flow::{
+    IngressDatagramListener, IngressDatagramTrait, IngressDatagramTunnel, QuicIngressTunnel,
+};
 use crate::tunnel::udp::quic_tunnel::QuicDatagramTunnelClient;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::rustls::config::alpn::Alpn;
 use crate::tunnel::utils::rustls::config::TlsConfigGenerator;
-
-/// QUIC-backed tunnel implementing `IngressDatagramTunnel`.
-struct QuicIngressTunnel {
-    inner: QuicDatagramTunnelClient,
-}
-
-#[async_trait]
-impl IngressDatagramTunnel for QuicIngressTunnel {
-    fn send_datagram(&self, payload: Bytes) -> Result<()> {
-        self.inner.send_datagram(payload)
-    }
-
-    async fn read_datagram(&self) -> Result<Bytes> {
-        self.inner.receive_datagram().await
-    }
-
-    fn close(&self, error_code: u32, reason: &[u8]) {
-        self.inner.connection.close(error_code.into(), reason);
-    }
-}
+use crate::tunnel::utils::socket::resolve_ipv4_addr;
 
 /// UDP mapping ingress configuration.
 ///
@@ -44,7 +29,6 @@ pub struct MappingUdpIngress {
     pub listen_port: u16,
     pub egress_addr: String,
     pub egress_port: u16,
-    pub max_datagram_size: Option<usize>,
     pub idle_timeout_secs: u64,
 }
 
@@ -74,14 +58,8 @@ impl MappingUdpIngress {
             listen_port,
             egress_addr,
             egress_port,
-            max_datagram_size: None,
             idle_timeout_secs,
         })
-    }
-
-    /// Set max_datagram_size from top-level quic config.
-    pub fn set_max_datagram_size(&mut self, size: Option<usize>) {
-        self.max_datagram_size = size;
     }
 
     pub fn metric_attributes(&self) -> IndexMap<String, String> {
@@ -99,6 +77,53 @@ impl MappingUdpIngress {
         ]
         .into()
     }
+
+    /// The fixed original destination a captured client packet is mapped to.
+    /// Mirrors the former `recv_datagram` logic: an IPv4 egress endpoint yields
+    /// its address; a domain endpoint is resolved to its first IPv4 address
+    /// (the netfilter_udp/datagram_flow path is IPv4-only, so non-IPv4 results
+    /// are skipped and a v6-only domain errors out).
+    async fn fixed_original_dst(&self) -> Result<SocketAddr> {
+        let original_dst = match EndpointAddr::from_host(&self.egress_addr) {
+            EndpointAddr::Ipv4(ip) => SocketAddr::new(std::net::IpAddr::V4(ip), self.egress_port),
+            EndpointAddr::Domain(d) => resolve_ipv4_addr(&d, self.egress_port)
+                .await
+                .with_context(|| format!("resolve mapping_udp egress domain {d}"))?,
+        };
+        Ok(original_dst)
+    }
+}
+
+/// Plain UDP listener for mapping_udp — owns a bound `UdpSocket` and the fixed
+/// original destination. All client datagram I/O goes through the flow, which
+/// calls `recv_datagram` / `send_to_client` here.
+struct MappingUdpListener {
+    socket: Arc<UdpSocket>,
+    original_dst: SocketAddr,
+}
+
+#[async_trait]
+impl IngressDatagramListener for MappingUdpListener {
+    fn local_addr(&self) -> Result<SocketAddr> {
+        self.socket
+            .local_addr()
+            .context("get mapping listener local addr")
+    }
+
+    async fn recv_datagram(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr, SocketAddr)> {
+        let (n, client_src) = self.socket.recv_from(buf).await?;
+        Ok((n, client_src, self.original_dst))
+    }
+
+    async fn send_to_client(
+        &self,
+        data: &Bytes,
+        client_addr: SocketAddr,
+        _original_dst: SocketAddr,
+    ) -> Result<()> {
+        self.socket.send_to(data, client_addr).await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -107,12 +132,8 @@ impl IngressDatagramTrait for MappingUdpIngress {
         self.metric_attributes()
     }
 
-    fn listen_endpoint(&self) -> (String, u16) {
-        (self.listen_addr.clone(), self.listen_port)
-    }
-
-    fn egress_endpoint(&self) -> TngEndpoint {
-        TngEndpoint::new(self.egress_addr.clone(), self.egress_port)
+    fn access_mode(&self) -> IngressAccessMode {
+        IngressAccessMode::MappingUdp
     }
 
     fn idle_timeout_secs(&self) -> u64 {
@@ -122,6 +143,8 @@ impl IngressDatagramTrait for MappingUdpIngress {
     async fn create_tunnel(
         &self,
         _client_addr: SocketAddr,
+        _original_dst: SocketAddr,
+        max_datagram_size: Option<usize>,
         tls_gen: &TlsConfigGenerator,
         _runtime: TokioRuntime,
     ) -> Result<Arc<dyn IngressDatagramTunnel>> {
@@ -139,11 +162,27 @@ impl IngressDatagramTrait for MappingUdpIngress {
         let quic_tunnel = QuicDatagramTunnelClient::connect(
             &egress_endpoint,
             Alpn::RatsQuic,
-            self.max_datagram_size,
+            max_datagram_size,
             tls_config,
+            // mapping_udp installs no iptables OUTPUT capture rule, so no
+            // SO_MARK is needed on the QUIC client socket.
+            None,
         )
         .await?;
 
-        Ok(Arc::new(QuicIngressTunnel { inner: quic_tunnel }))
+        Ok(Arc::new(QuicIngressTunnel::new(quic_tunnel)))
+    }
+
+    async fn bind_listener(&self) -> Result<Arc<dyn IngressDatagramListener>> {
+        let listen_str = format!("{}:{}", self.listen_addr, self.listen_port);
+        let socket = UdpSocket::bind(&listen_str)
+            .await
+            .with_context(|| format!("Failed to bind mapping_udp listener on {listen_str}"))?;
+        tracing::info!("UDP mapping ingress listening on {}", listen_str);
+
+        Ok(Arc::new(MappingUdpListener {
+            socket: Arc::new(socket),
+            original_dst: self.fixed_original_dst().await?,
+        }))
     }
 }

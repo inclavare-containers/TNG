@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use web_time_compat::{Duration, Instant, InstantExt};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use indexmap::IndexMap;
@@ -15,12 +15,13 @@ use crate::config::egress::CommonArgs as EgressCommonArgs;
 use crate::error::TngError;
 use crate::service::RegistedService;
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
+use crate::tunnel::access_log::AccessAccepted;
 use crate::tunnel::endpoint::{EndpointAddr, TngEndpoint};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::rustls::config::TlsConfigGenerator;
+use crate::tunnel::utils::socket::resolve_ipv4_addr;
 
 /// Trait for a single QUIC connection on the egress side.
 ///
@@ -43,14 +44,22 @@ pub(super) trait EgressDatagramConnection: Send + Sync {
 
 /// Trait for the QUIC listener on the egress side.
 ///
-/// Accepts incoming QUIC connections and yields `EgressDatagramConnection` objects.
+/// Accepts incoming QUIC connections and yields `AcceptedConnection` objects.
 #[async_trait]
 pub(super) trait EgressDatagramListener: Send + Sync {
     /// Get the local address the listener is bound to.
     fn local_addr(&self) -> Result<SocketAddr>;
 
-    /// Accept the next QUIC connection.
-    async fn accept(&self) -> Result<Arc<dyn EgressDatagramConnection>>;
+    /// Accept the next QUIC connection, returning the connection paired with
+    /// its original destination address (from IP_ORIGDSTADDR for netfilter_udp,
+    /// or the fixed backend endpoint for mapping_udp).
+    async fn accept(&self) -> Result<AcceptedConnection>;
+}
+
+/// An accepted QUIC connection paired with its backend address.
+pub(super) struct AcceptedConnection {
+    pub connection: Arc<dyn EgressDatagramConnection>,
+    pub backend_addr: TngEndpoint,
 }
 
 /// Trait for egress datagram listeners.
@@ -63,17 +72,26 @@ pub(super) trait EgressDatagramTrait: Send + Sync {
     /// Return the metric attributes of this egress.
     fn metric_attributes(&self) -> IndexMap<String, String>;
 
-    /// The backend endpoint this egress forwards to.
-    fn backend_endpoint(&self) -> TngEndpoint;
+    /// Return the access log mode for this egress.
+    fn access_mode(&self) -> crate::tunnel::access_log::EgressAccessMode;
 
     /// The idle timeout in seconds for connections.
     fn idle_timeout_secs(&self) -> u64;
 
+    /// The SO_MARK value to set on backend UDP sockets (to bypass TPROXY rules).
+    /// Returns `None` if no mark is needed (e.g., no TPROXY in use).
+    fn so_mark(&self) -> Option<u32> {
+        None
+    }
+
     /// Bind the QUIC listener. The Flow provides the TLS config generator
     /// so RA context is managed centrally (same pattern as ingress).
+    /// `max_datagram_size` is the top-level `quic.max_datagram_size` (the Flow
+    /// owns it so RA context is managed centrally).
     async fn bind_listener(
         &self,
         tls_gen: &TlsConfigGenerator,
+        max_datagram_size: Option<usize>,
     ) -> Result<Arc<dyn EgressDatagramListener>>;
 }
 
@@ -82,6 +100,9 @@ pub struct DatagramEgressFlow {
     tls_gen: TlsConfigGenerator,
     metrics: ServiceMetrics,
     runtime: TokioRuntime,
+    /// Top-level `quic.max_datagram_size`, captured in `new()` from the common
+    /// args and passed to `bind_listener`.
+    max_datagram_size: Option<usize>,
 }
 
 impl DatagramEgressFlow {
@@ -100,11 +121,14 @@ impl DatagramEgressFlow {
             Arc::new(crate::tunnel::ra_context::RaContext::from_ra_args(&ra_args).await?);
         let tls_gen = TlsConfigGenerator::new(ra_context, runtime.clone()).await?;
 
+        let max_datagram_size = common_args.quic.as_ref().and_then(|q| q.max_datagram_size);
+
         Ok(Self {
             egress: Box::new(egress),
             tls_gen,
             metrics,
             runtime,
+            max_datagram_size,
         })
     }
 }
@@ -112,18 +136,28 @@ impl DatagramEgressFlow {
 #[async_trait::async_trait]
 impl RegistedService for DatagramEgressFlow {
     async fn serve(&self, ready: Sender<()>) -> Result<()> {
-        let listener = self.egress.bind_listener(&self.tls_gen).await?;
+        let listener = self
+            .egress
+            .bind_listener(&self.tls_gen, self.max_datagram_size)
+            .await?;
         let actual_addr = listener.local_addr()?;
-        tracing::info!("UDP mapping egress QUIC listener on {}", actual_addr);
+        let access_mode = self.egress.access_mode();
+        tracing::info!(
+            "UDP {} egress QUIC listener on {}",
+            access_mode,
+            actual_addr
+        );
 
         ready.send(()).await?;
 
-        let backend_ep = self.egress.backend_endpoint();
         let idle_timeout_secs = self.egress.idle_timeout_secs();
         let listener_addr = actual_addr;
 
         loop {
-            let connection = listener.accept().await?;
+            let AcceptedConnection {
+                connection,
+                backend_addr: backend_ep,
+            } = listener.accept().await?;
             let remote = connection.remote_address();
 
             tracing::info!(
@@ -131,8 +165,7 @@ impl RegistedService for DatagramEgressFlow {
                 "Accepted QUIC connection from ingress"
             );
 
-            let access_accepted =
-                AccessAccepted::new_egress(remote, listener_addr, EgressAccessMode::MappingUdp);
+            let access_accepted = AccessAccepted::new_egress(remote, listener_addr, access_mode);
             let access_routed = access_accepted.into_routed(
                 &backend_ep,
                 true, // from_trusted_tunnel
@@ -145,16 +178,17 @@ impl RegistedService for DatagramEgressFlow {
             let active_cx = metrics.new_cx();
             let runtime_spawn = self.runtime.clone();
             let runtime_for_task = self.runtime.clone();
-            let backend_ep_clone = backend_ep.clone();
             let idle_timeout = idle_timeout_secs;
             let connection_clone = connection.clone();
+            let so_mark = self.egress.so_mark();
 
             runtime_spawn.spawn_supervised_task(async move {
                 if let Err(e) = Self::forward_connection(
                     connection_clone,
-                    &backend_ep_clone,
+                    &backend_ep,
                     idle_timeout,
                     &runtime_for_task,
+                    so_mark,
                 )
                 .await
                 {
@@ -175,23 +209,37 @@ impl DatagramEgressFlow {
         backend_ep: &TngEndpoint,
         idle_timeout_secs: u64,
         runtime: &TokioRuntime,
+        so_mark: Option<u32>,
     ) -> Result<()> {
-        let backend_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        // Connect without formatting a "host:port" string: both `(Ipv4Addr, u16)`
-        // and `(&str, u16)` implement `ToSocketAddrs` directly.
-        match backend_ep.addr() {
-            EndpointAddr::Ipv4(ip) => {
-                backend_socket.connect((*ip, backend_ep.port())).await?;
-            }
-            EndpointAddr::Domain(d) => {
-                backend_socket
-                    .connect((d.as_str(), backend_ep.port()))
-                    .await?;
-            }
+        let backend_addr = match backend_ep.addr() {
+            EndpointAddr::Ipv4(ip) => SocketAddr::new(std::net::IpAddr::V4(*ip), backend_ep.port()),
+            EndpointAddr::Domain(d) => resolve_ipv4_addr(d, backend_ep.port())
+                .await
+                .with_context(|| format!("resolve egress backend domain {d}"))?,
+        };
+
+        // Create a UDP socket with socket2 crate so that we can set the SO_MARK option
+        let std_socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        std_socket.set_nonblocking(true)?;
+        if let Some(mark) = so_mark {
+            std_socket.set_mark(mark)?;
         }
+        const ANY: SocketAddr =
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0);
+        std_socket.bind(&ANY.into())?;
+        let backend_socket = Arc::new(UdpSocket::from_std(std_socket.into())?);
+        backend_socket.connect(backend_addr).await?;
 
         let idle_timeout = Duration::from_secs(idle_timeout_secs);
         let last_activity = Arc::new(Mutex::new(Instant::get()));
+        // Idle-timeout probe cadence: when neither direction has moved for this
+        // long, the `sleep` arm in each forward task fires and checks whether
+        // the session has been idle past `idle_timeout`. 5s is coarse but fine
+        // — the timeout itself is ~30s.
         let check_interval = Duration::from_secs(5);
 
         let conn_clone = connection.clone();
@@ -207,13 +255,18 @@ impl DatagramEgressFlow {
                     datagram_result = conn_clone.read_datagram() => {
                         match datagram_result {
                             Ok(payload) => {
-                                let _ = backend_socket_a.send(&payload).await;
+                                tracing::debug!(len = payload.len(), "egress A: forward QUIC->backend");
+                                if let Err(e) = backend_socket_a.send(&payload).await {
+                                    tracing::warn!(error = %e, "egress A: backend_socket send failed");
+                                }
                                 *last_act_a.lock().await = Instant::get();
                             }
-                            Err(_) => break,
+                            Err(e) => { tracing::debug!(error=%e, "egress A: read_datagram ended"); break; }
                         }
                     }
                     _ = sleep(check_interval) => {
+                        // Idle-timeout probe: if neither direction has moved
+                        // for `timeout_a`, tear down the connection.
                         let last = *last_act_a.lock().await;
                         if last.elapsed() >= timeout_a {
                             break;
@@ -238,6 +291,7 @@ impl DatagramEgressFlow {
                     recv_result = backend_socket_b.recv(&mut recv_buf) => {
                         match recv_result {
                             Ok(n) => {
+                                tracing::debug!(len = n, "egress B: recv backend->QUIC");
                                 let payload = Bytes::copy_from_slice(&recv_buf[..n]);
                                 if let Err(e) = connection_send.send_datagram(payload) {
                                     tracing::warn!(error = %e, "Failed to send datagram to QUIC");
@@ -245,10 +299,11 @@ impl DatagramEgressFlow {
                                 }
                                 *last_act_b.lock().await = Instant::get();
                             }
-                            Err(_) => break,
+                            Err(e) => { tracing::debug!(error=%e, "egress B: recv ended"); break; }
                         }
                     }
                     _ = sleep(check_interval) => {
+                        // Idle-timeout probe (same as task A).
                         let last = *last_act_b.lock().await;
                         if last.elapsed() >= timeout_b {
                             break;

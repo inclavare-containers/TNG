@@ -111,6 +111,53 @@ pub struct EgressMappingUdpArgs {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct EgressNetfilterUdpArgs {
+    #[serde_as(as = "OneOrMany<_, PreferMany>")]
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_dst: Vec<EgressNetfilterCaptureDstArgs>,
+
+    #[serde(default = "bool::default")]
+    pub capture_local_traffic: bool,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capture_cgroup: Vec<String>,
+
+    #[serde(default = "Vec::new")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nocapture_cgroup: Vec<String>,
+
+    /// The local port the TPROXY interception socket (QUIC listener) binds to.
+    ///
+    /// Optional: when omitted, a free port is picked randomly. This is the
+    /// iptables interception machine's receive port — it receives packets
+    /// redirected by the TPROXY rule. **It must not overlap any `capture_dst`
+    /// port**; otherwise the listener would intercept its own traffic and
+    /// recurse. Letting it default to a random port avoids this by construction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen_port: Option<u16>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub so_mark: Option<u32>,
+
+    /// Idle timeout in seconds for the UDP session.
+    ///
+    /// This is a bidirectional timeout — both directions must be idle for the
+    /// timeout to trigger. Any activity in either direction resets the timer.
+    ///
+    /// On the egress side, if no datagram is sent from QUIC AND no response
+    /// datagram is received from the backend for this duration, the UDP socket
+    /// is closed and the corresponding QUIC connection is terminated.
+    ///
+    /// Similar to NAT UDP session timeout. Defaults to 30s if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u64>,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EgressNetfilterArgs {
     #[serde_as(as = "OneOrMany<_, PreferMany>")]
     #[serde(default = "Vec::new")]
@@ -206,6 +253,22 @@ pub enum EgressNetfilterCaptureDst {
     },
 }
 
+impl EgressNetfilterCaptureDst {
+    /// Return the (start, end) port range matched by this rule, inclusive.
+    /// Returns `None` for host/ipset-only rules that match all ports.
+    pub fn port_range(&self) -> Option<(u16, u16)> {
+        match self {
+            EgressNetfilterCaptureDst::HostOnly { .. }
+            | EgressNetfilterCaptureDst::IpSetOnly { .. } => None,
+            EgressNetfilterCaptureDst::PortOnly { port, port_end }
+            | EgressNetfilterCaptureDst::HostAndPort { port, port_end, .. }
+            | EgressNetfilterCaptureDst::IpSetAndPort { port, port_end, .. } => {
+                Some((*port, port_end.unwrap_or(*port)))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum EgressMode {
@@ -221,6 +284,10 @@ pub enum EgressMode {
     #[cfg(feature = "egress-mapping-udp")]
     #[serde(rename = "mapping_udp")]
     MappingUdp(EgressMappingUdpArgs),
+
+    #[cfg(feature = "egress-netfilter-udp")]
+    #[serde(rename = "netfilter_udp")]
+    NetfilterUdp(EgressNetfilterUdpArgs),
 }
 
 impl EgressMode {
@@ -231,6 +298,8 @@ impl EgressMode {
             EgressMode::Hook(_) => EgressAccessMode::Hook,
             #[cfg(feature = "egress-mapping-udp")]
             EgressMode::MappingUdp(_) => EgressAccessMode::MappingUdp,
+            #[cfg(feature = "egress-netfilter-udp")]
+            EgressMode::NetfilterUdp(_) => EgressAccessMode::NetfilterUdp,
         }
     }
 }
@@ -828,6 +897,33 @@ mod tests {
             serde_json::to_value(config2)?
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_egress_netfilter_udp() -> Result<()> {
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_egress": [
+                    {
+                        "netfilter_udp": {
+                            "capture_dst": [
+                                { "port": 30001 },
+                                { "host": "10.0.0.0/24", "port": 443 }
+                            ],
+                            "listen_port": 50001
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+        let json = serde_json::to_string_pretty(&config)?;
+        let config2: TngConfig = serde_json::from_str(&json)?;
+        assert_eq!(
+            serde_json::to_value(config)?,
+            serde_json::to_value(config2)?
+        );
         Ok(())
     }
 }
