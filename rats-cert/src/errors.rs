@@ -202,6 +202,12 @@ pub enum Error {
     AttestationServiceCreateFailed(#[source] attestation_service::ServiceError),
 
     #[cfg(feature = "__builtin-as")]
+    #[error("Failed to create builtin attestation service policy engine")]
+    AttestationServicePolicyEngineCreateFailed(
+        #[source] attestation_service::policy_engine::PolicyError,
+    ),
+
+    #[cfg(feature = "__builtin-as")]
     #[error("Failed to create attestation service challenger")]
     AttestationServiceChallengerCreateFailed(#[source] anyhow::Error),
 

@@ -238,7 +238,16 @@ impl BuiltinCocoConverter {
                         attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
                             attestation_service::token::ear_broker::DEFAULT_POLICY,
                             DEFAULT_POLICY_ID,
-                        ),
+                            // The artifact-server address is only consumed
+                            // under attestation-service's `policy-artifact-server`
+                            // feature (not enabled here), so this value has no
+                            // effect today. Pass trustee's own default
+                            // (`config::DEFAULT_ARTIFACT_SERVER_ADDRESS`) rather
+                            // than `""` so the call site mirrors upstream usage
+                            // and stays correct if that feature is ever enabled.
+                            attestation_service::config::DEFAULT_ARTIFACT_SERVER_ADDRESS,
+                        )
+                        .map_err(Error::AttestationServicePolicyEngineCreateFailed)?,
                     ),
                 ),
             )
@@ -1295,7 +1304,13 @@ default file_system := 2"#,
         let engine = attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
             policy,
             DEFAULT_POLICY_ID,
-        );
+            // The artifact-server address is only consumed under
+            // attestation-service's `policy-artifact-server` feature (not
+            // enabled for these tests), so this value has no effect here.
+            // Pass trustee's own default to mirror upstream usage.
+            attestation_service::config::DEFAULT_ARTIFACT_SERVER_ADDRESS,
+        )
+        .expect("create OPA in-memory engine");
         // The four rules our templates define. The real AS also queries four more
         // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
         // skipped when a policy leaves them undefined, so they need not be queried.
