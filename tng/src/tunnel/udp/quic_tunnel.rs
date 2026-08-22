@@ -61,6 +61,17 @@ impl QuicDatagramTunnelClient {
                     Some(socket2::Protocol::UDP),
                 )
                 .context("Failed to create QUIC client socket")?;
+                // SO_MARK is Linux-only. `so_mark = Some(_)` is only ever passed
+                // by netfilter_udp ingress, which is itself Linux-only, so this
+                // branch is unreachable on non-Linux — consume `mark` to keep
+                // the binding used without actually setting the option.
+                #[cfg(not(any(
+                    target_os = "android",
+                    target_os = "fuchsia",
+                    target_os = "linux"
+                )))]
+                let _ = mark;
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 std_socket.set_mark(mark).with_context(|| {
                     format!("Failed to set SO_MARK={mark} on QUIC client socket")
                 })?;

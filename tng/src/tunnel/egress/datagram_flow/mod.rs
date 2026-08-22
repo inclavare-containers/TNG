@@ -211,6 +211,12 @@ impl DatagramEgressFlow {
         runtime: &TokioRuntime,
         so_mark: Option<u32>,
     ) -> Result<()> {
+        // SO_MARK is Linux-only; `so_mark` is only `Some` for netfilter_udp
+        // egress (Linux-only). On other platforms it is always `None`, so
+        // consume it to avoid an unused-variable warning there.
+        #[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
+        let _ = so_mark;
+
         let backend_addr = match backend_ep.addr() {
             EndpointAddr::Ipv4(ip) => SocketAddr::new(std::net::IpAddr::V4(*ip), backend_ep.port()),
             EndpointAddr::Domain(d) => resolve_ipv4_addr(d, backend_ep.port())
@@ -225,6 +231,7 @@ impl DatagramEgressFlow {
             Some(socket2::Protocol::UDP),
         )?;
         std_socket.set_nonblocking(true)?;
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         if let Some(mark) = so_mark {
             std_socket.set_mark(mark)?;
         }
