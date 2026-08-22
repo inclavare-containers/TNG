@@ -793,7 +793,7 @@ This is suitable for scenarios where the server is already listening on a port a
 | `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | No (`[]`) | Destination address and port capture rules (captures all TCP if empty) |
 | `netfilter.capture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to capture |
 | `netfilter.nocapture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to exclude |
-| `netfilter.capture_local_traffic` | boolean | `false` | Whether to capture traffic with source IP being the local machine |
+| `netfilter.capture_local_traffic` | boolean | `false` | Whether to also capture locally-generated traffic destined for local addresses (loopback-to-self). Traffic destined for other hosts is never captured, even when this is `true` |
 | `netfilter.listen_port` | integer | No (increments from 40000) | TNG listen port for redirected traffic |
 | `netfilter.so_mark` | integer | `565` | SO_MARK value for decrypted plaintext traffic sockets to prevent loops |
 
@@ -816,14 +816,16 @@ flowchart TD
     E --No--> C
 ```
 
-> **Note:** This mode only captures TCP traffic. By default (`capture_local_traffic: false`) it does not capture traffic whose **source IP is local** (i.e. traffic the machine itself originates, including loopback-to-self); set `capture_local_traffic: true` to capture such locally-originated traffic.
+> **Note:** This mode only captures TCP traffic, and only traffic **destined for local addresses** (the local backend). It never captures traffic destined for other hosts — neither other-host→other-host traffic routed through this machine nor locally-generated traffic to other hosts. By default (`capture_local_traffic: false`) it also does not capture locally-generated traffic at all (including loopback-to-self); set `capture_local_traffic: true` to also capture local-to-local traffic (the backend-on-same-machine case).
 
 **Capture matrix** (by `capture_local_traffic`):
 
 | `capture_local_traffic` | Other host → local | Other host → other host | Local → local | Local → other host |
 |---|---|---|---|---|
-| `false` (default) | ✅ | ✅ | ❌ | ❌ |
-| `true` | ✅ | ✅ | ✅ | ✅ |
+| `false` (default) | ✅ | ❌ | ❌ | ❌ |
+| `true` | ✅ | ❌ | ✅ | ❌ |
+
+> Traffic destined for other hosts (`Other host → other host`, `Local → other host`) is never captured, even with `capture_local_traffic: true` — the egress only intercepts traffic destined for local addresses.
 
 > [!NOTE]
 > **Running in containers without `CAP_NET_ADMIN`:** See the [Ingress netfilter note](#mode-netfilter-transparent-proxy) above for the same workaround using pasta.

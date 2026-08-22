@@ -52,6 +52,24 @@ impl IptablesRuleGenerator for NetfilterEgress {
             self.so_mark
         );
 
+        // Locality guard. The egress only intercepts traffic destined for local
+        // addresses (the local backend). Traffic to other hosts — whether routed
+        // through this machine (other host → other host) or originated locally
+        // (local → other host) — is never captured, so return it early regardless
+        // of `capture_local_traffic`.
+        invoke_script += &format!(
+            "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype ! --dst-type LOCAL -j RETURN ; "
+        );
+
+        // When `capture_local_traffic` is false, also exclude all
+        // locally-generated traffic (local → local), so only remote traffic
+        // destined for local addresses (other host → local) is captured.
+        if !self.capture_local_traffic {
+            invoke_script += &format!(
+                "iptables -t nat -A TNG_EGRESS_{id} -p tcp -m addrtype --src-type LOCAL -j RETURN ; "
+            );
+        }
+
         // Handle cgroup filtering
         if !self.capture_cgroup.is_empty() {
             if !is_cgroup_v2() {
@@ -73,7 +91,6 @@ impl IptablesRuleGenerator for NetfilterEgress {
                 &mut invoke_script,
                 &format!("TNG_EGRESS_{id}_CGROUP"),
                 &self.capture_dst,
-                &self.capture_local_traffic,
                 listen_port,
             );
 
@@ -98,7 +115,6 @@ impl IptablesRuleGenerator for NetfilterEgress {
                 &mut invoke_script,
                 &format!("TNG_EGRESS_{id}"),
                 &self.capture_dst,
-                &self.capture_local_traffic,
                 listen_port,
             );
         }
@@ -118,43 +134,37 @@ impl IptablesRuleGenerator for NetfilterEgress {
 impl NetfilterEgress {
     /// Generate REDIRECT rules matching all capture_dst entries.
     ///
-    /// When `capture_local_traffic` is false, adds `! --src-type LOCAL`
-    /// to avoid intercepting traffic from local processes (handled by OUTPUT chain).
+    /// Locality (which locally-originated traffic to capture) is handled up-front
+    /// by the `--src-type LOCAL` guard in the main chain, so these rules carry no
+    /// source/destination type filter and simply REDIRECT whatever reaches them.
     fn append_capture_rules(
         script: &mut String,
         chain: &str,
         capture_dst: &[EgressNetfilterCaptureDst],
-        capture_local_traffic: &bool,
         listen_port: u16,
     ) {
-        let src_check = if !*capture_local_traffic {
-            "-m addrtype ! --src-type LOCAL "
-        } else {
-            ""
-        };
-
         if capture_dst.is_empty() {
             *script += &format!(
-                "iptables -t nat -A {chain} -p tcp {src_check}-j REDIRECT --to-ports {listen_port} ; ",
+                "iptables -t nat -A {chain} -p tcp -j REDIRECT --to-ports {listen_port} ; ",
             );
         } else {
             for cap in capture_dst {
                 match cap {
                     EgressNetfilterCaptureDst::HostOnly { host } => {
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dst {}/{} -j REDIRECT --to-ports {listen_port} ; ",
+                            "iptables -t nat -A {chain} -p tcp --dst {}/{} -j REDIRECT --to-ports {listen_port} ; ",
                             host.first_address(), host.network_length()
                         );
                     }
                     EgressNetfilterCaptureDst::IpSetOnly { ipset } => {
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}-m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
+                            "iptables -t nat -A {chain} -p tcp -m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
                     EgressNetfilterCaptureDst::PortOnly { port, port_end } => {
                         let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {dport} -j REDIRECT --to-ports {listen_port} ; "
+                            "iptables -t nat -A {chain} -p tcp --dport {dport} -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
                     EgressNetfilterCaptureDst::HostAndPort {
@@ -164,7 +174,7 @@ impl NetfilterEgress {
                     } => {
                         let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dst {}/{} --dport {dport} -j REDIRECT --to-ports {listen_port} ; ",
+                            "iptables -t nat -A {chain} -p tcp --dst {}/{} --dport {dport} -j REDIRECT --to-ports {listen_port} ; ",
                             host.first_address(), host.network_length()
                         );
                     }
@@ -175,7 +185,7 @@ impl NetfilterEgress {
                     } => {
                         let dport = format_dport(*port, port_end.as_ref());
                         *script += &format!(
-                            "iptables -t nat -A {chain} -p tcp {src_check}--dport {dport} -m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
+                            "iptables -t nat -A {chain} -p tcp --dport {dport} -m set --match-set {ipset} dst -j REDIRECT --to-ports {listen_port} ; "
                         );
                     }
                 }

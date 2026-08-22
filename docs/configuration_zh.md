@@ -793,7 +793,7 @@ TNG 通过内核 netfilter 拦截**来自其他节点发往指定端口**的入�
 | `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | 否 (`[]`) | 目标地址和端口捕获规则（为空时捕获所有 TCP） |
 | `netfilter.capture_cgroup` | array [string] | 否 (`[]`) | 需要捕获的 cgroup 路径列表 |
 | `netfilter.nocapture_cgroup` | array [string] | 否 (`[]`) | 需要排除的 cgroup 路径列表 |
-| `netfilter.capture_local_traffic` | boolean | `false` | 是否捕获源 IP 为本机的流量 |
+| `netfilter.capture_local_traffic` | boolean | `false` | 是否额外捕获本机发出、发往本地地址的流量（回环到自身）。发往其他主机的流量永远不会被捕获，即使设为 `true` |
 | `netfilter.listen_port` | integer | 否（从 40000 递增） | TNG 监听端口，接收重定向流量 |
 | `netfilter.so_mark` | integer | `565` | 解密后明文流量的 socket SO_MARK 值，防止回环 |
 
@@ -816,14 +816,16 @@ flowchart TD
     E --否--> C
 ```
 
-> **注意**：该模式仅捕获 TCP 流量。默认（`capture_local_traffic: false`）不捕获**源 IP 为本机**的流量（即本机自身发出的流量，含 loopback-to-self）；需设 `capture_local_traffic: true` 才会捕获这类本机发出的流量。
+> **注意**：该模式仅捕获 TCP 流量，且仅捕获**目标为本机地址**（本地后端）的流量。发往其他主机的流量永远不会被捕获——无论是经本机转发的“其他主机→其他主机”，还是本机发出、发往其他主机的流量。默认（`capture_local_traffic: false`）还不捕获任何本机自身发出的流量（含 loopback-to-self）；需设 `capture_local_traffic: true` 才会额外捕获本机→本机的流量（后端在同一台机器的场景）。
 
 **捕获矩阵**（按 `capture_local_traffic` 区分）：
 
 | `capture_local_traffic` | 其他主机→本机 | 其他主机→其他主机 | 本机→本机 | 本机→其他主机 |
 |---|---|---|---|---|
-| `false`（默认） | ✅ | ✅ | ❌ | ❌ |
-| `true` | ✅ | ✅ | ✅ | ✅ |
+| `false`（默认） | ✅ | ❌ | ❌ | ❌ |
+| `true` | ✅ | ❌ | ✅ | ❌ |
+
+> 发往其他主机的流量（`其他主机→其他主机`、`本机→其他主机`）永远不会被捕获，即使 `capture_local_traffic: true`——egress 只拦截目标为本机地址的流量。
 
 > [!NOTE]
 > **在无 `CAP_NET_ADMIN` 的容器中运行**：同上，参考 [Ingress netfilter 章节](#netfilter透明代理)中的 pasta 方案。
