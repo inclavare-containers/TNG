@@ -16,6 +16,7 @@
   - [Mode: netfilter (Transparent Proxy)](#mode-netfilter-transparent-proxy)
   - [Mode: hook (LD_PRELOAD)](#mode-ingress-hook-ld-preload)
   - [Mode: mapping_udp (UDP over QUIC)](#mode-mapping_udp-udp-over-quic-datagram-tunnel)
+  - [Mode: netfilter_udp (Transparent UDP Proxy)](#mode-netfilter_udp-transparent-udp-proxy)
     - [Per-Entry QUIC Configuration](#udp-over-quic-configuration)
 - [Egress (Tunnel Exit)](#egress-tunnel-exit)
   - [Common Fields](#common-fields)
@@ -24,6 +25,7 @@
   - [Mode: netfilter (Port Hijacking)](#mode-netfilter-port-hijacking)
   - [Mode: hook (LD_PRELOAD)](#egress-hook-ld-preload)
   - [Mode: mapping_udp (UDP over QUIC)](#mode-mapping_udp-udp-over-quic-datagram-tunnel)
+  - [Mode: netfilter_udp (Transparent UDP Proxy)](#mode-netfilter_udp-transparent-udp-proxy-1)
 - [Remote Attestation (Common Configuration)](#remote-attestation-common-configuration)
   - [Provider Selection](#provider-selection)
   - [Attester Configuration](#attester-configuration)
@@ -76,7 +78,7 @@ The `Ingress` object configures the tunnel's entry endpoints, controlling how tr
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` \| `netfilter_udp` | None | Traffic inbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `ohttp` | [OHttp](#ingress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
@@ -362,6 +364,12 @@ flowchart TD
 
 > **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses.
 
+**Capture matrix:**
+
+| Mode | Other host → local | Other host → other host | Local → local | Local → other host |
+|---|---|---|---|---|
+| netfilter ingress | ❌ | ❌ | ❌ | ✅ |
+
 > [!NOTE]
 > **Running in containers without `CAP_NET_ADMIN`:** The netfilter mode requires `CAP_NET_ADMIN` to create iptables rules. If your container lacks this capability, you can work around it using [pasta](https://passt.top), which bypasses the missing capability by creating a child network namespace and user namespace pair:
 >
@@ -596,6 +604,54 @@ Encapsulates raw UDP datagrams over a QUIC connection. The ingress side listens 
 
 ---
 
+### Mode: netfilter_udp (Transparent UDP Proxy)
+
+> **Requires:** Linux kernel with iptables TPROXY support. Only available with the `ingress-netfilter-udp` and `egress-netfilter-udp` feature flags.
+
+Intercepts raw UDP traffic transparently via iptables TPROXY, tunnels it over QUIC datagrams, and reconstructs the original UDP flow at the other end. No client-side code changes are needed — applications send UDP to the original destination address as usual.
+
+#### Ingress Side (`"netfilter_udp"`)
+
+The ingress side intercepts client UDP packets using iptables TPROXY in the mangle table PREROUTING chain. It extracts the original destination address via `IP_ORIGDSTADDR` socket option and establishes a QUIC datagram tunnel per `(client_src, original_dst)` session.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `capture_dst` | array or object [[CaptureDst](#netfilter-capture-destination)] | All | Destination filter: which UDP traffic to intercept (host/ipset/port/port_end combinations). If empty, captures all UDP traffic |
+| `listen_port` | integer | No (auto-assigned) | Local port for TPROXY to redirect intercepted packets to |
+| `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets from interception |
+| `capture_cgroup` | array of string | None | Only capture traffic from these cgroup paths (cgroup v2 only) |
+| `nocapture_cgroup` | array of string | None | Exclude traffic from these cgroup paths (cgroup v2 only) |
+
+**Example:**
+
+```json
+{
+  "add_ingress": [
+    {
+      "netfilter_udp": {
+        "capture_dst": [
+          { "host": "10.0.0.1", "port": 5000 }
+        ],
+        "listen_port": 10001
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "no_ra": true
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> By default, ingress connects to the egress using `original_dst` — the client's original destination address extracted from TPROXY. Ensure clients target the egress machine's address so `original_dst` resolves correctly.
+
+**Capture matrix:**
+
+| Mode | Other host → local | Other host → other host | Local → local | Local → other host |
+|---|---|---|---|---|
+| netfilter ingress | ❌ | ❌ | ❌ | ✅ |
+
+---
+
 ## Egress (Tunnel Exit)
 
 The `Egress` object configures the tunnel's exit endpoints, controlling how traffic exits the tunnel.
@@ -606,7 +662,7 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` \| `netfilter_udp` | None | Traffic outbound mode. Place the corresponding mode's key-value in the object based on the mode used |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-rules)] | No | Direct forwarding (without decryption) rules |
 | `ohttp` | [OHttp](#egress-side-configuration) | None | OHTTP protocol configuration (mutually exclusive with `rats_tls`) |
 | `rats_tls` | [RatsTlsArgs](#transport-layer-common-configuration) | None | RA-TLS transport configuration (mutually exclusive with `ohttp`) |
@@ -737,7 +793,7 @@ This is suitable for scenarios where the server is already listening on a port a
 | `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | No (`[]`) | Destination address and port capture rules (captures all TCP if empty) |
 | `netfilter.capture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to capture |
 | `netfilter.nocapture_cgroup` | array [string] | No (`[]`) | List of cgroup paths to exclude |
-| `netfilter.capture_local_traffic` | boolean | `false` | Whether to capture traffic with source IP being the local machine |
+| `netfilter.capture_local_traffic` | boolean | `false` | Whether to also capture locally-generated traffic destined for local addresses (loopback-to-self). Traffic destined for other hosts is never captured, even when this is `true` |
 | `netfilter.listen_port` | integer | No (increments from 40000) | TNG listen port for redirected traffic |
 | `netfilter.so_mark` | integer | `565` | SO_MARK value for decrypted plaintext traffic sockets to prevent loops |
 
@@ -760,7 +816,16 @@ flowchart TD
     E --No--> C
 ```
 
-> **Note:** This mode only captures TCP traffic and does not capture traffic destined for local addresses (unless `capture_local_traffic: true`).
+> **Note:** This mode only captures TCP traffic, and only traffic **destined for local addresses** (the local backend). It never captures traffic destined for other hosts — neither other-host→other-host traffic routed through this machine nor locally-generated traffic to other hosts. By default (`capture_local_traffic: false`) it also does not capture locally-generated traffic at all (including loopback-to-self); set `capture_local_traffic: true` to also capture local-to-local traffic (the backend-on-same-machine case).
+
+**Capture matrix** (by `capture_local_traffic`):
+
+| `capture_local_traffic` | Other host → local | Other host → other host | Local → local | Local → other host |
+|---|---|---|---|---|
+| `false` (default) | ✅ | ❌ | ❌ | ❌ |
+| `true` | ✅ | ❌ | ✅ | ❌ |
+
+> Traffic destined for other hosts (`Other host → other host`, `Local → other host`) is never captured, even with `capture_local_traffic: true` — the egress only intercepts traffic destined for local addresses.
 
 > [!NOTE]
 > **Running in containers without `CAP_NET_ADMIN`:** See the [Ingress netfilter note](#mode-netfilter-transparent-proxy) above for the same workaround using pasta.
@@ -962,6 +1027,52 @@ The egress side of `mapping_udp` accepts QUIC datagram connections from an ingre
         "idle_timeout_secs": 60
       },
       "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+---
+
+### Mode: netfilter_udp (Transparent UDP Proxy)
+
+The egress side accepts incoming QUIC datagram connections on a TPROXY-configured socket. For outbound UDP to backends, iptables TPROXY intercepts packets destined for the captured addresses, and `IP_ORIGDSTADDR` on the redirected packets reveals the original backend target so the payload can be forwarded correctly. See the [ingress netfilter_udp section](#mode-netfilter_udp-transparent-udp-proxy) for the full feature overview.
+
+> **Capture scope:** The egress only hooks the mangle `PREROUTING` chain, so it captures incoming UDP from remote hosts destined for the machine, and locally-generated UDP sent to a local address (loopback-to-self, only when `capture_local_traffic` is `true`). It does **not** capture locally-generated UDP destined for other hosts — such traffic traverses the `OUTPUT` chain, which the egress does not hook.
+
+**Capture matrix** (by `capture_local_traffic`):
+
+| `capture_local_traffic` | Other host → local | Other host → other host | Local → local | Local → other host |
+|---|---|---|---|---|
+| `false` (default) | ✅ | ✅ | ❌ | ❌ |
+| `true` | ✅ | ✅ | ✅ | ❌ |
+
+> `Local → other host` stays ❌ even with `capture_local_traffic: true` — the egress does not hook `OUTPUT`, so locally-generated outbound traffic never reaches the PREROUTING TPROXY rule.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `capture_dst` | array or object [[CaptureDst](#netfilter-capture-destination)] | All | Which UDP traffic to intercept on the egress machine |
+| `capture_local_traffic` | boolean | `false` | Whether to capture traffic whose source IP is the local machine (locally-originated traffic; enable when a local client on the gateway talks to a co-located backend) |
+| `listen_port` | integer | Yes | Local port for TPROXY to redirect QUIC UDP packets to |
+| `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets |
+| `capture_cgroup` | array of string | None | Only capture traffic from these cgroup paths |
+| `nocapture_cgroup` | array of string | None | Exclude traffic from these cgroup paths |
+
+**Example:**
+
+```json
+{
+  "add_egress": [
+    {
+      "netfilter_udp": {
+        "capture_dst": [
+          { "host": "192.168.1.1", "port": 30001 }
+        ],
+        "capture_local_traffic": true,
+        "listen_port": 20001
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "no_ra": true
     }
   ]
 }
@@ -2000,9 +2111,11 @@ Logs are appended to existing files.
 | ingress mapping | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| ingress netfilter_udp | `ingress_type=netfilter_udp,ingress_id={id},ingress_listen_port={listen_port}` |
 | egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 | egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress netfilter_udp | `egress_type=netfilter_udp,egress_id={id},egress_listen_port={listen_port}` |
 
 **Supported Exporters:**
 

@@ -5868,15 +5868,14 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "541d0f57c6ec747a90738a52741d3221f7960e8ac2f0ff4b1a63680e033b4ab5"
+source = "git+https://github.com/inclavare-containers/quinn.git?rev=2995f83efe00cdce9bb833b922e69d08649b271b#2995f83efe00cdce9bb833b922e69d08649b271b"
 dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7789,6 +7788,7 @@ dependencies = [
  "hyper-util 0.1.7",
  "indexmap 2.14.0",
  "itertools 0.14.0",
+ "libc",
  "local-ip-address",
  "nix 0.30.1",
  "notify",
@@ -7798,6 +7798,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "parking_lot 0.12.3",
  "peekable 0.4.1",
  "pin-project",
  "pin-project-lite",
@@ -7912,6 +7913,7 @@ dependencies = [
  "scopeguard",
  "serde_json",
  "serial_test",
+ "socket2 0.5.10",
  "tempfile",
  "thirtyfour",
  "tng",

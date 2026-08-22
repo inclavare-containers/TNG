@@ -15,6 +15,8 @@ pub mod mapping;
 pub mod mapping_udp;
 #[cfg(all(feature = "ingress-netfilter", target_os = "linux"))]
 pub mod netfilter;
+#[cfg(all(feature = "ingress-netfilter-udp", target_os = "linux"))]
+pub mod netfilter_udp;
 #[cfg(feature = "ingress-socks5")]
 pub mod socks5;
 

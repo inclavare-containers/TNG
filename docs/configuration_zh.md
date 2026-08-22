@@ -16,6 +16,7 @@
   - [模式：netfilter（透明代理）](#netfilter透明代理)
   - [模式：hook（LD_PRELOAD）](#ingress-hook-ld_preload)
   - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
+  - [模式：netfilter_udp（透明 UDP 代理）](#模式netfilter_udp透明-udp-代理)
     - [逐条目 QUIC 配置](#udp-over-quic-配置)
 - [Egress（隧道出口）](#egress隧道出口)
   - [通用字段](#egress通用字段)
@@ -24,6 +25,7 @@
   - [模式：netfilter（端口劫持）](#netfilter端口劫持)
   - [模式：hook（LD_PRELOAD）](#egress-hookld_preload)
   - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
+  - [模式：netfilter_udp（透明 UDP 代理）](#模式netfilter_udp透明-udp-代理-1)
 - [远程证明（公共配置）](#远程证明公共配置)
   - [Provider 选择](#provider-选择)
   - [Attester 配置](#attester-配置)
@@ -76,7 +78,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `ingress_mode` | `mapping` \| `http_proxy` \| `netfilter` \| `socks5` \| `hook` \| `mapping_udp` \| `netfilter_udp` | 无 | 流量入站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `ohttp` | [OHttp](#ingress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
@@ -362,6 +364,12 @@ flowchart TD
 
 > **注意**：该模式仅捕获 TCP 流量，不捕获发往本机地址的流量。
 
+**捕获矩阵：**
+
+| 模式 | 其他主机→本机 | 其他主机→其他主机 | 本机→本机 | 本机→其他主机 |
+|---|---|---|---|---|
+| netfilter ingress | ❌ | ❌ | ❌ | ✅ |
+
 > [!NOTE]
 > **在无 `CAP_NET_ADMIN` 的容器中运行**：netfilter 模式需要 `CAP_NET_ADMIN` 来创建 iptables 规则。如果容器缺少此能力，可以通过 [pasta](https://passt.top) 来解决——它通过创建子 network namespace 和子 user namespace 的方式，在子 namespace 内获得 `CAP_NET_ADMIN`，从而绕过缺该能力的问题：
 >
@@ -596,6 +604,54 @@ flowchart TD
 
 ---
 
+### 模式：netfilter_udp（透明 UDP 代理）
+
+> **要求：** 支持 iptables TPROXY 的 Linux 内核。仅在启用 `ingress-netfilter-udp` 和 `egress-netfilter-udp` 特性时可用。
+
+通过 iptables TPROXY 透明劫持原始 UDP 流量，经 QUIC Datagram 隧道转发，并在对端重建原始 UDP 流。客户端代码无需任何修改——应用程序照常向原始目的地址发送 UDP。
+
+#### Ingress 侧（`"netfilter_udp"`）
+
+Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 UDP 包，利用 `IP_ORIGDSTADDR` socket 选项提取原始目的地址，并为每个 `(client_src, original_dst)` 会话建立 QUIC Datagram 隧道。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|---|---|---|---|
+| `capture_dst` | 数组或对象 [[CaptureDst](#netfilter-捕获目的地址)] | 全部 | 目的地址过滤：劫持哪些 UDP 流量（host/ipset/port/port_end 组合）。为空时劫持所有 UDP |
+| `listen_port` | 整数 | 否（自动分配） | TPROXY 重定向劫持包到的本地端口 |
+| `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |
+| `capture_cgroup` | 字符串数组 | 无 | 仅劫持这些 cgroup 路径的流量（仅 cgroup v2） |
+| `nocapture_cgroup` | 字符串数组 | 无 | 排除这些 cgroup 路径的流量（仅 cgroup v2） |
+
+**示例：**
+
+```json
+{
+  "add_ingress": [
+    {
+      "netfilter_udp": {
+        "capture_dst": [
+          { "host": "10.0.0.1", "port": 5000 }
+        ],
+        "listen_port": 10001
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "no_ra": true
+    }
+  ]
+}
+```
+
+> [!NOTE]
+> 默认情况下 ingress 使用 `original_dst`（从 TPROXY 提取的客户端原始目的地址）连接 egress。请确保客户端目标地址为 egress 机器的地址，以保证 `original_dst` 正确解析。
+
+**捕获矩阵：**
+
+| 模式 | 其他主机→本机 | 其他主机→其他主机 | 本机→本机 | 本机→其他主机 |
+|---|---|---|---|---|
+| netfilter ingress | ❌ | ❌ | ❌ | ✅ |
+
+---
+
 ## Egress（隧道出口）
 
 `Egress` 对象配置隧道的出口端点，控制流量如何从隧道流出。
@@ -606,7 +662,7 @@ flowchart TD
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
+| `egress_mode` | `mapping` \| `netfilter` \| `hook` \| `mapping_udp` \| `netfilter_udp` | 无 | 流量出站方式。根据使用的模式，在对象中放置对应模式的键值 |
 | `direct_forward` | array [[DirectForwardRule](#direct_forward-规则)] | 否 | 直接转发（不解密）规则 |
 | `ohttp` | [OHttp](#egress-侧配置) | 无 | OHTTP 协议配置（与 `rats_tls` 互斥） |
 | `rats_tls` | [RatsTlsArgs](#ratstlsargs) | 无 | RA-TLS 传输配置（与 `ohttp` 互斥） |
@@ -737,7 +793,7 @@ TNG 通过内核 netfilter 拦截**来自其他节点发往指定端口**的入�
 | `netfilter.capture_dst` | array [[CaptureDst](#capturedst)] | 否 (`[]`) | 目标地址和端口捕获规则（为空时捕获所有 TCP） |
 | `netfilter.capture_cgroup` | array [string] | 否 (`[]`) | 需要捕获的 cgroup 路径列表 |
 | `netfilter.nocapture_cgroup` | array [string] | 否 (`[]`) | 需要排除的 cgroup 路径列表 |
-| `netfilter.capture_local_traffic` | boolean | `false` | 是否捕获源 IP 为本机的流量 |
+| `netfilter.capture_local_traffic` | boolean | `false` | 是否额外捕获本机发出、发往本地地址的流量（回环到自身）。发往其他主机的流量永远不会被捕获，即使设为 `true` |
 | `netfilter.listen_port` | integer | 否（从 40000 递增） | TNG 监听端口，接收重定向流量 |
 | `netfilter.so_mark` | integer | `565` | 解密后明文流量的 socket SO_MARK 值，防止回环 |
 
@@ -760,7 +816,16 @@ flowchart TD
     E --否--> C
 ```
 
-> **注意**：该模式仅捕获 TCP 流量，不捕获发往本机地址的流量（除非 `capture_local_traffic: true`）。
+> **注意**：该模式仅捕获 TCP 流量，且仅捕获**目标为本机地址**（本地后端）的流量。发往其他主机的流量永远不会被捕获——无论是经本机转发的“其他主机→其他主机”，还是本机发出、发往其他主机的流量。默认（`capture_local_traffic: false`）还不捕获任何本机自身发出的流量（含 loopback-to-self）；需设 `capture_local_traffic: true` 才会额外捕获本机→本机的流量（后端在同一台机器的场景）。
+
+**捕获矩阵**（按 `capture_local_traffic` 区分）：
+
+| `capture_local_traffic` | 其他主机→本机 | 其他主机→其他主机 | 本机→本机 | 本机→其他主机 |
+|---|---|---|---|---|
+| `false`（默认） | ✅ | ❌ | ❌ | ❌ |
+| `true` | ✅ | ❌ | ✅ | ❌ |
+
+> 发往其他主机的流量（`其他主机→其他主机`、`本机→其他主机`）永远不会被捕获，即使 `capture_local_traffic: true`——egress 只拦截目标为本机地址的流量。
 
 > [!NOTE]
 > **在无 `CAP_NET_ADMIN` 的容器中运行**：同上，参考 [Ingress netfilter 章节](#netfilter透明代理)中的 pasta 方案。
@@ -962,6 +1027,52 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
         "idle_timeout_secs": 60
       },
       "attest": { "no_ra": true }
+    }
+  ]
+}
+```
+
+---
+
+### 模式：netfilter_udp（透明 UDP 代理）
+
+Egress 侧在配置了 TPROXY 的 socket 上接收来自 ingress 的 QUIC Datagram 连接。对于发往后端的 UDP 出站流量，iptables TPROXY 劫持发往捕获地址的包，通过 `IP_ORIGDSTADDR` 从重定向包中提取原始后端目标地址，从而正确转发 UDP 载荷。完整的特性概览见 [ingress netfilter_udp 章节](#模式netfilter_udp透明-udp-代理)。
+
+> **捕获范围：** egress 仅 hook mangle `PREROUTING` 链，因此能捕获远程主机发往本机的 UDP，以及本机生成、发往本机地址的 UDP（回环到自身，仅在 `capture_local_traffic` 为 `true` 时）。它**不能**捕获本机生成、发往其他主机的 UDP——这类流量走 `OUTPUT` 链，而 egress 未 hook 该链。
+
+**捕获矩阵**（按 `capture_local_traffic` 区分）：
+
+| `capture_local_traffic` | 其他主机→本机 | 其他主机→其他主机 | 本机→本机 | 本机→其他主机 |
+|---|---|---|---|---|
+| `false`（默认） | ✅ | ✅ | ❌ | ❌ |
+| `true` | ✅ | ✅ | ✅ | ❌ |
+
+> 即使 `capture_local_traffic: true`，`本机→其他主机` 仍为 ❌——egress 未 hook `OUTPUT`，本机发出的出站流量不会到达 PREROUTING 的 TPROXY 规则。
+
+| 字段 | 类型 | 默认值 | 描述 |
+|---|---|---|---|
+| `capture_dst` | 数组或对象 [[CaptureDst](#netfilter-捕获目的地址)] | 全部 | 在 egress 机器上劫持哪些 UDP 流量 |
+| `capture_local_traffic` | 布尔值 | `false` | 是否捕获源 IP 为本机的流量（本机自身发出的流量；当网关本机上的客户端访问同机后端时需开启） |
+| `listen_port` | 整数 | 必填 | TPROXY 重定向 QUIC UDP 包到的本地端口 |
+| `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |
+| `capture_cgroup` | 字符串数组 | 无 | 仅劫持这些 cgroup 路径的流量 |
+| `nocapture_cgroup` | 字符串数组 | 无 | 排除这些 cgroup 路径的流量 |
+
+**示例：**
+
+```json
+{
+  "add_egress": [
+    {
+      "netfilter_udp": {
+        "capture_dst": [
+          { "host": "192.168.1.1", "port": 30001 }
+        ],
+        "capture_local_traffic": true,
+        "listen_port": 20001
+      },
+      "quic": { "max_datagram_size": 1200 },
+      "no_ra": true
     }
   ]
 }
@@ -1990,9 +2101,11 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
 | ingress mapping | `ingress_type=mapping,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
+| ingress netfilter_udp | `ingress_type=netfilter_udp,ingress_id={id},ingress_listen_port={listen_port}` |
 | egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 | egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress netfilter_udp | `egress_type=netfilter_udp,egress_id={id},egress_listen_port={listen_port}` |
 
 **支持的 Exporter：**
 

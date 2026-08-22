@@ -10,6 +10,7 @@ pub enum IngressAccessMode {
     HttpProxy,
     Hook,
     MappingUdp,
+    NetfilterUdp,
 }
 
 impl Display for IngressAccessMode {
@@ -21,6 +22,7 @@ impl Display for IngressAccessMode {
             IngressAccessMode::HttpProxy => write!(f, "http_proxy"),
             IngressAccessMode::Hook => write!(f, "hook"),
             IngressAccessMode::MappingUdp => write!(f, "mapping_udp"),
+            IngressAccessMode::NetfilterUdp => write!(f, "netfilter_udp"),
         }
     }
 }
@@ -32,6 +34,7 @@ pub enum EgressAccessMode {
     Netfilter,
     Hook,
     MappingUdp,
+    NetfilterUdp,
 }
 
 impl Display for EgressAccessMode {
@@ -41,6 +44,7 @@ impl Display for EgressAccessMode {
             EgressAccessMode::Netfilter => write!(f, "netfilter"),
             EgressAccessMode::Hook => write!(f, "hook"),
             EgressAccessMode::MappingUdp => write!(f, "mapping_udp"),
+            EgressAccessMode::NetfilterUdp => write!(f, "netfilter_udp"),
         }
     }
 }

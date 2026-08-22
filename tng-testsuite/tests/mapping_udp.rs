@@ -604,3 +604,74 @@ async fn test_mapping_udp_short_idle_timeout() -> Result<()> {
 
     Ok(())
 }
+
+/// Egress `mapping_udp` with a **domain** `out.host` — exercises domain-backend
+/// resolution in `forward_connection` (egress `MappingUdpEgress` produces an
+/// `EndpointAddr::Domain` backend endpoint, which must be resolved to an IPv4
+/// address instead of bailing). The egress backend is `localhost` (resolves to
+/// `127.0.0.1`, where the UdpServer listens).
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_mapping_udp_basic_with_domain_backend() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"
+        {
+            "add_egress": [
+                {
+                    "mapping_udp": {
+                        "in": {
+                            "host": "0.0.0.0",
+                            "port": 20031
+                        },
+                        "out": {
+                            "host": "localhost",
+                            "port": 30031
+                        }
+                    },
+                    "quic": {
+                        "max_datagram_size": 1200
+                    },
+                    "no_ra": true
+                }
+            ]
+        }
+        "#,
+        )
+        .boxed(),
+        TngInstance::TngClient(
+            r#"
+        {
+            "add_ingress": [
+                {
+                    "mapping_udp": {
+                        "in": {
+                            "port": 10031
+                        },
+                        "out": {
+                            "host": "192.168.1.1",
+                            "port": 20031
+                        },
+                        "idle_timeout_secs": 30
+                    },
+                    "quic": {
+                        "max_datagram_size": 1200
+                    },
+                    "no_ra": true
+                }
+            ]
+        }
+        "#,
+        )
+        .boxed(),
+        AppType::UdpServer { port: 30031 }.boxed(),
+        AppType::UdpClient {
+            host: "127.0.0.1",
+            port: 10031,
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}

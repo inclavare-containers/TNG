@@ -21,6 +21,38 @@ pub fn format_dport(port: u16, port_end: Option<&u16>) -> String {
     }
 }
 
+/// Policy-routing fwmark and routing-table number bases for netfilter TPROXY
+/// rules.
+///
+/// Each netfilter mode owns a **disjoint** fwmark range and a disjoint policy
+/// routing table, so that a single TNG instance running several of them
+/// concurrently in the same network namespace does not collide. The per-mode
+/// `id` (the index of the instance within its own `add_ingress` / `add_egress`
+/// list — a *separate* enumeration per side and per protocol) is added to the
+/// mode's base. The ranges are spaced 1024 apart, far beyond any realistic
+/// instance count per mode.
+///
+/// | mode        | fwmark base | table base |
+/// |-------------|-------------|------------|
+/// | TCP ingress | 566         | 239        |
+/// | UDP ingress | 1566        | 1239       |
+/// | UDP egress  | 2566        | 2239       |
+///
+/// These are kernel-internal marks/tables, not user-facing config. The
+/// `so_mark` SO_MARK socket option (default 565) used to let TNG's own tunnel
+/// sockets escape capture is a separate value; it is just numerically
+/// adjacent to the TCP-ingress base.
+pub const NETFILTER_TCP_INGRESS_FW_MARK_BASE: u32 = 566;
+pub const NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE: u32 = 239;
+
+pub const NETFILTER_UDP_INGRESS_FW_MARK_BASE: u32 = NETFILTER_TCP_INGRESS_FW_MARK_BASE + 1024;
+pub const NETFILTER_UDP_INGRESS_ROUTE_TABLE_BASE: u32 =
+    NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE + 1024;
+
+pub const NETFILTER_UDP_EGRESS_FW_MARK_BASE: u32 = NETFILTER_TCP_INGRESS_FW_MARK_BASE + 2 * 1024;
+pub const NETFILTER_UDP_EGRESS_ROUTE_TABLE_BASE: u32 =
+    NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE + 2 * 1024;
+
 pub struct IptablesExecutor {}
 
 pub struct IptablesGuard {
@@ -119,7 +151,11 @@ impl Drop for IptablesGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::format_dport;
+    use super::{
+        format_dport, NETFILTER_TCP_INGRESS_FW_MARK_BASE, NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE,
+        NETFILTER_UDP_EGRESS_FW_MARK_BASE, NETFILTER_UDP_EGRESS_ROUTE_TABLE_BASE,
+        NETFILTER_UDP_INGRESS_FW_MARK_BASE, NETFILTER_UDP_INGRESS_ROUTE_TABLE_BASE,
+    };
 
     #[test]
     fn test_format_dport_single_port() {
@@ -132,5 +168,72 @@ mod tests {
         assert_eq!(format_dport(30000, Some(&30031)), "30000:30031");
         assert_eq!(format_dport(80, Some(&80)), "80:80");
         assert_eq!(format_dport(1, Some(&65535)), "1:65535");
+    }
+
+    /// The three netfilter modes must use disjoint fwmark and routing-table
+    /// ranges so that a single TNG instance running several of them in the
+    /// same network namespace (each `id` enumerated separately per side) does
+    /// not collide on the fwmark or policy routing table. `id` values are
+    /// small in practice; assert disjointness over a generous id span.
+    #[test]
+    fn test_netfilter_fwmark_and_table_ranges_are_disjoint() {
+        const ID_SPAN: u32 = 256;
+
+        let ranges: [((u32, u32), (u32, u32)); 3] = [
+            (
+                (
+                    NETFILTER_TCP_INGRESS_FW_MARK_BASE,
+                    NETFILTER_TCP_INGRESS_FW_MARK_BASE + ID_SPAN,
+                ),
+                (
+                    NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE,
+                    NETFILTER_TCP_INGRESS_ROUTE_TABLE_BASE + ID_SPAN,
+                ),
+            ),
+            (
+                (
+                    NETFILTER_UDP_INGRESS_FW_MARK_BASE,
+                    NETFILTER_UDP_INGRESS_FW_MARK_BASE + ID_SPAN,
+                ),
+                (
+                    NETFILTER_UDP_INGRESS_ROUTE_TABLE_BASE,
+                    NETFILTER_UDP_INGRESS_ROUTE_TABLE_BASE + ID_SPAN,
+                ),
+            ),
+            (
+                (
+                    NETFILTER_UDP_EGRESS_FW_MARK_BASE,
+                    NETFILTER_UDP_EGRESS_FW_MARK_BASE + ID_SPAN,
+                ),
+                (
+                    NETFILTER_UDP_EGRESS_ROUTE_TABLE_BASE,
+                    NETFILTER_UDP_EGRESS_ROUTE_TABLE_BASE + ID_SPAN,
+                ),
+            ),
+        ];
+
+        // fwmark ranges are pairwise disjoint
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                let (a_start, a_end) = ranges[i].0;
+                let (b_start, b_end) = ranges[j].0;
+                assert!(
+                    a_end <= b_start || b_end <= a_start,
+                    "fwmark ranges overlap: [{a_start},{a_end}) vs [{b_start},{b_end})"
+                );
+            }
+        }
+
+        // routing-table ranges are pairwise disjoint
+        for i in 0..3 {
+            for j in (i + 1)..3 {
+                let (a_start, a_end) = ranges[i].1;
+                let (b_start, b_end) = ranges[j].1;
+                assert!(
+                    a_end <= b_start || b_end <= a_start,
+                    "route-table ranges overlap: [{a_start},{a_end}) vs [{b_start},{b_end})"
+                );
+            }
+        }
     }
 }
