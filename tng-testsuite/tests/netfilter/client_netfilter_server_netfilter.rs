@@ -266,6 +266,12 @@ async fn test_ipset_and_port() -> Result<()> {
                     ipset create myset hash:ip
                     ipset add myset 192.168.1.1
                     ipset list myset
+                    # Block so this BackgroundContinue task does not exit before the
+                    # verifier runs. run_test! cancels the token on the FIRST task
+                    # completion, and a short-lived setup script would tear the tunnel
+                    # down before app_client exercises it. The sleep is cancelled by
+                    # the token when the test ends.
+                    sleep inf
                 "#
             .to_owned(),
             mode: ShellMode::BackgroundContinue,
@@ -323,6 +329,9 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
                     ipset create myset hash:ip
                     ipset add myset 8.8.8.8
                     ipset list myset
+                    # Block so this BackgroundContinue task does not exit before the
+                    # verifier runs (see the other prepare_ipset for rationale).
+                    sleep inf
                 "#
             .to_owned(),
             mode: ShellMode::BackgroundContinue,
@@ -382,6 +391,12 @@ async fn test_ipset_only() -> Result<()> {
                     ipset create myset hash:ip
                     ipset add myset 192.168.1.1
                     ipset list myset
+                    # Block so this BackgroundContinue task does not exit before the
+                    # verifier runs. run_test! cancels the token on the FIRST task
+                    # completion, and a short-lived setup script would tear the tunnel
+                    # down before app_client exercises it. The sleep is cancelled by
+                    # the token when the test ends.
+                    sleep inf
                 "#
             .to_owned(),
             mode: ShellMode::BackgroundContinue,
