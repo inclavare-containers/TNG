@@ -102,7 +102,7 @@ impl TransportLayer {
                         prelude_pos,
                     } = inspected_stream;
                     PreludedStream {
-                        stream: stream.into_inner(),
+                        stream: stream.assume_first_byte_completed(),
                         prelude,
                         prelude_pos,
                     }
