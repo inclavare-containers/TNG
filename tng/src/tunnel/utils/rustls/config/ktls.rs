@@ -301,25 +301,104 @@ macro_rules! install_ktls_body {
     }};
 }
 
+/// Set the `corked` flag on the `CorkStream` nested inside a tokio_rustls
+/// `TlsStream`/`TlsStream`, so the cork-and-drain step ([`cork_drain`]) can be
+/// written once for both the client and server sides.
+trait Corkable: tokio::io::AsyncRead + Unpin {
+    fn set_corked(&mut self, corked: bool);
+}
+
+impl<IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Corkable
+    for tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>
+{
+    fn set_corked(&mut self, corked: bool) {
+        self.get_mut().0.corked = corked;
+    }
+}
+
+impl<IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Corkable
+    for tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>
+{
+    fn set_corked(&mut self, corked: bool) {
+        self.get_mut().0.corked = corked;
+    }
+}
+
+/// Cork-and-drain the rustls stream to a clean TLS record boundary, appending
+/// any drained plaintext to `prelude`.
+///
+/// This restores the step the official `ktls` crate ran inside
+/// `config_ktls_client`/`config_ktls_server` (set `CorkStream::corked = true`,
+/// then read through rustls until `CorkStream` returns an empty read at a
+/// record boundary — it never starts the next record from the live socket, so
+/// the drain stops exactly on a boundary). The inline `ktls_core` path had
+/// dropped this when it replaced `config_ktls_*` with `install_ktls_*` +
+/// [`install_ktls_body!`], which `into_inner()`s the stream straight away —
+/// losing both the boundary guarantee and any post-handshake plaintext rustls
+/// had buffered (those bytes are already consumed from the socket, so the
+/// kernel kTLS RX would otherwise take over mid-record or silently drop the
+/// record).
+///
+/// Folding the drained bytes into the same `prelude` buffer that
+/// [`install_ktls_body!]` turns into the `ktls_core::Context` buffer makes the
+/// splice data plane flush them before reading the kernel socket, mirroring the
+/// old `drained + drained_part2` concatenation.
+async fn cork_drain<S: Corkable>(stream: &mut S, prelude: &mut Vec<u8>) -> Result<()> {
+    use tokio::io::AsyncReadExt as _;
+    stream.set_corked(true);
+    let mut buf = [0u8; 8192];
+    loop {
+        match stream.read(&mut buf).await {
+            // `CorkStream` returns an empty read at a record boundary when
+            // corked (it wakes and returns `Ready(Ok(()))` with zero bytes
+            // filled); rustls surfaces that as `UnexpectedEof`. Both end the
+            // drain — the boundary is reached.
+            Ok(0) => break,
+            Ok(n) => prelude.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error) => {
+                return Err(anyhow::Error::from(error)
+                    .context("kTLS: corked drain (boundary alignment) failed"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Inline hanyu-ktls setup for the client side (replaces the official
-/// `ktls::config_ktls_client`): `tokio-rustls into_inner` -> extract secrets ->
+/// `ktls::config_ktls_client`): cork-and-drain to a record boundary (see
+/// [`cork_drain`]) -> `tokio-rustls into_inner` -> extract secrets ->
 /// `setup_ulp` + `setup_tls_params` -> `Context::new` -> `KtlsSpliceStream`.
-async fn install_ktls_client<IO: IntoTcpStream>(
-    this: tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>,
+async fn install_ktls_client<IO>(
+    mut this: tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>,
     make_session: fn(&rustls::ClientConnection) -> Session,
     mut prelude: Vec<u8>,
-) -> Result<KtlsSpliceStream> {
+) -> Result<KtlsSpliceStream>
+where
+    IO: IntoTcpStream + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // Drain to a clean record boundary *before* `into_inner()` consumes the
+    // stream — once split, the rustls connection (and any plaintext it still
+    // buffers) can no longer be read through. See [`cork_drain`].
+    cork_drain(&mut this, &mut prelude).await?;
     let (cork_io, conn) = this.into_inner();
     install_ktls_body!(cork_io, conn, make_session, prelude)
 }
 
 /// Inline hanyu-ktls setup for the server side (replaces the official
 /// `ktls::config_ktls_server`). See [`install_ktls_client`].
-async fn install_ktls_server<IO: IntoTcpStream>(
-    this: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
+async fn install_ktls_server<IO>(
+    mut this: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
     make_session: fn(&rustls::ServerConnection) -> Session,
     mut prelude: Vec<u8>,
-) -> Result<KtlsSpliceStream> {
+) -> Result<KtlsSpliceStream>
+where
+    IO: IntoTcpStream + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // Drain to a clean record boundary *before* `into_inner()` consumes the
+    // stream — once split, the rustls connection (and any plaintext it still
+    // buffers) can no longer be read through. See [`cork_drain`].
+    cork_drain(&mut this, &mut prelude).await?;
     let (cork_io, conn) = this.into_inner();
     install_ktls_body!(cork_io, conn, make_session, prelude)
 }
