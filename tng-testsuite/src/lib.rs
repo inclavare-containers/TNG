@@ -134,45 +134,37 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
 
             let mut first_error: Option<anyhow::Error> = None;
 
-            // Verifier client tasks terminate on their own (a UDP/TCP client
-            // finishes its rounds, or times out and bails); the service tasks
-            // (TngServer, TngClient, UdpServer, ...) only exit once `token` is
-            // cancelled. A verifier cancels the token itself on completion via
-            // `token.drop_guard()`; we also cancel below once the first task
-            // finishes, so a crashed service (which carries no drop_guard) still
-            // tears the rest down.
+            // Wait for all tasks to finish. The verifier (e.g. app_client) cancels
+            // the token itself on completion via its `token.drop_guard()`, which
+            // makes the service tasks (TngServer, TngClient, ...) wind down so the
+            // loop drains to completion.
             //
-            // We then drain the remaining tasks with a BOUNDED grace. A
-            // service's teardown — notably the netfilter `IptablesGuard::drop`
-            // revoke script — must not block the suite forever: if it hangs,
-            // we log and force-end so the test reports its real result instead
-            // of hanging indefinitely.
-            if let Some((task_name, res)) = sub_tasks.next().await {
-                if let Err(e) = res.with_context(|| format!("Error in the {task_name} task")) {
-                    tracing::error!("[{name}] Error in task {task_name}: {e:?}");
-                    if first_error.is_none() {
-                        first_error = Some(e);
-                    }
-                }
-            }
-            token.cancel();
-
-            let teardown_grace = Duration::from_secs(15);
-            let drain = async {
-                while let Some((task_name, res)) = sub_tasks.next().await {
-                    if let Err(e) = res.with_context(|| format!("Error in the {task_name} task")) {
-                        tracing::error!("[{name}] Error in task {task_name}: {e:?}");
-                        if first_error.is_none() {
-                            first_error = Some(e);
+            // We deliberately do NOT cancel on the FIRST task completion: a
+            // short-lived `BackgroundContinue` setup task (such as `prepare_ipset`)
+            // finishes within milliseconds, and cancelling then would tear the
+            // tunnel down before the verifier ever runs — which is what broke the
+            // ipset netfilter tests. Only a task that actually errors (a crashed
+            // service with no drop_guard) cancels the token here so the rest
+            // still tear down.
+            loop {
+                match sub_tasks.next().await {
+                    Some((task_name, res)) => {
+                        if let Err(e) =
+                            res.with_context(|| format!("Error in the {task_name} task"))
+                        {
+                            tracing::error!("[{name}] Error in task {task_name}: {e:?}");
+                            if first_error.is_none() {
+                                first_error = Some(e);
+                            }
+                            // A crashed service carries no drop_guard, so cancel
+                            // the token to let the remaining tasks tear down.
+                            token.cancel();
                         }
                     }
+                    None => {
+                        break;
+                    }
                 }
-            };
-            if tokio::time::timeout(teardown_grace, drain).await.is_err() {
-                tracing::error!(
-                    "[{name}] Teardown grace ({teardown_grace:?}) exceeded while waiting for \
-                     service tasks to shut down; forcing test end",
-                );
             }
 
             if let Some(e) = first_error {
