@@ -50,7 +50,7 @@
 // duplicated attribute (clippy::duplicated_attributes).
 
 use std::format;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd};
 
 use anyhow::{Context as _, Result};
 use tokio::net::TcpStream;
@@ -229,7 +229,7 @@ impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
 
 #[async_trait::async_trait]
 pub trait StreamForKtls:
-    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Sync + Send + Sized
+    tokio::io::AsyncRead + tokio::io::AsyncWrite + AsFd + Unpin + Sync + Send + Sized
 {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
@@ -240,41 +240,15 @@ pub trait StreamForKtls:
     ) -> Result<KtlsSpliceStream>;
 }
 
-/// Recover the inner `TcpStream` from the various IO wrappers used during the
-/// kTLS handshake. Each wrapper ultimately owns a `TcpStream`; this trait lets
-/// the setup helper extract it without knowing the concrete wrapper type.
-trait IntoTcpStream {
-    fn into_tcp_stream(self) -> TcpStream;
-}
-
-impl IntoTcpStream for TcpStream {
-    fn into_tcp_stream(self) -> TcpStream {
-        self
-    }
-}
-
-impl IntoTcpStream for PreludedStream<TcpStream> {
-    fn into_tcp_stream(self) -> TcpStream {
-        self.stream
-    }
-}
-
-impl IntoTcpStream for FirstByteReadTimeoutStream<TcpStream> {
-    fn into_tcp_stream(self) -> TcpStream {
-        self.into_inner()
-    }
-}
-
-/// Shared body of client/server kTLS installation.
-macro_rules! install_ktls_body {
-    ($cork_io:ident, $conn:ident, $make_session:expr, $prelude:ident) => {{
+/// Extracts the rustls secrets and installs the kTLS keys in-kernel
+/// (`setup_ulp` + `setup_tls_params`). The caller builds the `Context` /
+/// `KtlsSpliceStream` from the returned pieces.
+macro_rules! setup_ktls_keys {
+    ($io:ident, $conn:ident, $session:ident) => {{
         use ktls_core::{
-            setup_tls_params, setup_ulp, Buffer, Context, ExtractedSecrets, TlsCryptoInfoRx,
-            TlsCryptoInfoTx,
+            setup_tls_params, setup_ulp, ExtractedSecrets, TlsCryptoInfoRx, TlsCryptoInfoTx,
         };
 
-        let tcp: TcpStream = $cork_io.io.into_tcp_stream();
-        let session = $make_session(&$conn);
         let rustls_secrets = $conn
             .dangerous_extract_secrets()
             .context("kTLS: dangerous_extract_secrets failed")?;
@@ -285,19 +259,12 @@ macro_rules! install_ktls_body {
             tx: (seq_tx, secrets_tx),
             rx: (seq_rx, secrets_rx),
         } = secrets;
-        let info_tx = TlsCryptoInfoTx::new(session.protocol_version(), secrets_tx, seq_tx)
+        let info_tx = TlsCryptoInfoTx::new($session.protocol_version(), secrets_tx, seq_tx)
             .context("kTLS: TlsCryptoInfoTx failed")?;
-        let info_rx = TlsCryptoInfoRx::new(session.protocol_version(), secrets_rx, seq_rx)
+        let info_rx = TlsCryptoInfoRx::new($session.protocol_version(), secrets_rx, seq_rx)
             .context("kTLS: TlsCryptoInfoRx failed")?;
-        setup_ulp(&tcp).context("kTLS: setup_ulp failed")?;
-        setup_tls_params(&tcp, &info_tx, &info_rx).context("kTLS: setup_tls_params failed")?;
-        let buffer = if $prelude.is_empty() {
-            None
-        } else {
-            Some(Buffer::from(std::mem::take(&mut $prelude)))
-        };
-        let ctx = Context::new(session, buffer);
-        Ok(KtlsSpliceStream::new(tcp, ctx))
+        setup_ulp(&$io).context("kTLS: setup_ulp failed")?;
+        setup_tls_params(&$io, &info_tx, &info_rx).context("kTLS: setup_tls_params failed")?;
     }};
 }
 
@@ -323,9 +290,8 @@ impl<IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Corkable
         self.get_mut().0.corked = corked;
     }
 }
-
-/// Cork-and-drain the rustls stream to a clean TLS record boundary, appending
-/// any drained plaintext to `prelude`.
+/// Cork-and-drain the rustls stream to a clean TLS record boundary, returning
+/// any drained plaintext as `Some(Vec<u8>)`.
 ///
 /// This restores the step the official `ktls` crate ran inside
 /// `config_ktls_client`/`config_ktls_server` (set `CorkStream::corked = true`,
@@ -333,19 +299,20 @@ impl<IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Corkable
 /// record boundary — it never starts the next record from the live socket, so
 /// the drain stops exactly on a boundary). The inline `ktls_core` path had
 /// dropped this when it replaced `config_ktls_*` with `install_ktls_*` +
-/// [`install_ktls_body!`], which `into_inner()`s the stream straight away —
+/// [`setup_ktls_keys!`], which `into_inner()`s the stream straight away —
 /// losing both the boundary guarantee and any post-handshake plaintext rustls
 /// had buffered (those bytes are already consumed from the socket, so the
 /// kernel kTLS RX would otherwise take over mid-record or silently drop the
 /// record).
 ///
-/// Folding the drained bytes into the same `prelude` buffer that
-/// [`install_ktls_body!]` turns into the `ktls_core::Context` buffer makes the
-/// splice data plane flush them before reading the kernel socket, mirroring the
-/// old `drained + drained_part2` concatenation.
-async fn cork_drain<S: Corkable>(stream: &mut S, prelude: &mut Vec<u8>) -> Result<()> {
+/// Returning the drained bytes makes the [`setup_ktls_keys!`] macro able to
+/// turn them into the `ktls_core::Context` buffer so the splice data plane
+/// flushes them before reading the kernel socket, mirroring the old
+/// `drained + drained_part2` concatenation.
+async fn cork_drain<S: Corkable>(stream: &mut S) -> Result<Option<Vec<u8>>> {
     use tokio::io::AsyncReadExt as _;
     stream.set_corked(true);
+    let mut drained = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
         match stream.read(&mut buf).await {
@@ -354,7 +321,7 @@ async fn cork_drain<S: Corkable>(stream: &mut S, prelude: &mut Vec<u8>) -> Resul
             // filled); rustls surfaces that as `UnexpectedEof`. Both end the
             // drain — the boundary is reached.
             Ok(0) => break,
-            Ok(n) => prelude.extend_from_slice(&buf[..n]),
+            Ok(n) => drained.extend_from_slice(&buf[..n]),
             Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(error) => {
                 return Err(anyhow::Error::from(error)
@@ -362,7 +329,11 @@ async fn cork_drain<S: Corkable>(stream: &mut S, prelude: &mut Vec<u8>) -> Resul
             }
         }
     }
-    Ok(())
+    if drained.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(drained))
+    }
 }
 
 /// Inline hanyu-ktls setup for the client side (replaces the official
@@ -372,17 +343,19 @@ async fn cork_drain<S: Corkable>(stream: &mut S, prelude: &mut Vec<u8>) -> Resul
 async fn install_ktls_client<IO>(
     mut this: tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>,
     make_session: fn(&rustls::ClientConnection) -> Session,
-    mut prelude: Vec<u8>,
-) -> Result<KtlsSpliceStream>
+) -> Result<(IO, Session, Option<Vec<u8>>)>
 where
-    IO: IntoTcpStream + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    IO: AsFd + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     // Drain to a clean record boundary *before* `into_inner()` consumes the
     // stream — once split, the rustls connection (and any plaintext it still
     // buffers) can no longer be read through. See [`cork_drain`].
-    cork_drain(&mut this, &mut prelude).await?;
+    let drained = cork_drain(&mut this).await?;
     let (cork_io, conn) = this.into_inner();
-    install_ktls_body!(cork_io, conn, make_session, prelude)
+    let session = make_session(&conn);
+    let io = cork_io.io;
+    setup_ktls_keys!(io, conn, session);
+    Ok((io, session, drained))
 }
 
 /// Inline hanyu-ktls setup for the server side (replaces the official
@@ -390,17 +363,19 @@ where
 async fn install_ktls_server<IO>(
     mut this: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
     make_session: fn(&rustls::ServerConnection) -> Session,
-    mut prelude: Vec<u8>,
-) -> Result<KtlsSpliceStream>
+) -> Result<(IO, Session, Option<Vec<u8>>)>
 where
-    IO: IntoTcpStream + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    IO: AsFd + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     // Drain to a clean record boundary *before* `into_inner()` consumes the
     // stream — once split, the rustls connection (and any plaintext it still
     // buffers) can no longer be read through. See [`cork_drain`].
-    cork_drain(&mut this, &mut prelude).await?;
+    let drained = cork_drain(&mut this).await?;
     let (cork_io, conn) = this.into_inner();
-    install_ktls_body!(cork_io, conn, make_session, prelude)
+    let session = make_session(&conn);
+    let io = cork_io.io;
+    setup_ktls_keys!(io, conn, session);
+    Ok((io, session, drained))
 }
 
 #[async_trait::async_trait]
@@ -408,13 +383,17 @@ impl StreamForKtls for TcpStream {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        install_ktls_client(this, Session::new_client, Vec::new()).await
+        let (io, session, drained) = install_ktls_client(this, Session::new_client).await?;
+        let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
+        Ok(KtlsSpliceStream::new(io, ctx))
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        install_ktls_server(this, Session::new_server, Vec::new()).await
+        let (io, session, drained) = install_ktls_server(this, Session::new_server).await?;
+        let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
+        Ok(KtlsSpliceStream::new(io, ctx))
     }
 }
 
@@ -468,13 +447,30 @@ macro_rules! preluded_config_ktls_body {
             }
             drained.extend_from_slice(&buf[..n]);
         }
-        if !drained.is_empty() {
+        let drained = if !drained.is_empty() {
             tracing::trace!(drained_len = drained.len(), "kTLS: drained prelude bytes");
-        }
+            Some(drained)
+        } else {
+            None
+        };
 
-        // 2. Inline the hanyu-ktls setup, folding the drained prelude bytes into
-        //    the Context buffer so the splice data plane can flush them.
-        $install_ktls(this, $session_fn, drained).await
+        // 2. call the install_ktls_* function.
+        let (io, session, drained_part2) = $install_ktls(this, $session_fn).await?;
+
+        // 3. concatenate the prelude-drained bytes (received first) with the
+        //    cork-drained bytes (received after), preserving wire order.
+        //    It is safe to destructure the PreludedStream here because the
+        //    prelude has been drained.
+        let PreludedStream { stream, .. } = io;
+        let drained = match (drained, drained_part2) {
+            (Some(drained), Some(drained_part2)) => Some([drained, drained_part2].concat()),
+            (Some(drained), None) => Some(drained),
+            (None, Some(drained_part2)) => Some(drained_part2),
+            (None, None) => None,
+        };
+
+        let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
+        Ok(KtlsSpliceStream::new(stream, ctx))
     }};
 }
 
@@ -493,34 +489,38 @@ impl StreamForKtls for PreludedStream<TcpStream> {
     }
 }
 
-impl AsRawFd for PreludedStream<TcpStream> {
-    fn as_raw_fd(&self) -> RawFd {
-        self.stream.as_raw_fd()
+impl AsFd for PreludedStream<TcpStream> {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 }
 
 /// `FirstByteReadTimeoutStream` wrapper for kTLS install.
 ///
-/// The rustls handshake has already completed by the time we reach this
-/// point, so the first-byte read timeout has fired and the inner
-/// `TcpStream` can be safely unwrapped.
+/// The rustls handshake **has already completed** by the time we reach this
+/// point, so the first-byte read timeout has fired and the inner `TcpStream`
+/// can be safely unwrapped.
 #[async_trait::async_trait]
 impl StreamForKtls for FirstByteReadTimeoutStream<TcpStream> {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        install_ktls_client(this, Session::new_client, Vec::new()).await
+        let (io, session, drained) = install_ktls_client(this, Session::new_client).await?;
+        let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
+        Ok(KtlsSpliceStream::new(io.assume_first_byte_completed(), ctx))
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        install_ktls_server(this, Session::new_server, Vec::new()).await
+        let (io, session, drained) = install_ktls_server(this, Session::new_server).await?;
+        let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
+        Ok(KtlsSpliceStream::new(io.assume_first_byte_completed(), ctx))
     }
 }
-impl AsRawFd for FirstByteReadTimeoutStream<TcpStream> {
-    fn as_raw_fd(&self) -> RawFd {
-        self.get_ref().as_raw_fd()
+impl AsFd for FirstByteReadTimeoutStream<TcpStream> {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.assume_first_byte_completed_ref().as_fd()
     }
 }
 

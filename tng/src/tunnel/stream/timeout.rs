@@ -48,7 +48,11 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>
     /// The caller **must** ensure that the first byte read has logically
     /// completed before calling this method. Blindly unwrapping the stream
     /// before the first byte is read will bypass the timeout check.
-    pub fn into_inner(self) -> T {
+    pub fn assume_first_byte_completed(self) -> T {
+        debug_assert!(
+            matches!(self.state, State::AfterFirstRead),
+            "first byte read has not completed"
+        );
         self.inner
     }
 
@@ -60,7 +64,11 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>
     /// completed before calling this method. Blindly unwrapping the stream
     /// before the first byte is read will bypass the timeout check.
     #[cfg_attr(not(target_os = "linux"), allow(unused))]
-    pub fn get_ref(&self) -> &T {
+    pub fn assume_first_byte_completed_ref(&self) -> &T {
+        debug_assert!(
+            matches!(self.state, State::AfterFirstRead),
+            "first byte read has not completed"
+        );
         &self.inner
     }
 }
@@ -237,7 +245,7 @@ mod tests {
         let (mut server, client) = tokio::io::duplex(64);
         server.write_all(b"x").await.unwrap();
         let stream = FirstByteReadTimeoutStream::new(client, Duration::from_millis(100));
-        let mut inner = stream.into_inner();
+        let mut inner = stream.assume_first_byte_completed();
         let mut buf = [0u8; 1];
         inner.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"x");
