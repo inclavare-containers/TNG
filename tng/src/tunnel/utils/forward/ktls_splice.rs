@@ -141,72 +141,69 @@ impl AsFd for KtlsSpliceStream {
 
 impl AsyncReadFd for KtlsSpliceStream {
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Forward readiness straight to the underlying TcpStream.
         self.tcp.poll_read_ready(cx)
     }
 
     fn try_io_read<R>(&self, f: impl FnOnce() -> io::Result<R>) -> io::Result<R> {
-        // Readiness-guard contract: run the splice (and any control-record
-        // drain) *inside* `TcpStream::try_io(Interest::READABLE, ..)` so tokio
-        // owns the READABLE readiness flag. `tokio_splice2`'s
-        // `poll_splice_drain` loops `ready!(poll_read_ready) -> try_io_read`:
-        // on `Err` it retries only when the kind is `WouldBlock` *or*
-        // `Interrupted` (tokio-splice2 `context.rs`); all other kinds fault.
-        // tokio's `Registration::try_io` clears the READABLE flag *only* when
-        // the closure returns `WouldBlock`, and passes every other error
-        // (including `Interrupted`) through unchanged without clearing
-        // (tokio `runtime/io/registration.rs`). That asymmetry is the lever.
+        // Run the splice (and any control-record drain) inside
+        // `TcpStream::try_io(Interest::READABLE, ..)` so tokio owns the
+        // READABLE flag. `tokio_splice2`'s `poll_splice_drain` loops
+        // `ready!(poll_read_ready) -> try_io_read` and retries an `Err` only
+        // when its kind is `WouldBlock` or `Interrupted` — anything else
+        // faults (tokio-splice2 `context.rs`).
         //
-        // On a genuine `EAGAIN` (no decrypted record available) the socket is
-        // truly empty, so returning `WouldBlock` is correct: tokio clears
-        // READABLE and `poll_splice_drain` parks on `epoll_wait` — the next
-        // record's arrival is a fresh edge-triggered epoll edge that wakes it.
+        // The lever: tokio's `Registration::try_io`
+        // (`runtime/io/registration.rs`) clears READABLE *only* when the
+        // closure returns `WouldBlock`; every other error (including
+        // `Interrupted`) passes through with the flag still set. So:
         //
-        // After a control-record drain (`handle_io_error` returns `Ok(())`)
-        // the application-data record that was queued *behind* the control
-        // record is now at the RX head. Returning `WouldBlock` here would
-        // clear READABLE and park — but that record's epoll edge already fired
-        // when it arrived and was consumed; no new edge will come, so the wake
-        // is lost and the task parks forever (the observed 6.6 deadlock).
-        // Return `Interrupted` instead: `poll_splice_drain` still treats it as
-        // "retry", but `try_io` does NOT clear READABLE, so the next
-        // `poll_read_ready` returns `Ready` immediately and the retry splice
-        // reads the now-head application-data record without parking. This
-        // converges: the loop drains each pending control record (bounded by
-        // their count) then either reads app data or hits a genuine `EAGAIN`
-        // that parks correctly. The `FnOnce` one-shot is not a problem — we do
-        // not re-invoke `f`; `poll_splice_drain` re-drives us with a fresh
-        // closure carrying the correct pipe fd.
+        //   * Real EAGAIN (no decrypted record): return `WouldBlock`. tokio
+        //     clears READABLE, `poll_splice_drain` parks on epoll, and the
+        //     next record's arrival is a fresh edge that wakes it — correct.
+        //   * After a control-record drain (`handle_io_error` Ok): the app
+        //     data queued behind that control record is now at the RX head,
+        //     but its epoll edge already fired when it arrived. Returning
+        //     `WouldBlock` here would clear READABLE and park forever — no
+        //     new edge will come (the observed 6.6 deadlock). Return
+        //     `Interrupted` instead: the flag stays set, the next
+        //     `poll_read_ready` is `Ready` right away, and the retry reads
+        //     that app data without parking. The loop drains every pending
+        //     control record (bounded by their count), then either reads app
+        //     data or hits a real EAGAIN that parks correctly.
         //
-        // EIO interception contract (spec §2.1): the splice closure must always
-        // run. On a non-application TLS control record (TLS 1.3
-        // `NewSessionTicket`, alert, handshake) at the head of the kTLS RX
-        // queue, the kernel's `tls_sw_splice_read` returns `EINVAL` — not
-        // `EIO` — and re-queues the record at the head (`net/tls/tls_sw.c`:
-        // "splice does not support reading control messages"). This EINVAL
-        // (not EIO) is a historical artifact, not an intentional signal: the
-        // splice path originally returned `ENOTSUPP` (2018) and was
-        // batch-converted to `EINVAL` in 2019 only because `ENOTSUPP` is not
-        // a userspace errno; the recvmsg path has always used `EIO` for the
-        // same condition, and mainline never aligned them. ktls-core's
-        // `Context::handle_io_error` drains control records only when the
-        // errno is `EIO` (the recvmsg-path signal); a raw `EINVAL` falls to
-        // its unrecoverable arm and sends a fatal `internal_error` alert,
-        // tearing the connection down on the first post-handshake control
-        // record. Bridge that errno mismatch by translating the splice
-        // `EINVAL` into `EIO` so `handle_io_error` engages the same
-        // drain-and-retry path: `handle_tls_control_message` consumes the
-        // control record via cmsg, returns `Ok(())`, and we surface
-        // `Interrupted` (preserving READABLE) so `poll_splice_drain` re-arms
-        // and retries to read the next application-data record. Safe on the
-        // read path: the splice is always `splice(kTLS_socket, pipe)` with
-        // valid fds, and the only `EINVAL` source in `tls_sw_splice_read` is
-        // the control-record branch. The write side is symmetric (TX never
+        // `f` is one-shot; we never re-invoke it — `poll_splice_drain`
+        // re-drives us with a fresh closure carrying the right pipe fd.
+        //
+        // errno quirk (spec §2.1): when a non-application TLS control record
+        // (TLS 1.3 `NewSessionTicket`, alert, handshake) sits at the RX head,
+        // `tls_sw_splice_read` returns `EINVAL` — not `EIO` — and re-queues
+        // the record (`net/tls/tls_sw.c`: "splice does not support reading
+        // control messages"). Artifact, not signal: splice returned
+        // `ENOTSUPP` (2018), batch-changed to `EINVAL` (2019) because
+        // `ENOTSUPP` isn't a userspace errno; recvmsg always used `EIO` for
+        // the same case and mainline never aligned them. `handle_io_error`
+        // drains control records only on `EIO`, so a raw `EINVAL` hits its
+        // unrecoverable arm and sends a fatal `internal_error` alert —
+        // killing the connection on the first post-handshake control record.
+        // Below we map `EINVAL` -> `EIO` so it drains-and-retries. Safe on
+        // the read path: the splice is always `splice(kTLS_socket, pipe)`
+        // and the only `EINVAL` source in `tls_sw_splice_read` is the
+        // control-record branch. The write side is symmetric — TX never
         // queues control records for splice, but a peer-alert `EIO` still
-        // recovers via `handle_io_error`).
+        // recovers via `handle_io_error`.
         self.tcp.try_io(Interest::READABLE, || match f() {
+            // splice succeeded.
             Ok(r) => Ok(r),
+            // Real EAGAIN: no decrypted record to read; clear READABLE and park.
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             Err(e) => {
+                // Likely a control record at the RX head. splice reports
+                // that as EINVAL, so first map it to EIO, then let
+                // handle_io_error retrieve the record via recvmsg+cmsg.
+                // Drained -> Interrupted (keep READABLE; retry reads the app
+                // data behind it); unrecoverable (e.g. fatal alert) -> pass
+                // through.
                 let raw = e.raw_os_error();
                 let e = if raw == Some(nix::errno::Errno::EINVAL as i32) {
                     io::Error::from_raw_os_error(nix::errno::Errno::EIO as i32)
@@ -224,28 +221,46 @@ impl AsyncReadFd for KtlsSpliceStream {
 
 impl AsyncWriteFd for KtlsSpliceStream {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Forward readiness straight to the underlying TcpStream.
         self.tcp.poll_write_ready(cx)
     }
 
     fn try_io_write<R>(&self, f: impl FnOnce() -> io::Result<R>) -> io::Result<R> {
         // Symmetric with try_io_read: run the splice inside tokio's
-        // `try_io(Interest::WRITABLE, ..)` guard. On a genuine `EAGAIN` (send
-        // buffer / kTLS TX path full) return `WouldBlock` so tokio clears
-        // WRITABLE and `poll_splice_pump` parks — a later EPOLLOUT edge (buffer
-        // drained below SO_SNDLOWAT) re-arms it. After a control-record drain
-        // (`handle_io_error` Ok — a peer alert on the TX side) return
-        // `Interrupted` instead: `poll_splice_pump` still retries (it treats
-        // `WouldBlock` and `Interrupted` alike), but `try_io` does NOT clear
-        // WRITABLE, so the retry proceeds without parking and without losing a
-        // wake. TX never queues control records for splice, so there is no
-        // EINVAL bridge here; only the `EIO` peer-alert recovery path applies.
+        // `try_io(Interest::WRITABLE, ..)` guard.
+        //
+        //   * Real EAGAIN (send buffer / kTLS TX path full): return
+        //     `WouldBlock` so tokio clears WRITABLE and `poll_splice_pump`
+        //     parks; a later EPOLLOUT edge (buffer drained below
+        //     SO_SNDLOWAT) re-arms it.
+        //   * After a control-record drain (`handle_io_error` Ok — a peer
+        //     alert surfaced on the TX side): return `Interrupted`.
+        //     `poll_splice_pump` retries just the same (it treats
+        //     `WouldBlock` and `Interrupted` alike), but `try_io` does NOT
+        //     clear WRITABLE, so the retry goes ahead without parking and
+        //     without losing a wake.
+        //
+        // TX never queues control records for splice, so there is no EINVAL
+        // bridge here — only the `EIO` peer-alert path. The alert itself is
+        // received on RX, but the "pending control record" EIO is a
+        // socket-level state, so it can surface on the next write op and we
+        // drain it here the same way.
         self.tcp.try_io(Interest::WRITABLE, || match f() {
+            // splice succeeded.
             Ok(r) => Ok(r),
+            // Real EAGAIN: send buffer / TX path full; clear WRITABLE and park.
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
-            Err(e) => match self.ctx_mut().handle_io_error(&self.tcp, e) {
-                Ok(()) => Err(io::ErrorKind::Interrupted.into()),
-                Err(e) => Err(e),
-            },
+            Err(e) => {
+                // A peer alert is pending on the socket (close_notify on
+                // orderly teardown, or a fatal alert). It surfaces as EIO on
+                // this write; handle_io_error retrieves it via recvmsg+cmsg.
+                // close_notify -> Ok -> Interrupted (retry, no wake lost);
+                // fatal alert -> Err -> fault the splice out.
+                match self.ctx_mut().handle_io_error(&self.tcp, e) {
+                    Ok(()) => Err(io::ErrorKind::Interrupted.into()),
+                    Err(e) => Err(e),
+                }
+            }
         })
     }
 }
