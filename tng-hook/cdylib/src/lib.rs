@@ -732,7 +732,10 @@ mod tests {
             0,
             0,
         ));
-        assert_eq!(unsafe { parse(&v4) }, Some((socket, ConnectAddressFamily::Ipv4)));
+        assert_eq!(
+            unsafe { parse(&v4) },
+            Some((socket, ConnectAddressFamily::Ipv4))
+        );
         assert_eq!(
             unsafe { parse(&mapped) },
             Some((socket, ConnectAddressFamily::Ipv4MappedIpv6))
