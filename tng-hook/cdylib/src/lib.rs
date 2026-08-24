@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::raw::c_void;
 use std::sync::OnceLock;
 
@@ -232,6 +232,37 @@ unsafe fn sockaddr_to_v4(addr: *const sockaddr) -> Option<SocketAddrV4> {
     Some(SocketAddrV4::new(ip, port))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectAddressFamily {
+    Ipv4,
+    Ipv4MappedIpv6,
+}
+
+unsafe fn sockaddr_to_connect_v4(
+    addr: *const sockaddr,
+) -> Option<(SocketAddrV4, ConnectAddressFamily)> {
+    if addr.is_null() {
+        return None;
+    }
+
+    let sa = &*addr;
+    if sa.sa_family == libc::AF_INET as u16 {
+        return sockaddr_to_v4(addr).map(|addr| (addr, ConnectAddressFamily::Ipv4));
+    }
+    if sa.sa_family != libc::AF_INET6 as u16 {
+        return None;
+    }
+
+    let sin6 = &*(addr as *const libc::sockaddr_in6);
+    let octets = sin6.sin6_addr.s6_addr;
+    let mapped_ip = Ipv6Addr::from(octets).to_ipv4_mapped()?;
+    let port = u16::from_be(sin6.sin6_port);
+    Some((
+        SocketAddrV4::new(mapped_ip, port),
+        ConnectAddressFamily::Ipv4MappedIpv6,
+    ))
+}
+
 /// Intercepted `bind()` — rewrite origin port to real port if mapped.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[no_mangle]
@@ -351,8 +382,7 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         return unsafe { real_connect(sockfd, addr, addrlen) };
     }
 
-    // Only handle AF_INET (IPv4)
-    let Some(dst_addr) = (unsafe { sockaddr_to_v4(addr) }) else {
+    let Some((dst_addr, address_family)) = (unsafe { sockaddr_to_connect_v4(addr) }) else {
         if !addr.is_null() {
             let sa = unsafe { &*addr };
             tracing::debug!(
@@ -438,15 +468,31 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
         }
     }
 
-    // Connect to the internal HTTP proxy instead (now blocking)
-    let proxy_sockaddr = make_sockaddr_v4(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port));
-
     let ret = unsafe {
-        real_connect(
-            sockfd,
-            &proxy_sockaddr as *const _ as *const sockaddr,
-            std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
-        )
+        match address_family {
+            ConnectAddressFamily::Ipv4 => {
+                let proxy_sockaddr =
+                    make_sockaddr_v4(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, proxy_port));
+                real_connect(
+                    sockfd,
+                    &proxy_sockaddr as *const _ as *const sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in>() as socklen_t,
+                )
+            }
+            ConnectAddressFamily::Ipv4MappedIpv6 => {
+                let proxy_sockaddr = make_sockaddr_v6(&SocketAddrV6::new(
+                    Ipv4Addr::LOCALHOST.to_ipv6_mapped(),
+                    proxy_port,
+                    0,
+                    0,
+                ));
+                real_connect(
+                    sockfd,
+                    &proxy_sockaddr as *const _ as *const sockaddr,
+                    std::mem::size_of::<libc::sockaddr_in6>() as socklen_t,
+                )
+            }
+        }
     };
     if ret != 0 {
         let errno = unsafe { *libc::__errno_location() };
@@ -656,6 +702,48 @@ fn make_sockaddr_v4(addr: &SocketAddrV4) -> libc::sockaddr_in {
     let octets = addr.ip().octets();
     sin.sin_addr.s_addr = u32::from_ne_bytes(octets);
     sin
+}
+
+fn make_sockaddr_v6(addr: &SocketAddrV6) -> libc::sockaddr_in6 {
+    let mut sin6 = unsafe { std::mem::zeroed::<libc::sockaddr_in6>() };
+    sin6.sin6_family = libc::AF_INET6 as u16;
+    sin6.sin6_port = addr.port().to_be();
+    sin6.sin6_flowinfo = addr.flowinfo();
+    sin6.sin6_addr.s6_addr = addr.ip().octets();
+    sin6.sin6_scope_id = addr.scope_id();
+    sin6
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe fn parse<T>(addr: &T) -> Option<(SocketAddrV4, ConnectAddressFamily)> {
+        sockaddr_to_connect_v4(addr as *const _ as *const sockaddr)
+    }
+
+    #[test]
+    fn parses_ipv4_connect_destinations() {
+        let socket = SocketAddrV4::new(Ipv4Addr::new(10, 1, 2, 3), 32000);
+        let v4 = make_sockaddr_v4(&socket);
+        let mapped = make_sockaddr_v6(&SocketAddrV6::new(
+            socket.ip().to_ipv6_mapped(),
+            socket.port(),
+            0,
+            0,
+        ));
+        assert_eq!(unsafe { parse(&v4) }, Some((socket, ConnectAddressFamily::Ipv4)));
+        assert_eq!(
+            unsafe { parse(&mapped) },
+            Some((socket, ConnectAddressFamily::Ipv4MappedIpv6))
+        );
+    }
+
+    #[test]
+    fn rejects_native_ipv6_connect_destination() {
+        let addr = make_sockaddr_v6(&SocketAddrV6::new(Ipv6Addr::LOCALHOST, 32000, 0, 0));
+        assert_eq!(unsafe { parse(&addr) }, None);
+    }
 }
 
 /// Send all bytes on a socket, retrying on partial writes.

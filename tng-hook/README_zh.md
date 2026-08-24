@@ -280,4 +280,4 @@ echo $TNG_HOOK_INGRESS_MAPPINGS | python3 -m json.tool
 
 ### bind 拦截后应用崩溃
 
-仅支持 `AF_INET`（IPv4）。如果应用使用 IPv6（`AF_INET6`），会原样传递给真实函数。检查应用日志中的 IPv6 绑定尝试。
+入口 `connect()` hook 支持原生 IPv4 和 IPv4-mapped IPv6 目标（例如 `::ffff:10.0.0.1`）；原生 IPv6 目标仍会原样透传。出口 `bind()` hook 仍仅支持 IPv4。

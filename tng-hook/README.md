@@ -280,4 +280,4 @@ Ensure `host` (or CIDR) and `port` match what the application is connecting to.
 
 ### Application crashes after bind intercept
 
-Only `AF_INET` (IPv4) is supported. If the application uses IPv6 (`AF_INET6`), it passes through unchanged. Check the application logs for IPv6 binding attempts.
+Native IPv4 and IPv4-mapped IPv6 destinations (for example, `::ffff:10.0.0.1`) are supported by the ingress `connect()` hook. Native IPv6 destinations still pass through unchanged. The egress `bind()` hook remains IPv4-only.
