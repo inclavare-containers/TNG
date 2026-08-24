@@ -1288,7 +1288,7 @@ Passport 模式适用于网络隔离或性能要求较高的场景，因为它�
 | `as_type` | string | `"restful"` | AS 类型：`"restful"` / `"grpc"` / `"builtin"` |
 | `as_addr` | string | — | `"restful"` 和 `"grpc"` 类型必填，AS 地址 |
 | `as_headers` | object | `{}` | 发送到 AS 的自定义头部（如 Authorization） |
-| `attestation_policy` | object | — | `"builtin"` 类型可选，内置 AS 的证明策略配置。省略时默认为 `{"type": "hardware_only"}`（别名 `{"type": "default"}` 同样解析为该策略）。接受的 `type` 值：`hardware_only`（别名 `default`，仅校验硬件 TEE 识别、忽略参考值，为默认策略，适用于通用部署）、`hardware_only_strict`（保持仅硬件/忽略参考值，但要求 TDX 非 debug 且包含 eventlog）、`hardware_with_reference_values`（基于 trustee 的完整参考值度量）、`trust_all`（全部维度恒置为通过（affirming），仅用于调试/测试）、`inline`（base64 编码的 rego）、`path`（rego 文件路径） |
+| `attestation_policy` | object | — | `"builtin"` 类型可选，内置 AS 的证明策略配置。省略时默认为 `{"type": "hardware_only"}`（别名 `{"type": "default"}` 同样解析为该策略）。接受的 `type` 值：`hardware_only`（别名 `default`，仅校验硬件 TEE 识别、忽略参考值，为默认策略，适用于通用部署）、`hardware_only_strict`（保持仅硬件/忽略参考值，但要求 TDX 非 debug 且包含 eventlog）、`hardware_with_reference_values`（基于 trustee 的完整参考值度量）、`hardware_strict_with_reference_values`（基于 trustee 的参考值度量，并额外要求 TDX 非 debug 且包含 eventlog）、`trust_all`（全部维度恒置为通过（affirming），仅用于调试/测试）、`inline`（base64 编码的 rego）、`path`（rego 文件路径） |
 | `reference_values` | array | — | `"builtin"` 类型可选，内置 AS 的参考值配置列表 |
 | `policy_ids` | array [string] | 是 | 策略 ID 列表。仅 `"restful"` 和 `"grpc"` 类型使用，`as_type` 为 `"builtin"` 时被忽略 |
 | `trusted_certs_paths` | array [string] | `[]` | 验证 Attestation Token 签名的根 CA 证书路径 |

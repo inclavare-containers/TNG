@@ -140,6 +140,9 @@ pub enum PolicyConfig {
     /// reference values are available and mandatory.
     /// See: https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego
     HardwareWithReferenceValues,
+    /// Trustee default reference-value appraisal with stricter TDX hardware
+    /// requirements: TDX evidence must be non-debug and include an event log.
+    HardwareStrictWithReferenceValues,
     /// tng-bundled template: only hardware TEE recognition is enforced; the
     /// other three trustworthiness dimensions are affirming by default and
     /// `data.reference` is ignored. This is the default policy, suited to
@@ -408,6 +411,9 @@ impl BuiltinCocoConverter {
     ) -> Result<Option<String>> {
         match policy {
             PolicyConfig::HardwareWithReferenceValues => Ok(None),
+            PolicyConfig::HardwareStrictWithReferenceValues => Ok(Some(
+                URL_SAFE_NO_PAD.encode(Self::build_hardware_strict_with_reference_values_policy()?),
+            )),
             PolicyConfig::HardwareOnly => Ok(Some(
                 URL_SAFE_NO_PAD.encode(include_str!("policies/hardware_only.rego")),
             )),
@@ -435,6 +441,53 @@ impl BuiltinCocoConverter {
                 Ok(Some(URL_SAFE_NO_PAD.encode(content_str)))
             }
         }
+    }
+
+    fn build_hardware_strict_with_reference_values_policy() -> Result<String> {
+        const TDX_HARDWARE_RULE: &str = r#"hardware := 2 if {
+	# Check the quote is a TDX quote signed by Intel SGX Quoting Enclave
+	input.tdx.quote.header.tee_type == "81000000"
+	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+	# Check TDX Module version and its hash. Also check OVMF code hash.
+	# input.tdx.quote.body.mr_seam in query_reference_value("tdx.mr_seam")
+	# input.tdx.quote.body.tcb_svn in query_reference_value("tdx.tcb_svn")
+	# input.tdx.quote.body.mr_td in query_reference_value("tdx.mr_td")
+}"#;
+        const TDX_HARDWARE_RULE_STRICT: &str = r#"hardware := 2 if {
+	# Check the quote is a TDX quote signed by Intel SGX Quoting Enclave
+	input.tdx.quote.header.tee_type == "81000000"
+	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+	tdx_debug_disabled
+	tdx_eventlog_present
+	# Check TDX Module version and its hash. Also check OVMF code hash.
+	# input.tdx.quote.body.mr_seam in query_reference_value("tdx.mr_seam")
+	# input.tdx.quote.body.tcb_svn in query_reference_value("tdx.tcb_svn")
+	# input.tdx.quote.body.mr_td in query_reference_value("tdx.mr_td")
+}"#;
+        const TDX_STRICT_HELPERS: &str = r#"
+
+# TNG strict TDX hardware predicates. The verifier has already replayed the
+# event log against quote RTMRs before these claims reach policy evaluation.
+tdx_debug_disabled if {
+	regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes)
+}
+
+tdx_eventlog_present if {
+	count(input.tdx.uefi_event_logs) > 0
+}
+"#;
+
+        let default_policy = attestation_service::token::ear_broker::DEFAULT_POLICY;
+        if !default_policy.contains(TDX_HARDWARE_RULE) {
+            return Err(Error::BuiltinPolicyTemplateFailed {
+                detail: "TDX hardware rule not found in Trustee default policy".to_string(),
+            });
+        }
+
+        Ok(
+            default_policy.replacen(TDX_HARDWARE_RULE, TDX_HARDWARE_RULE_STRICT, 1)
+                + TDX_STRICT_HELPERS,
+        )
     }
 
     /// Load reference values from configuration
@@ -701,6 +754,24 @@ default file_system := 2"#;
             result.unwrap().is_none(),
             "HardwareWithReferenceValues policy should return None"
         );
+    }
+
+    #[tokio::test]
+    async fn test_load_hardware_strict_with_reference_values_policy() {
+        let policy_config = PolicyConfig::HardwareStrictWithReferenceValues;
+        let result =
+            BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&policy_config).await;
+        assert!(result.is_ok());
+        let encoded = result
+            .unwrap()
+            .expect("Should return Some for HardwareStrictWithReferenceValues policy");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("Failed to decode policy");
+        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
+        assert!(content.contains("tdx_debug_disabled"));
+        assert!(content.contains("tdx_eventlog_present"));
+        assert!(content.contains("validate_boot_measurements_uefi_event_log"));
     }
 
     #[tokio::test]
@@ -1431,6 +1502,21 @@ default file_system := 2"#,
             eval_policy_vector(policy, missing_eventlog).await,
             (2, 97, 2, 2)
         );
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_strict_with_reference_values_restricts_tdx_hardware() {
+        let policy = BuiltinCocoConverter::build_hardware_strict_with_reference_values_policy()
+            .expect("build strict reference-values policy");
+
+        let valid_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(&policy, valid_tdx).await.1, 2);
+
+        let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(&policy, debug_tdx).await.1, 97);
+
+        let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
+        assert_eq!(eval_policy_vector(&policy, missing_eventlog).await.1, 97);
     }
 
     #[tokio::test]

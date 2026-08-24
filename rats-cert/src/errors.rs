@@ -287,6 +287,9 @@ pub enum Error {
     #[error("Failed to decode base64 policy content")]
     DecodePolicyContentFailed(#[source] base64::DecodeError),
 
+    #[error("Failed to build builtin policy template: {detail}")]
+    BuiltinPolicyTemplateFailed { detail: String },
+
     #[error("Invalid attestation service header name")]
     InvalidAttestationServiceHeaderName(#[source] reqwest::header::InvalidHeaderName),
 

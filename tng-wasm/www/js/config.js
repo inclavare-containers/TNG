@@ -57,6 +57,8 @@ function buildBuiltinPolicy(policy, content) {
       return { type: "hardware_only_strict" };
     case "hardware_with_reference_values":
       return { type: "hardware_with_reference_values" };
+    case "hardware_strict_with_reference_values":
+      return { type: "hardware_strict_with_reference_values" };
     case "trust_all":
       return { type: "trust_all" };
     case "inline":
