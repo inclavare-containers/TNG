@@ -290,6 +290,13 @@ pub enum Error {
     #[error("Failed to build builtin policy template: {detail}")]
     BuiltinPolicyTemplateFailed { detail: String },
 
+    #[error("transparency_log policy requires the crypto-rustcrypto feature")]
+    #[cfg(not(feature = "crypto-rustcrypto"))]
+    TransparencyLogPolicyRequiresCryptoRustcrypto,
+
+    #[error("Failed to fetch and authenticate transparency-log entry")]
+    TransparencyLogFetchFailed(#[source] anyhow::Error),
+
     #[error("Invalid attestation service header name")]
     InvalidAttestationServiceHeaderName(#[source] reqwest::header::InvalidHeaderName),
 

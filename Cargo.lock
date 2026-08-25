@@ -566,7 +566,7 @@ checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=a7cae2464685dd3b7975213238d3fc09e03a7fa7#a7cae2464685dd3b7975213238d3fc09e03a7fa7"
+source = "git+https://github.com/openanolis/trustee/?rev=2703b7d924c1c2de357cf234be773d852464f57e#2703b7d924c1c2de357cf234be773d852464f57e"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -1817,7 +1817,7 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 [[package]]
 name = "dcap-qvl"
 version = "0.4.1"
-source = "git+https://github.com/inclavare-containers/dcap-qvl?rev=d988f7de3f5e82d0d7e8f9bceeb3af9fa8d9daa1#d988f7de3f5e82d0d7e8f9bceeb3af9fa8d9daa1"
+source = "git+https://github.com/inclavare-containers/dcap-qvl?rev=d8a260d8c87619cce607f24d16d8bd474b458592#d8a260d8c87619cce607f24d16d8bd474b458592"
 dependencies = [
  "anyhow",
  "asn1_der",
@@ -2316,7 +2316,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=a7cae2464685dd3b7975213238d3fc09e03a7fa7#a7cae2464685dd3b7975213238d3fc09e03a7fa7"
+source = "git+https://github.com/openanolis/trustee/?rev=2703b7d924c1c2de357cf234be773d852464f57e#2703b7d924c1c2de357cf234be773d852464f57e"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -6066,6 +6066,7 @@ dependencies = [
  "rayon",
  "rcgen",
  "reference-value-provider-service",
+ "regorus",
  "reqwest 0.12.9",
  "ring",
  "rsa",
@@ -6178,7 +6179,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=a7cae2464685dd3b7975213238d3fc09e03a7fa7#a7cae2464685dd3b7975213238d3fc09e03a7fa7"
+source = "git+https://github.com/openanolis/trustee/?rev=2703b7d924c1c2de357cf234be773d852464f57e#2703b7d924c1c2de357cf234be773d852464f57e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8780,7 +8781,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=a7cae2464685dd3b7975213238d3fc09e03a7fa7#a7cae2464685dd3b7975213238d3fc09e03a7fa7"
+source = "git+https://github.com/openanolis/trustee/?rev=2703b7d924c1c2de357cf234be773d852464f57e#2703b7d924c1c2de357cf234be773d852464f57e"
 dependencies = [
  "anyhow",
  "asn1-rs",

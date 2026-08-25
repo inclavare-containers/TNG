@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1.0.0",
+  "measurements": [
+    {
+      "type": "container.image.cmaas-runtime",
+      "value": "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46"
+    }
+  ]
+}

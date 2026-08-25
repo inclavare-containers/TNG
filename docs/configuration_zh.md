@@ -1381,6 +1381,7 @@ Passport 模式适用于网络隔离或性能要求较高的场景，因为它�
 | `"default"` | 使用 attestation-service 内置的默认策略，对 TEE 硬件和软件进行详尽度量验证 |
 | `"inline"` | 内联策略，需提供 `content`（Base64 编码的 OPA 策略内容） |
 | `"path"` | 文件路径策略，需提供 `path`（OPA 策略文件路径） |
+| `"transparency_log"` | 将可信度量集锚定到一个 Rekor v1 透明日志条目。初始化时 rats-cert 按 `logIndex` 拉取条目并认证（签名 checkpoint + Merkle 包含证明 + Signed Entry Timestamp），将可信参考烘焙进策略；appraisal 时将实际 TDX 度量值（从 quote 与 event log 中提取）与记录的参考进行比对。需要 `publishedMeasurements`、`schemaVersion` 以及一个 `rekor-v1` service。见示例4及下方字段参考。 |
 
 **ReferenceValueConfig（参考值来源）：**
 
@@ -1542,6 +1543,43 @@ Passport 模式适用于网络隔离或性能要求较高的场景，因为它�
 }
 ```
 </details>
+
+<details>
+<summary>示例4：transparency_log 策略（Rekor v1 锚定）</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "transparency_log",
+            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 2279770888,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    }
+}
+```
+</details>
+
+#### `transparency_log` 策略 — 字段参考
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `publishedMeasurements` | — | 日志 manifest 中发布的度量类型，须按与 manifest 的 `measurements` 数组完全相同的顺序与集合列出。类型或顺序不匹配会使校验始终拒绝，因此必须与日志 manifest 逐字一致。 |
+| `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion`。 |
+| `services[].type` | — | 必须为 `"rekor-v1"`；仅支持恰好一个 service。 |
+| `services[].logUrl` | — | Rekor v1 日志基地址（如 `https://rekor.sigstore.dev`、`https://rekor.openanolis.cn`）。 |
+| `services[].logIndex` | — | 要拉取并认证的 Rekor v1 条目索引。 |
+| `services[].rekorPublicKeyPem` | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）。省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供。 |
+| `services[].publisherPublicKeyPem` | — | 可选的可信 publisher 公钥 PEM。设置后，appraisal 时校验条目的 DSSE 发布者签名，将条目绑定到此 publisher（抵御 `logIndex` 被替换）。省略时信任仅锚定在配置的 `logIndex` 上。对不含 DSSE 签名的条目设置此项属于配置/条目不匹配，初始化即报错。 |
 
 <a name="verify-passport-模式"></a>
 

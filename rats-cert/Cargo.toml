@@ -30,6 +30,10 @@ rand = "0.8.5"
 rcgen = {workspace = true, optional = true}
 reference-value-provider-service = {workspace = true, default-features = false, optional = true}
 reqwest = {workspace = true, optional = true}
+# Direct `regorus` dep so the `crypto.sha256` host-await helper can name
+# `regorus::Value` directly (the same single crate attestation-service pulls
+# in, via the matching workspace dep). Only needed by the builtin AS path.
+regorus = {workspace = true, optional = true}
 rsa = {workspace = true, optional = true}
 rustls-pki-types = {workspace = true, optional = true}
 serde = {workspace = true}
@@ -146,7 +150,10 @@ crypto-rustcrypto = [
 
 # Builtin Attestation Service features (local evidence verification)
 # __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
-__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen"]
+# `dep:sha2` is included here so the `crypto.sha256` host-await helper compiles
+# whenever builtin-as is on, regardless of the `crypto-rustcrypto` feature —
+# honoring the non-crypto fallback path in `load_policy_as_base64_url_safe_no_pad`.
+__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:regorus", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen", "dep:sha2"]
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]

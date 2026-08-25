@@ -169,6 +169,9 @@ where
 #[derive(Debug, PartialEq, EnumIter, Clone)]
 pub enum ReportData {
     Claims(Claims),
+    /// No report_data to verify — `verify_evidence` skips the runtime_data
+    /// subset check when this variant is passed.
+    None,
 }
 
 /// Wrap [`ReportData`] into a structured JSON value suitable for embedding
@@ -178,6 +181,7 @@ pub(crate) fn wrap_runtime_data_as_structed(report_data: &ReportData) -> Result<
         ReportData::Claims(claims) => {
             serde_json::to_value(claims).map_err(Error::SerializeClaimsToJsonFailed)
         }
+        ReportData::None => Ok(serde_json::Value::Null),
     }
 }
 

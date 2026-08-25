@@ -53,51 +53,55 @@ impl CommonCocoVerifier {
         };
 
         /* Check report_data matchs */
-        let runtime_data_expected = crate::tee::wrap_runtime_data_as_structed(report_data)?;
-        let runtime_data_in_token = if is_ear {
-            // EAR JWT route
-            claims_value
-                .pointer("/submods/cpu0/ear.veraison.annotated-evidence/runtime_data_claims")
-                .ok_or_else(|| Error::MissingTokenField {
-                    detail: "runtime_data_claims".to_string(),
-                })?
+        if matches!(report_data, ReportData::None) {
+            tracing::debug!("report_data is None — skipping runtime_data subset check");
         } else {
-            // Standard CoCo AS token route
-            claims_value
-                .pointer("/customized_claims/runtime_data")
-                .ok_or_else(|| Error::MissingTokenField {
-                    detail: "runtime_data".to_string(),
-                })?
-        };
+            let runtime_data_expected = crate::tee::wrap_runtime_data_as_structed(report_data)?;
+            let runtime_data_in_token = if is_ear {
+                // EAR JWT route
+                claims_value
+                    .pointer("/submods/cpu0/ear.veraison.annotated-evidence/runtime_data_claims")
+                    .ok_or_else(|| Error::MissingTokenField {
+                        detail: "runtime_data_claims".to_string(),
+                    })?
+            } else {
+                // Standard CoCo AS token route
+                claims_value
+                    .pointer("/customized_claims/runtime_data")
+                    .ok_or_else(|| Error::MissingTokenField {
+                        detail: "runtime_data".to_string(),
+                    })?
+            };
 
-        let runtime_data_expected_map =
-            runtime_data_expected
-                .as_object()
-                .ok_or_else(|| Error::MissingTokenField {
-                    detail: "runtime_data_expected is not a map".to_string(),
-                })?;
+            let runtime_data_expected_map =
+                runtime_data_expected
+                    .as_object()
+                    .ok_or_else(|| Error::MissingTokenField {
+                        detail: "runtime_data_expected is not a map".to_string(),
+                    })?;
 
-        let runtime_data_in_token_map =
-            runtime_data_in_token
-                .as_object()
-                .ok_or_else(|| Error::MissingTokenField {
-                    detail: "runtime_data_in_token is not a map".to_string(),
-                })?;
+            let runtime_data_in_token_map =
+                runtime_data_in_token
+                    .as_object()
+                    .ok_or_else(|| Error::MissingTokenField {
+                        detail: "runtime_data_in_token is not a map".to_string(),
+                    })?;
 
-        let is_subset = runtime_data_expected_map
-            .iter()
-            .all(|(key, value)| runtime_data_in_token_map.get(key) == Some(value));
+            let is_subset = runtime_data_expected_map
+                .iter()
+                .all(|(key, value)| runtime_data_in_token_map.get(key) == Some(value));
 
-        tracing::debug!(
-            expected = ?runtime_data_expected_map,
-            actually = ?runtime_data_in_token_map,
-            is_subset,
-            "compare runtime_data"
-        );
+            tracing::debug!(
+                expected = ?runtime_data_expected_map,
+                actually = ?runtime_data_in_token_map,
+                is_subset,
+                "compare runtime_data"
+            );
 
-        if !is_subset {
-            return Err(Error::RuntimeDataMismatch);
-        }
+            if !is_subset {
+                return Err(Error::RuntimeDataMismatch);
+            }
+        } // end of report_data subset check (non-None branch)
 
         // Check expected policy-ids
         let allowed_policy_ids = if is_ear {

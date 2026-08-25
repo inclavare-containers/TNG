@@ -1371,6 +1371,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `"default"` | Uses the default policy built into attestation-service, performing comprehensive measurement verification of TEE hardware and software |
 | `"inline"` | Inline policy; requires `content` (Base64-encoded OPA policy content) |
 | `"path"` | File path policy; requires `path` (OPA policy file path) |
+| `"transparency_log"` | Anchors the trusted measurement set in a Rekor v1 transparency-log entry. At init, rats-cert fetches the entry by `logIndex`, authenticates it (signed checkpoint + Merkle inclusion proof + Signed Entry Timestamp), and bakes the trusted reference into the policy; at appraisal it compares the actual TDX measurements (extracted from the quote and event log) against the recorded reference. Requires `publishedMeasurements`, `schemaVersion`, and one `rekor-v1` service. See Example 4 and the field reference below. |
 
 **ReferenceValueConfig (Reference Value Source):**
 
@@ -1530,6 +1531,43 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 }
 ```
 </details>
+
+<details>
+<summary>Example 4: transparency_log policy (Rekor v1 anchor)</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "transparency_log",
+            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 2279770888,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    }
+}
+```
+</details>
+
+#### `transparency_log` policy — field reference
+
+| Field | Default | Description |
+|---|---|---|
+| `publishedMeasurements` | — | The measurement types published in the logged manifest, listed in the SAME order and exact set as the manifest's `measurements` array. A mismatch (type or order) makes the check always reject, so this must mirror the logged manifest exactly. |
+| `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion`. |
+| `services[].type` | — | Must be `"rekor-v1"`; exactly one service is supported. |
+| `services[].logUrl` | — | Rekor v1 log base URL (e.g. `https://rekor.sigstore.dev`, `https://rekor.openanolis.cn`). |
+| `services[].logIndex` | — | The Rekor v1 entry index to fetch and authenticate. |
+| `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies the checkpoint/SET). Omit to use the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; required for other logs. |
+| `services[].publisherPublicKeyPem` | — | Optional PEM of the trusted publisher. When set, the entry's DSSE publisher signature is verified at appraisal, binding the entry to this publisher (defense against a substituted `logIndex`). When omitted, trust is anchored in the configured `logIndex` alone. Setting it on an entry that carries no DSSE signature is a config/entry mismatch and errors at init. |
 
 <a name="verify-passport-model"></a>
 
