@@ -940,6 +940,7 @@ mod tests {
         Ok(())
     }
 
+    #[test]
     fn parse_ktls_default_best_effort() {
         let args: RatsTlsArgs = serde_json::from_str("{}").unwrap();
         assert_eq!(args.ktls, Ktls::BestEffort);
