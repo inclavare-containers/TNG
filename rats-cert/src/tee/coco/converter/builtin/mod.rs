@@ -550,7 +550,7 @@ impl BuiltinCocoConverter {
                     dsse_signature,
                     publisher_public_key_pem,
                 );
-                tracing::info!(payload_hash = %auth.payload_hash, "Transparency_log policy loaded: baking payloadHash into Rego");
+                tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash into Rego");
                 Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
             }
             #[cfg(not(feature = "crypto-rustcrypto"))]
@@ -928,10 +928,19 @@ fn build_transparency_log_policy(
         r#"package policy
 import rego.v1
 
-default executables := 2
+default executables := 97
 default configuration := 2
 default file_system := 2
-default hardware := 97
+
+# hardware: progressive scoring for TDX platform checks.
+# AR4SI: 0-32 valid, 33-96 warning, 97-127 contraindicated.
+# Lower score = more checks passed = more trusted.
+# 127 = default, TDX not recognized (nothing matched)
+# 126 = tee_type matched but vendor_id didn't (contraindicated)
+# 125 = tee_type + vendor_id matched but debug enabled (contraindicated)
+# 33  = tee_type + vendor_id + non-debug but eventlog missing (warning)
+# 2   = all passed (valid)
+default hardware := 127
 
 # baked: trusted payloadHash (lowercase hex) from the authenticated Rekor entry
 payload_hash := {payload_hash:?}
@@ -973,17 +982,55 @@ reconstructed_manifest := {{
 
 # crypto.sha256 returns lowercase hex (== payloadHash format). When a publisher
 # key is baked, verify_dsse_signature additionally binds the entry to the
-# trusted publisher (fails closed → false → hardware 97 → reject).
+# trusted publisher (fails closed → false → executables 97 → reject).
 measurements_verified if {{
     crypto.sha256(json.marshal(reconstructed_manifest)) == payload_hash
 {dsse_verify_line}}}
+
+# executables: 2 only if measurements verified
+executables := 2 if {{
+    measurements_verified
+}}
+
+# hardware: progressive scoring for TDX platform checks.
+# Score 2 = affirming (all checks pass).
 hardware := 2 if {{
     input.tdx.quote.header.tee_type == "81000000"
     input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
     tdx_debug_disabled
     tdx_eventlog_present
-    measurements_verified
 }}
+
+# Score 126 = tee_type matched but vendor_id didn't (contraindicated).
+hardware := 126 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id != "939a7233f79c4ca9940a0db3957f0607"
+}}
+
+# Score 125 = tee_type + vendor_id matched but debug enabled (contraindicated).
+hardware := 125 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    not tdx_debug_disabled
+}}
+
+# Score 33 = all TDX checks passed except eventlog missing (warning).
+hardware := 33 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    not tdx_eventlog_present
+}}
+
+# Score 2 = all passed (valid, affirming).
+hardware := 2 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    tdx_eventlog_present
+}}
+
+# Score 127 = TDX not recognized (default, contraindicated).
 
 tdx_debug_disabled if {{ regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes) }}
 tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
@@ -1937,11 +1984,11 @@ default file_system := 2"#,
         let tdx_bad_vendor = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}}}"#;
         assert_eq!(
             eval_policy_vector(policy, tdx_bad_vendor).await,
-            (2, 97, 2, 2)
+            (97, 2, 2, 2)
         );
 
         // No TEE evidence at all -> hardware stays unrecognized.
-        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 97, 2, 2));
+        assert_eq!(eval_policy_vector(policy, "{}").await, (97, 2, 2, 2));
     }
 
     #[tokio::test]
@@ -1952,12 +1999,12 @@ default file_system := 2"#,
         assert_eq!(eval_policy_vector(policy, valid_tdx).await, (2, 2, 2, 2));
 
         let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
-        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 97, 2, 2));
+        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 125, 2, 2));
 
         let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
         assert_eq!(
             eval_policy_vector(policy, missing_eventlog).await,
-            (2, 97, 2, 2)
+            (97, 2, 2, 2)
         );
     }
 
@@ -2102,22 +2149,22 @@ default file_system := 2"#,
             digest,
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         );
-        assert_eq!(eval_policy_vector(&policy, &bad).await, (2, 97, 2, 2));
+        assert_eq!(eval_policy_vector(&policy, &bad).await, (97, 2, 2, 2));
 
         // Wrong repo -> reject.
         let wrong_repo = ok.replace("cmaas-runtime", "other-runtime");
         assert_eq!(
             eval_policy_vector(&policy, &wrong_repo).await,
-            (2, 97, 2, 2)
+            (97, 2, 2, 2)
         );
 
         // No AAEL event -> reject.
         let no_aael = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000000"}},"uefi_event_logs":[]}}"#;
-        assert_eq!(eval_policy_vector(&policy, no_aael).await, (2, 97, 2, 2));
+        assert_eq!(eval_policy_vector(&policy, no_aael).await, (97, 33, 2, 2));
 
         // Debug bit set -> reject.
         let debug = ok.replace("\"0000001000000000\"", "\"0100001000000000\"");
-        assert_eq!(eval_policy_vector(&policy, &debug).await, (2, 97, 2, 2));
+        assert_eq!(eval_policy_vector(&policy, &debug).await, (2, 125, 2, 2));
     }
 
     /// Build the synthetic matching input for the `container.image.cmaas-runtime`
@@ -2169,7 +2216,7 @@ default file_system := 2"#,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "wrong measurement type name must reject"
         );
     }
@@ -2209,7 +2256,7 @@ default file_system := 2"#,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "wrong schema version must reject"
         );
     }
@@ -2249,7 +2296,7 @@ default file_system := 2"#,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "wrong payload hash must reject"
         );
     }
@@ -2321,7 +2368,7 @@ default file_system := 2"#,
         );
         assert_eq!(
             eval_policy_vector(&reversed_policy, &ok).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "wrong measurement order must reject"
         );
     }
@@ -2380,7 +2427,7 @@ default file_system := 2"#,
         let bad = ok.replace(mr_td, tampered);
         assert_eq!(
             eval_policy_vector(&policy, &bad).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "tampered td-shim mr_td must reject on hardware"
         );
     }
@@ -2448,7 +2495,7 @@ default file_system := 2"#,
         );
         assert_eq!(
             eval_policy_vector(&policy, &bad).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "tampered digest must reject (payloadHash AND DSSE both fail)"
         );
 
@@ -2469,7 +2516,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
-            (2, 97, 2, 2),
+            (97, 2, 2, 2),
             "wrong publisher key must reject even when payloadHash matches (DSSE gates)"
         );
     }
