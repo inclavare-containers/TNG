@@ -243,11 +243,18 @@ mod tests {
     #[tokio::test]
     async fn into_inner_returns_inner_stream() {
         let (mut server, client) = tokio::io::duplex(64);
-        server.write_all(b"x").await.unwrap();
-        let stream = FirstByteReadTimeoutStream::new(client, Duration::from_millis(100));
+        server.write_all(b"xy").await.unwrap();
+        let mut stream = FirstByteReadTimeoutStream::new(client, Duration::from_millis(100));
+        // The first-byte read MUST complete through the wrapper before
+        // `assume_first_byte_completed()` is sound (it asserts state ==
+        // AfterFirstRead). Read one byte, then unwrap and drain the rest from
+        // the recovered inner stream.
+        let mut first = [0u8; 1];
+        stream.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"x");
         let mut inner = stream.assume_first_byte_completed();
-        let mut buf = [0u8; 1];
-        inner.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"x");
+        let mut rest = [0u8; 1];
+        inner.read_exact(&mut rest).await.unwrap();
+        assert_eq!(&rest, b"y");
     }
 }
