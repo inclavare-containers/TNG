@@ -167,8 +167,14 @@ pub enum PolicyConfig {
     /// docs/superpowers/specs/2026-08-23-rekor-transparency-policy-design.md.
     #[serde(rename = "transparency_log")]
     TransparencyLog {
-        #[serde(rename = "publishedMeasurements")]
-        published_measurements: Vec<String>,
+        /// Ordered measurement types baked into the policy. When `None`
+        /// (the `publishedMeasurements` JSON field is absent), the policy
+        /// skips the measurement reconstruction + verification entirely and
+        /// `executables` stays affirming (2) — only TDX platform checks
+        /// gate the appraisal. An explicit `[]` still runs the check (and
+        /// fails it, since no manifest can match the baked payloadHash).
+        #[serde(rename = "publishedMeasurements", default)]
+        published_measurements: Option<Vec<String>>,
         #[serde(rename = "schemaVersion", default = "default_schema_version")]
         schema_version: String,
         services: Vec<TransparencyServiceConfig>,
@@ -546,7 +552,7 @@ impl BuiltinCocoConverter {
                 let policy = build_transparency_log_policy(
                     &auth.payload_hash,
                     schema_version,
-                    published_measurements,
+                    published_measurements.as_deref(),
                     dsse_signature,
                     publisher_public_key_pem,
                 );
@@ -895,17 +901,10 @@ fn resolve_dsse_signature<'a>(
 fn build_transparency_log_policy(
     payload_hash: &str,
     schema_version: &str,
-    published_measurements: &[String],
+    published_measurements: Option<&[String]>,
     dsse_signature: Option<&str>,
     publisher_key: Option<&str>,
 ) -> String {
-    // Bake the published_measurements array as a Rego array literal.
-    let items: Vec<String> = published_measurements
-        .iter()
-        .map(|t| format!("{t:?}"))
-        .collect();
-    let pm = format!("[{}]", items.join(", "));
-
     // The DSSE publisher-signature check is added only when a publisher key is
     // configured (some signature + some key). When `None`, fall back to the
     // base-design payloadHash-only check: no `dsse_signature`/`publisher_key`
@@ -924,8 +923,102 @@ fn build_transparency_log_policy(
         _ => (String::new(), ""),
     };
 
-    format!(
-        r#"package policy
+    match published_measurements {
+        // No `publishedMeasurements` configured (the JSON field is absent):
+        // skip the measurement reconstruction + verification entirely.
+        // `executables` stays at its affirming default (2) — only the TDX
+        // platform hardware checks gate the appraisal. The trusted
+        // payloadHash, schemaVersion, and (when configured) the DSSE
+        // publisher signature/key are still baked for reference, but no
+        // manifest is reconstructed or compared.
+        None => format!(
+            r#"package policy
+import rego.v1
+
+default executables := 2
+default configuration := 2
+default file_system := 2
+
+# hardware: progressive scoring for TDX platform checks.
+# AR4SI: 0-32 valid, 33-96 warning, 97-127 contraindicated.
+# Lower score = more checks passed = more trusted.
+# 127 = default, TDX not recognized (nothing matched)
+# 126 = tee_type matched but vendor_id didn't (contraindicated)
+# 125 = tee_type + vendor_id matched but debug enabled (contraindicated)
+# 33  = tee_type + vendor_id + non-debug but eventlog missing (warning)
+# 2   = all passed (valid)
+default hardware := 127
+
+# baked: trusted payloadHash (lowercase hex) from the authenticated Rekor entry
+payload_hash := {payload_hash:?}
+
+# baked: the logged manifest's schemaVersion
+schema_version := {schema_version:?}{dsse_literals}
+
+# hardware: progressive scoring for TDX platform checks.
+# Score 2 = affirming (all checks pass).
+hardware := 2 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    tdx_eventlog_present
+}}
+
+# Score 126 = tee_type matched but vendor_id didn't (contraindicated).
+hardware := 126 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id != "939a7233f79c4ca9940a0db3957f0607"
+}}
+
+# Score 125 = tee_type + vendor_id matched but debug enabled (contraindicated).
+hardware := 125 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    not tdx_debug_disabled
+}}
+
+# Score 33 = all TDX checks passed except eventlog missing (warning).
+hardware := 33 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    not tdx_eventlog_present
+}}
+
+# Score 2 = all passed (valid, affirming).
+hardware := 2 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    tdx_eventlog_present
+}}
+
+# Score 127 = TDX not recognized (default, contraindicated).
+
+tdx_debug_disabled if {{ regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes) }}
+tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
+"#,
+            payload_hash = payload_hash,
+            schema_version = schema_version,
+            dsse_literals = dsse_literals,
+        ),
+        // `publishedMeasurements` present (possibly empty `[]`): run the
+        // full measurement verification. Bake the ordered array, reconstruct
+        // the manifest from actual TDX measurement values at appraisal, hash
+        // it via `crypto.sha256(json.marshal(...))`, and compare to the baked
+        // `payload_hash`. An empty array yields an empty manifest whose hash
+        // never matches a real payloadHash → `measurements_verified` is
+        // false → `executables` stays at its contraindicated default (97).
+        Some(published_measurements) => {
+            // Bake the published_measurements array as a Rego array literal.
+            let items: Vec<String> = published_measurements
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect();
+            let pm = format!("[{}]", items.join(", "));
+
+            format!(
+                r#"package policy
 import rego.v1
 
 default executables := 97
@@ -1035,12 +1128,14 @@ hardware := 2 if {{
 tdx_debug_disabled if {{ regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes) }}
 tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
 "#,
-        payload_hash = payload_hash,
-        schema_version = schema_version,
-        pm = pm,
-        dsse_literals = dsse_literals,
-        dsse_verify_line = dsse_verify_line,
-    )
+                payload_hash = payload_hash,
+                schema_version = schema_version,
+                pm = pm,
+                dsse_literals = dsse_literals,
+                dsse_verify_line = dsse_verify_line,
+            )
+        }
+    }
 }
 
 /// Host-await function that injects the `crypto.sha256` builtin regorus 0.11
@@ -1984,11 +2079,11 @@ default file_system := 2"#,
         let tdx_bad_vendor = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}}}"#;
         assert_eq!(
             eval_policy_vector(policy, tdx_bad_vendor).await,
-            (97, 2, 2, 2)
+            (2, 97, 2, 2)
         );
 
         // No TEE evidence at all -> hardware stays unrecognized.
-        assert_eq!(eval_policy_vector(policy, "{}").await, (97, 2, 2, 2));
+        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 97, 2, 2));
     }
 
     #[tokio::test]
@@ -1999,12 +2094,12 @@ default file_system := 2"#,
         assert_eq!(eval_policy_vector(policy, valid_tdx).await, (2, 2, 2, 2));
 
         let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
-        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 125, 2, 2));
+        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 97, 2, 2));
 
         let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
         assert_eq!(
             eval_policy_vector(policy, missing_eventlog).await,
-            (97, 2, 2, 2)
+            (2, 97, 2, 2)
         );
     }
 
@@ -2056,7 +2151,10 @@ default file_system := 2"#,
             } => {
                 assert_eq!(
                     published_measurements,
-                    ["tdx.td-shim", "container.image.cmaas-runtime"]
+                    Some(vec![
+                        "tdx.td-shim".to_string(),
+                        "container.image.cmaas-runtime".to_string()
+                    ])
                 );
                 assert_eq!(schema_version, "1.0.0");
                 assert_eq!(services.len(), 1);
@@ -2119,6 +2217,108 @@ default file_system := 2"#,
         }
     }
 
+    /// An absent `publishedMeasurements` field must deserialize to `None`
+    /// (distinct from an explicit `[]`, which deserializes to `Some(vec![])`).
+    /// `None` means "skip the measurement check entirely"; `Some([])` means
+    /// "run the check against an empty manifest" (which fails). Keeping the
+    /// two apart is the whole point of the `Option<Vec<String>>` field type.
+    #[test]
+    fn transparency_log_config_without_published_measurements() {
+        let json = r#"{
+            "type": "transparency_log",
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.sigstore.dev",
+                "logIndex": 2279770888
+            }]
+        }"#;
+        let cfg: PolicyConfig = serde_json::from_str(json).expect("parse");
+        match cfg {
+            PolicyConfig::TransparencyLog {
+                published_measurements,
+                ..
+            } => {
+                assert_eq!(
+                    published_measurements, None,
+                    "absent publishedMeasurements must be None, not Some([])"
+                );
+            }
+            other => panic!("expected TransparencyLog, got {other:?}"),
+        }
+
+        // Contrast: an explicit empty array is Some(vec![]), NOT None.
+        let empty_json = r#"{
+            "type": "transparency_log",
+            "publishedMeasurements": [],
+            "services": []
+        }"#;
+        let cfg: PolicyConfig = serde_json::from_str(empty_json).expect("parse");
+        match cfg {
+            PolicyConfig::TransparencyLog {
+                published_measurements,
+                ..
+            } => {
+                assert_eq!(published_measurements, Some(vec![]));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// When `publishedMeasurements` is absent (`None`), the generated policy
+    /// skips measurement reconstruction + verification entirely: `executables`
+    /// stays at its affirming default (2), so a valid TDX platform input
+    /// affirms across all four trust dimensions without any manifest-hash
+    /// comparison. Only the TDX hardware checks gate the appraisal.
+    #[tokio::test]
+    async fn transparency_log_rego_affirms_when_published_measurements_absent() {
+        let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
+        let policy = build_transparency_log_policy(payload_hash, "1.0.0", None, None, None);
+
+        // Valid TDX platform input (non-debug, canonical Intel vendor_id, event
+        // log present). No AAEL image event is needed: with publishedMeasurements
+        // absent the manifest is never reconstructed, so the payloadHash is
+        // irrelevant to the appraisal outcome here.
+        let ok = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000000"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(
+            eval_policy_vector(&policy, ok).await,
+            (2, 2, 2, 2),
+            "absent publishedMeasurements must affirm on a valid TDX platform"
+        );
+
+        // Debug bit set must still reject on hardware (125) — the platform
+        // checks run regardless of the measurement check being skipped.
+        let debug = ok.replace("\"0000001000000000\"", "\"0100001000000000\"");
+        assert_eq!(
+            eval_policy_vector(&policy, &debug).await,
+            (2, 125, 2, 2),
+            "absent publishedMeasurements must still reject a debug TDX"
+        );
+    }
+
+    /// With `publishedMeasurements` absent, an input that would normally fail
+    /// the manifest-hash check (no AAEL event, so `actual_measurement` is
+    /// undefined) still affirms on `executables` — proving the measurement
+    /// block was genuinely elided, not just made permissive. Compare against
+    /// `transparency_log_rego_affirms_on_matching_measurements`, where the same
+    /// no-AAEL input under a `Some(["container.image.cmaas-runtime"])` policy
+    /// yields `(97, 33, 2, 2)`.
+    #[tokio::test]
+    async fn transparency_log_rego_skips_measurements_when_absent() {
+        let payload_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let policy = build_transparency_log_policy(payload_hash, "1.0.0", None, None, None);
+
+        // No AAEL event at all — under a Some([...]) policy this would drop the
+        // measurement and mismatch the (deliberately wrong) payloadHash → 97.
+        // Under the None policy the measurement check is skipped → executables 2.
+        let no_aael = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000000"}},"uefi_event_logs":[]}}"#;
+        assert_eq!(
+            eval_policy_vector(&policy, no_aael).await,
+            (2, 33, 2, 2),
+            "absent publishedMeasurements must skip the measurement check (executables=2)"
+        );
+    }
+
     #[tokio::test]
     async fn transparency_log_rego_affirms_on_matching_measurements() {
         // Real fixture manifest: {schemaVersion:1.0.0, measurements:[{type:
@@ -2129,7 +2329,7 @@ default file_system := 2"#,
         let policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2196,7 +2396,7 @@ default file_system := 2"#,
         let correct_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2210,7 +2410,7 @@ default file_system := 2"#,
         let wrong_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-WRONG".to_string()],
+            Some(&["container.image.cmaas-WRONG".to_string()]),
             None,
             None,
         );
@@ -2235,7 +2435,7 @@ default file_system := 2"#,
         let correct_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2250,7 +2450,7 @@ default file_system := 2"#,
         let wrong_policy = build_transparency_log_policy(
             payload_hash,
             "9.9.9",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2275,7 +2475,7 @@ default file_system := 2"#,
         let correct_policy = build_transparency_log_policy(
             correct_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2290,7 +2490,7 @@ default file_system := 2"#,
         let wrong_policy = build_transparency_log_policy(
             wrong_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             None,
             None,
         );
@@ -2341,10 +2541,10 @@ default file_system := 2"#,
         let correct_policy = build_transparency_log_policy(
             &payload_hash,
             "1.0.0",
-            &[
+            Some(&[
                 "container.image.cmaas-runtime".to_string(),
                 "tdx.td-shim".to_string(),
-            ],
+            ]),
             None,
             None,
         );
@@ -2359,10 +2559,10 @@ default file_system := 2"#,
         let reversed_policy = build_transparency_log_policy(
             &payload_hash,
             "1.0.0",
-            &[
+            Some(&[
                 "tdx.td-shim".to_string(),
                 "container.image.cmaas-runtime".to_string(),
-            ],
+            ]),
             None,
             None,
         );
@@ -2402,7 +2602,7 @@ default file_system := 2"#,
         let policy = build_transparency_log_policy(
             &payload_hash,
             "1.0.0",
-            &["tdx.td-shim".to_string()],
+            Some(&["tdx.td-shim".to_string()]),
             None,
             None,
         );
@@ -2470,7 +2670,7 @@ default file_system := 2"#,
         let policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             Some(&dsse_signature),
             Some(&publisher_key),
         );
@@ -2510,7 +2710,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         let wrong_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
-            &["container.image.cmaas-runtime".to_string()],
+            Some(&["container.image.cmaas-runtime".to_string()]),
             Some(&dsse_signature),
             Some(bogus_pem),
         );

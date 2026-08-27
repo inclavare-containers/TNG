@@ -1381,7 +1381,7 @@ Passport 模式适用于网络隔离或性能要求较高的场景，因为它�
 | `"default"` | 使用 attestation-service 内置的默认策略，对 TEE 硬件和软件进行详尽度量验证 |
 | `"inline"` | 内联策略，需提供 `content`（Base64 编码的 OPA 策略内容） |
 | `"path"` | 文件路径策略，需提供 `path`（OPA 策略文件路径） |
-| `"transparency_log"` | 将可信度量集锚定到一个 Rekor v1 透明日志条目。初始化时 rats-cert 按 `logIndex` 拉取条目并认证（签名 checkpoint + Merkle 包含证明 + Signed Entry Timestamp），将可信参考烘焙进策略；appraisal 时将实际 TDX 度量值（从 quote 与 event log 中提取）与记录的参考进行比对。需要 `publishedMeasurements`、`schemaVersion` 以及一个 `rekor-v1` service。见示例4及下方字段参考。 |
+| `"transparency_log"` | 将可信度量集锚定到一个 Rekor v1 透明日志条目。初始化时 rats-cert 按 `logIndex` 拉取条目并认证（签名 checkpoint + Merkle 包含证明 + Signed Entry Timestamp），将可信参考记录供后续使用；appraisal 时将实际 TDX 度量值（从 quote 与 event log 中提取）与记录的参考进行比对。需要 `schemaVersion` 与一个 `rekor-v1` service；`publishedMeasurements` 可选（缺省 → 跳过度量检查，见下方字段参考）。见示例4。 |
 
 **ReferenceValueConfig（参考值来源）：**
 
@@ -1571,9 +1571,32 @@ Passport 模式适用于网络隔离或性能要求较高的场景，因为它�
 
 #### `transparency_log` 策略 — 字段参考
 
+<details>
+<summary><code>transparency_log</code> 策略校验什么</summary>
+
+`transparency_log` 策略将可信度量集锚定到一个经过认证的 Rekor v1 透明日志条目，然后在 appraisal 时将运行中 TDX 硬件的实际度量值与记录的参考进行比对。
+
+**初始化（策略加载）时：**
+
+- 按配置的 `logUrl` 与 `logIndex` 拉取 Rekor v1 条目。
+- 认证条目：校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。若省略 `rekorPublicKeyPem`，则使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
+- 记录可信参考（条目的 `payloadHash`，以及当配置了 publisher 公钥时记录 DSSE 发布者签名），供 appraisal 时使用。
+
+**appraisal（证据校验）时：**
+
+- 从 TDX quote（如 `tdx.td-shim` 对应的 `mr_td`）与 UEFI 事件日志（如 `container.image.*` 度量对应 AAEL `kangaroo/pull-image` 事件中的镜像摘要）中提取实际度量值。
+- 按 `publishedMeasurements` 给定的顺序，用这些实际值重建 release manifest，并将其哈希与记录的 `payloadHash` 比对。类型、顺序、值或 `schemaVersion` 不匹配即拒绝。
+- 无论度量检查结果如何，都强制执行 TDX 平台检查（非 debug、存在事件日志、Intel 规范 quoting-enclave vendor）。
+
+**可选的 DSSE 发布者校验：** 当配置了 `publisherPublicKeyPem` 时，appraisal 时还会校验条目的 DSSE 发布者签名，将条目绑定到可信 publisher（抵御 `logIndex` 被替换）。省略时信任仅锚定在配置的 `logIndex` 上。对不含 DSSE 签名的条目设置此项属于配置/条目不匹配，初始化即报错。
+
+**`publishedMeasurements` 缺省时：** 度量重建与哈希比对被整体跳过——仅执行 TDX 平台检查，executables 信任维度保持 affirming。显式空数组（`[]`）**并不等同**于缺省：它仍会执行检查，而对真实日志参考必然拒绝。当仅需平台证明、不需要度量绑定时，用缺省来跳过度量检查。
+
+</details>
+
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `publishedMeasurements` | — | 日志 manifest 中发布的度量类型，须按与 manifest 的 `measurements` 数组完全相同的顺序与集合列出。类型或顺序不匹配会使校验始终拒绝，因此必须与日志 manifest 逐字一致。 |
+| `publishedMeasurements` | 缺省（`None`） | 日志 manifest 中发布的度量类型，须按与 manifest 的 `measurements` 数组完全相同的顺序与集合列出。类型或顺序不匹配会使校验始终拒绝，因此必须与日志 manifest 逐字一致。当该字段**缺省**时，度量检查被整体跳过（仅执行 TDX 平台校验）；显式 `[]` 并不等同——它仍会执行检查，对真实日志参考必然拒绝。 |
 | `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion`。 |
 | `services[].type` | — | 必须为 `"rekor-v1"`；仅支持恰好一个 service。 |
 | `services[].logUrl` | — | Rekor v1 日志基地址（如 `https://rekor.sigstore.dev`、`https://rekor.openanolis.cn`）。 |

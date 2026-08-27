@@ -1371,7 +1371,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `"default"` | Uses the default policy built into attestation-service, performing comprehensive measurement verification of TEE hardware and software |
 | `"inline"` | Inline policy; requires `content` (Base64-encoded OPA policy content) |
 | `"path"` | File path policy; requires `path` (OPA policy file path) |
-| `"transparency_log"` | Anchors the trusted measurement set in a Rekor v1 transparency-log entry. At init, rats-cert fetches the entry by `logIndex`, authenticates it (signed checkpoint + Merkle inclusion proof + Signed Entry Timestamp), and bakes the trusted reference into the policy; at appraisal it compares the actual TDX measurements (extracted from the quote and event log) against the recorded reference. Requires `publishedMeasurements`, `schemaVersion`, and one `rekor-v1` service. See Example 4 and the field reference below. |
+| `"transparency_log"` | Anchors the trusted measurement set in a Rekor v1 transparency-log entry. At init, rats-cert fetches the entry by `logIndex`, authenticates it (signed checkpoint + Merkle inclusion proof + Signed Entry Timestamp), and records the trusted reference; at appraisal it compares the actual TDX measurements (extracted from the quote and event log) against the recorded reference. Requires `schemaVersion` and one `rekor-v1` service; `publishedMeasurements` is optional (absent → skip the measurement check, see the field reference below). See Example 4. |
 
 **ReferenceValueConfig (Reference Value Source):**
 
@@ -1559,9 +1559,32 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 
 #### `transparency_log` policy — field reference
 
+<details>
+<summary>What the <code>transparency_log</code> policy verifies</summary>
+
+The `transparency_log` policy anchors the trusted measurement set to an authenticated Rekor v1 transparency-log entry, then checks the running TDX hardware's actual measurements against that recorded reference.
+
+**At init (policy load):**
+
+- Fetch the Rekor v1 entry by `logIndex` from the configured `logUrl`.
+- Authenticate the entry: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). If `rekorPublicKeyPem` is omitted, the well-known public key for `rekor.sigstore.dev` / `rekor.openanolis.cn` is used; other logs must supply their key.
+- Record the trusted reference (the entry's `payloadHash` and, when a publisher key is configured, the DSSE publisher signature) for use at appraisal.
+
+**At appraisal (evidence verification):**
+
+- Extract the actual measurement values from the TDX quote (e.g. `mr_td` for `tdx.td-shim`) and the UEFI event log (e.g. the image digest from an AAEL `kangaroo/pull-image` event for a `container.image.*` measurement).
+- Reconstruct the release manifest from those actual values, in the order given by `publishedMeasurements`, and compare its hash to the recorded `payloadHash`. A mismatch (wrong type, wrong order, wrong value, or wrong `schemaVersion`) rejects.
+- Enforce the TDX platform checks (non-debug, event log present, canonical Intel quoting-enclave vendor) regardless of the measurement check.
+
+**Optional DSSE publisher verification:** When `publisherPublicKeyPem` is configured, the entry's DSSE publisher signature is also verified at appraisal, binding the entry to a trusted publisher (defense against a substituted `logIndex`). Without it, trust is anchored in the configured `logIndex` alone. Configuring it on an entry that carries no DSSE signature is a config/entry mismatch and errors at init.
+
+**When `publishedMeasurements` is absent:** the measurement reconstruction and hash comparison are skipped entirely — only the TDX platform checks run, and the executables trust dimension stays affirming. An explicit empty array (`[]`) is *not* the same: it still runs the check, which always rejects against a real logged reference. Use absence to opt out of measurement binding (e.g. when only platform attestation matters).
+
+</details>
+
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | — | The measurement types published in the logged manifest, listed in the SAME order and exact set as the manifest's `measurements` array. A mismatch (type or order) makes the check always reject, so this must mirror the logged manifest exactly. |
+| `publishedMeasurements` | absent (`None`) | The measurement types published in the logged manifest, listed in the SAME order and exact set as the manifest's `measurements` array. A mismatch (type or order) makes the check always reject, so this must mirror the logged manifest exactly. When the field is **absent**, the measurement check is skipped entirely (only TDX platform verification runs); an explicit `[]` is *not* the same — it runs the check, which always rejects against a real logged reference. |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion`. |
 | `services[].type` | — | Must be `"rekor-v1"`; exactly one service is supported. |
 | `services[].logUrl` | — | Rekor v1 log base URL (e.g. `https://rekor.sigstore.dev`, `https://rekor.openanolis.cn`). |
