@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.8.0
+Version: 2.9.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,23 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Mon Aug 31 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.0-1
+- feat(transparency_log): optional publishedMeasurements + doc clarification
+- refactor(transparency_log): split trust vector for granular failure diagnostics
+- feat(rats-cert): add transparency_log attestation policy with Rekor v1 verification
+- fix(tng-hook): apply cargo fmt to TCPStore test assertions
+- fix(tng-hook): handle mapped IPv6 TCPStore connections
+- Add strict reference-value builtin AS policy
+- Add strict hardware-only builtin AS policy
+- netfilter(egress): only capture traffic destined for local addresses
+- test(testsuite): revert run_test! cancel-on-first-completion semantics
+- fix(netfilter_udp): gate Linux-only code so non-Linux targets compile
+- feat: add netfilter_udp transparent UDP proxy mode
+- Bump trustee to a7cae246 and enable policy-rvps on wasm
+- fix(rats-cert): enable policy-rvps so the builtin converter can appraise
+- ci: generate AS token-signer key without the EC PARAMETERS block
+- Migrate trustee to upstream openanolis and add builtin-as wasm tests
+
 * Thu Aug 13 2026 Kun Lai <laikun@linux.alibaba.com> - 2.8.0-1
 - test: harden curl-based integration checks
 - fix(ci): pin rv-release-tool to fixed trustee commit 28ce0c6
