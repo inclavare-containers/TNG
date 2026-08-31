@@ -559,6 +559,11 @@ pub async fn handshake_ktls<IO: StreamForKtls + 'static, C: KtlsHandshakeConfig>
 
     // 2. Feasibility: read the negotiated cipher from the rustls
     //    Connection and probe the cached kernel kTLS support set.
+    tracing::debug!(
+        suite = ?tls_stream.negotiated_cipher_suite(),
+        %side,
+        "kTLS: negotiated rustls cipher suite"
+    );
     let supported = match tls_stream.negotiated_cipher_suite() {
         Some(suite) => compatible_ciphers().await.is_compatible(suite),
         None => false,
