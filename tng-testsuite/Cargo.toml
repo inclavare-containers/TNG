@@ -20,6 +20,7 @@ futures = {workspace = true}
 http = {workspace = true}
 hyper = {workspace = true}
 itertools = {workspace = true}
+libc = "0.2"
 netns-rs = {workspace = true}
 nix = {workspace = true, features = ["signal", "process", "mount"]}
 opentelemetry-stdout = {workspace = true}

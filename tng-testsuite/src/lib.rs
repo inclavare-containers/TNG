@@ -1,4 +1,5 @@
 pub mod netns;
+pub mod nip_io_hosts;
 pub mod task;
 pub mod test_context;
 
@@ -28,6 +29,11 @@ static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<
 /// The `name` parameter identifies this test for structured logging (e.g. `function_name!()` or a
 /// string literal like `"no_ra"`).
 pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
+    // Materialize nip.io -> IP mappings into /etc/hosts so peer_shared serf
+    // tests that use `<ip>.nip.io` hostnames resolve without external DNS.
+    // Best-effort; harmless on DNS-capable machines (same answers as nip.io).
+    nip_io_hosts::ensure_nip_io_hosts();
+
     let token = CancellationToken::new();
 
     let result = {
