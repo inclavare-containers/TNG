@@ -1,6 +1,6 @@
 ## Use Case 5: vLLM Inference Service with OHTTP Cluster
 
-[中文文档](scenario_zh.md)
+[中文文档](README_zh.md)
 
 ### Scenario Overview
 

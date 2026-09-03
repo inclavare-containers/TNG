@@ -18,14 +18,96 @@
 
 ## 快速开始
 
+TNG 提供多种接入模式 —— 选择适合你场景的方式。
+
+<details>
+<summary><b>使用 Docker 运行</b> —— 体验 TNG 最快的方式</summary>
+
 ```sh
-# 一条命令启动 TNG — 只需提供 JSON 配置字符串
 docker run -it --rm --privileged --network host --cgroupns=host \
   ghcr.io/inclavare-containers/tng:latest \
   tng launch --config-content='<your config json>'
 ```
 
-详见下方 [安装](#安装) 部分，了解 Docker、RPM、二进制和 SDK 等多种安装方式。
+无需安装。只需提供 JSON 配置，TNG 负责其余一切。
+
+</details>
+
+<details>
+<summary><b>tng exec</b> —— 现有应用零代码改动</summary>
+
+```sh
+# 透明地通过 TNG 启动你的现有应用
+tng exec --config-file config.json -- ./your-app
+```
+
+你的应用照常与后端通信 —— TNG 在网络层拦截，并通过远程证明隧道加密。
+
+</details>
+
+<details>
+<summary><b>JavaScript SDK</b> —— 浏览器端加密请求</summary>
+
+```sh
+npm install @inclavare-containers/tng
+```
+
+```js
+import { TngClient } from '@inclavare-containers/tng';
+
+const client = new TngClient({ config: { /* your config */ } });
+const response = await client.fetch('https://your-tee-service/api/data');
+```
+
+完全通过 WebAssembly 在浏览器中运行，无需服务端代理。
+
+</details>
+
+<details>
+<summary><b>Python SDK</b> —— 编程式接入</summary>
+
+```sh
+pip install tng-sdk
+```
+
+```python
+from tng import TngClient
+
+client = TngClient(config={"ingress": {...}, "egress": {...}})
+response = client.request("https://your-tee-service/api/data")
+```
+
+支持 `httpx`、`requests` 和 `openai` 作为可选后端。
+
+</details>
+
+<details>
+<summary><b>Go SDK</b> —— Go 服务的编程式接入</summary>
+
+```sh
+go get github.com/inclavare-containers/tng/tng-go
+```
+
+```go
+import "github.com/inclavare-containers/tng/tng-go"
+
+// 自动以 http_proxy ingress 拉起 TNG 子进程
+rt, err := tng.NewRoundTripper(&tng.Config{NoRA: true})
+if err != nil {
+    log.Fatal(err)
+}
+defer rt.Close()
+
+// 与标准 http.Client 协同工作
+client = &http.Client{Transport: rt}
+resp, err := client.Get("http://your-tee-service/api/data")
+```
+
+纯 Go 实现，无需 CGO。可作为任何 Go HTTP 客户端的即插即用 `http.RoundTripper`。
+
+</details>
+
+Docker、RPM、二进制和 SDK 等安装方式详见 [安装](#安装)。
 
 ---
 
