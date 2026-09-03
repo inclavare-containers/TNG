@@ -44,9 +44,7 @@ macro_rules! install_subscriber {
         #[cfg(not(unix))]
         {
             if tokio_console {
-                eprintln!(
-                    "Warning: --tokio-console is not supported on this platform. Ignoring."
-                );
+                eprintln!("Warning: --tokio-console is not supported on this platform. Ignoring.");
             }
             sub.init();
         }
@@ -86,6 +84,12 @@ async fn main() -> anyhow::Result<()> {
     // rather than being dropped by an uninitialised subscriber.
     let resolved = log_opts::resolve_log_format(cli.log_format);
 
+    let rolling = log_opts::resolve_rolling(
+        cli.log_rolling,
+        cli.log_max_size.as_deref(),
+        cli.log_max_backups,
+    );
+
     // Initialize rustls crypto provider
     #[allow(clippy::expect_used)]
     rustls::crypto::aws_lc_rs::default_provider()
@@ -99,25 +103,53 @@ async fn main() -> anyhow::Result<()> {
 
     // Open log file if --log-file is specified.
     // We always create a NonBlocking writer (either file-backed or stdout-backed)
-    // so that both branches produce the same concrete Layer type.
-    let (log_writer, is_file) = match &cli.log_file {
+    // so that both branches produce the same concrete Layer type. Rolling-related
+    // warnings (path not a regular file, or no --log-file) are collected here and
+    // emitted via `tracing::warn!` AFTER the subscriber is initialized below, so
+    // they land in the configured log stream (json/text) rather than only on
+    // stderr.
+    let mut writer_warnings: Vec<String> = Vec::new();
+    // The non-blocking WorkerGuard is returned from every arm and kept alive
+    // in `main`'s scope (NOT `mem::forget`-ed). On normal return or unwind,
+    // its Drop signals the worker to drain its channel and flush the inner
+    // writer (incl. the rolling appender's BufWriter) — this prevents log
+    // loss on shutdown. `std::process::exit` skips destructors, so the error
+    // path below drops it explicitly before exiting.
+    let (log_writer, worker_guard, is_file) = match &cli.log_file {
+        Some(path) if rolling.config.enabled && tng_hook_types::path_supports_rolling(path) => {
+            let appender = tracing_rolling_file::RollingFileAppenderBase::new(
+                path,
+                tracing_rolling_file::RollingConditionBase::new().max_size(rolling.config.max_size),
+                rolling.config.max_backups,
+            )
+            .context("Failed to open rolling log file")?;
+            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+            (non_blocking, guard, true)
+        }
         Some(path) => {
+            if rolling.config.enabled {
+                writer_warnings.push(format!(
+                    "--log-rolling ignored for {}: not a regular file (e.g. character device/terminal); using plain append",
+                    path.display()
+                ));
+            }
             let file = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
                 .context("Failed to open log file")?;
             let (non_blocking, guard) = tracing_appender::non_blocking(file);
-            // Leak the guard to keep the worker thread alive for the process
-            // lifetime. This is safe because the guard is never dropped until
-            // process exit, at which point the OS cleans up anyway.
-            std::mem::forget(guard);
-            (non_blocking, true)
+            (non_blocking, guard, true)
         }
         None => {
+            if rolling.config.enabled {
+                writer_warnings.push(
+                    "--log-rolling ignored: no --log-file (stdout); using non-rolling stdout"
+                        .into(),
+                );
+            }
             let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
-            std::mem::forget(guard);
-            (non_blocking, false)
+            (non_blocking, guard, false)
         }
     };
 
@@ -166,6 +198,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("{warning}");
     }
 
+    for warning in &rolling.warnings {
+        tracing::warn!("{warning}");
+    }
+
+    for warning in &writer_warnings {
+        tracing::warn!("{warning}");
+    }
+
     let fut = async {
         match cli.command {
             GlobalSubcommand::Launch(options) => {
@@ -204,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
 
                 tracing::info!("Exited gracefully");
+                Ok::<i32, anyhow::Error>(0)
             }
             GlobalSubcommand::Exec(options) => {
                 show_banner("exec");
@@ -228,26 +269,38 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
 
-                TngExec::run(
+                let exit_code = TngExec::run(
                     config,
                     options.command,
                     &reload_handle,
                     cli.log_file.as_ref(),
                     Some(&resolved.format),
+                    Some(&rolling.config),
                 )
                 .await?;
 
-                tracing::info!("Exec session ended");
+                tracing::info!(exit_code, "Exec session ended");
+                Ok::<i32, anyhow::Error>(exit_code)
             }
         }
-
-        Ok::<_, anyhow::Error>(())
     };
 
-    if let Err(error) = fut.await {
-        tracing::error!(?error);
-        std::process::exit(1);
+    match fut.await {
+        Ok(exit_code) => {
+            // Normal completion. `std::process::exit` skips destructors, so
+            // drop the non-blocking worker guard explicitly: its Drop signals
+            // the worker to drain its channel and flush the inner writer
+            // (incl. the rolling appender's BufWriter). Without this, `tng
+            // exec` would lose buffered logs on shutdown — the worker would be
+            // killed mid-flush by the exit.
+            drop(worker_guard);
+            std::process::exit(exit_code);
+        }
+        Err(error) => {
+            tracing::error!(?error);
+            // Same flush-before-exit on the error path.
+            drop(worker_guard);
+            std::process::exit(1);
+        }
     }
-
-    Ok(())
 }

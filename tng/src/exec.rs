@@ -96,7 +96,8 @@ impl TngExec {
         reload_handle: &crate::runtime::TracingReloadHandle,
         log_file: Option<&PathBuf>,
         log_format: Option<&tng_hook_types::LogFormat>,
-    ) -> Result<()> {
+        rolling: Option<&tng_hook_types::RollingConfig>,
+    ) -> Result<i32> {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
 
@@ -201,6 +202,14 @@ impl TngExec {
             child_cmd.env("TNG_HOOK_LOG_FORMAT", fmt.as_str());
         }
 
+        if let Some(r) = rolling {
+            if r.enabled {
+                child_cmd.env("TNG_HOOK_LOG_ROLLING", "true");
+                child_cmd.env("TNG_HOOK_LOG_MAX_SIZE", r.max_size.to_string());
+                child_cmd.env("TNG_HOOK_LOG_MAX_BACKUPS", r.max_backups.to_string());
+            }
+        }
+
         let mut child = child_cmd.spawn().context("Failed to spawn child command")?;
 
         let child_id = child.id();
@@ -215,7 +224,11 @@ impl TngExec {
         canceller.cancel();
         let _ = runtime_handle.await;
 
-        // 10. Exit with child's exit code
+        // 10. Return the child's exit code. The caller (`main`) drops the
+        // non-blocking log worker guard and THEN calls `std::process::exit`
+        // with this code. Calling `process::exit` here would skip the guard's
+        // drop and kill the worker mid-flush, losing buffered logs on shutdown
+        // — the exact loss this guard exists to prevent.
         let exit_code = exit_status
             .code()
             .or_else(|| {
@@ -229,7 +242,7 @@ impl TngExec {
                 }
             })
             .unwrap_or(1);
-        std::process::exit(exit_code);
+        Ok(exit_code)
     }
 
     /// Validate hook-mode configuration.

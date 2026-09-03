@@ -1,6 +1,7 @@
+use std::io::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::raw::c_void;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use libc::{c_int, size_t, sockaddr, socklen_t, ssize_t};
 use tng_hook_types::{
@@ -34,6 +35,15 @@ type SendtoFn = unsafe extern "C" fn(
 
 static REAL_SENDTO: OnceLock<SendtoFn> = OnceLock::new();
 
+/// Holds the hook's rolling appender so the `#[ctor::dtor]` below can flush
+/// its BufWriter on process exit. Rust statics (incl. the global subscriber
+/// that owns the appender) are not dropped on exit, so without an explicit
+/// flush the last buffered log lines would be lost. Only set when rolling is
+/// enabled and a log file is configured.
+static HOOK_ROLLING_APPENDER: OnceLock<
+    Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>,
+> = OnceLock::new();
+
 static INGRESS_LOOKUP: OnceLock<IngressHookLookup> = OnceLock::new();
 
 /// Global mapping lookup table, initialized once from env var at library load.
@@ -60,6 +70,40 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
         None
     } else {
         Some(std::mem::transmute_copy(&sym))
+    }
+}
+
+/// A `MakeWriter` over a shared `Arc<Mutex<RollingFileAppenderBase>>`.
+///
+/// The appender must be shared between the fmt layer (which writes) and the
+/// `#[ctor::dtor]` (which flushes on exit). `Arc<Mutex<..>>` cannot be used
+/// directly as a `MakeWriter`: tracing-subscriber's blanket `impl MakeWriter
+/// for Arc<W>` does not satisfy the `for<'a> MakeWriter<'a>` HRTB. So we wrap
+/// it and implement `MakeWriter` directly, delegating each write to the inner
+/// `Mutex` (same `MutexGuardWriter`-equivalent path the plain `Mutex<W>` uses).
+struct SharedRollingWriter(Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>);
+
+/// A write handle that locks the shared appender for the duration of a write.
+struct SharedRollingWriterGuard<'a>(
+    std::sync::MutexGuard<'a, tracing_rolling_file::RollingFileAppenderBase>,
+);
+
+impl std::io::Write for SharedRollingWriterGuard<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.0.write_all(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedRollingWriter {
+    type Writer = SharedRollingWriterGuard<'a>;
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedRollingWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
@@ -95,6 +139,20 @@ where
     }
 }
 
+/// Destructor: flush the hook's rolling appender's BufWriter when the `.so`
+/// is unloaded at process exit. Rust statics (incl. the global subscriber that
+/// owns the appender) are not dropped on exit, so without this the last ~8 KiB
+/// of buffered logs would never reach the file. Runs on normal exit / `exit()`;
+/// not on SIGKILL. Poison is tolerated (a panicked holder still leaves the
+/// appender flushable) via `into_inner`.
+#[ctor::dtor]
+fn flush_rolling_appender_on_exit() {
+    if let Some(appender) = HOOK_ROLLING_APPENDER.get() {
+        let mut guard = appender.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = guard.flush();
+    }
+}
+
 /// Initialize the library at load time.
 ///
 /// This is called once when the `.so` is loaded (before main).
@@ -107,37 +165,44 @@ fn init() {
     // Uses `set_default` so it won't panic if the host already has a subscriber.
     let log_file_path = std::env::var("TNG_HOOK_LOG_FILE").ok();
 
-    // Resolve log format: TNG_HOOK_LOG_FORMAT (injected by the parent `tng
-    // exec`) takes priority, falling back to TNG_LOG_FORMAT (inherited env).
-    // JSON makes the hook's lines match the parent's so a single collected
-    // file stays consistent (JSON Lines). Uses the shared `LogFormat` enum
-    // (no `bool`/`&str` round-trip); an invalid value silently falls back to
-    // text (a cdylib ctor should stay quiet).
     let log_format: tng_hook_types::LogFormat = std::env::var("TNG_HOOK_LOG_FORMAT")
         .or_else(|_| std::env::var("TNG_LOG_FORMAT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(tng_hook_types::LogFormat::Text);
+    let rolling = tng_hook_types::RollingConfig::from_hook_env();
 
-    // The hook shares the log file with the parent `tng exec` process via
-    // O_APPEND (concurrent writes < PIPE_BUF are atomic). No rolling here —
-    // only the parent rolls. JSON vs text layers differ in concrete type, so
-    // erase to a boxed trait object before `.with(...)`. `Mutex<W>` is a
-    // `MakeWriter`; for stderr we wrap `Stderr` (which has no direct impl).
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let layer: Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync> =
         if let Some(ref path) = log_file_path {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .unwrap_or_else(|e| {
-                    panic!("tng-hook: failed to open log file {}: {}", path, e);
-                });
-            build_log_layer(log_format, std::sync::Mutex::new(file), false, filter)
+            // When rolling is on, the hook writes its OWN file (pid-derived,
+            // collision-free with the parent's base.N backups) and rolls it
+            // independently — no shared file, no stale fd. When rolling is off,
+            // share the parent's file (concurrent append, current behavior).
+            if rolling.enabled {
+                let derived = tng_hook_types::hook_log_path(path.as_ref(), std::process::id());
+                let appender = tracing_rolling_file::RollingFileAppenderBase::new(
+                    derived,
+                    tracing_rolling_file::RollingConditionBase::new().max_size(rolling.max_size),
+                    rolling.max_backups,
+                )
+                .unwrap_or_else(|e| panic!("tng-hook: failed to open rolling log file: {e}"));
+                // Wrap in Arc<Mutex<..>>: one clone goes to SharedRollingWriter
+                // (the fmt layer's MakeWriter), one is stashed in the global so
+                // the dtor can flush the BufWriter on exit.
+                let writer = Arc::new(std::sync::Mutex::new(appender));
+                let _ = HOOK_ROLLING_APPENDER.set(writer.clone());
+                build_log_layer(log_format, SharedRollingWriter(writer), false, filter)
+            } else {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .unwrap_or_else(|e| panic!("tng-hook: failed to open log file {path:?}: {e}"));
+                build_log_layer(log_format, std::sync::Mutex::new(file), false, filter)
+            }
         } else {
-            // Default: write to stderr (existing behavior)
             build_log_layer(
                 log_format,
                 std::sync::Mutex::new(std::io::stderr()),

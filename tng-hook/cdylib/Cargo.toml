@@ -17,4 +17,5 @@ scopeguard = "1.2"
 serde_json = {workspace = true}
 tng-hook-types = {path = "../types"}
 tracing = {workspace = true}
+tracing-rolling-file = {workspace = true}
 tracing-subscriber = {version = "0.3", features = ["env-filter", "json"]}

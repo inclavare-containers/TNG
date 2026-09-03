@@ -122,6 +122,7 @@ rats-cert = {path = "../rats-cert", default-features = false, features = ["crypt
 socket2 = {workspace = true}
 tokio = {workspace = true, default-features = true, features = ["rt-multi-thread", "time", "process"]}
 tracing-appender = {workspace = true}
+tracing-rolling-file = {workspace = true}
 # Enable aws-lc-rs for native targets (AVX512/VAES optimization)
 rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "aws-lc-rs", "brotli"]}
 tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "aws-lc-rs"]}
