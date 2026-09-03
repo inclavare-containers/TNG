@@ -14,10 +14,44 @@ use tng::config::ingress::IngressMode;
 use tng::config::TngConfig;
 use tng::runtime::TngRuntime;
 use tng::{build, show_banner};
+use tng_hook_types::LogFormat;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cli;
+mod log_opts;
+
+/// Install a built subscriber, optionally layering tokio-console on top.
+///
+/// `console_subscriber` is only available on unix (native builds). The non-unix
+/// path warns and ignores `--tokio-console` rather than silently dropping it.
+/// Both the json and text subscriber shapes funnel through this macro so the
+/// console/init tail isn't duplicated per branch. The `tokio_console` flag is
+/// passed in (rather than capturing `cli`) so the macro stays hygienic and
+/// doesn't resolve `cli` to the `cli` module at expansion time.
+macro_rules! install_subscriber {
+    ($sub:expr, $tokio_console:expr) => {{
+        let sub = $sub;
+        let tokio_console: bool = $tokio_console;
+        #[cfg(unix)]
+        {
+            if tokio_console {
+                sub.with(console_subscriber::spawn()).init();
+            } else {
+                sub.init();
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if tokio_console {
+                eprintln!(
+                    "Warning: --tokio-console is not supported on this platform. Ignoring."
+                );
+            }
+            sub.init();
+        }
+    }};
+}
 
 /// Reject hook modes when running via `tng launch`.
 /// Hook modes (IngressMode::Hook, EgressMode::Hook) are only allowed via `tng exec`.
@@ -44,6 +78,13 @@ fn reject_hook_modes(config: &TngConfig) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Resolve log format: env TNG_LOG_FORMAT takes priority over --log-format,
+    // defaulting to plain text. Done before tracing init so the fmt layer can
+    // be built in the right shape (json vs text). An invalid env value defers
+    // a warning until *after* init (below) so it lands in the log stream
+    // rather than being dropped by an uninitialised subscriber.
+    let resolved = log_opts::resolve_log_format(cli.log_format);
 
     // Initialize rustls crypto provider
     #[allow(clippy::expect_used)]
@@ -80,40 +121,49 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let subscriber_init = tracing_subscriber::registry()
-        .with(
-            pending_tracing_layers.with_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=trace,tng=trace".into()),
-            ),
-        )
-        .with({
-            let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=info,tng=info".into());
+    // Build the subscriber. JSON and text fmt layers have different concrete
+    // types and cannot be unified by boxing a `dyn Layer` (the fmt layer sits
+    // on top of the reload layer, so it must satisfy
+    // `Layer<Layered<reload, Registry>>`, not just `Layer<Registry>`). Branch
+    // on the resolved `LogFormat` enum (no `bool`/`&str` leakage) and funnel
+    // both shapes through the `install_subscriber!` macro. `pending` is moved
+    // into exactly one arm (only one runs at runtime).
+    let reload_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=trace,tng=trace".into());
+    let fmt_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,tokio_graceful=off,rats_cert=info,tng=info".into());
+    let pending = pending_tracing_layers.with_filter(reload_filter);
 
-            let base_layer = tracing_subscriber::fmt::layer().with_writer(log_writer.clone());
-            if is_file {
-                base_layer.with_ansi(false).with_filter(filter)
+    match resolved.format {
+        LogFormat::Json => {
+            let sub = tracing_subscriber::registry().with(pending).with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(log_writer.clone())
+                    .with_ansi(false)
+                    .with_filter(fmt_filter),
+            );
+            install_subscriber!(sub, cli.tokio_console);
+        }
+        LogFormat::Text => {
+            let ansi = if is_file {
+                false
             } else {
-                base_layer
-                    .with_ansi(atty::is(atty::Stream::Stdout))
-                    .with_filter(filter)
-            }
-        });
-
-    #[cfg(unix)]
-    if cli.tokio_console {
-        subscriber_init.with(console_subscriber::spawn()).init();
-    } else {
-        subscriber_init.init();
+                atty::is(atty::Stream::Stdout)
+            };
+            let sub = tracing_subscriber::registry().with(pending).with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(log_writer.clone())
+                    .with_ansi(ansi)
+                    .with_filter(fmt_filter),
+            );
+            install_subscriber!(sub, cli.tokio_console);
+        }
     }
 
-    #[cfg(not(unix))]
-    {
-        if cli.tokio_console {
-            eprintln!("Warning: --tokio-console is not supported on this platform. Ignoring.");
-        }
-        subscriber_init.init();
+    // Emit any deferred invalid-env warning now that the subscriber is live.
+    if let Some(warning) = &resolved.invalid_env_warning {
+        tracing::warn!("{warning}");
     }
 
     let fut = async {
@@ -183,6 +233,7 @@ async fn main() -> anyhow::Result<()> {
                     options.command,
                     &reload_handle,
                     cli.log_file.as_ref(),
+                    Some(&resolved.format),
                 )
                 .await?;
 

@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{arg, Parser, Subcommand};
 
+use tng_hook_types::LogFormat;
+
 use crate::build::CLAP_LONG_VERSION;
 
 #[derive(Parser, Debug)]
@@ -18,6 +20,11 @@ pub struct Cli {
     #[clap(long, global = true, value_name = "FILE")]
     /// Path to log file (writes to stdout/stderr if not set)
     pub log_file: Option<PathBuf>,
+
+    #[clap(long, global = true, value_name = "FORMAT")]
+    /// Log output format: text | json.
+    /// The `TNG_LOG_FORMAT` env var takes priority over this flag when set.
+    pub log_format: Option<LogFormat>,
 }
 
 #[derive(Subcommand, Debug)]

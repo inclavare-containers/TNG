@@ -95,6 +95,7 @@ impl TngExec {
         command: Vec<String>,
         reload_handle: &crate::runtime::TracingReloadHandle,
         log_file: Option<&PathBuf>,
+        log_format: Option<&tng_hook_types::LogFormat>,
     ) -> Result<()> {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
@@ -187,6 +188,17 @@ impl TngExec {
 
         if let Some(ref log_file) = log_file {
             child_cmd.env("TNG_HOOK_LOG_FILE", log_file);
+        }
+
+        // Propagate the resolved log format to the hook child so the hook's
+        // tracing init emits JSON when the parent does. The hook reads
+        // TNG_HOOK_LOG_FORMAT (falling back to TNG_LOG_FORMAT). Injecting the
+        // resolved value covers the case where the parent got JSON from the
+        // --log-format CLI flag rather than from an env var the child would
+        // otherwise inherit. The domain enum is threaded here; it is only
+        // serialised to a string at the env-var boundary.
+        if let Some(fmt) = log_format {
+            child_cmd.env("TNG_HOOK_LOG_FORMAT", fmt.as_str());
         }
 
         let mut child = child_cmd.spawn().context("Failed to spawn child command")?;

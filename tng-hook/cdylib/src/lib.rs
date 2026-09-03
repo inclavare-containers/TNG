@@ -63,6 +63,38 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
     }
 }
 
+/// Build the tracing fmt layer (json or text) as a boxed trait object.
+///
+/// Shared by the file and stderr branches so the json/text choice is not
+/// duplicated. `with_writer` requires `W: for<'writer> MakeWriter<'writer> +
+/// 'static`; `Send + Sync` is added so the resulting layer can be boxed to
+/// `Box<dyn Layer<Registry> + Send + Sync>`.
+fn build_log_layer<W>(
+    format: tng_hook_types::LogFormat,
+    writer: W,
+    ansi: bool,
+    filter: tracing_subscriber::EnvFilter,
+) -> Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>
+where
+    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    match format {
+        tng_hook_types::LogFormat::Json => Box::new(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_filter(filter),
+        ),
+        tng_hook_types::LogFormat::Text => Box::new(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(ansi)
+                .with_filter(filter),
+        ),
+    }
+}
+
 /// Initialize the library at load time.
 ///
 /// This is called once when the `.so` is loaded (before main).
@@ -75,39 +107,45 @@ fn init() {
     // Uses `set_default` so it won't panic if the host already has a subscriber.
     let log_file_path = std::env::var("TNG_HOOK_LOG_FILE").ok();
 
-    if let Some(ref path) = log_file_path {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap_or_else(|e| {
-                panic!("tng-hook: failed to open log file {}: {}", path, e);
-            });
+    // Resolve log format: TNG_HOOK_LOG_FORMAT (injected by the parent `tng
+    // exec`) takes priority, falling back to TNG_LOG_FORMAT (inherited env).
+    // JSON makes the hook's lines match the parent's so a single collected
+    // file stays consistent (JSON Lines). Uses the shared `LogFormat` enum
+    // (no `bool`/`&str` round-trip); an invalid value silently falls back to
+    // text (a cdylib ctor should stay quiet).
+    let log_format: tng_hook_types::LogFormat = std::env::var("TNG_HOOK_LOG_FORMAT")
+        .or_else(|_| std::env::var("TNG_LOG_FORMAT"))
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(tng_hook_types::LogFormat::Text);
 
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(std::sync::Mutex::new(file))
-                    .with_ansi(false)
-                    .with_filter(
-                        tracing_subscriber::EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-                    ),
+    // The hook shares the log file with the parent `tng exec` process via
+    // O_APPEND (concurrent writes < PIPE_BUF are atomic). No rolling here —
+    // only the parent rolls. JSON vs text layers differ in concrete type, so
+    // erase to a boxed trait object before `.with(...)`. `Mutex<W>` is a
+    // `MakeWriter`; for stderr we wrap `Stderr` (which has no direct impl).
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let layer: Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync> =
+        if let Some(ref path) = log_file_path {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap_or_else(|e| {
+                    panic!("tng-hook: failed to open log file {}: {}", path, e);
+                });
+            build_log_layer(log_format, std::sync::Mutex::new(file), false, filter)
+        } else {
+            // Default: write to stderr (existing behavior)
+            build_log_layer(
+                log_format,
+                std::sync::Mutex::new(std::io::stderr()),
+                atty::is(atty::Stream::Stderr),
+                filter,
             )
-            .init();
-    } else {
-        // Default: write to stderr (existing behavior)
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(atty::is(atty::Stream::Stderr))
-                    .with_filter(
-                        tracing_subscriber::EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-                    ),
-            )
-            .init();
-    }
+        };
+    tracing_subscriber::registry().with(layer).init();
 
     // Resolve real functions directly from libc
     unsafe {
