@@ -50,6 +50,19 @@ Do not update one language and leave the other stale. If a section is added/remo
 
 - **Do not hard-wrap prose lines in human-readable Markdown.** In `docs/*.md`, `*_zh.md`, and crate `README.md`/`README_zh.md`, keep each paragraph (and each list item / blockquote line) as a single unbounded line — do not insert manual line breaks at a fixed column (e.g. ~70 chars for EN, ~36 chars for ZH). Markdown reflows to the reader's viewport automatically; manual wrapping only produces noisy diffs, mismatched EN/ZH line counts, and awkward editing. One sentence may run as long as it needs. Code blocks, tables, and frontmatter are exempt (their line structure is semantic).
 
+## Persistent Text Writing Style
+
+Several kinds of text in this repo are read by future developers and users long after they are written: Markdown documentation (`docs/*.md`, `*_zh.md`, crate `README*.md`), commit messages, PR titles and descriptions, and code comments. All of these are **persistent text** and must read like a real person wrote it.
+
+- **Write like a human, not a form.** Use plain, direct language. Prefer short sentences over clause-stuffed ones. No robotic openers ("This commit aims to...", "The purpose of this PR is to..."), no filler hedging, no bureaucratic tone. Get to the point in the first line.
+- **Be concise.** Say what changed and why, then stop. A reader should understand the change from the first sentence; extra detail goes in a short bullet list, not a wall of prose.
+- **Plain language over jargon soup.** Use the concrete term a working engineer uses. Don't stack acronyms and internal codenames without context; if a name isn't obvious, drop one phrase of context.
+- **Commit messages and PR descriptions are in English.** Title in imperative mood ("log: stop writing secrets into logs"); body explains what and why in plain English. The bilingual convention above applies to documentation, not to commit/PR text.
+- **Comments explain *why*, not *what*.** The code already shows what it does; a comment should explain the non-obvious reason, constraint, or gotcha. When carrying over an existing comment, preserve it verbatim unless it is no longer accurate (see Code Refactoring Rules).
+- **No AI-affectation footers in persistent text.** Never add "🤖 Generated with [Claude Code]" or similar attribution to PR descriptions, commit messages, or docs. The only accepted AI attribution in commits is the `Assisted-by:` trailer (see Git Commit Requirements).
+
+These rules apply wherever text is meant to be read later. Ephemeral output (a one-off reply in this session, a `println!` debug line) does not need to follow them.
+
 ## TODO.md Discipline
 
 **Never add, remove, or edit entries in `TODO.md` automatically** — not as a "test coverage note", not to record deferred work, not for any reason — unless the user explicitly asks for it. `TODO.md` is a human-curated tracking file; auto-generated entries there are noise. If you discover deferred work or a coverage gap worth tracking, mention it in your reply and let the user decide whether to put it in `TODO.md`.
