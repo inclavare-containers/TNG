@@ -1,4 +1,4 @@
-## Use Case 4: Client Accessing Business Cluster Scenario (OHTTP Support)
+## Use Case 3: Client Accessing Business Cluster Scenario (OHTTP Support)
 
 [中文文档](README_zh.md)
 

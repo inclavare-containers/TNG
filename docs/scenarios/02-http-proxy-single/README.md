@@ -1,4 +1,4 @@
-## Use Case 1: Client Accessing Single Confidential Computing Node via HTTP Proxy
+## Use Case 2: Client Accessing Single Confidential Computing Node via HTTP Proxy
 
 [中文文档](README_zh.md)
 

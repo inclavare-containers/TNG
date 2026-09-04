@@ -1,4 +1,4 @@
-## Use Case 3: Mutual Remote Attestation between Mesh Cluster Nodes
+## Use Case 4: Mutual Remote Attestation between Mesh Cluster Nodes
 
 [中文文档](README_zh.md)
 

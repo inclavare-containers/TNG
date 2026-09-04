@@ -1,4 +1,4 @@
-## 用例2：客户端通过透明代理访问单机密计算节点
+## 用例1：客户端通过透明代理访问单机密计算节点
 
 ### 场景概述
 
@@ -43,7 +43,7 @@
 - **关键点说明**：
   - **`netfilter.capture_dst.port`**：指定需要被捕获的目标端口（例子中为 8080），即应用原本直接访问的服务端口。
   - 如有需要，可以结合 `capture_cgroup` / `nocapture_cgroup` 等字段，只捕获特定 cgroup 内应用的流量，避免影响同机其他业务。
-  - **`verify.as_addr`** 和 **`policy_ids`** 的含义与用例 1 相同，用于连接 Attestation Service 并选择策略。
+  - **`verify.as_addr`** 和 **`policy_ids`** 的含义与用例 2 相同，用于连接 Attestation Service 并选择策略。
 
 ### 服务端侧 TNG（Egress）配置示例
 
@@ -69,7 +69,7 @@
 ```
 
 - **关键点说明**：
-  - 与用例 1 中的 Egress 配置类似，只是这里客户端侧也是 `netfilter`，因此两端应用都不需要感知代理/隧道的存在。
+  - 与用例 2 中的 Egress 配置类似，只是这里客户端侧也是 `netfilter`，因此两端应用都不需要感知代理/隧道的存在。
   - `capture_local_traffic` 为 `true` 时，服务端本机访问后端服务的请求也会被 TNG 接管，方便在单机环境中测试。
 
 ### 典型使用步骤
@@ -78,7 +78,7 @@
   - 部署并启动 TNG Ingress，加载上述 `netfilter + verify` 配置；
   - 根据配置生成或手动编写 iptables 规则，将发往目标端口（例如 8080）的流量重定向到 TNG 监听端口（`listen_port`）。
 - **服务端侧**：
-  - 与用例 1 类似，在机密计算环境中启动 Attestation Agent 和后端服务；
+  - 与用例 2 类似，在机密计算环境中启动 Attestation Agent 和后端服务；
   - 启动 TNG Egress，加载 `netfilter + attest` 配置；
   - 设置 iptables 规则，将进入机密实例、发往后端端口的流量先转发给 TNG。
 

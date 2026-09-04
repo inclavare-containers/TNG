@@ -1,4 +1,4 @@
-## Use Case 2: Client Accessing Single Confidential Computing Node via Transparent Proxy
+## Use Case 1: Client Accessing Single Confidential Computing Node via Transparent Proxy
 
 [中文文档](README_zh.md)
 
@@ -45,7 +45,7 @@
 - **Key Points**:
   - **`netfilter.capture_dst.port`**: Specifies the target port to be captured (8080 in the example), which is the service port originally accessed directly by the application.
   - If needed, fields like `capture_cgroup` / `nocapture_cgroup` can be combined to capture traffic only from applications within specific cgroups, avoiding impact on other local businesses.
-  - The meanings of **`verify.as_addr`** and **`policy_ids`** are the same as in Use Case 1, used for connecting to the Attestation Service and selecting policies.
+  - The meanings of **`verify.as_addr`** and **`policy_ids`** are the same as in Use Case 2, used for connecting to the Attestation Service and selecting policies.
 
 ### Server-side TNG (Egress) Configuration Example
 
@@ -71,7 +71,7 @@
 ```
 
 - **Key Points**:
-  - Similar to the Egress configuration in Use Case 1, but here the client side is also `netfilter`, so applications on both ends do not need to be aware of the proxy/tunnel's existence.
+  - Similar to the Egress configuration in Use Case 2, but here the client side is also `netfilter`, so applications on both ends do not need to be aware of the proxy/tunnel's existence.
   - When `capture_local_traffic` is `true`, requests from the server itself to backend services are also taken over by TNG, facilitating testing in a single-machine environment.
 
 ### Typical Usage Steps
@@ -80,7 +80,7 @@
   - Deploy and start TNG Ingress, loading the above `netfilter + verify` configuration;
   - Generate or manually write iptables rules according to the configuration to redirect traffic sent to the target port (e.g., 8080) to the TNG listening port (`listen_port`).
 - **Server side**:
-  - Similar to Use Case 1, start Attestation Agent and backend services in a confidential computing environment;
+  - Similar to Use Case 2, start Attestation Agent and backend services in a confidential computing environment;
   - Start TNG Egress, loading the `netfilter + attest` configuration;
   - Set iptables rules to forward traffic entering the confidential instance and sent to the backend port to TNG first.
 
