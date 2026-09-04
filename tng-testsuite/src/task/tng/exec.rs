@@ -25,6 +25,12 @@ pub struct TngExecTask {
     #[allow(dead_code)]
     tag: String,
     node_type: NodeType,
+    // Optional log configuration forwarded to `tng exec` as --log-* flags.
+    log_file: Option<String>,
+    log_format: Option<String>,
+    log_rolling: bool,
+    log_max_size: Option<String>,
+    log_max_backups: Option<usize>,
 }
 
 impl TngExecTask {
@@ -40,7 +46,38 @@ impl TngExecTask {
             stop_after_exit,
             tag: "tng_exec".to_owned(),
             node_type,
+            log_file: None,
+            log_format: None,
+            log_rolling: false,
+            log_max_size: None,
+            log_max_backups: None,
         }
+    }
+
+    /// Forward `--log-file <PATH>` to `tng exec`.
+    pub fn with_log_file(mut self, path: impl Into<String>) -> Self {
+        self.log_file = Some(path.into());
+        self
+    }
+    /// Forward `--log-format <FORMAT>` (e.g. "json") to `tng exec`.
+    pub fn with_log_format(mut self, format: impl Into<String>) -> Self {
+        self.log_format = Some(format.into());
+        self
+    }
+    /// Forward `--log-rolling` to `tng exec`.
+    pub fn with_log_rolling(mut self, enabled: bool) -> Self {
+        self.log_rolling = enabled;
+        self
+    }
+    /// Forward `--log-max-size <SIZE>` (e.g. "64MB") to `tng exec`.
+    pub fn with_log_max_size(mut self, size: impl Into<String>) -> Self {
+        self.log_max_size = Some(size.into());
+        self
+    }
+    /// Forward `--log-max-backups <N>` to `tng exec`.
+    pub fn with_log_max_backups(mut self, n: usize) -> Self {
+        self.log_max_backups = Some(n);
+        self
     }
 }
 
@@ -67,11 +104,24 @@ impl Task for TngExecTask {
 
         // Build the command
         let mut cmd = Command::new(&tng_bin);
-        cmd.arg("exec")
-            .arg("--config-content")
-            .arg(&config_json)
-            .arg("--");
-        cmd.args(&command);
+        cmd.arg("exec").arg("--config-content").arg(&config_json);
+        // Forward optional --log-* flags (verified by the log_rolling test).
+        if let Some(p) = &self.log_file {
+            cmd.arg("--log-file").arg(p);
+        }
+        if let Some(f) = &self.log_format {
+            cmd.arg("--log-format").arg(f);
+        }
+        if self.log_rolling {
+            cmd.arg("--log-rolling");
+        }
+        if let Some(s) = &self.log_max_size {
+            cmd.arg("--log-max-size").arg(s);
+        }
+        if let Some(n) = self.log_max_backups {
+            cmd.arg("--log-max-backups").arg(n.to_string());
+        }
+        cmd.arg("--").args(&command);
 
         tracing::info!(?cmd, "Launching tng exec");
 
