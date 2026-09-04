@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.9.0
+Version: 2.9.1
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,18 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Fri Sep 04 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.1-1
+- test(log): add integration test for JSON, rolling, and flush-on-exit
+- feat(log): add size-based rolling with per-pid hook files and exit flush
+- feat(log): add JSON output format for the tng binary and hook cdylib
+- docs(claude): add persistent-text writing style rules
+- log: redact secrets and plaintext from logs
+- docs(configuration): fix config-field mismatches between docs and implementation
+- docs(scenarios): fix use-case title numbering to match directory order
+- docs: fix broken scenario cross-links and sync Chinese README Quick Start
+- test(testsuite): resolve nip.io peer hostnames via /etc/hosts for no-DNS envs
+- docs(skill): add release-version project skill
+
 * Mon Aug 31 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.0-1
 - feat(transparency_log): optional publishedMeasurements + doc clarification
 - refactor(transparency_log): split trust vector for granular failure diagnostics
