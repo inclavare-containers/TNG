@@ -822,7 +822,12 @@ impl OHttpClientInner {
 
         let response = {
             let (head, body) = response.into_parts();
-            tracing::debug!(response = ?head, "Decrypted response head from upstream server");
+            // Log only the status; the full head carries upstream response headers
+            // (e.g. Set-Cookie, Authorization) which are plaintext application data.
+            tracing::debug!(
+                status = %head.status,
+                "Decrypted response from upstream server"
+            );
             http::Response::from_parts(head, body)
         };
 

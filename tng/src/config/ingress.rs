@@ -382,11 +382,22 @@ pub struct IngressSocks5Args {
 
     pub auth: Option<Socks5AuthArgs>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Socks5AuthArgs {
     pub username: String,
 
     pub password: String,
+}
+
+/// Manual impl to redact `password` from debug/log output so that
+/// `tracing::debug!(?config, ...)` does not leak the SOCKS5 password.
+impl std::fmt::Debug for Socks5AuthArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Socks5AuthArgs")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Fallback outer OHTTP POST path used when no `path_rewrites` rule matches
@@ -519,7 +530,7 @@ mod tests {
 
     use super::{
         AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
-        OHttpArgs, PathDefault,
+        OHttpArgs, PathDefault, Socks5AuthArgs,
     };
 
     #[test]
@@ -1263,5 +1274,25 @@ mod tests {
             }
         ))?;
         Ok(())
+    }
+
+    #[test]
+    fn test_socks5_auth_args_debug_redacts_password() {
+        let secret = "super-secret-socks5-password-12345";
+        let args = Socks5AuthArgs {
+            username: "tng".to_string(),
+            password: secret.to_string(),
+        };
+        let debug_output = format!("{:?}", args);
+        assert!(
+            !debug_output.contains(secret),
+            "Debug output must not contain the raw SOCKS5 password"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output should show [REDACTED] for password"
+        );
+        // username is not secret and should remain visible
+        assert!(debug_output.contains("tng"));
     }
 }

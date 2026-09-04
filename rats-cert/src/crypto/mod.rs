@@ -126,8 +126,9 @@ pub mod tests {
         ]
         .into_par_iter()
         .map(|algo| {
-            let key = DefaultCrypto::gen_private_key(algo)?.to_pkcs8_pem()?;
-            println!("generated {:?} key:\n{}", algo, key.as_str());
+            // Generate the key to exercise the code path, but never log the
+            // private-key PEM — that would leak secret material to stdout/logs.
+            let _key = DefaultCrypto::gen_private_key(algo)?.to_pkcs8_pem()?;
             Ok(())
         })
         .collect()

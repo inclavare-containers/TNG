@@ -99,7 +99,13 @@ impl HttpRequestInspector {
                 let mut req = httparse::Request::new(&mut headers);
                 let status = req.parse(&buf).context("Failed to parse http1 request")?;
 
-                tracing::trace!(?req, "Got http1 request");
+                // Log only the request line; the full request carries headers
+                // (e.g. Authorization, Cookie) which are plaintext client data.
+                tracing::trace!(
+                    method = ?req.method,
+                    path = ?req.path,
+                    "Got http1 request"
+                );
                 match (
                     req.path,
                     req.headers
