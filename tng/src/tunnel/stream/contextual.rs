@@ -6,10 +6,6 @@ use std::{
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-pub trait CommonStreamTrait: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
-
-impl<T> CommonStreamTrait for T where T: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
-
 /// Wraps a stream and tags IO errors with a source identifier, so error logs
 /// can distinguish which component the stream came from.
 pub struct ContextualStream<S> {

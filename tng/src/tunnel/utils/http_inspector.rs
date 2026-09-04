@@ -1,5 +1,3 @@
-use std::io::Cursor;
-
 use anyhow::{bail, Context, Result};
 use bytes::BytesMut;
 use http::{uri::Authority, Uri};
@@ -9,6 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt as _};
 use tokio::time as tokio_time;
 #[cfg(wasm)]
 use tokio_with_wasm::alias::time as tokio_time;
+
+use crate::tunnel::stream::PreludedStream;
 
 const HTTP_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -21,34 +21,33 @@ pub enum RequestInfo {
     /// There is no HTTP request in the stream, and we got no error during the inspection, so we assume it's some protocol other than HTTP
     UnknownProtocol,
 }
-
+/// The result of inspecting a stream for HTTP requests.
 pub struct InspectionResult<T> {
-    /// This is a "clone" of the original stream, which can be used to read and write just like the original stream.
-    pub unmodified_stream: T,
-
+    pub inspected_stream: PreludedStream<T>,
+    /// The outcome of the HTTP protocol inspection, indicating whether the stream
+    /// contains an HTTP/1 request, HTTP/2 request, or an unknown protocol.
     pub result: Result<RequestInfo>,
 }
 
 pub struct HttpRequestInspector {}
 
 impl HttpRequestInspector {
-    pub async fn inspect_stream(
-        in_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
-    ) -> InspectionResult<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin>
-    {
+    pub async fn inspect_stream<
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+    >(
+        mut in_stream: T,
+    ) -> InspectionResult<T> {
         let (mut stream1_reader, mut stream1_writer) = tokio::io::simplex(64);
         let (stream2_reader, mut stream2_writer) = tokio::io::simplex(64);
 
         let (multiplex_stop_sender, multiplex_stop_receiver) = tokio::sync::oneshot::channel();
 
         let multiplex_task = async {
-            let (mut in_stream_reader, in_stream_writer) = tokio::io::split(in_stream);
-
             let mut buf = BytesMut::with_capacity(4096);
             let fut = async {
                 loop {
                     let start = buf.len();
-                    let read_bytes = in_stream_reader
+                    let read_bytes = in_stream
                         .read_buf(&mut buf)
                         .await
                         .context("Failed to read from stream")?;
@@ -80,10 +79,7 @@ impl HttpRequestInspector {
                 }
             };
 
-            (
-                tokio::io::join(Cursor::new(buf).chain(in_stream_reader), in_stream_writer),
-                res,
-            )
+            (in_stream, buf.freeze(), res)
         };
 
         let try_http1 = async {
@@ -190,13 +186,21 @@ impl HttpRequestInspector {
 
         match tokio::join!(multiplex_task, try_http1_or_http2) {
             // What ever wrong happened in the multiplex task failed, return the error.
-            ((stream, Err(e)), _) => InspectionResult {
-                unmodified_stream: stream,
+            ((stream, prelude, Err(e)), _) => InspectionResult {
+                inspected_stream: PreludedStream {
+                    stream,
+                    prelude,
+                    prelude_pos: 0,
+                },
                 result: Err(e),
             },
             // Else, we return the result generated during http1 or http2 inspection.
-            ((stream, Ok(_)), request_info) => InspectionResult {
-                unmodified_stream: stream,
+            ((stream, prelude, Ok(_)), request_info) => InspectionResult {
+                inspected_stream: PreludedStream {
+                    stream,
+                    prelude,
+                    prelude_pos: 0,
+                },
                 result: Ok(request_info),
             },
         }
@@ -205,6 +209,8 @@ impl HttpRequestInspector {
 
 #[cfg(test)]
 mod tests {
+
+    use std::io::Cursor;
 
     use anyhow::Result;
     use auto_enums::auto_enum;
@@ -363,7 +369,7 @@ mod tests {
 
         // Setup an inspection, and get the inspection result.
         let InspectionResult {
-            unmodified_stream,
+            inspected_stream,
             result,
         } = HttpRequestInspector::inspect_stream(s2).await;
 
@@ -402,7 +408,7 @@ mod tests {
             };
             let svc = TowerToHyperService::new(svc);
             if let Err(error) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                .serve_connection_with_upgrades(TokioIo::new(unmodified_stream), svc)
+                .serve_connection_with_upgrades(TokioIo::new(inspected_stream), svc)
                 .await
             {
                 tracing::error!(?error, "Failed to serve HTTP inspector connection");
@@ -481,9 +487,16 @@ mod tests {
     ) -> Result<()> {
         // Setup an inspection, and get the inspection result.
         let InspectionResult {
-            mut unmodified_stream,
+            inspected_stream:
+                PreludedStream {
+                    prelude,
+                    prelude_pos,
+                    mut stream,
+                },
             result,
         } = HttpRequestInspector::inspect_stream(Cursor::new(content.to_vec())).await;
+
+        assert_eq!(prelude_pos, 0);
 
         // Check the inspection result of the request.
         match expected_result {
@@ -497,9 +510,181 @@ mod tests {
 
         // Check the content of the stream.
         let mut buf = Vec::new();
-        unmodified_stream.read_to_end(&mut buf).await?;
+        Cursor::new(prelude).read_to_end(&mut buf).await?;
+        stream.read_to_end(&mut buf).await?;
         assert_eq!(buf, content);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_serves_prelude_then_stream() -> Result<()> {
+        // Bytes written to `server` surface when reading the `client` half
+        // that the chain wraps.
+        let (client, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"STREAM").await?;
+        // Closing `server` is what lets the chain read see EOF after the
+        // buffered stream bytes; otherwise `read` would block forever.
+        drop(server);
+
+        let mut chain = PreludedStream {
+            prelude: Bytes::from_static(b"PRE"),
+            prelude_pos: 0,
+            stream: client,
+        };
+
+        let mut got = Vec::new();
+        let mut buf = [0u8; 64];
+        loop {
+            let n = chain.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got, b"PRESTREAM");
+        // After draining, the prelude must be marked fully consumed.
+        assert!(chain.prelude_consumed());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_drains_prelude_across_small_reads() -> Result<()> {
+        // A prelude larger than the read buffer must be drained across several
+        // `poll_read` calls, with `prelude_pos` advancing correctly, before any
+        // byte is read from the underlying stream.
+        let (client, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"AB").await?;
+        drop(server);
+
+        let mut chain = PreludedStream {
+            prelude: Bytes::from(vec![b'x'; 100]),
+            prelude_pos: 0,
+            stream: client,
+        };
+        assert!(!chain.prelude_consumed());
+
+        let mut got = Vec::new();
+        let mut buf = [0u8; 16];
+        loop {
+            let n = chain.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..n]);
+        }
+
+        let mut expected = vec![b'x'; 100];
+        expected.extend_from_slice(b"AB");
+        assert_eq!(got, expected);
+        assert!(chain.prelude_consumed());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_prelude_consumed_flips_after_full_drain() -> Result<()> {
+        // The flag must be false while prelude bytes remain and flip to true
+        // exactly once the prelude has been consumed (independent of whether
+        // the underlying stream still has data).
+        let (client, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"TAIL").await?;
+        drop(server);
+
+        let mut chain = PreludedStream {
+            prelude: Bytes::from_static(b"PRE"),
+            prelude_pos: 0,
+            stream: client,
+        };
+        assert!(!chain.prelude_consumed());
+
+        // Read exactly the prelude length; this is served entirely from the
+        // prelude and must drain it.
+        let mut prelude_buf = [0u8; 3];
+        chain.read_exact(&mut prelude_buf).await?;
+        assert_eq!(&prelude_buf, b"PRE");
+        assert!(chain.prelude_consumed());
+
+        // The next read falls through to the underlying stream.
+        let mut tail = [0u8; 4];
+        chain.read_exact(&mut tail).await?;
+        assert_eq!(&tail, b"TAIL");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_empty_prelude_passes_through() -> Result<()> {
+        // An empty prelude must behave as a bare pass-through to the stream:
+        // `prelude_consumed` is true from the start, and reads go straight to
+        // the underlying stream.
+        let (client, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"DATA").await?;
+        drop(server);
+
+        let mut chain = PreludedStream {
+            prelude: Bytes::new(),
+            prelude_pos: 0,
+            stream: client,
+        };
+        assert!(chain.prelude_consumed());
+
+        let mut buf = [0u8; 8];
+        let n = chain.read(&mut buf).await?;
+        assert_eq!(&buf[..n], b"DATA");
+        // No false EOF while the underlying stream still has data.
+        assert!(chain.read(&mut buf).await? == 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_writes_delegate_to_stream() -> Result<()> {
+        // Writes must reach the underlying stream untouched: bytes written via
+        // the chain appear on the other duplex half, in order, regardless of
+        // any unread prelude (the write path never touches the prelude).
+        let (client, mut server) = tokio::io::duplex(4096);
+        let mut chain = PreludedStream {
+            prelude: Bytes::from_static(b"PRE"),
+            prelude_pos: 0,
+            stream: client,
+        };
+
+        chain.write_all(b"PING").await?;
+
+        let mut buf = [0u8; 4];
+        server.read_exact(&mut buf).await?;
+        assert_eq!(&buf, b"PING");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chain_no_false_eof_at_prelude_to_stream_transition() -> Result<()> {
+        // Regression guard for the prelude→stream handoff: the prelude branch
+        // returns `Ready(Ok)` with bytes (never an empty fill while prelude
+        // remains), and EOF is only reported after the prelude is exhausted
+        // AND the underlying stream hits EOF.
+        let (client, mut server) = tokio::io::duplex(4096);
+        server.write_all(b"Z").await?;
+        drop(server);
+
+        let mut chain = PreludedStream {
+            prelude: Bytes::from_static(b"P"),
+            prelude_pos: 0,
+            stream: client,
+        };
+
+        let mut buf = [0u8; 16];
+        // First read must return the prelude byte, not 0 (EOF).
+        let n = chain.read(&mut buf).await?;
+        assert_eq!(n, 1);
+        assert_eq!(&buf[..n], b"P");
+
+        // Second read returns the underlying stream byte.
+        let n = chain.read(&mut buf).await?;
+        assert_eq!(n, 1);
+        assert_eq!(&buf[..n], b"Z");
+
+        // Only now, with prelude drained and stream closed, does EOF arrive.
+        let n = chain.read(&mut buf).await?;
+        assert_eq!(n, 0);
         Ok(())
     }
 }

@@ -68,6 +68,8 @@ itertools = "0.14.0"
 js-sys = "0.3.77"
 jsonwebtoken = {version = "9", default-features = false}
 kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "8e36434"}
+ktls-core = { version = "=0.0.5" }
+ktls-stream = { version = "=0.0.5" }
 memberlist = "0.8.5"
 memberlist-core = "0.8.5"
 memberlist-net = "0.8.5"

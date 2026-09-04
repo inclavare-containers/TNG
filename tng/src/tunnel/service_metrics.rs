@@ -28,7 +28,7 @@ impl ServiceMetricsCreator {
 /// ServiceMetrics is a set of metrics for a service.
 ///
 /// This struct is free be cloned and used anywhere.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ServiceMetrics {
     cx_total: AttributedCounter<Counter<u64>, u64>,
     cx_active: AttributedCounter<UpDownCounter<i64>, i64>,
@@ -111,6 +111,13 @@ impl ServiceMetrics {
             rx: PendingCounter::new(self.rx_bytes_total.clone()),
         }
     }
+
+    pub fn new_byte_counter(&self) -> ByteCounters {
+        ByteCounters {
+            tx: PendingCounter::new(self.tx_bytes_total.clone()),
+            rx: PendingCounter::new(self.rx_bytes_total.clone()),
+        }
+    }
 }
 
 pub struct ActiveConnectionCounter {
@@ -148,4 +155,9 @@ impl Drop for ActiveConnectionCounter {
         }
         self.cx_active.add(-1);
     }
+}
+
+pub struct ByteCounters {
+    pub tx: PendingCounter,
+    pub rx: PendingCounter,
 }

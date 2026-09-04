@@ -30,20 +30,19 @@ futures = {workspace = true}
 getrandom = {workspace = true}
 h2 = {workspace = true}
 hex = {workspace = true}
-humantime-serde = {workspace = true}
 hpke = {workspace = true}
 http = {workspace = true}
 http-body = {workspace = true}
 http-body-util = {workspace = true}
 httparse = {workspace = true}
+humantime-serde = {workspace = true}
 hyper = {workspace = true}
 hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
 libc = "0.2"
 local-ip-address = "0.6"
-parking_lot = "0.12"
-nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
+nix = {workspace = true, features = ["process", "signal", "socket", "net", "fs", "feature"]}
 ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "7d45814b747eb3944b234956edc1e56e2bf9cb2f"}
 opentelemetry = {workspace = true, optional = true}
 opentelemetry-otlp = {workspace = true, features = [
@@ -66,10 +65,11 @@ opentelemetry_sdk = {workspace = true, features = [
   "experimental_metrics_custom_reader",
   "rt-tokio",
 ], optional = true}
+parking_lot = "0.12"
 peekable = {workspace = true, optional = true}
 pin-project = {workspace = true}
 pin-project-lite = {workspace = true}
-pkcs8 = { version = "0.10", features = ["pem"], optional = true }
+pkcs8 = {version = "0.10", features = ["pem"], optional = true}
 portpicker = {workspace = true}
 prost = {workspace = true}
 prost-types = {workspace = true}
@@ -94,8 +94,8 @@ strum = {workspace = true}
 strum_macros = {workspace = true}
 tempfile = {workspace = true}
 thiserror = {workspace = true}
-tng-hook-types = { path = "../tng-hook/types" }
 time = {workspace = true}
+tng-hook-types = {path = "../tng-hook/types"}
 tokio-graceful = {workspace = true}
 # rustls crypto provider: aws-lc-rs for native, ring for wasm
 tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12"]}
@@ -134,13 +134,34 @@ rats-cert = {path = "../rats-cert", default-features = false, features = ["crypt
 ring = {workspace = true, features = ["wasm32_unknown_unknown_js"]}
 # Enable ring for wasm targets (aws-lc-sys can't compile wasm)
 rustls = {workspace = true, default-features = false, features = ["logging", "std", "tls12", "ring"]}
-tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "ring"]}
 rustls-pki-types = {version = "*", features = ["web"]}
 serde-wasm-bindgen = {workspace = true}
 tokio = {workspace = true, default-features = false}
+tokio-rustls = {workspace = true, default-features = false, features = ["logging", "tls12", "ring"]}
 tokio_with_wasm = {workspace = true}
 wasm-bindgen-futures = {workspace = true}
 ws_stream_wasm = {workspace = true}
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Official rustls/ktls crate (v6) for kTLS setup. Its `rustls ^0.23.12` and
+# `tokio-rustls ^0.26.0` deps unify with this workspace's patched rustls fork
+# (0.23.27, via [patch.crates-io.rustls]) and tokio-rustls 0.26.2, so
+# `config_ktls_*` shares the same rustls instance that exposes the fork's
+# `enable_secret_extraction` field. kTLS is a default, platform-gated
+# capability (Linux only — ktls-sys needs the Linux ULP headers); wasm builds
+# exclude it via the `cfg(target_os = "linux")` target gate, not a cargo
+# feature.
+ktls = {version = "6"}
+# hanyu-dev kTLS: public `Context` (state machine + cmsg/shutdown) for splice
+# interop — replaces the official `ktls` crate's data-plane types on the
+# zero-copy path. `ktls = "6"` is kept ONLY for `ktls::CorkStream`.
+ktls-core = {workspace = true, features = ["shim-rustls"]}
+ktls-stream = {workspace = true, features = ["shim-rustls"]}
+# Zero-copy `splice(2)` data plane for the kTLS send direction (plain -> ktls
+# upstream): the kernel encrypts pipe pages without a user-space copy. The recv
+# direction stays on `KtlsStream::poll_read` (upstream kTLS RX has no
+# `splice_read`). Linux-only (`splice(2)` is Linux).
+tokio-splice2 = {version = "0.3"}
 
 [build-dependencies]
 cfg_aliases = {workspace = true}
@@ -168,18 +189,18 @@ default = [
 __egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid", "dep:pkcs8"]
 egress-all = ["egress-mapping", "egress-netfilter", "egress-mapping-udp", "egress-netfilter-udp"]
 egress-mapping = ["__egress-common"]
-egress-netfilter = ["__egress-common", "dep:which"]
 egress-mapping-udp = ["__egress-common"]
+egress-netfilter = ["__egress-common", "dep:which"]
 egress-netfilter-udp = ["__egress-common", "dep:which"]
 
 __ingress-common = ["dep:async-tungstenite"]
 ingress-all = ["ingress-http-proxy", "ingress-mapping", "ingress-netfilter", "ingress-socks5", "ingress-mapping-udp", "ingress-netfilter-udp"]
 ingress-http-proxy = ["__ingress-common", "hyper/client"]
 ingress-mapping = ["__ingress-common"]
-ingress-netfilter = ["__ingress-common", "dep:which"]
-ingress-socks5 = ["__ingress-common", "dep:fast-socks5"]
 ingress-mapping-udp = ["__ingress-common"]
+ingress-netfilter = ["__ingress-common", "dep:which"]
 ingress-netfilter-udp = ["__ingress-common", "dep:which"]
+ingress-socks5 = ["__ingress-common", "dep:fast-socks5"]
 
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 

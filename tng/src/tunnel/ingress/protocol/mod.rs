@@ -9,9 +9,13 @@ use anyhow::Result;
 
 #[cfg(not(wasm))]
 use crate::status::StatusProvider;
-use crate::AttestationResult;
 #[cfg(not(wasm))]
-use crate::{tunnel::endpoint::TngEndpoint, CommonStreamTrait};
+use crate::tunnel::endpoint::TngEndpoint;
+#[cfg(not(wasm))]
+use crate::tunnel::ingress::flow::IncomingStream;
+#[cfg(not(wasm))]
+use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::AttestationResult;
 #[cfg(not(wasm))]
 use async_trait::async_trait;
 
@@ -25,10 +29,11 @@ pub type ProtocolStreamForwarderOutput = (
 
 #[cfg(not(wasm))]
 #[async_trait]
-pub trait ProtocolStreamForwarder: StatusProvider {
-    async fn forward_stream<'a>(
+pub(super) trait ProtocolStreamForwarder: StatusProvider {
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
-        downstream: Box<dyn CommonStreamTrait + 'static>,
+        endpoint: &TngEndpoint,
+        downstream: IncomingStream,
+        metrics: std::sync::Arc<ServiceMetrics>,
     ) -> Result<ProtocolStreamForwarderOutput>;
 }

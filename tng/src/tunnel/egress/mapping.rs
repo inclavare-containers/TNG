@@ -137,7 +137,7 @@ impl EgressTrait for MappingEgress {
                                     EgressAccessMode::Mapping,
                                 );
                                 yield Ok(AcceptedStream {
-                                    stream: Box::new(crate::ContextualStream::new(stream, "egress-mapping")),
+                                    stream: super::flow::IncomingStream::Raw(stream),
                                     src: peer_addr,
                                     dst: Arc::clone(&target.out_ep),
                                     listener_addr: target.local_addr,

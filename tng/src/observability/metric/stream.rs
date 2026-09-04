@@ -11,7 +11,7 @@ use super::counter::AttributedCounter;
 const COUNTER_FLUSH_THRESHOLD: u64 = 1024 * 1024; // 1 MB
 
 /// Accumulates bytes and flushes to the counter on drop or threshold breach.
-pub(crate) struct PendingCounter {
+pub struct PendingCounter {
     pending: u64,
     counter: AttributedCounter<Counter<u64>, u64>,
 }
@@ -24,7 +24,7 @@ impl PendingCounter {
         }
     }
 
-    fn add(&mut self, bytes: u64) {
+    pub fn add(&mut self, bytes: u64) {
         self.pending += bytes;
         if self.pending >= COUNTER_FLUSH_THRESHOLD {
             self.counter.add(self.pending);

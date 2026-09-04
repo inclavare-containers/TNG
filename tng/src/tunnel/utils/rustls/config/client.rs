@@ -15,6 +15,21 @@ use crate::tunnel::utils::rustls::{
     ra::server_cert_verifier::LazyServerCertVerifier,
 };
 
+/// On Linux, kTLS needs the negotiated key material extractable so it can be
+/// installed in-kernel via `setsockopt(TLS_TX/TLS_RX)`. No-op on non-Linux
+/// (kTLS is absent there). Not gated by the resolved kTLS tier: the config is
+/// built once and shared/pooled across connections before per-link kTLS
+/// resolution, so the tier is not known at config-build time. Setting the flag
+/// unconditionally on Linux matches the prior inline sites; gating by
+/// `engages()` is deferred to a per-link-config change.
+#[cfg(target_os = "linux")]
+pub fn enable_secret_extraction_client(config: &mut rustls::ClientConfig) {
+    config.enable_secret_extraction = true;
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn enable_secret_extraction_client(_config: &mut rustls::ClientConfig) {}
+
 #[cfg(not(wasm))]
 impl TlsConfigGenerator {
     pub async fn get_lazy_one_time_rustls_client_config(
@@ -30,6 +45,8 @@ impl TlsConfigGenerator {
                     .with_root_certificates(RootCertStore::empty())
                     .with_no_client_auth();
 
+                enable_secret_extraction_client(&mut tls_client_config);
+
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
@@ -43,6 +60,8 @@ impl TlsConfigGenerator {
                     ])
                     .with_root_certificates(RootCertStore::empty())
                     .with_no_client_auth();
+
+                enable_secret_extraction_client(&mut tls_client_config);
 
                 let verifier: Arc<LazyServerCertVerifier> =
                     Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
@@ -62,6 +81,7 @@ impl TlsConfigGenerator {
                     .with_client_cert_resolver(Arc::new(
                         DynamicCertResolver::new(cert_manager.clone()),
                     ));
+                enable_secret_extraction_client(&mut tls_client_config);
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
@@ -78,6 +98,8 @@ impl TlsConfigGenerator {
                     .with_client_cert_resolver(Arc::new(
                         DynamicCertResolver::new(cert_manager.clone()),
                     ));
+
+                enable_secret_extraction_client(&mut tls_client_config);
 
                 let verifier: Arc<LazyServerCertVerifier> =
                     Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
@@ -169,6 +191,8 @@ impl TlsConfigGenerator {
                     .with_root_certificates(RootCertStore::empty())
                     .with_no_client_auth();
 
+                enable_secret_extraction_client(&mut tls_client_config);
+
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
@@ -182,6 +206,8 @@ impl TlsConfigGenerator {
                     ])
                     .with_root_certificates(RootCertStore::empty())
                     .with_no_client_auth();
+
+                enable_secret_extraction_client(&mut tls_client_config);
 
                 let verifier: Arc<BlockingServerCertVerifier> =
                     Arc::new(BlockingServerCertVerifier::new(verify_ctx.clone())?);
@@ -201,6 +227,7 @@ impl TlsConfigGenerator {
                     .with_client_cert_resolver(Arc::new(
                         DynamicCertResolver::new(cert_manager.clone()),
                     ));
+                enable_secret_extraction_client(&mut tls_client_config);
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
@@ -217,6 +244,8 @@ impl TlsConfigGenerator {
                     .with_client_cert_resolver(Arc::new(
                         DynamicCertResolver::new(cert_manager.clone()),
                     ));
+
+                enable_secret_extraction_client(&mut tls_client_config);
 
                 let verifier: Arc<BlockingServerCertVerifier> =
                     Arc::new(BlockingServerCertVerifier::new(verify_ctx.clone())?);

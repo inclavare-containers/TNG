@@ -147,7 +147,7 @@ struct ClientSession {
 pub struct DatagramIngressFlow {
     ingress: Arc<dyn IngressDatagramTrait>,
     tls_gen: TlsConfigGenerator,
-    metrics: ServiceMetrics,
+    metrics: Arc<ServiceMetrics>,
     runtime: TokioRuntime,
     /// Top-level `quic.max_datagram_size`, captured in `new()` from the common
     /// args and passed to `create_tunnel` per session.
@@ -163,7 +163,7 @@ impl DatagramIngressFlow {
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let metric_attributes = ingress.metric_attributes();
-        let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
+        let metrics = Arc::new(service_metrics_creator.new_service_metrics(metric_attributes));
 
         let ra_args = common_args.ra_args.clone().into_checked()?;
         let ra_context =

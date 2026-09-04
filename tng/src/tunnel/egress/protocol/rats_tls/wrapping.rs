@@ -25,7 +25,7 @@ pub struct RatsTlsWrappingLayer {}
 
 impl RatsTlsWrappingLayer {
     pub async fn unwrap_stream(
-        tls_stream: impl CommonStreamTrait + Sync,
+        tls_stream: impl CommonStreamTrait,
         attestation_result: Option<AttestationResult>,
         channel: tokio::sync::mpsc::UnboundedSender<(
             Box<dyn CommonStreamTrait + Sync>,
