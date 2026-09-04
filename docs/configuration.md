@@ -59,7 +59,8 @@
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `control_interface` | [ControlInterface](#control-interface) | No | Control plane configuration |
-| `metrics` | [Metrics](#metric) | No | Metrics configuration; disabled if not specified |
+| `metric` | [Metrics](#metric) | No | Metrics configuration; disabled if not specified |
+| `trace` | [Trace](#trace) | No | Trace configuration; disabled if not specified |
 | `add_ingress` | array [[Ingress](#ingress-tunnel-entry)] | No | List of tunnel ingress endpoints |
 | `add_egress` | array [[Egress](#egress-tunnel-exit)] | No | List of tunnel egress endpoints |
 | `admin_bind` | AdminBind | No | **Deprecated** — See [Deprecated Configuration](#deprecated-configuration) |
@@ -513,7 +514,7 @@ Intercepts outgoing TCP connections from the child process via LD_PRELOAD and ro
         ],
         "proxy_port": 49001
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -546,7 +547,7 @@ Encapsulates raw UDP datagrams over a QUIC connection. The ingress side listens 
         "out": { "host": "127.0.0.1", "port": 8443 },
         "idle_timeout_secs": 60
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -570,7 +571,7 @@ Encapsulates raw UDP datagrams over a QUIC connection. The ingress side listens 
         "in": { "host": "0.0.0.0", "port": 8443 },
         "out": { "host": "127.0.0.1", "port": 20001 }
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -593,7 +594,7 @@ Encapsulates raw UDP datagrams over a QUIC connection. The ingress side listens 
         "out": { "host": "127.0.0.1", "port": 8443 }
       },
       "quic": { "max_datagram_size": 1200 },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -621,6 +622,7 @@ The ingress side intercepts client UDP packets using iptables TPROXY in the mang
 | `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets from interception |
 | `capture_cgroup` | array of string | None | Only capture traffic from these cgroup paths (cgroup v2 only) |
 | `nocapture_cgroup` | array of string | None | Exclude traffic from these cgroup paths (cgroup v2 only) |
+| `idle_timeout_secs` | integer | `30` | Bidirectional idle timeout in seconds. If neither direction sees activity for this duration, the QUIC connection is closed |
 
 **Example:**
 
@@ -1026,7 +1028,7 @@ The egress side of `mapping_udp` accepts QUIC datagram connections from an ingre
         "out": { "host": "127.0.0.1", "port": 20001 },
         "idle_timeout_secs": 60
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -1057,6 +1059,7 @@ The egress side accepts incoming QUIC datagram connections on a TPROXY-configure
 | `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets |
 | `capture_cgroup` | array of string | None | Only capture traffic from these cgroup paths |
 | `nocapture_cgroup` | array of string | None | Exclude traffic from these cgroup paths |
+| `idle_timeout_secs` | integer | `30` | Bidirectional idle timeout in seconds. If neither direction sees activity for this duration, the QUIC connection is closed |
 
 **Example:**
 
@@ -2173,7 +2176,7 @@ Logs are appended to existing files.
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress netfilter_udp | `ingress_type=netfilter_udp,ingress_id={id},ingress_listen_port={listen_port}` |
-| egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress mapping | `egress_type=mapping,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 | egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter_udp | `egress_type=netfilter_udp,egress_id={id},egress_listen_port={listen_port}` |
@@ -2182,7 +2185,7 @@ Logs are appended to existing files.
 
 | Type | Configuration Fields |
 |---|---|
-| `otlp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers`, `step` (default 60s) |
+| `oltp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers`, `step` (required) |
 | `falcon` | `server_url`, `endpoint`, `tags`, `step` (default 60s) |
 | `stdout` | `step` (default 60s) |
 
@@ -2194,7 +2197,7 @@ Logs are appended to existing files.
     "metric": {
         "exporters": [
             {
-                "type": "otlp",
+                "type": "oltp",
                 "protocol": "http/protobuf",
                 "endpoint": "https://otlp.example.com/url",
                 "headers": { "Authorization": "XXXXXXXXX" },
@@ -2232,7 +2235,7 @@ Supports OpenTelemetry standard tracing export.
 
 | Type | Description |
 |---|---|
-| `otlp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers` |
+| `oltp` | `protocol` (`grpc`/`http/protobuf`/`http/json`), `endpoint`, `headers` |
 | `stdout` | Synchronous output; impacts performance under high concurrency; for debugging only |
 
 <details>
@@ -2243,7 +2246,7 @@ Supports OpenTelemetry standard tracing export.
     "trace": {
         "exporters": [
             {
-                "type": "otlp",
+                "type": "oltp",
                 "protocol": "http/protobuf",
                 "endpoint": "https://otlp.example.com/url"
             }

@@ -59,7 +59,8 @@
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `control_interface` | [ControlInterface](#control-interface) | 否 | 控制面配置 |
-| `metrics` | [Metrics](#metric) | 否 | Metrics 配置，未指定时不启用 |
+| `metric` | [Metrics](#metric) | 否 | Metrics 配置，未指定时不启用 |
+| `trace` | [Trace](#trace) | 否 | Trace 配置，未指定时不启用 |
 | `add_ingress` | array [[Ingress](#ingress隧道入口)] | 否 | 隧道入口端点列表 |
 | `add_egress` | array [[Egress](#egress隧道出口)] | 否 | 隧道出口端点列表 |
 | `admin_bind` | AdminBind | 否 | **已废弃** — 见 [废弃配置](#废弃配置) |
@@ -513,7 +514,7 @@ flowchart TD
         ],
         "proxy_port": 49001
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -546,7 +547,7 @@ flowchart TD
         "out": { "host": "127.0.0.1", "port": 8443 },
         "idle_timeout_secs": 60
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -570,7 +571,7 @@ flowchart TD
         "in": { "host": "0.0.0.0", "port": 8443 },
         "out": { "host": "127.0.0.1", "port": 20001 }
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -593,7 +594,7 @@ flowchart TD
         "out": { "host": "127.0.0.1", "port": 8443 }
       },
       "quic": { "max_datagram_size": 1200 },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -621,6 +622,7 @@ Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 
 | `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |
 | `capture_cgroup` | 字符串数组 | 无 | 仅劫持这些 cgroup 路径的流量（仅 cgroup v2） |
 | `nocapture_cgroup` | 字符串数组 | 无 | 排除这些 cgroup 路径的流量（仅 cgroup v2） |
+| `idle_timeout_secs` | 整数 | `30` | 双向空闲超时时间（秒）。如果两个方向在此时间内均无活动，则关闭 QUIC 连接 |
 
 **示例：**
 
@@ -1026,7 +1028,7 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
         "out": { "host": "127.0.0.1", "port": 20001 },
         "idle_timeout_secs": 60
       },
-      "attest": { "no_ra": true }
+      "no_ra": true
     }
   ]
 }
@@ -1057,6 +1059,7 @@ Egress 侧在配置了 TPROXY 的 socket 上接收来自 ingress 的 QUIC Datagr
 | `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |
 | `capture_cgroup` | 字符串数组 | 无 | 仅劫持这些 cgroup 路径的流量 |
 | `nocapture_cgroup` | 字符串数组 | 无 | 排除这些 cgroup 路径的流量 |
+| `idle_timeout_secs` | 整数 | `30` | 双向空闲超时时间（秒）。与 Ingress 侧语义相同 |
 
 **示例：**
 
@@ -2163,7 +2166,7 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
 | ingress http_proxy | `ingress_type=http_proxy,ingress_id={id},ingress_proxy_listen={proxy_listen.host}:{proxy_listen.port}` |
 | ingress mapping_udp | `ingress_type=mapping_udp,ingress_id={id},ingress_in={in.host}:{in.port},ingress_out={out.host}:{out.port}` |
 | ingress netfilter_udp | `ingress_type=netfilter_udp,ingress_id={id},ingress_listen_port={listen_port}` |
-| egress mapping | `egress_type=netfilter,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
+| egress mapping | `egress_type=mapping,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter | `egress_type=netfilter,egress_id={id},egress_listen_port={listen_port}` |
 | egress mapping_udp | `egress_type=mapping_udp,egress_id={id},egress_in={in.host}:{in.port},egress_out={out.host}:{out.port}` |
 | egress netfilter_udp | `egress_type=netfilter_udp,egress_id={id},egress_listen_port={listen_port}` |
@@ -2172,7 +2175,7 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
 
 | 类型 | 配置字段 |
 |---|---|
-| `otlp` | `protocol`（`grpc`/`http/protobuf`/`http/json`）、`endpoint`、`headers`、`step`（默认 60s） |
+| `oltp` | `protocol`（`grpc`/`http/protobuf`/`http/json`）、`endpoint`、`headers`、`step`（必填） |
 | `falcon` | `server_url`、`endpoint`、`tags`、`step`（默认 60s） |
 | `stdout` | `step`（默认 60s） |
 
@@ -2184,7 +2187,7 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
     "metric": {
         "exporters": [
             {
-                "type": "otlp",
+                "type": "oltp",
                 "protocol": "http/protobuf",
                 "endpoint": "https://otlp.example.com/url",
                 "headers": { "Authorization": "XXXXXXXXX" },
@@ -2222,7 +2225,7 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
 
 | 类型 | 说明 |
 |---|---|
-| `otlp` | `protocol`（`grpc`/`http/protobuf`/`http/json`）、`endpoint`、`headers` |
+| `oltp` | `protocol`（`grpc`/`http/protobuf`/`http/json`）、`endpoint`、`headers` |
 | `stdout` | 同步输出，高并发时影响性能，仅供调试 |
 
 <details>
@@ -2233,7 +2236,7 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
     "trace": {
         "exporters": [
             {
-                "type": "otlp",
+                "type": "oltp",
                 "protocol": "http/protobuf",
                 "endpoint": "https://otlp.example.com/url"
             }
