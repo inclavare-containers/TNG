@@ -26,6 +26,12 @@ pub struct Cli {
     /// The `TNG_LOG_FORMAT` env var takes priority over this flag when set.
     pub log_format: Option<LogFormat>,
 
+    #[clap(long, global = true, value_name = "FILE")]
+    /// Path to a separate error-level log file. When set, ERROR+ events go
+    /// to this file only; non-error events go to --log-file. The
+    /// `TNG_LOG_ERROR_FILE` env var takes priority over this flag.
+    pub log_error_file: Option<PathBuf>,
+
     #[clap(long, global = true)]
     /// Enable size-based log rolling (requires --log-file).
     /// The `TNG_LOG_ROLLING` env var takes priority over this flag.

@@ -90,6 +90,12 @@ async fn main() -> anyhow::Result<()> {
         cli.log_max_backups,
     );
 
+    // Resolve the error log file: env TNG_LOG_ERROR_FILE > --log-error-file >
+    // None. When None, ERROR events go to the main --log-file (current
+    // behavior). Done before tracing init so the error writer can be built
+    // alongside the info writer.
+    let error_file = log_opts::resolve_error_file(cli.log_error_file);
+
     // Initialize rustls crypto provider
     #[allow(clippy::expect_used)]
     rustls::crypto::aws_lc_rs::default_provider()
@@ -153,6 +159,44 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Build the error writer when --log-error-file is set. The error path
+    // MUST be a real file (no stdout fallback): rolling when the path supports
+    // it and rolling is enabled, otherwise plain append. A second non-blocking
+    // writer + guard is created so ERROR+ events are buffered and flushed on
+    // exit just like the info stream. When error_file is None, no error
+    // writer/guard is produced and routing falls back to the info writer.
+    let (error_writer, error_guard) = match &error_file {
+        Some(path) if rolling.config.enabled && tng_hook_types::path_supports_rolling(path) => {
+            let appender = tracing_rolling_file::RollingFileAppenderBase::new(
+                path,
+                tracing_rolling_file::RollingConditionBase::new().max_size(rolling.config.max_size),
+                rolling.config.max_backups,
+            )
+            .context("Failed to open rolling error log file")?;
+            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+            (Some(non_blocking), Some(guard))
+        }
+        Some(path) => {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .context("Failed to open error log file")?;
+            let (non_blocking, guard) = tracing_appender::non_blocking(file);
+            (Some(non_blocking), Some(guard))
+        }
+        None => (None, None),
+    };
+
+    // Wrap the info and (optional) error writers in a LevelRoutingWriter so
+    // ERROR+ events route to the error file when set, and everything else goes
+    // to the info writer. When error is None the router forwards all events
+    // to the info writer (current behavior). Using a uniform
+    // `LevelRoutingWriter<NonBlocking, NonBlocking>` type in both cases avoids
+    // branching the subscriber construction on whether the error file is set:
+    // the json/text arms each take a single concrete writer type.
+    let routed_writer = tng_hook_types::LevelRoutingWriter::new(log_writer.clone(), error_writer);
+
     // Build the subscriber. JSON and text fmt layers have different concrete
     // types and cannot be unified by boxing a `dyn Layer` (the fmt layer sits
     // on top of the reload layer, so it must satisfy
@@ -171,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
             let sub = tracing_subscriber::registry().with(pending).with(
                 tracing_subscriber::fmt::layer()
                     .json()
-                    .with_writer(log_writer.clone())
+                    .with_writer(routed_writer)
                     .with_ansi(false)
                     .with_filter(fmt_filter),
             );
@@ -185,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let sub = tracing_subscriber::registry().with(pending).with(
                 tracing_subscriber::fmt::layer()
-                    .with_writer(log_writer.clone())
+                    .with_writer(routed_writer)
                     .with_ansi(ansi)
                     .with_filter(fmt_filter),
             );
@@ -275,6 +319,7 @@ async fn main() -> anyhow::Result<()> {
                     &reload_handle,
                     cli.log_file.as_ref(),
                     Some(&resolved.format),
+                    error_file.as_ref(),
                     Some(&rolling.config),
                 )
                 .await?;
@@ -288,18 +333,25 @@ async fn main() -> anyhow::Result<()> {
     match fut.await {
         Ok(exit_code) => {
             // Normal completion. `std::process::exit` skips destructors, so
-            // drop the non-blocking worker guard explicitly: its Drop signals
-            // the worker to drain its channel and flush the inner writer
-            // (incl. the rolling appender's BufWriter). Without this, `tng
-            // exec` would lose buffered logs on shutdown — the worker would be
-            // killed mid-flush by the exit.
+            // drop the non-blocking worker guards explicitly: their Drop signals
+            // the workers to drain their channels and flush the inner writers
+            // (incl. the rolling appenders' BufWriters). Without this, `tng
+            // exec` would lose buffered logs on shutdown — the workers would be
+            // killed mid-flush by the exit. Both the info guard and the
+            // (optional) error guard must be flushed.
             drop(worker_guard);
+            if let Some(g) = error_guard {
+                drop(g);
+            }
             std::process::exit(exit_code);
         }
         Err(error) => {
             tracing::error!(?error);
             // Same flush-before-exit on the error path.
             drop(worker_guard);
+            if let Some(g) = error_guard {
+                drop(g);
+            }
             std::process::exit(1);
         }
     }

@@ -96,6 +96,7 @@ impl TngExec {
         reload_handle: &crate::runtime::TracingReloadHandle,
         log_file: Option<&PathBuf>,
         log_format: Option<&tng_hook_types::LogFormat>,
+        error_file: Option<&PathBuf>,
         rolling: Option<&tng_hook_types::RollingConfig>,
     ) -> Result<i32> {
         // 1. Validate all hook-mode entries
@@ -189,6 +190,13 @@ impl TngExec {
 
         if let Some(ref log_file) = log_file {
             child_cmd.env("TNG_HOOK_LOG_FILE", log_file);
+        }
+
+        // Propagate the resolved error log file path to the hook child so the
+        // hook's tracing init routes ERROR+ events to a separate file. The hook
+        // reads TNG_HOOK_LOG_ERROR_FILE (see tng_hook_types log init).
+        if let Some(ref err) = error_file {
+            child_cmd.env("TNG_HOOK_LOG_ERROR_FILE", err);
         }
 
         // Propagate the resolved log format to the hook child so the hook's

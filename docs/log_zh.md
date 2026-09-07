@@ -10,6 +10,10 @@ TNG 通过 `tracing` 生态输出日志。本文档说明 TNG 二进制的日志
 
 `--log-file <PATH>` 将 tracing 输出写入文件（追加模式）。未指定时，TNG 写入 stdout/stderr。
 
+## 错误日志
+
+`--log-error-file <PATH>`（环境变量 `TNG_LOG_ERROR_FILE`，优先级高于命令行参数）将 ERROR 级别日志单独写入一个文件。非错误日志（INFO、WARN、DEBUG）只写 `--log-file`；ERROR 级别只写错误文件——两者**互不重叠**（同一条日志不会出现在两个文件里）。这样可以直接扫 `error.log.tng` 快速定位问题，不用翻大量 INFO 日志。错误文件复用与主文件相同的滚动配置（无单独命令行参数）。开启滚动时，hook 的错误文件名为 `error.log.<pid>.tng`（与 info 文件同样的 PID 派生规则）。
+
 ## 滚动（按大小 + 份数）
 
 `--log-rolling` 启用基于大小的滚动，需配合 `--log-file` 使用。
@@ -39,13 +43,7 @@ TNG 通过 `tracing` 生态输出日志。本文档说明 TNG 二进制的日志
 
 ## `tng exec` 下 `tng-hook` 的日志行为
 
-`tng exec` 启动一个预加载了 `tng-hook` 共享库的子进程。hook 从父进程注入的环境变量读取日志配置：
-
-| 环境变量 | 来源 |
-|---|---|
-| `TNG_HOOK_LOG_FILE` | 父进程的 `--log-file` |
-| `TNG_HOOK_LOG_FORMAT` | 父进程解析后的格式 |
-| `TNG_HOOK_LOG_ROLLING` / `TNG_HOOK_LOG_MAX_SIZE` / `TNG_HOOK_LOG_MAX_BACKUPS` | 父进程的滚动配置 |
+`tng exec` 启动一个预加载了 `tng-hook` 共享库的子进程。hook 与主进程一同记录日志：
 
 - **滚动关闭（默认）：** hook 共享父进程的日志文件，并发追加。两者写出相同的 JSON/文本格式。
 - **滚动开启：** hook 写入**自己的**文件，文件名由父进程路径在最后一个 `.`-扩展名前插入 `.<pid>` 得到，并独立轮转。父进程与 hook 从不共享文件，因此轮转不会丢失对方的数据。

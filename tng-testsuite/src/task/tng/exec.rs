@@ -31,6 +31,7 @@ pub struct TngExecTask {
     log_rolling: bool,
     log_max_size: Option<String>,
     log_max_backups: Option<usize>,
+    log_error_file: Option<String>,
 }
 
 impl TngExecTask {
@@ -51,6 +52,7 @@ impl TngExecTask {
             log_rolling: false,
             log_max_size: None,
             log_max_backups: None,
+            log_error_file: None,
         }
     }
 
@@ -77,6 +79,11 @@ impl TngExecTask {
     /// Forward `--log-max-backups <N>` to `tng exec`.
     pub fn with_log_max_backups(mut self, n: usize) -> Self {
         self.log_max_backups = Some(n);
+        self
+    }
+    /// Forward `--log-error-file <PATH>` to `tng exec`.
+    pub fn with_log_error_file(mut self, path: impl Into<String>) -> Self {
+        self.log_error_file = Some(path.into());
         self
     }
 }
@@ -120,6 +127,9 @@ impl Task for TngExecTask {
         }
         if let Some(n) = self.log_max_backups {
             cmd.arg("--log-max-backups").arg(n.to_string());
+        }
+        if let Some(e) = &self.log_error_file {
+            cmd.arg("--log-error-file").arg(e);
         }
         cmd.arg("--").args(&command);
 

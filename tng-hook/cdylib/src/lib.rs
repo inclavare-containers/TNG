@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 use libc::{c_int, size_t, sockaddr, socklen_t, ssize_t};
 use tng_hook_types::{
     EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup, IngressHookMappingTable,
+    LevelRoutingWriter,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
@@ -41,6 +42,14 @@ static REAL_SENDTO: OnceLock<SendtoFn> = OnceLock::new();
 /// flush the last buffered log lines would be lost. Only set when rolling is
 /// enabled and a log file is configured.
 static HOOK_ROLLING_APPENDER: OnceLock<
+    Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>,
+> = OnceLock::new();
+
+/// Holds the hook's rolling ERROR appender (separate file for ERROR+ events
+/// when `TNG_HOOK_LOG_ERROR_FILE` is injected by `tng exec`). Same flush-on-exit
+/// rationale as `HOOK_ROLLING_APPENDER`. Only set when rolling is enabled AND
+/// an error file path is configured.
+static HOOK_ROLLING_ERROR_APPENDER: OnceLock<
     Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>,
 > = OnceLock::new();
 
@@ -139,15 +148,46 @@ where
     }
 }
 
+/// Build a `SharedRollingWriter` for the given base log path, deriving the
+/// PID-collision-free path via `hook_log_path`, constructing the rolling
+/// appender, and stashing its `Arc<Mutex<..>>` clone in the provided global
+/// `OnceLock` so the `#[ctor::dtor]` can flush the BufWriter on exit. Used for
+/// both the info writer (`HOOK_ROLLING_APPENDER`) and the error writer
+/// (`HOOK_ROLLING_ERROR_APPENDER`).
+fn make_rolling_writer(
+    base_path: &str,
+    global: &'static OnceLock<Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>>,
+    rolling: tng_hook_types::RollingConfig,
+) -> SharedRollingWriter {
+    let derived =
+        tng_hook_types::hook_log_path(std::path::Path::new(base_path), std::process::id());
+    let appender = tracing_rolling_file::RollingFileAppenderBase::new(
+        derived,
+        tracing_rolling_file::RollingConditionBase::new().max_size(rolling.max_size),
+        rolling.max_backups,
+    )
+    .unwrap_or_else(|e| panic!("tng-hook: failed to open rolling log file {base_path:?}: {e}"));
+    // One Arc clone goes to SharedRollingWriter (the fmt layer's MakeWriter),
+    // one is stashed in the global so the dtor can flush on exit.
+    let writer = Arc::new(std::sync::Mutex::new(appender));
+    let _ = global.set(writer.clone());
+    SharedRollingWriter(writer)
+}
+
 /// Destructor: flush the hook's rolling appender's BufWriter when the `.so`
 /// is unloaded at process exit. Rust statics (incl. the global subscriber that
 /// owns the appender) are not dropped on exit, so without this the last ~8 KiB
 /// of buffered logs would never reach the file. Runs on normal exit / `exit()`;
 /// not on SIGKILL. Poison is tolerated (a panicked holder still leaves the
-/// appender flushable) via `into_inner`.
+/// appender flushable) via `into_inner`. Flushes BOTH the info appender and
+/// the error appender (when `TNG_HOOK_LOG_ERROR_FILE` is configured).
 #[ctor::dtor]
 fn flush_rolling_appender_on_exit() {
     if let Some(appender) = HOOK_ROLLING_APPENDER.get() {
+        let mut guard = appender.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = guard.flush();
+    }
+    if let Some(appender) = HOOK_ROLLING_ERROR_APPENDER.get() {
         let mut guard = appender.lock().unwrap_or_else(|e| e.into_inner());
         let _ = guard.flush();
     }
@@ -174,6 +214,11 @@ fn init() {
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    // Optional separate error log file (injected by `tng exec` when the user
+    // passes --log-error-file). When set, ERROR+ events go to the error writer
+    // and everything else to the info writer (disjoint — see LevelRoutingWriter).
+    // Only meaningful when an info log file is also configured.
+    let error_file_path = std::env::var("TNG_HOOK_LOG_ERROR_FILE").ok();
     let layer: Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync> =
         if let Some(ref path) = log_file_path {
             // When rolling is on, the hook writes its OWN file (pid-derived,
@@ -181,26 +226,36 @@ fn init() {
             // independently — no shared file, no stale fd. When rolling is off,
             // share the parent's file (concurrent append, current behavior).
             if rolling.enabled {
-                let derived = tng_hook_types::hook_log_path(path.as_ref(), std::process::id());
-                let appender = tracing_rolling_file::RollingFileAppenderBase::new(
-                    derived,
-                    tracing_rolling_file::RollingConditionBase::new().max_size(rolling.max_size),
-                    rolling.max_backups,
-                )
-                .unwrap_or_else(|e| panic!("tng-hook: failed to open rolling log file: {e}"));
-                // Wrap in Arc<Mutex<..>>: one clone goes to SharedRollingWriter
-                // (the fmt layer's MakeWriter), one is stashed in the global so
-                // the dtor can flush the BufWriter on exit.
-                let writer = Arc::new(std::sync::Mutex::new(appender));
-                let _ = HOOK_ROLLING_APPENDER.set(writer.clone());
-                build_log_layer(log_format, SharedRollingWriter(writer), false, filter)
+                let info_writer = make_rolling_writer(path, &HOOK_ROLLING_APPENDER, rolling);
+                let layer_writer = if let Some(ref epath) = error_file_path {
+                    let error_writer =
+                        make_rolling_writer(epath, &HOOK_ROLLING_ERROR_APPENDER, rolling);
+                    LevelRoutingWriter::new(info_writer, Some(error_writer))
+                } else {
+                    LevelRoutingWriter::new(info_writer, None::<SharedRollingWriter>)
+                };
+                build_log_layer(log_format, layer_writer, false, filter)
             } else {
-                let file = std::fs::OpenOptions::new()
+                let info_file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(path)
                     .unwrap_or_else(|e| panic!("tng-hook: failed to open log file {path:?}: {e}"));
-                build_log_layer(log_format, std::sync::Mutex::new(file), false, filter)
+                let info_writer = std::sync::Mutex::new(info_file);
+                let layer_writer = if let Some(ref epath) = error_file_path {
+                    let error_file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(epath)
+                        .unwrap_or_else(|e| {
+                            panic!("tng-hook: failed to open error log file {epath:?}: {e}")
+                        });
+                    let error_writer = std::sync::Mutex::new(error_file);
+                    LevelRoutingWriter::new(info_writer, Some(error_writer))
+                } else {
+                    LevelRoutingWriter::new(info_writer, None::<std::sync::Mutex<std::fs::File>>)
+                };
+                build_log_layer(log_format, layer_writer, false, filter)
             }
         } else {
             build_log_layer(

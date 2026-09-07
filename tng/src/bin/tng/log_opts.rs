@@ -1,6 +1,7 @@
 //! Log format resolution: `TNG_LOG_FORMAT` env var takes priority over the
 //! `--log-format` CLI flag, which falls back to plain text.
 
+use std::path::PathBuf;
 use std::str::FromStr as _;
 
 use tng_hook_types::{parse_size, LogFormat, RollingConfig};
@@ -46,6 +47,15 @@ pub fn resolve_log_format(cli_value: Option<LogFormat>) -> ResolvedLogFormat {
             format: cli_value.unwrap_or(LogFormat::Text),
             invalid_env_warning: None,
         },
+    }
+}
+
+/// Resolve the error log file path: env `TNG_LOG_ERROR_FILE` > CLI > None.
+/// When None, ERROR events go to the main --log-file (current behavior).
+pub fn resolve_error_file(cli_value: Option<PathBuf>) -> Option<PathBuf> {
+    match std::env::var("TNG_LOG_ERROR_FILE") {
+        Ok(v) if !v.is_empty() => Some(PathBuf::from(v)),
+        _ => cli_value,
     }
 }
 
@@ -124,6 +134,25 @@ pub fn resolve_rolling(
     ResolvedRolling {
         config: cfg,
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod error_file_tests {
+    use super::*;
+
+    #[serial_test::serial]
+    #[test]
+    fn resolve_error_file_env_over_cli() {
+        std::env::remove_var("TNG_LOG_ERROR_FILE");
+        let cli = Some(PathBuf::from("/cli.err"));
+        assert_eq!(
+            resolve_error_file(cli.clone()),
+            Some(PathBuf::from("/cli.err"))
+        );
+        std::env::set_var("TNG_LOG_ERROR_FILE", "/env.err");
+        assert_eq!(resolve_error_file(cli), Some(PathBuf::from("/env.err")));
+        std::env::remove_var("TNG_LOG_ERROR_FILE");
     }
 }
 

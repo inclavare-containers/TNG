@@ -10,6 +10,10 @@ TNG writes logs through the `tracing` ecosystem. This page covers the binary's l
 
 `--log-file <PATH>` writes tracing output to a file (appended). Without it, TNG writes to stdout/stderr.
 
+## Error log
+
+`--log-error-file <PATH>` (env `TNG_LOG_ERROR_FILE`, env takes priority) routes ERROR+ events to a separate file. Non-error events (INFO, WARN, DEBUG) go to `--log-file` only; ERROR+ events go to the error file only — they are **disjoint** (an event never appears in both files). This lets you scan `error.log.tng` for problems without wading through verbose INFO logs. The error file reuses the same rolling config as the main file (no separate CLI). When rolling is on, the hook's error file is `error.log.<pid>.tng` (PID-derived, same as the info file).
+
 ## Rolling (size + count)
 
 `--log-rolling` enables size-based rolling. It requires `--log-file`.
@@ -39,13 +43,7 @@ The `tng-hook` path is different: the hook writes **synchronously** (no `non_blo
 
 ## How `tng-hook` logs under `tng exec`
 
-`tng exec` runs a child process with the `tng-hook` shared library preloaded. The hook reads its log config from environment variables injected by the parent:
-
-| Env var | Source |
-|---|---|
-| `TNG_HOOK_LOG_FILE` | the parent's `--log-file` |
-| `TNG_HOOK_LOG_FORMAT` | the parent's resolved format |
-| `TNG_HOOK_LOG_ROLLING` / `TNG_HOOK_LOG_MAX_SIZE` / `TNG_HOOK_LOG_MAX_BACKUPS` | the parent's rolling config |
+`tng exec` runs a child process with the `tng-hook` shared library preloaded. The hook logs alongside the main process:
 
 - **Rolling off (default):** the hook shares the parent's log file and appends concurrently. Both write the same JSON/text format.
 - **Rolling on:** the hook writes its **own** file, named by inserting `.<pid>` before the last `.`-extension of the parent's path, and rolls it independently. The parent and the hook never share a file, so rotation cannot drop each other's data.

@@ -290,3 +290,8 @@ name = "log_rolling"
 path = "tests/hook/log_rolling.rs"
 required-features = ["on-bin"]
 
+[[test]]
+name = "log_error_routing"
+path = "tests/hook/log_error_routing.rs"
+required-features = ["on-bin"]
+
