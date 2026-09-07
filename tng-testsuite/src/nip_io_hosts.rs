@@ -407,6 +407,53 @@ mod tests {
         std::fs::read_to_string(p).expect("read path")
     }
 
+    /// Call `remove_block_if_last` until the block is gone from `hosts_path` or
+    /// `timeout` elapses.
+    ///
+    /// `remove_block_if_last` reports "not the last user" (and leaves the block
+    /// in place) the instant any other open file description holds a shared
+    /// flock on the holders lockfile. In this parallel unit-test binary that is
+    /// usually a genuinely concurrent holder, but it can also be a *transient*
+    /// one: a sibling test that spawns a child via `tokio::process::Command`
+    /// makes std spawn with `vfork`+`execvp` here (its `posix_spawn` fast-path
+    /// is not taken for this spawn, so it falls back to `vfork`+`execvp`).
+    /// `vfork` copies the fd table, and `O_CLOEXEC` only closes the inherited
+    /// holder fd on the first *successful* `execve`, so while `execvp` walks
+    /// `PATH` (several failing `execve` attempts) the child transiently shares
+    /// this holder's open file description and keeps the shared flock alive.
+    /// The child releases it within microseconds once `execve` succeeds. Polling
+    /// absorbs that transient false-negative.
+    ///
+    /// This does not mask a real "another live holder" condition: the callers
+    /// below drop every holder before calling this, so the only possible
+    /// `Ok(false)` here is the transient one above; a genuine leftover holder
+    /// would make this exhaust its attempts and panic loudly.
+    fn remove_block_until_gone(
+        hosts_path: &str,
+        holders_path: &str,
+        install_path: &str,
+        timeout: std::time::Duration,
+    ) {
+        // `std::time::Instant::now` is repo-disallowed (wasm-unsafe, see
+        // clippy.toml); bound the loop by a retry count derived from `timeout`
+        // instead of a wall-clock deadline.
+        const INTERVAL: std::time::Duration = std::time::Duration::from_millis(2);
+        let attempts = (timeout.as_millis() / INTERVAL.as_millis().max(1)).max(1) as usize;
+        for attempt in 0..attempts {
+            remove_block_if_last(hosts_path, holders_path, install_path).expect("cleanup");
+            if !has_block(&read_path(std::path::Path::new(hosts_path))) {
+                return;
+            }
+            if attempt + 1 == attempts {
+                panic!(
+                    "block still present {timeout:?} after cleanup; \
+                     remove_block_if_last never won the holders flock"
+                );
+            }
+            std::thread::sleep(INTERVAL);
+        }
+    }
+
     #[test]
     fn rewrite_hosts_writes_and_truncates() {
         let mut f = NamedTempFile::new().expect("tmp");
@@ -443,7 +490,9 @@ mod tests {
         drop(holder_fd);
 
         // Cleanup as the last (only) user: block removed, content restored.
-        remove_block_if_last(hp, hp2, ip2).expect("cleanup");
+        // Polled: see `remove_block_until_gone` — a sibling test's `vfork` spawn
+        // can transiently hold our shared flock during its `execvp` PATH walk.
+        remove_block_until_gone(hp, hp2, ip2, std::time::Duration::from_secs(2));
         let after_cleanup = read_path(hosts.path());
         assert!(
             !has_block(&after_cleanup),
@@ -489,9 +538,50 @@ mod tests {
         );
 
         // Now the second holder leaves and cleanup as last user removes it.
+        // Polled: see `remove_block_until_gone` for the transient-flock caveat.
         drop(other_holder);
-        remove_block_if_last(hp, hp2, ip2).expect("cleanup last");
+        remove_block_until_gone(hp, hp2, ip2, std::time::Duration::from_secs(2));
         assert!(!has_block(&read_path(hosts.path())));
+    }
+
+    #[test]
+    fn remove_block_until_gone_panics_when_cleanup_never_wins() {
+        // The polling helper's contract: if a *genuine* holder keeps the shared
+        // flock forever, give up loudly after the timeout rather than hang. This
+        // is what makes the "expect removal" callers safe -- a real leftover
+        // holder surfaces as a test failure, not a silent wrong-pass. It also
+        // exercises the retry/timeout path (sleep + deadline) of the helper.
+        let hosts = NamedTempFile::new().expect("tmp hosts");
+        std::fs::write(hosts.path(), "127.0.0.1 localhost\n").expect("write");
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let holders = dir.path().join("h.lock");
+        let install = dir.path().join("i.lock");
+        let hp = hosts.path().to_str().unwrap();
+        let hp2 = holders.to_str().unwrap();
+        let ip2 = install.to_str().unwrap();
+
+        // Install, then leave a stuck shared holder that never releases.
+        let holder_fd = install_block_at(hp, hp2, ip2).expect("install");
+        let stuck = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&holders)
+            .expect("open holders");
+        flock(&stuck, libc::LOCK_SH).expect("SH lock");
+        drop(holder_fd); // only the stuck holder remains
+
+        // Tiny timeout: the helper retries (2 ms sleeps) a few times, then the
+        // deadline trips and it panics. Catch the panic so the test stays green.
+        let result = std::panic::catch_unwind(|| {
+            remove_block_until_gone(hp, hp2, ip2, std::time::Duration::from_millis(30))
+        });
+        drop(stuck);
+        assert!(
+            result.is_err(),
+            "must panic when cleanup never wins the holders flock"
+        );
     }
 
     #[test]
