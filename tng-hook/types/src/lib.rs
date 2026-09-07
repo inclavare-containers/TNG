@@ -10,4 +10,4 @@ pub use ingress::{
 };
 pub use level_routing::{EitherWriter, LevelRoutingWriter};
 pub use log_format::LogFormat;
-pub use wire::{encode_frame, FrameDecoder, FrameError, Route};
+pub use wire::{decode_frame, encode_frame, FrameError, Route};

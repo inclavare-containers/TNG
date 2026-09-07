@@ -339,10 +339,12 @@ impl TngExec {
 
         tracing::info!(?exit_status, "Child process exited");
 
-        // Drain the hook log collector before returning: signal the accept
-        // loop to stop and join its task so in-flight hook frames are flushed
-        // into the main's writers. The collector's own JoinSet drain (with its
-        // 2s timeout) bounds how long a stuck reader can hold shutdown.
+        // Drain the hook log collector before returning: signal the recv
+        // loop to stop and join its task so in-flight hook datagrams are
+        // flushed into the main's writers. After the loop breaks the
+        // collector drains any datagrams still queued in the kernel recv
+        // buffer with non-blocking try_recv, so a frame the child sent just
+        // before exit is not lost.
         #[cfg(target_os = "linux")]
         if let Some(handle) = collector {
             let _ = handle.cancel_tx.send(());
