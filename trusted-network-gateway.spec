@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.9.1
+Version: 2.9.2
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,17 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Tue Sep 08 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.2-1
+- test(log): egress multi-process centralization + rolling under tng exec
+- test(log): hook centralization under recursion, fork, and great-grandchild
+- log: switch hook centralization UDS from stream to datagram
+- log: centralize hook log rolling into tng exec via abstract-namespace UDS
+- docs(claude): codify documentation writing rules from the ra doc work
+- feat(log): route ERROR+ events to a separate error log file
+- docs(ra): extract remote attestation config into a standalone guide
+- ci(wasm): stop tag-triggered GitHub Pages deployments
+- test(testsuite): fix flaky nip_io_hosts cleanup race with vfork spawns
+
 * Fri Sep 04 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.1-1
 - test(log): add integration test for JSON, rolling, and flush-on-exit
 - feat(log): add size-based rolling with per-pid hook files and exit flush

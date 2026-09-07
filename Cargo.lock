@@ -6037,7 +6037,7 @@ dependencies = [
 
 [[package]]
 name = "rats-cert"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "anyhow",
  "as-any",
@@ -7752,7 +7752,7 @@ dependencies = [
 
 [[package]]
 name = "tng"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "again",
  "anyhow",
@@ -7863,7 +7863,7 @@ dependencies = [
 
 [[package]]
 name = "tng-hook-cdylib"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "atty",
  "ctor",
@@ -7879,7 +7879,7 @@ dependencies = [
 
 [[package]]
 name = "tng-hook-types"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "cidr",
  "local-ip-address",
@@ -7893,7 +7893,7 @@ dependencies = [
 
 [[package]]
 name = "tng-testsuite"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "again",
  "anyhow",
@@ -7937,7 +7937,7 @@ dependencies = [
 
 [[package]]
 name = "tng-wasm"
-version = "2.9.1"
+version = "2.9.2"
 dependencies = [
  "anyhow",
  "axum",
