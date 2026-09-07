@@ -60,8 +60,24 @@ Several kinds of text in this repo are read by future developers and users long 
 - **Commit messages and PR descriptions are in English.** Title in imperative mood ("log: stop writing secrets into logs"); body explains what and why in plain English. The bilingual convention above applies to documentation, not to commit/PR text.
 - **Comments explain *why*, not *what*.** The code already shows what it does; a comment should explain the non-obvious reason, constraint, or gotcha. When carrying over an existing comment, preserve it verbatim unless it is no longer accurate (see Code Refactoring Rules).
 - **No AI-affectation footers in persistent text.** Never add "🤖 Generated with [Claude Code]" or similar attribution to PR descriptions, commit messages, or docs. The only accepted AI attribution in commits is the `Assisted-by:` trailer (see Git Commit Requirements).
+- **No em dashes in prose.** Do not use the em dash ("——" in Chinese, "—" in English) as punctuation in docs, commits, PR descriptions, or comments; use a period, comma, semicolon, colon, or restructure the sentence instead. The table-cell `—` meaning "no default value" is a column value, not prose, and is exempt. Prefer a colon over a "—" separator inside heading text too.
 
 These rules apply wherever text is meant to be read later. Ephemeral output (a one-off reply in this session, a `println!` debug line) does not need to follow them.
+
+## Documentation Structure & Craft
+
+These lessons come from repeated remote-attestation doc reviews; apply them to any `docs/*.md` / `*_zh.md` reference doc, especially reader-facing config references.
+
+- **Keep field-table column semantics consistent.** The "默认/Default" column holds a real default value; never overload it with required-flags (`是`/`否`/`Yes`/`No`). Use `—` for "no default" and put "(required)" / "（必填）" in the description. Apply the same convention across every table in the doc.
+- **Verify doc claims against source.** When documenting config fields, enum values, or defaults, cross-check against the code (`tng/src/config/ra.rs`, `rats-cert`, …) before asserting. Reviews have caught real errors: an enum alias documented as the wrong policy, a `model` row missing from verify tables, a `refresh_interval` row missing from one attest table. Don't write "the default is X" without having seen it in code.
+- **Example `<summary>` titles: mark only the distinction.** A title states what sets this example apart from its siblings in the same section; it does not restate the mode/provider/attest context the heading already carries. No long parenthetical asides. Use one consistent prefix ("示例：" / "Example:"); number sibling sub-examples (示例 3a/3b/3c).
+- **Progressive disclosure, but not all-folded.** Fold advanced background and full field-reference tables in `<details>` so the main path stays scannable. But don't make every block a folded `<details>` — vary the presentation (unfold the canonical example; fold the variants) so readers can tell the blocks apart.
+- **Respect the heading-depth ceiling.** GitHub renders at most `######` (h6); `#######` renders as plain text. Never exceed h6. If a section at h6 needs sub-parts, use **bold labels** for the sub-parts; to give sub-parts real headings, promote the parent section to h5 first.
+- **Add a glossary for newcomer-facing docs.** When the audience may not know the acronyms (Rekor, Trustee, OPA/rego, SLSA, DSSE, PCCS, RATS-TLS), add a short "术语速查/Glossary" with one line per term. Define on first use, don't throw-and-go.
+- **Lead multi-option sections with a comparison table.** When a section offers several strategies/modes/types, put a small ✅/❌ comparison table at the top so the reader can choose, then expand each option below.
+- **Mermaid diagrams.** Mermaid is the repo's diagram convention. Keep node labels carrying the system name (e.g. "TNG Attester", "TNG Verifier"). For a side-by-side comparison use `flowchart LR` + `direction LR` inside each subgraph + an invisible edge (`~~~`) between subgraphs to force horizontal layout. Convey design differences, not operational ones, and don't imply a service is always a separate process (note in-process/built-in variants where relevant).
+- **Bilingual structural parity is verifiable.** zh and en must keep the same heading levels, the same number of `<details>`/examples, and the same field-table rows. Before calling a doc change done, check: `grep -c '```'` is even in both files, `<details>`/`</details>` counts match, `grep -n '^#'` level sequences are identical zh↔en, and `grep -n '——'` finds no prose em dashes.
+- **Internal links only to stable anchors.** Only link `](#…)` to h2/h3 headings (their GitHub auto-anchors are stable). Do not link to h6 sub-sections or bold-labeled blocks — their auto-anchors are fragile. Verify every internal link resolves.
 
 ## TODO.md Discipline
 
