@@ -295,3 +295,8 @@ name = "log_error_routing"
 path = "tests/hook/log_error_routing.rs"
 required-features = ["on-bin"]
 
+[[test]]
+name = "log_centralization_subprocess"
+path = "tests/hook/log_centralization_subprocess.rs"
+required-features = ["on-bin"]
+
