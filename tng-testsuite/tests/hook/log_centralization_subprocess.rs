@@ -25,6 +25,12 @@ const HOOK_INIT_MARKER: &str = "tng-hook: initialized";
 /// un-intercepted) to the collector without recursion or deadlock.
 const TUNNEL_MARKER: &str = "tunnel established";
 
+/// Marker the hook cdylib emits when it intercepts a server's `bind()` to a
+/// captured egress port and rewrites it to the real port (egress hook mode).
+/// Finding it in `info.log` proves the egress hook's bind interception ran
+/// in a subprocess and its log flowed through the collector.
+const EGRESS_BIND_MARKER: &str = "bind hijacked";
+
 /// Threaded echo server on `port` (Server node), backgrounded for the test's
 /// lifetime. One thread per connection so concurrent clients are handled in
 /// parallel.
@@ -469,6 +475,151 @@ python3 -c 'import subprocess, sys; sys.exit(subprocess.run([sys.executable, "/t
     assert!(
         info_contents.contains(TUNNEL_MARKER),
         "info.log missing hook tunnel-established line; great-grandchild connect did not reach the collector"
+    );
+    assert_logs_ok(&dir, &info, &error);
+    Ok(())
+}
+
+/// Egress multi-process test: a shell-script SERVER target spawns THREE
+/// subprocesses (grandchildren of `tng exec`), each an echo server that
+/// `bind()`s a different captured egress port. Each fork+exec'd subprocess
+/// re-inits the cdylib; its `bind()` is intercepted (`bind hijacked`) and
+/// that log flows through the collector into the server's `info.log`. Three
+/// TCP clients (over the client-side TNG ingress + tunnel) each echo through
+/// one server, proving the bind interception + tunnel still work under
+/// multi-process egress. The run completing exit-0 is the "correct work"
+/// proof; the log assertions cover multi-producer centralization + anomalies.
+///
+/// Requires `on-bin` (external tng binary + libtng_hook.so).
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+#[serial]
+async fn hook_log_egress_multiprocess_centralized() -> Result<()> {
+    let dir = TempDir::new()?;
+    let info = dir.path().join("info.log.tng");
+    let error = dir.path().join("error.log.tng");
+
+    let tasks: Vec<Box<dyn Task>> = vec![
+        // Server side: tng exec with egress hook (captures bind to 20001/2/3)
+        // and centralized logs. The child shell script spawns 3 python echo
+        // servers (grandchildren), each binding a different captured port,
+        // accepting ONE connection, echoing, then exiting; the shell waits for
+        // all and exits non-zero if any failed. Each server handles exactly one
+        // connection (the client below connects once per port, retrying until
+        // the server is bound); stop_after_exit=true so the tng exec process
+        // exits gracefully after the shell (WorkerGuard drops -> flush).
+        TngExecTask::new(
+            r#"{
+                "add_egress": [{
+                    "hook": {"capture_listen": [{"port": 20001}, {"port": 20002}, {"port": 20003}]},
+                    "no_ra": true
+                }]
+            }"#
+            .to_string(),
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                r#"
+pids=""
+for p in 20001 20002 20003; do
+  python3 -c '
+import socket, sys
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", port))
+s.listen(5)
+c, _ = s.accept()
+d = c.recv(4096)
+if d:
+    c.sendall(d)
+c.close()
+s.close()
+' "$p" &
+  pids="$pids $!"
+done
+rc=0
+for pid in $pids; do wait "$pid" || rc=1; done
+exit $rc
+"#
+                .to_string(),
+            ],
+            true,
+            NodeType::Server,
+        )
+        .with_log_file(info.to_string_lossy().to_string())
+        .with_log_format("json")
+        .with_log_error_file(error.to_string_lossy().to_string())
+        .boxed(),
+        // Client side: TNG client with one ingress mapping per server port.
+        TngInstance::TngClient(
+            r#"{
+                "add_ingress": [
+                    {"mapping": {"in": {"port": 10001}, "out": {"host": "192.168.1.1", "port": 20001}}, "no_ra": true},
+                    {"mapping": {"in": {"port": 10002}, "out": {"host": "192.168.1.1", "port": 20002}}, "no_ra": true},
+                    {"mapping": {"in": {"port": 10003}, "out": {"host": "192.168.1.1", "port": 20003}}, "no_ra": true}
+                ]
+            }"#,
+        )
+        .boxed(),
+        // One client (Client node) that connects to 10001/10002/10003 in turn,
+        // echoing through the tunnel. Each connect retries until the matching
+        // server's hook-rewritten bind is in place (readiness race); a failed
+        // connect does NOT abort the run the way a non-retrying TcpClient would.
+        ShellTask {
+            name: "egress client".to_owned(),
+            node_type: NodeType::Client,
+            script: r#"
+python3 -c '
+import socket, time, sys
+def echo(port, payload):
+    err = None
+    for _ in range(30):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect(("127.0.0.1", port))
+            s.sendall(payload)
+            s.shutdown(socket.SHUT_WR)
+            d = s.recv(4096)
+            s.close()
+            assert d == payload, f"port {port}: expected {payload}, got: {d}"
+            return
+        except Exception as e:
+            err = e
+            time.sleep(0.2)
+    raise RuntimeError(f"port {port} failed after 30 attempts: {err}")
+echo(10001, b"egress-1")
+echo(10002, b"egress-2")
+echo(10003, b"egress-3")
+print("OK: 3 egress echoes through the tunnel")
+'
+"#
+            .to_owned(),
+            mode: ShellMode::ForegroundStop,
+        }
+        .boxed(),
+    ];
+
+    run_test!(tasks).await?;
+
+    // Completing the run (exit 0) proves the 3 server subprocesses each
+    // intercepted bind + echoed 5 connections through the tunnel. The log
+    // content proves each fork+exec'd server's bind-interception log reached
+    // the collector (multi-producer egress centralization).
+    let info_contents = fs::read_to_string(&info)?;
+    let bind_count = info_contents.matches(EGRESS_BIND_MARKER).count();
+    assert!(
+        bind_count >= 2,
+        "expected >=2 '{}' lines in info.log (3 egress server subprocesses), got {}; multi-process egress bind interception or centralization is broken",
+        EGRESS_BIND_MARKER,
+        bind_count
+    );
+    let init_count = info_contents.matches(HOOK_INIT_MARKER).count();
+    assert!(
+        init_count >= 3,
+        "expected >=3 '{}' lines in info.log (sh + 3 egress server grandchildren), got {}; fork+exec re-init broken on the egress side",
+        HOOK_INIT_MARKER,
+        init_count
     );
     assert_logs_ok(&dir, &info, &error);
     Ok(())

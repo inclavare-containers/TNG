@@ -300,3 +300,8 @@ name = "log_centralization_subprocess"
 path = "tests/hook/log_centralization_subprocess.rs"
 required-features = ["on-bin"]
 
+[[test]]
+name = "log_rolling"
+path = "tests/hook/log_rolling.rs"
+required-features = ["on-bin"]
+
