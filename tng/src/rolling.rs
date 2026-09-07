@@ -1,6 +1,6 @@
-//! Rolling-log config shared by the tng binary and the tng-hook cdylib.
+//! Rolling-log config used by the `tng` binary/lib.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Size+count rolling config. `tracing-rolling-file` v0.1.3 has no MaxAge/
 /// Compress support, so those are intentionally absent.
@@ -19,30 +19,6 @@ impl Default for RollingConfig {
             max_size: 64 * 1024 * 1024,
             max_backups: 5,
         }
-    }
-}
-
-impl RollingConfig {
-    /// Read from the `TNG_HOOK_LOG_*` env vars injected by the parent `tng exec`.
-    /// `max_size` is a plain byte count (the parent serialises the human-readable
-    /// CLI/env value to bytes before injecting). Invalid values fall back to the
-    /// per-field default silently (a cdylib ctor stays quiet).
-    pub fn from_hook_env() -> RollingConfig {
-        let mut cfg = RollingConfig::default();
-        if let Ok(v) = std::env::var("TNG_HOOK_LOG_ROLLING") {
-            cfg.enabled = v.eq_ignore_ascii_case("true") || v == "1";
-        }
-        if let Ok(v) = std::env::var("TNG_HOOK_LOG_MAX_SIZE") {
-            if let Ok(n) = v.parse::<u64>() {
-                cfg.max_size = n;
-            }
-        }
-        if let Ok(v) = std::env::var("TNG_HOOK_LOG_MAX_BACKUPS") {
-            if let Ok(n) = v.parse::<usize>() {
-                cfg.max_backups = n;
-            }
-        }
-        cfg
     }
 }
 
@@ -70,32 +46,9 @@ pub fn parse_size(input: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("size `{input}` overflows u64"))
 }
 
-/// Derive the hook's own log path: insert `.<pid>` before the last `.`-separated
-/// extension of `base`; if `base` has no extension, append `.<pid>`. Mirrors the
-/// Go lumberjack "timestamp before extension" convention and is provably
-/// collision-free with the main process's `base.N` rotation backups.
-pub fn hook_log_path(base: &Path, pid: u32) -> PathBuf {
-    let new_name = match (base.file_stem(), base.extension()) {
-        (Some(stem), Some(ext)) => {
-            format!(
-                "{}.{}.{}",
-                stem.to_string_lossy(),
-                pid,
-                ext.to_string_lossy()
-            )
-        }
-        (Some(stem), None) => format!("{}.{}", stem.to_string_lossy(), pid),
-        _ => return base.to_path_buf(),
-    };
-    match base.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.join(new_name),
-        _ => PathBuf::from(new_name),
-    }
-}
-
 /// True when `path` is a regular file, a symlink to a file, or doesn't exist yet
 /// (so it can be created). False for char/block devices (e.g. /dev/tty), fifos,
-/// sockets, directories, or unreadable paths — rolling those is nonsensical.
+/// sockets, directories, or unreadable paths: rolling those is nonsensical.
 pub fn path_supports_rolling(path: &Path) -> bool {
     match std::fs::metadata(path) {
         Ok(md) => md.is_file(),
@@ -122,22 +75,6 @@ mod tests {
         assert!(parse_size("abc").is_err());
         assert!(parse_size("").is_err());
         assert!(parse_size("64QB").is_err());
-    }
-
-    #[test]
-    fn hook_path_inserts_pid_before_last_ext() {
-        assert_eq!(
-            hook_log_path(std::path::Path::new("/home/admin/logs/info.log.tng"), 12345),
-            std::path::PathBuf::from("/home/admin/logs/info.log.12345.tng")
-        );
-        assert_eq!(
-            hook_log_path(std::path::Path::new("/var/log/tng.log"), 7),
-            std::path::PathBuf::from("/var/log/tng.7.log")
-        );
-        assert_eq!(
-            hook_log_path(std::path::Path::new("tng"), 9),
-            std::path::PathBuf::from("tng.9")
-        );
     }
 
     #[test]

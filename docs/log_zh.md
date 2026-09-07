@@ -12,7 +12,7 @@ TNG 通过 `tracing` 生态输出日志。本文档说明 TNG 二进制的日志
 
 ## 错误日志
 
-`--log-error-file <PATH>`（环境变量 `TNG_LOG_ERROR_FILE`，优先级高于命令行参数）将 ERROR 级别日志单独写入一个文件。非错误日志（INFO、WARN、DEBUG）只写 `--log-file`；ERROR 级别只写错误文件——两者**互不重叠**（同一条日志不会出现在两个文件里）。这样可以直接扫 `error.log.tng` 快速定位问题，不用翻大量 INFO 日志。错误文件复用与主文件相同的滚动配置（无单独命令行参数）。开启滚动时，hook 的错误文件名为 `error.log.<pid>.tng`（与 info 文件同样的 PID 派生规则）。
+`--log-error-file <PATH>`（环境变量 `TNG_LOG_ERROR_FILE`，优先级高于命令行参数）将 ERROR 级别日志单独写入一个文件。非错误日志（INFO、WARN、DEBUG）只写 `--log-file`；ERROR 级别只写错误文件，两者**互不重叠**（同一条日志不会出现在两个文件里）。这样可以直接扫 `error.log.tng` 快速定位问题，不用翻大量 INFO 日志。错误文件复用与主文件相同的滚动配置（无单独命令行参数）。`tng exec` 下，hook 的 ERROR 事件合并进同一个错误文件（见 [Hook 日志集中化](#hook-日志集中化)）。
 
 ## 滚动（按大小 + 份数）
 
@@ -39,26 +39,19 @@ TNG 通过 `tracing` 生态输出日志。本文档说明 TNG 二进制的日志
 - 滚动**关闭**：无滚动 appender 缓冲。日志行仅经非阻塞 worker 输出，及时排空。
 - 滚动**开启**：`tracing-rolling-file` appender 在 worker 前端额外加一层约 8 KiB 的 `BufWriter`，累计约 8 KiB 或轮转时刷盘。对长驻服务（常见情况）不可见；仅极短生命周期的进程可能在退出前未刷出最后的部分缓冲。
 
-`tng-hook` 路径不同：hook **同步**写入（无 `non_blocking` worker）。滚动开启时仍会加约 8 KiB 滚动 appender 缓冲（8 KiB 或轮转时刷盘）；滚动关闭时直接写入文件。
+`tng-hook` 路径不同：hook 把每条记录交给主 `tng exec` 进程，再由其投入与自身日志相同的 `non_blocking` worker（滚动开启时 worker 前端仍会加约 8 KiB 滚动 appender 缓冲；滚动关闭则跳过该层）。hook 日志绝不会阻塞宿主进程：当主侧处理跟不上时，hook 直接丢弃记录，而非拖慢数据面。
 
-## `tng exec` 下 `tng-hook` 的日志行为
+## Hook 日志集中化
 
-`tng exec` 启动一个预加载了 `tng-hook` 共享库的子进程。hook 与主进程一同记录日志：
+`tng exec` 启动一个预加载了 `tng-hook` 共享库的子进程。主进程不让每个 hook 子进程各自打开日志文件，而是集中处理 hook 日志，让每条 hook 记录都合并进主进程持有的同一个 `--log-file` / `--log-error-file`。
 
-- **滚动关闭（默认）：** hook 共享父进程的日志文件，并发追加。两者写出相同的 JSON/文本格式。
-- **滚动开启：** hook 写入**自己的**文件，文件名由父进程路径在最后一个 `.`-扩展名前插入 `.<pid>` 得到，并独立轮转。父进程与 hook 从不共享文件，因此轮转不会丢失对方的数据。
+hook 产生的 ERROR 进入错误文件，其余日志进入 info 文件。不留任何按进程拆分的日志文件，因此长时间运行且 hook 进程众多的部署不再有按进程滚动文件导致的 inode 耗尽风险。滚动由主进程集中管理，hook 自身不写任何滚动文件。
 
-命名规则：取父进程路径，在最后一个 `.`-扩展名之前插入 `.<pid>`。示例（pid 为 `12345`）：
+仅当日志路径是普通文件、指向普通文件的软链接、或尚不存在的路径（才能合并进主进程拥有的同一个滚动文件）时才集中化。info 流与 error 流分别判定。非普通路径（字符设备如 `/dev/null` 或 `/dev/tty`、FIFO、socket、目录）不集中化：hook 直接向该路径追加，无按进程文件。
 
-| 父进程路径 | Hook 文件 |
-|---|---|
-| `info.log.tng` | `info.log.12345.tng` |
-| `tng.log` | `tng.12345.log` |
-| `tng`（无扩展名） | `tng.12345` |
+集中化仅 Linux 可用；其他平台 hook 一律直接追加。
 
-因此 hook 的编号备份（如 `info.log.12345.tng.1`）绝不会与父进程的备份（`info.log.tng.1`）冲突。
-
-滚动开启时 hook 与父进程使用相同的带缓冲 appender，刷盘行为一致（见 [刷盘行为](#刷盘行为)）。
+hook 记录与主进程使用相同的 JSON 或文本格式（由 `--log-format` 设定）。
 
 ## 示例（容器入口）
 
@@ -66,6 +59,7 @@ TNG 通过 `tracing` 生态输出日志。本文档说明 TNG 二进制的日志
 tng exec --config-file "$TNG_CONFIG" \
   --log-format json \
   --log-file /home/admin/logs/info.log.tng \
+  --log-error-file /home/admin/logs/error.log.tng \
   --log-rolling --log-max-size 64MB --log-max-backups 5 \
   -- "$INFER_LAUNCHER"
 ```

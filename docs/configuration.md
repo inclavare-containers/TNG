@@ -1537,8 +1537,9 @@ TNG outputs logs to standard output by default. Control the log level via the `R
 Redirect all log output to the specified file instead of stdout/stderr.
 This is a global CLI option and applies to both `tng launch` and `tng exec`.
 
-When used with `tng exec`, the hook library (`.so`) loaded by the child
-process also writes to the same log file.
+When used with `tng exec`, the hook library (`.so`) loaded by the child process does not open its own log file. The main `tng exec` process centralizes hook logging: hook records merge into the same `--log-file` / `--log-error-file` the main process owns, so ERROR events from the hook land in the error file and everything else lands in the info file, with no per-process log files left behind. Rolling is owned centrally by the main process. See [Log](log.md) for the full hook-log behavior.
+
+This centralization applies only when the log path is a regular file or a not-yet-existing path. A non-regular path such as `/dev/null` (a character device), a FIFO, or a socket is not centralized: the hook appends to that path directly, with no per-process file. Centralization is Linux-only.
 
 Log level is controlled by the `RUST_LOG` environment variable (same as
 without `--log-file`).

@@ -122,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // loss on shutdown. `std::process::exit` skips destructors, so the error
     // path below drops it explicitly before exiting.
     let (log_writer, worker_guard, is_file) = match &cli.log_file {
-        Some(path) if rolling.config.enabled && tng_hook_types::path_supports_rolling(path) => {
+        Some(path) if rolling.config.enabled && tng::rolling::path_supports_rolling(path) => {
             let appender = tracing_rolling_file::RollingFileAppenderBase::new(
                 path,
                 tracing_rolling_file::RollingConditionBase::new().max_size(rolling.config.max_size),
@@ -166,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
     // exit just like the info stream. When error_file is None, no error
     // writer/guard is produced and routing falls back to the info writer.
     let (error_writer, error_guard) = match &error_file {
-        Some(path) if rolling.config.enabled && tng_hook_types::path_supports_rolling(path) => {
+        Some(path) if rolling.config.enabled && tng::rolling::path_supports_rolling(path) => {
             let appender = tracing_rolling_file::RollingFileAppenderBase::new(
                 path,
                 tracing_rolling_file::RollingConditionBase::new().max_size(rolling.config.max_size),
@@ -195,7 +195,12 @@ async fn main() -> anyhow::Result<()> {
     // `LevelRoutingWriter<NonBlocking, NonBlocking>` type in both cases avoids
     // branching the subscriber construction on whether the error file is set:
     // the json/text arms each take a single concrete writer type.
-    let routed_writer = tng_hook_types::LevelRoutingWriter::new(log_writer.clone(), error_writer);
+    // Clone `error_writer` here (not move) so the `Exec` arm can hand another
+    // clone to `TngExec::run` for the hook-log collector. NonBlocking clones
+    // share the same underlying worker, so multiple clones funnel into one
+    // file without contention.
+    let routed_writer =
+        tng_hook_types::LevelRoutingWriter::new(log_writer.clone(), error_writer.clone());
 
     // Build the subscriber. JSON and text fmt layers have different concrete
     // types and cannot be unified by boxing a `dyn Layer` (the fmt layer sits
@@ -313,6 +318,36 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
 
+                // Raise RLIMIT_NOFILE to the hard limit so the hook-log
+                // collector's N (one fd per child) + O(1) file descriptors fit
+                // alongside the tunnel's own fds. Best-effort: a failure here
+                // only limits how many hook processes can be logged
+                // concurrently, so warn and continue rather than aborting.
+                #[cfg(target_os = "linux")]
+                {
+                    use libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
+                    let mut cur = rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    if unsafe { getrlimit(RLIMIT_NOFILE, &mut cur) } == 0
+                        && cur.rlim_max > cur.rlim_cur
+                    {
+                        let raised = rlimit {
+                            rlim_cur: cur.rlim_max,
+                            rlim_max: cur.rlim_max,
+                        };
+                        if unsafe { setrlimit(RLIMIT_NOFILE, &raised) } != 0 {
+                            let error = std::io::Error::last_os_error();
+                            tracing::warn!(
+                                ?error,
+                                hard_limit = cur.rlim_max,
+                                "failed to raise RLIMIT_NOFILE; many hook processes may exhaust fds"
+                            );
+                        }
+                    }
+                }
+
                 let exit_code = TngExec::run(
                     config,
                     options.command,
@@ -320,7 +355,8 @@ async fn main() -> anyhow::Result<()> {
                     cli.log_file.as_ref(),
                     Some(&resolved.format),
                     error_file.as_ref(),
-                    Some(&rolling.config),
+                    log_writer.clone(),
+                    error_writer.clone(),
                 )
                 .await?;
 

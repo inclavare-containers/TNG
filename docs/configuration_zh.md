@@ -1517,7 +1517,9 @@ TNG 默认将日志输出到标准输出，通过 `RUST_LOG` 环境变量控制�
 将所有日志输出重定向到指定文件，而非 stdout/stderr。
 这是一个全局 CLI 选项，对 `tng launch` 和 `tng exec` 均生效。
 
-在 `tng exec` 模式下，子进程加载的 hook 库（`.so`）也会写入同一个日志文件。
+在 `tng exec` 模式下，子进程加载的 hook 库（`.so`）并不自行打开日志文件。主 `tng exec` 进程对 hook 日志做集中处理：hook 记录合并进主进程持有的同一个 `--log-file` / `--log-error-file`，因此 hook 产生的 ERROR 进入错误文件、其余日志进入 info 文件，且不会遗留任何按进程拆分的日志文件。滚动由主进程集中管理。完整行为见 [日志](log_zh.md)。
+
+仅当日志路径为普通文件或尚不存在的路径时才启用集中化。非普通路径，如 `/dev/null`（字符设备）、FIFO 或 socket，不集中化：hook 直接向该路径追加，无按进程文件。集中化仅 Linux 可用。
 
 日志级别由 `RUST_LOG` 环境变量控制（与不使用 `--log-file` 时相同）。
 

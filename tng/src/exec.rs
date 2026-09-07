@@ -84,12 +84,29 @@ impl PortAllocator {
         None
     }
 }
+/// Running collector task, its cancel sender, and the bound socket name, when
+/// the centralized hook-log path is active. One `Option<CollectorHandle>` holds
+/// what used to be a parallel `Option<(JoinHandle, oneshot::Sender)>` +
+/// `Option<String>` plus two `mut bool` flags: "collector started" is now
+/// unrepresentable-as-false, so per-stream centralization can be recomputed
+/// from immutable inputs at injection time without `unreachable!` guards.
+#[cfg(target_os = "linux")]
+struct CollectorHandle {
+    task: tokio::task::JoinHandle<()>,
+    cancel_tx: tokio::sync::oneshot::Sender<()>,
+    name: String,
+}
+
 pub struct TngExec;
 
 impl TngExec {
     /// Validate all hook-mode entries, build mappings, and run the child
     /// process with TNG tunnel. Supports both egress and ingress hooks
     /// simultaneously.
+    // `info_nb`/`error_nb` are only consumed by the Linux collector-start
+    // path, so on non-Linux targets these stay unused.
+    #[allow(unused_variables)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         mut config: TngConfig,
         command: Vec<String>,
@@ -97,7 +114,11 @@ impl TngExec {
         log_file: Option<&PathBuf>,
         log_format: Option<&tng_hook_types::LogFormat>,
         error_file: Option<&PathBuf>,
-        rolling: Option<&tng_hook_types::RollingConfig>,
+        // Clones of the main process' non-blocking info/error writers, threaded
+        // in so the hook-log collector can merge child hook-process logs into
+        // the same files the main process writes to.
+        info_nb: tracing_appender::non_blocking::NonBlocking,
+        error_nb: Option<tracing_appender::non_blocking::NonBlocking>,
     ) -> Result<i32> {
         // 1. Validate all hook-mode entries
         Self::validate_config(&config)?;
@@ -176,6 +197,65 @@ impl TngExec {
             .await
             .context("TNG runtime readiness signal was dropped")?;
 
+        // Per-stream centralization decision: a stream is centralized when
+        // its destination is a regular file (or a creatable path), so the
+        // collector can merge hook logs into the same rolling files the main
+        // process owns. Char devices (e.g. /dev/null), fifos, and sockets are
+        // not centralized; the hook appends directly. info and error are
+        // judged independently. Abstract-namespace UDS + the cdylib are
+        // Linux-only, so the whole centralization path is Linux-gated; on
+        // other platforms the hook keeps the direct-file behavior.
+        //
+        // `info_supports`/`error_supports` are immutable for the run, so they
+        // are computed once here and reused at env-injection time (after the
+        // collector may have failed to bind) to recompute per-stream
+        // centralization without `mut` flags.
+        #[cfg(target_os = "linux")]
+        let info_supports = log_file.is_some_and(|p| crate::rolling::path_supports_rolling(p));
+        #[cfg(target_os = "linux")]
+        let error_supports = error_file.is_some_and(|p| crate::rolling::path_supports_rolling(p));
+        #[cfg(target_os = "linux")]
+        let any_central = info_supports || error_supports;
+        #[cfg(not(target_os = "linux"))]
+        let any_central = false;
+
+        // Start the centralized collector when any stream opts in. The
+        // collector owns the abstract-namespace listener the cdylib connects
+        // to; its cloned NonBlocking writers merge hook payloads into the
+        // main's rolling files. The single shared socket serves both streams,
+        // so a bind failure takes both down: `collector = None` then makes
+        // both streams non-central at injection, falling back to per-stream
+        // direct-file injection.
+        #[cfg(target_os = "linux")]
+        let collector: Option<CollectorHandle> = if any_central {
+            match crate::hook_log_collector::HookLogCollector::start(
+                info_nb.clone(),
+                error_nb.clone(),
+            )
+            .await
+            {
+                Ok((collector, name)) => {
+                    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+                    #[allow(clippy::disallowed_methods)]
+                    let task = tokio::spawn(async move { collector.run(cancel_rx).await });
+                    Some(CollectorHandle {
+                        task,
+                        cancel_tx,
+                        name,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?e,
+                        "failed to start hook log collector; falling back to per-process files"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // 7. Spawn child process with LD_PRELOAD and mapping env vars
         let (cmd, args) = command.split_first().context("Command is empty")?;
 
@@ -188,17 +268,56 @@ impl TngExec {
         // Always set ingress mapping (even if empty ingresses, for consistency)
         child_cmd.env("TNG_HOOK_INGRESS_MAPPINGS", &ingress_json);
 
-        if let Some(ref log_file) = log_file {
-            child_cmd.env("TNG_HOOK_LOG_FILE", log_file);
+        // Per-stream log routing env for the hook child. Each stream is either
+        // centralized (points at the collector's abstract-namespace socket via
+        // `TNG_HOOK_LOG_SOCKET` / `TNG_HOOK_LOG_ERROR_SOCKET`, value = socket
+        // name) or non-centralized (falls back to direct file append through
+        // `TNG_HOOK_LOG_FILE` / `TNG_HOOK_LOG_ERROR_FILE`). The two schemes are
+        // mutually exclusive per stream, mirroring the `*_FILE` naming. When
+        // both streams carry the same socket name the cdylib connects once and
+        // demuxes by route byte (a cdylib impl detail).
+        // Rolling config is not propagated: the main process owns the rolling
+        // appender, and centralized hook logs merge into it through the
+        // collector; non-centralized streams append directly without rolling.
+        #[cfg(target_os = "linux")]
+        {
+            // Recompute per-stream centralization from immutable inputs: a
+            // stream is central iff the collector started (Some below) and its
+            // path supports rolling. Both inputs are immutable for the run, so
+            // this is cheap; the collector being Some means the name exists,
+            // so the socket lookup below is total with no `unreachable!` guard.
+            if let Some(c) = collector.as_ref() {
+                if info_supports {
+                    child_cmd.env("TNG_HOOK_LOG_SOCKET", &c.name);
+                } else if let Some(p) = log_file {
+                    child_cmd.env("TNG_HOOK_LOG_FILE", p);
+                }
+                if error_supports {
+                    child_cmd.env("TNG_HOOK_LOG_ERROR_SOCKET", &c.name);
+                } else if let Some(p) = error_file {
+                    child_cmd.env("TNG_HOOK_LOG_ERROR_FILE", p);
+                }
+            } else {
+                // No collector (a path did not support rolling, or the
+                // collector failed to bind): every stream falls back to direct
+                // file append.
+                if let Some(p) = log_file {
+                    child_cmd.env("TNG_HOOK_LOG_FILE", p);
+                }
+                if let Some(p) = error_file {
+                    child_cmd.env("TNG_HOOK_LOG_ERROR_FILE", p);
+                }
+            }
         }
-
-        // Propagate the resolved error log file path to the hook child so the
-        // hook's tracing init routes ERROR+ events to a separate file. The hook
-        // reads TNG_HOOK_LOG_ERROR_FILE (see tng_hook_types log init).
-        if let Some(ref err) = error_file {
-            child_cmd.env("TNG_HOOK_LOG_ERROR_FILE", err);
+        #[cfg(not(target_os = "linux"))]
+        {
+            if let Some(p) = log_file {
+                child_cmd.env("TNG_HOOK_LOG_FILE", p);
+            }
+            if let Some(p) = error_file {
+                child_cmd.env("TNG_HOOK_LOG_ERROR_FILE", p);
+            }
         }
-
         // Propagate the resolved log format to the hook child so the hook's
         // tracing init emits JSON when the parent does. The hook reads
         // TNG_HOOK_LOG_FORMAT (falling back to TNG_LOG_FORMAT). Injecting the
@@ -210,14 +329,6 @@ impl TngExec {
             child_cmd.env("TNG_HOOK_LOG_FORMAT", fmt.as_str());
         }
 
-        if let Some(r) = rolling {
-            if r.enabled {
-                child_cmd.env("TNG_HOOK_LOG_ROLLING", "true");
-                child_cmd.env("TNG_HOOK_LOG_MAX_SIZE", r.max_size.to_string());
-                child_cmd.env("TNG_HOOK_LOG_MAX_BACKUPS", r.max_backups.to_string());
-            }
-        }
-
         let mut child = child_cmd.spawn().context("Failed to spawn child command")?;
 
         let child_id = child.id();
@@ -227,6 +338,18 @@ impl TngExec {
         let exit_status = child.wait().await.context("Failed to wait for child")?;
 
         tracing::info!(?exit_status, "Child process exited");
+
+        // Drain the hook log collector before returning: signal the accept
+        // loop to stop and join its task so in-flight hook frames are flushed
+        // into the main's writers. The collector's own JoinSet drain (with its
+        // 2s timeout) bounds how long a stuck reader can hold shutdown.
+        #[cfg(target_os = "linux")]
+        if let Some(handle) = collector {
+            let _ = handle.cancel_tx.send(());
+            if let Err(e) = handle.task.await {
+                tracing::warn!(?e, "hook log collector task join error");
+            }
+        }
 
         // 9. Cancel TNG runtime
         canceller.cancel();

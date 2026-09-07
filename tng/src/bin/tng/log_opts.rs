@@ -4,7 +4,8 @@
 use std::path::PathBuf;
 use std::str::FromStr as _;
 
-use tng_hook_types::{parse_size, LogFormat, RollingConfig};
+use tng::rolling::{parse_size, RollingConfig};
+use tng_hook_types::LogFormat;
 
 /// Outcome of resolving the log format. The resolved format is always
 /// present (falling back to [`LogFormat::Text`]); `invalid_env_warning`

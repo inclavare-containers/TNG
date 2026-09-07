@@ -12,7 +12,7 @@ TNG writes logs through the `tracing` ecosystem. This page covers the binary's l
 
 ## Error log
 
-`--log-error-file <PATH>` (env `TNG_LOG_ERROR_FILE`, env takes priority) routes ERROR+ events to a separate file. Non-error events (INFO, WARN, DEBUG) go to `--log-file` only; ERROR+ events go to the error file only — they are **disjoint** (an event never appears in both files). This lets you scan `error.log.tng` for problems without wading through verbose INFO logs. The error file reuses the same rolling config as the main file (no separate CLI). When rolling is on, the hook's error file is `error.log.<pid>.tng` (PID-derived, same as the info file).
+`--log-error-file <PATH>` (env `TNG_LOG_ERROR_FILE`, env takes priority) routes ERROR+ events to a separate file. Non-error events (INFO, WARN, DEBUG) go to `--log-file` only; ERROR+ events go to the error file only; the two are **disjoint** (an event never appears in both files). This lets you scan `error.log.tng` for problems without wading through verbose INFO logs. The error file reuses the same rolling config as the main file (no separate CLI). Under `tng exec`, the hook's ERROR events merge into the same error file (see [Hook log centralization](#hook-log-centralization)).
 
 ## Rolling (size + count)
 
@@ -39,26 +39,19 @@ The main process always funnels tracing events through `tracing_appender::non_bl
 - Rolling **off**: no rolling-appender buffer. Lines reach the file with only the non-blocking worker in the path, which drains promptly.
 - Rolling **on**: the `tracing-rolling-file` appender adds an ~8 KiB `BufWriter` in front of the worker. Lines flush at ~8 KiB fill or on rotation. For long-running services (the normal case) this is invisible; only a very short-lived process might not flush the final partial buffer before exit.
 
-The `tng-hook` path is different: the hook writes **synchronously** (no `non_blocking` worker). Rolling on still adds the ~8 KiB rolling-appender buffer (flush at ~8 KiB or rotation); rolling off writes straight to the file.
+The `tng-hook` path is different: the hook hands each record to the main `tng exec` process, which funnels it into the same `non_blocking` worker as its own logs (rolling on still adds the ~8 KiB rolling-appender buffer in front of that worker; rolling off skips it). Hook logging never blocks the host process: if the main side falls behind, the hook drops records rather than stalling the data plane.
 
-## How `tng-hook` logs under `tng exec`
+## Hook log centralization
 
-`tng exec` runs a child process with the `tng-hook` shared library preloaded. The hook logs alongside the main process:
+`tng exec` runs a child process with the `tng-hook` shared library preloaded. Rather than each hooked child opening its own log file, the main process centralizes hook logging so every hook record merges into the same `--log-file` / `--log-error-file` the main process owns.
 
-- **Rolling off (default):** the hook shares the parent's log file and appends concurrently. Both write the same JSON/text format.
-- **Rolling on:** the hook writes its **own** file, named by inserting `.<pid>` before the last `.`-extension of the parent's path, and rolls it independently. The parent and the hook never share a file, so rotation cannot drop each other's data.
+ERROR events from the hook land in the error file; everything else lands in the info file. There are no per-process log files, so a long-running deployment with many hook processes no longer risks inode exhaustion from per-process rolling files. Rolling is owned centrally by the main process; the hook writes no rolling files of its own.
 
-The naming rule: take the parent path and insert `.<pid>` immediately before the final `.`-extension. Examples (with pid `12345`):
+Centralization applies only when the log path is a regular file, a symlink to a regular file, or a not-yet-existing path (so it can merge into the same rolling file the main process owns). The info and error streams are judged independently. A non-regular path (a character device such as `/dev/null` or `/dev/tty`, a FIFO, a socket, or a directory) is not centralized: the hook appends to that path directly, with no per-process file.
 
-| Parent path | Hook file |
-|---|---|
-| `info.log.tng` | `info.log.12345.tng` |
-| `tng.log` | `tng.12345.log` |
-| `tng` (no extension) | `tng.12345` |
+Centralization is Linux-only; on other platforms the hook always appends directly.
 
-The hook's numbered backups (e.g. `info.log.12345.tng.1`) therefore never collide with the parent's backups (`info.log.tng.1`).
-
-The hook uses the same buffered appender as the parent when rolling is on, so the same flushing behavior applies (see [Flushing](#flushing)).
+The hook records use the same JSON or text format as the main process (set by `--log-format`).
 
 ## Example (container entrypoint)
 
@@ -66,6 +59,7 @@ The hook uses the same buffered appender as the parent when rolling is on, so th
 tng exec --config-file "$TNG_CONFIG" \
   --log-format json \
   --log-file /home/admin/logs/info.log.tng \
+  --log-error-file /home/admin/logs/error.log.tng \
   --log-rolling --log-max-size 64MB --log-max-backups 5 \
   -- "$INFER_LAUNCHER"
 ```

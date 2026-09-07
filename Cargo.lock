@@ -7870,9 +7870,10 @@ dependencies = [
  "libc",
  "scopeguard",
  "serde_json",
+ "socket2 0.5.10",
+ "tempfile",
  "tng-hook-types",
  "tracing",
- "tracing-rolling-file",
  "tracing-subscriber",
 ]
 
@@ -7885,6 +7886,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
 ]

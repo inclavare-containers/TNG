@@ -286,8 +286,8 @@ path = "tests/hook/ingress_hook_capture_local_traffic_true.rs"
 required-features = ["on-bin"]
 
 [[test]]
-name = "log_rolling"
-path = "tests/hook/log_rolling.rs"
+name = "log_ipc_centralization"
+path = "tests/hook/log_ipc_centralization.rs"
 required-features = ["on-bin"]
 
 [[test]]

@@ -9,8 +9,11 @@ mod control_interface;
 pub mod error;
 #[cfg(not(wasm))]
 pub mod exec;
+#[cfg(target_os = "linux")]
+pub mod hook_log_collector;
 #[cfg(not(wasm))]
 mod observability;
+pub mod rolling;
 #[cfg(not(wasm))]
 pub mod runtime;
 #[cfg(not(wasm))]

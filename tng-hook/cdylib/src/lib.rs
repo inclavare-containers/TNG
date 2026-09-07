@@ -1,12 +1,14 @@
-use std::io::Write as _;
+use std::io::{self, ErrorKind, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::raw::c_void;
-use std::sync::{Arc, OnceLock};
+use std::os::unix::io::{FromRawFd, IntoRawFd};
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use libc::{c_int, size_t, sockaddr, socklen_t, ssize_t};
 use tng_hook_types::{
-    EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup, IngressHookMappingTable,
-    LevelRoutingWriter,
+    encode_frame, EgressHookMappingLookup, EgressHookMappingTable, IngressHookLookup,
+    IngressHookMappingTable, LevelRoutingWriter, Route,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
@@ -35,23 +37,6 @@ type SendtoFn = unsafe extern "C" fn(
 ) -> ssize_t;
 
 static REAL_SENDTO: OnceLock<SendtoFn> = OnceLock::new();
-
-/// Holds the hook's rolling appender so the `#[ctor::dtor]` below can flush
-/// its BufWriter on process exit. Rust statics (incl. the global subscriber
-/// that owns the appender) are not dropped on exit, so without an explicit
-/// flush the last buffered log lines would be lost. Only set when rolling is
-/// enabled and a log file is configured.
-static HOOK_ROLLING_APPENDER: OnceLock<
-    Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>,
-> = OnceLock::new();
-
-/// Holds the hook's rolling ERROR appender (separate file for ERROR+ events
-/// when `TNG_HOOK_LOG_ERROR_FILE` is injected by `tng exec`). Same flush-on-exit
-/// rationale as `HOOK_ROLLING_APPENDER`. Only set when rolling is enabled AND
-/// an error file path is configured.
-static HOOK_ROLLING_ERROR_APPENDER: OnceLock<
-    Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>,
-> = OnceLock::new();
 
 static INGRESS_LOOKUP: OnceLock<IngressHookLookup> = OnceLock::new();
 
@@ -82,37 +67,185 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
     }
 }
 
-/// A `MakeWriter` over a shared `Arc<Mutex<RollingFileAppenderBase>>`.
-///
-/// The appender must be shared between the fmt layer (which writes) and the
-/// `#[ctor::dtor]` (which flushes on exit). `Arc<Mutex<..>>` cannot be used
-/// directly as a `MakeWriter`: tracing-subscriber's blanket `impl MakeWriter
-/// for Arc<W>` does not satisfy the `for<'a> MakeWriter<'a>` HRTB. So we wrap
-/// it and implement `MakeWriter` directly, delegating each write to the inner
-/// `Mutex` (same `MutexGuardWriter`-equivalent path the plain `Mutex<W>` uses).
-struct SharedRollingWriter(Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>);
+/// Per-connection state for the centralized socket sink. `pending` holds the
+/// unsent tail of at most one partially-written frame. Because framing is
+/// length-prefixed with no resync marker, the writer must never leave a
+/// half-frame on the wire: a partial is either completed on the next event or
+/// dropped at cdylib exit (and the collector's `FrameDecoder::drain_partial`
+/// handles a truncated final frame on EOF). One pending frame bounds memory.
+struct ConnState {
+    stream: UnixStream,
+    pending: Option<Vec<u8>>,
+}
 
-/// A write handle that locks the shared appender for the duration of a write.
-struct SharedRollingWriterGuard<'a>(
-    std::sync::MutexGuard<'a, tracing_rolling_file::RollingFileAppenderBase>,
-);
+/// A shared, mutex-guarded connection to the collector's abstract-namespace
+/// socket. One `Conn` is reused across both the Info and Error sinks when
+/// both streams carry the same socket name (route byte demuxes on the
+/// collector).
+type Conn = Arc<Mutex<ConnState>>;
 
-impl std::io::Write for SharedRollingWriterGuard<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf)
-    }
-    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.0.write_all(buf)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
+/// Where a hook log line goes: an abstract-namespace UDS to the `tng exec`
+/// collector (`Socket`), a directly-appended file (`File`), or stderr
+/// (`Stderr`). `Socket` is the centralized path: the cdylib frames each
+/// record and streams it to the collector, which owns rolling/file rotation.
+/// `File`/`Stderr` are the non-centralized fallbacks.
+#[derive(Clone)]
+enum SinkKind {
+    Socket(Arc<Mutex<ConnState>>),
+    File(Arc<Mutex<std::fs::File>>),
+    Stderr,
+}
+
+/// A `MakeWriter` producing one `HookSinkWriter` per log event, tagged with
+/// the stream `route` (Info vs Error) so the collector can split them.
+struct HookSink {
+    kind: SinkKind,
+    route: Route,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for HookSink {
+    type Writer = HookSinkWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        HookSinkWriter {
+            kind: self.kind.clone(),
+            route: self.route,
+            buf: Vec::new(),
+        }
     }
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedRollingWriter {
-    type Writer = SharedRollingWriterGuard<'a>;
-    fn make_writer(&'a self) -> Self::Writer {
-        SharedRollingWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
+/// Per-event write handle. `Socket` buffers writes in memory and emits one
+/// framed record (`encode_frame`) on drop, so each tracing event becomes
+/// exactly one wire frame. `File`/`Stderr` write straight through (no
+/// framing), matching the old append/stderr behavior. The socket is
+/// non-blocking (set at connect time), so a stalled collector can never block
+/// the hooked host: `WouldBlock` and other I/O errors are swallowed.
+struct HookSinkWriter {
+    kind: SinkKind,
+    route: Route,
+    buf: Vec<u8>,
+}
+
+impl Write for HookSinkWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match &self.kind {
+            SinkKind::Socket(_) => {
+                self.buf.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            SinkKind::File(f) => f.lock().unwrap_or_else(|e| e.into_inner()).write(buf),
+            SinkKind::Stderr => std::io::stderr().write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match &self.kind {
+            // The buffered payload is framed and sent on Drop, not here: a
+            // mid-event `flush()` must not split one record into partial frames.
+            SinkKind::Socket(_) => Ok(()),
+            SinkKind::File(f) => f.lock().unwrap_or_else(|e| e.into_inner()).flush(),
+            SinkKind::Stderr => std::io::stderr().flush(),
+        }
+    }
+}
+
+/// Try to flush a stuck partial tail (`pending`) non-blocking. Returns true
+/// when there is no pending tail left (it drained fully, there was none, or a
+/// dead stream made us drop it); false when `WouldBlock` left bytes still
+/// unflushed, in which case the caller must not send a new frame this round
+/// (the partial must complete first to keep the wire framed).
+fn drain_pending<W: Write>(stream: &mut W, pending: &mut Option<Vec<u8>>) -> bool {
+    let mut tail = match pending.take() {
+        Some(t) => t,
+        None => return true,
+    };
+    let mut written = 0;
+    while written < tail.len() {
+        match stream.write(&tail[written..]) {
+            Ok(0) => return true,
+            Ok(n) => written += n,
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                tail.drain(..written);
+                *pending = Some(tail);
+                return false;
+            }
+            Err(_) => return true,
+        }
+    }
+    true
+}
+
+/// Send a new `frame` non-blocking. Returns `Some(unsent_tail)` when a partial
+/// write left bytes unflushed (to store as the sole pending frame); `None`
+/// when the whole frame was sent or the stream is closed or errored (frame
+/// dropped). Never blocks.
+fn send_frame<W: Write>(stream: &mut W, frame: &[u8]) -> Option<Vec<u8>> {
+    let mut written = 0;
+    while written < frame.len() {
+        match stream.write(&frame[written..]) {
+            Ok(0) => return None,
+            Ok(n) => written += n,
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => break,
+            Err(_) => return None,
+        }
+    }
+    if written < frame.len() {
+        Some(frame[written..].to_vec())
+    } else {
+        None
+    }
+}
+
+impl HookSinkWriter {
+    /// Flush the in-memory buffer into one framed record on the socket. The
+    /// socket is non-blocking, so a stalled collector can never block the host
+    /// here. Drain ordering guarantees the wire only ever carries complete
+    /// frames mid-stream: (1) finish any pending tail first, and if it is
+    /// still stuck, drop this event's frame rather than queue behind it; (2)
+    /// otherwise send this frame, and a partial leaves the unsent tail as the
+    /// sole pending frame for the next round.
+    fn flush_frame(&mut self) {
+        let SinkKind::Socket(conn) = &self.kind else {
+            return;
+        };
+        if self.buf.is_empty() {
+            return;
+        }
+        let frame = encode_frame(self.route, &self.buf);
+        self.buf.clear();
+        // Bind a `&mut ConnState` so the disjoint `stream`/`pending` field
+        // borrows below are accepted (disjoint borrows do not propagate
+        // through `MutexGuard`'s `DerefMut`).
+        let mut guard = conn.lock().unwrap_or_else(|e| e.into_inner());
+        let state = &mut *guard;
+        if !drain_pending(&mut state.stream, &mut state.pending) {
+            return;
+        }
+        state.pending = send_frame(&mut state.stream, &frame);
+    }
+}
+
+impl Drop for HookSinkWriter {
+    fn drop(&mut self) {
+        self.flush_frame();
+    }
+}
+
+/// Open `path` for append, returning a `File` sink. On failure (e.g. the
+/// directory does not exist) fall back to `Stderr` rather than aborting: a
+/// cdylib ctor must never kill the host process it is injected into just
+/// because a log file is unavailable.
+fn open_log_sink(path: &str) -> SinkKind {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(f) => SinkKind::File(Arc::new(Mutex::new(f))),
+        Err(e) => {
+            eprintln!("tng-hook: open log file {path} failed: {e}");
+            SinkKind::Stderr
+        }
     }
 }
 
@@ -148,49 +281,50 @@ where
     }
 }
 
-/// Build a `SharedRollingWriter` for the given base log path, deriving the
-/// PID-collision-free path via `hook_log_path`, constructing the rolling
-/// appender, and stashing its `Arc<Mutex<..>>` clone in the provided global
-/// `OnceLock` so the `#[ctor::dtor]` can flush the BufWriter on exit. Used for
-/// both the info writer (`HOOK_ROLLING_APPENDER`) and the error writer
-/// (`HOOK_ROLLING_ERROR_APPENDER`).
-fn make_rolling_writer(
-    base_path: &str,
-    global: &'static OnceLock<Arc<std::sync::Mutex<tracing_rolling_file::RollingFileAppenderBase>>>,
-    rolling: tng_hook_types::RollingConfig,
-) -> SharedRollingWriter {
-    let derived =
-        tng_hook_types::hook_log_path(std::path::Path::new(base_path), std::process::id());
-    let appender = tracing_rolling_file::RollingFileAppenderBase::new(
-        derived,
-        tracing_rolling_file::RollingConditionBase::new().max_size(rolling.max_size),
-        rolling.max_backups,
-    )
-    .unwrap_or_else(|e| panic!("tng-hook: failed to open rolling log file {base_path:?}: {e}"));
-    // One Arc clone goes to SharedRollingWriter (the fmt layer's MakeWriter),
-    // one is stashed in the global so the dtor can flush on exit.
-    let writer = Arc::new(std::sync::Mutex::new(appender));
-    let _ = global.set(writer.clone());
-    SharedRollingWriter(writer)
+/// Decide which socket(s) to connect from the per-stream socket-path env
+/// values. When both paths are equal, shares ONE connection (shared-socket +
+/// route byte: one fd, the collector demuxes by route byte). Pure modulo the
+/// `connect` callback, so the dedup logic is unit-testable with a mock
+/// connector instead of a real abstract-namespace socket.
+fn resolve_connections<C: Fn(&str) -> io::Result<Conn>>(
+    info_path: Option<&str>,
+    error_path: Option<&str>,
+    connect: &C,
+) -> io::Result<(Option<Conn>, Option<Conn>)> {
+    let info_conn = match info_path {
+        Some(p) => Some(connect(p)?),
+        None => None,
+    };
+    let error_conn = match error_path {
+        // Different path than info -> open a second connection.
+        Some(ep) if Some(ep) != info_path => Some(connect(ep)?),
+        // Same path as info -> reuse the one connection (route byte demuxes).
+        Some(_) => info_conn.clone(),
+        None => None,
+    };
+    Ok((info_conn, error_conn))
 }
 
-/// Destructor: flush the hook's rolling appender's BufWriter when the `.so`
-/// is unloaded at process exit. Rust statics (incl. the global subscriber that
-/// owns the appender) are not dropped on exit, so without this the last ~8 KiB
-/// of buffered logs would never reach the file. Runs on normal exit / `exit()`;
-/// not on SIGKILL. Poison is tolerated (a panicked holder still leaves the
-/// appender flushable) via `into_inner`. Flushes BOTH the info appender and
-/// the error appender (when `TNG_HOOK_LOG_ERROR_FILE` is configured).
-#[ctor::dtor]
-fn flush_rolling_appender_on_exit() {
-    if let Some(appender) = HOOK_ROLLING_APPENDER.get() {
-        let mut guard = appender.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = guard.flush();
-    }
-    if let Some(appender) = HOOK_ROLLING_ERROR_APPENDER.get() {
-        let mut guard = appender.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = guard.flush();
-    }
+/// Connect to the `tng exec` log collector over an abstract-namespace Unix
+/// domain socket (`\0<name>`). Abstract namespaces avoid filesystem path
+/// collisions and need no cleanup. The socket is set non-blocking before the
+/// fd is handed to `UnixStream`, so a collector that stalls can never block the
+/// hooked process's log path.
+fn connect_hook_socket(name: &str) -> io::Result<Arc<Mutex<ConnState>>> {
+    let sock = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+    let addr = socket2::SockAddr::unix(std::path::Path::new(&format!("\0{}", name)))?;
+    sock.connect(&addr)?;
+    sock.set_nonblocking(true)?;
+    // socket2 has no `From<Socket>` for `UnixStream`; convert via the raw fd.
+    // The non-blocking flag set above persists on the fd.
+    let fd = sock.into_raw_fd();
+    // SAFETY: `fd` is a valid, connected, non-blocking UNIX socket we just
+    // created; `into_raw_fd` transferred ownership to us.
+    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    Ok(Arc::new(Mutex::new(ConnState {
+        stream,
+        pending: None,
+    })))
 }
 
 /// Initialize the library at load time.
@@ -200,94 +334,111 @@ fn flush_rolling_appender_on_exit() {
 /// the mapping lookup table from the `TNG_HOOK_EGRESS_MAPPINGS` env var.
 #[ctor::ctor]
 fn init() {
-    // Initialize tracing subscriber based on TNG_HOOK_LOG_FILE env var.
-    // When set, write to the specified file; otherwise fall back to stderr.
-    // Uses `set_default` so it won't panic if the host already has a subscriber.
-    let log_file_path = std::env::var("TNG_HOOK_LOG_FILE").ok();
+    // Resolve the real libc functions FIRST. The centralized log path below
+    // opens an abstract-namespace UDS via `socket2::Socket::connect`, which
+    // routes through this library's own intercepted `connect` (the PLT
+    // resolves to our exported symbol); that passthrough needs `REAL_CONNECT`
+    // already set, so dlsym must precede any socket creation here.
+    unsafe {
+        let real_bind = resolve_libc_symbol::<BindFn>("bind").expect("Failed to resolve libc bind");
+        let _ = REAL_BIND.set(real_bind);
 
+        let real_getsockname = resolve_libc_symbol::<GetsocknameFn>("getsockname")
+            .expect("Failed to resolve libc getsockname");
+        let _ = REAL_GETSOCKNAME.set(real_getsockname);
+
+        let real_connect =
+            resolve_libc_symbol::<ConnectFn>("connect").expect("Failed to resolve libc connect");
+        let _ = REAL_CONNECT.set(real_connect);
+
+        let real_sendto =
+            resolve_libc_symbol::<SendtoFn>("sendto").expect("Failed to resolve libc sendto");
+        let _ = REAL_SENDTO.set(real_sendto);
+    }
+
+    // Route hook logs to one of three sinks per stream (info vs error):
+    //   * `TNG_HOOK_LOG_SOCKET` (info) / `TNG_HOOK_LOG_ERROR_SOCKET` (error)
+    //     set -> stream framed records to the `tng exec` collector over an
+    //     abstract-namespace UDS (the centralized path; the collector owns
+    //     rolling/file rotation). Presence flags centralization, value is the
+    //     socket name. When both vars carry the same name the cdylib connects
+    //     once and demuxes by route byte.
+    //   * `TNG_HOOK_LOG_FILE` / `TNG_HOOK_LOG_ERROR_FILE` set -> append directly
+    //     to that file (non-centralized fallback, current behavior).
+    //   * neither set (info only) -> stderr.
+    // Uses `.init()` (not `set_default`), which panics if the host already set
+    // a global subscriber. The LD_PRELOAD child is the only subscriber here, so
+    // that is the intended behavior; a host that already has its own subscriber
+    // will crash, which surfaces the conflict instead of silently dropping logs.
     let log_format: tng_hook_types::LogFormat = std::env::var("TNG_HOOK_LOG_FORMAT")
         .or_else(|_| std::env::var("TNG_LOG_FORMAT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(tng_hook_types::LogFormat::Text);
-    let rolling = tng_hook_types::RollingConfig::from_hook_env();
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    // Optional separate error log file (injected by `tng exec` when the user
-    // passes --log-error-file). When set, ERROR+ events go to the error writer
-    // and everything else to the info writer (disjoint — see LevelRoutingWriter).
-    // Only meaningful when an info log file is also configured.
-    let error_file_path = std::env::var("TNG_HOOK_LOG_ERROR_FILE").ok();
+
+    // Per-stream socket paths: presence = "this stream is centralized",
+    // value = the socket name. On connect failure the Options stay None and
+    // the sinks below fall back to file/stderr (info) or file/None (error, in
+    // which case the routing writer sends error events to the info sink).
+    let info_sock_path = std::env::var("TNG_HOOK_LOG_SOCKET").ok();
+    let error_sock_path = std::env::var("TNG_HOOK_LOG_ERROR_SOCKET").ok();
+    let (info_conn, error_conn) = match resolve_connections(
+        info_sock_path.as_deref(),
+        error_sock_path.as_deref(),
+        &connect_hook_socket,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("tng-hook: hook log socket connect failed: {e}");
+            (None, None)
+        }
+    };
+
+    let info_sink = if let Some(c) = info_conn {
+        HookSink {
+            kind: SinkKind::Socket(c),
+            route: Route::Info,
+        }
+    } else if let Ok(p) = std::env::var("TNG_HOOK_LOG_FILE") {
+        HookSink {
+            kind: open_log_sink(&p),
+            route: Route::Info,
+        }
+    } else {
+        HookSink {
+            kind: SinkKind::Stderr,
+            route: Route::Info,
+        }
+    };
+
+    let error_sink = if let Some(c) = error_conn {
+        Some(HookSink {
+            kind: SinkKind::Socket(c),
+            route: Route::Error,
+        })
+    } else if let Ok(p) = std::env::var("TNG_HOOK_LOG_ERROR_FILE") {
+        Some(HookSink {
+            kind: open_log_sink(&p),
+            route: Route::Error,
+        })
+    } else {
+        None
+    };
+
+    // Only colorize the pure-stderr fallback (info to a tty, no separate error
+    // stream): that path never reaches the collector, so ANSI escapes can't
+    // corrupt machine-parsed frames. Centralized/file sinks are always plain.
+    let ansi = matches!(info_sink.kind, SinkKind::Stderr)
+        && error_sink.is_none()
+        && atty::is(atty::Stream::Stderr);
+
+    let layer_writer = LevelRoutingWriter::new(info_sink, error_sink);
     let layer: Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync> =
-        if let Some(ref path) = log_file_path {
-            // When rolling is on, the hook writes its OWN file (pid-derived,
-            // collision-free with the parent's base.N backups) and rolls it
-            // independently — no shared file, no stale fd. When rolling is off,
-            // share the parent's file (concurrent append, current behavior).
-            if rolling.enabled {
-                let info_writer = make_rolling_writer(path, &HOOK_ROLLING_APPENDER, rolling);
-                let layer_writer = if let Some(ref epath) = error_file_path {
-                    let error_writer =
-                        make_rolling_writer(epath, &HOOK_ROLLING_ERROR_APPENDER, rolling);
-                    LevelRoutingWriter::new(info_writer, Some(error_writer))
-                } else {
-                    LevelRoutingWriter::new(info_writer, None::<SharedRollingWriter>)
-                };
-                build_log_layer(log_format, layer_writer, false, filter)
-            } else {
-                let info_file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .unwrap_or_else(|e| panic!("tng-hook: failed to open log file {path:?}: {e}"));
-                let info_writer = std::sync::Mutex::new(info_file);
-                let layer_writer = if let Some(ref epath) = error_file_path {
-                    let error_file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(epath)
-                        .unwrap_or_else(|e| {
-                            panic!("tng-hook: failed to open error log file {epath:?}: {e}")
-                        });
-                    let error_writer = std::sync::Mutex::new(error_file);
-                    LevelRoutingWriter::new(info_writer, Some(error_writer))
-                } else {
-                    LevelRoutingWriter::new(info_writer, None::<std::sync::Mutex<std::fs::File>>)
-                };
-                build_log_layer(log_format, layer_writer, false, filter)
-            }
-        } else {
-            build_log_layer(
-                log_format,
-                std::sync::Mutex::new(std::io::stderr()),
-                atty::is(atty::Stream::Stderr),
-                filter,
-            )
-        };
+        build_log_layer(log_format, layer_writer, ansi, filter);
     tracing_subscriber::registry().with(layer).init();
-
-    // Resolve real functions directly from libc
-    unsafe {
-        let real_bind = resolve_libc_symbol::<BindFn>("bind").expect("Failed to resolve libc bind");
-        tracing::debug!("init: resolved libc bind");
-        let _ = REAL_BIND.set(real_bind);
-
-        let real_getsockname = resolve_libc_symbol::<GetsocknameFn>("getsockname")
-            .expect("Failed to resolve libc getsockname");
-        tracing::debug!("init: resolved libc getsockname");
-        let _ = REAL_GETSOCKNAME.set(real_getsockname);
-
-        let real_connect =
-            resolve_libc_symbol::<ConnectFn>("connect").expect("Failed to resolve libc connect");
-        tracing::debug!("init: resolved libc connect");
-        let _ = REAL_CONNECT.set(real_connect);
-
-        let real_sendto =
-            resolve_libc_symbol::<SendtoFn>("sendto").expect("Failed to resolve libc sendto");
-        tracing::debug!("init: resolved libc sendto");
-        let _ = REAL_SENDTO.set(real_sendto);
-    }
 
     // Build egress lookup from env var
     match std::env::var("TNG_HOOK_EGRESS_MAPPINGS") {
@@ -773,7 +924,7 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
                     dst_addr.port(),
                     proxy_port
                 );
-                return 0;
+                0
             } else {
                 tracing::warn!(
                     "connect hijacked: {}:{} — proxy returned {}: {}",
@@ -785,7 +936,7 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
                 unsafe {
                     *libc::__errno_location() = libc::ECONNREFUSED;
                 }
-                return -1;
+                -1
             }
         }
         Err(e) => {
@@ -798,7 +949,7 @@ pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen
             unsafe {
                 *libc::__errno_location() = libc::ECONNREFUSED;
             }
-            return -1;
+            -1
         }
     }
 }
@@ -904,6 +1055,339 @@ mod tests {
     fn rejects_native_ipv6_connect_destination() {
         let addr = make_sockaddr_v6(&SocketAddrV6::new(Ipv6Addr::LOCALHOST, 32000, 0, 0));
         assert_eq!(unsafe { parse(&addr) }, None);
+    }
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use tng_hook_types::{encode_frame, FrameDecoder, Route};
+
+    #[test]
+    fn socket_kind_buffers_and_frames_one_frame_per_writer_drop() {
+        // Socket kind with a real stream: use a socketpair to capture bytes.
+        let (mut a, b) = UnixStream::pair().unwrap();
+        b.set_nonblocking(true).unwrap();
+        let conn = Arc::new(Mutex::new(ConnState {
+            stream: b,
+            pending: None,
+        }));
+        {
+            let mut w = HookSinkWriter {
+                kind: SinkKind::Socket(conn.clone()),
+                route: Route::Info,
+                buf: Vec::new(),
+            };
+            w.write_all(b"hello ").unwrap();
+            w.write_all(b"world\n").unwrap();
+            // drop -> one frame
+        }
+        // Close the write end so read_to_end sees EOF; the outer `conn` still
+        // holds b, so without this drop the read would block forever.
+        drop(conn);
+        let mut bytes = Vec::new();
+        a.read_to_end(&mut bytes).unwrap();
+        let mut d = FrameDecoder::new();
+        d.push(&bytes);
+        let (route, payload) = d.next_frame().unwrap().unwrap();
+        assert_eq!(route, Route::Info);
+        assert_eq!(payload, b"hello world\n");
+        assert!(d.next_frame().is_none());
+    }
+
+    /// A writer that accepts up to `budget` total bytes, then returns
+    /// `WouldBlock` (models a full kernel send buffer). The test raises the
+    /// budget to simulate the collector draining.
+    struct BudgetWriter {
+        out: Vec<u8>,
+        budget: usize,
+        written: usize,
+    }
+
+    impl Write for BudgetWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.written >= self.budget {
+                return Err(io::Error::new(ErrorKind::WouldBlock, "send buffer full"));
+            }
+            let n = std::cmp::min(buf.len(), self.budget - self.written);
+            self.out.extend_from_slice(&buf[..n]);
+            self.written += n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A partial first send must leave the unsent tail as `pending` instead of
+    /// writing a truncated length-prefixed frame that would desync the
+    /// collector. The wire only carries the bytes that actually went out.
+    #[test]
+    fn send_frame_partial_leaves_unsent_tail_as_pending() {
+        let frame = encode_frame(Route::Info, b"hello world\n"); // 17 bytes
+        let mut w = BudgetWriter {
+            out: Vec::new(),
+            budget: 3,
+            written: 0,
+        };
+        let pending = send_frame(&mut w, &frame);
+        assert_eq!(pending.as_deref(), Some(&frame[3..]));
+        // Only the first 3 bytes hit the wire; the rest is pending, so no
+        // complete valid frame is decodable yet (no desync).
+        assert_eq!(w.out, &frame[..3]);
+        let mut d = FrameDecoder::new();
+        d.push(&w.out);
+        assert!(
+            !matches!(d.next_frame(), Some(Ok(_))),
+            "partial bytes must not decode to a valid frame (would desync)"
+        );
+    }
+
+    /// When the collector drains (budget raised), the pending tail is flushed
+    /// and the frame completes. The reassembled wire bytes decode to the
+    /// original full frame.
+    #[test]
+    fn drain_pending_completes_truncated_frame_after_drain() {
+        let frame = encode_frame(Route::Info, b"hello world\n");
+        let mut w = BudgetWriter {
+            out: Vec::new(),
+            budget: 3,
+            written: 0,
+        };
+        // First event: partial -> pending = frame[3..].
+        let mut pending = send_frame(&mut w, &frame);
+        assert_eq!(pending.as_deref(), Some(&frame[3..]));
+        // Collector drained: raise the budget so the tail can flush fully.
+        w.budget = frame.len() + 10;
+        let fully_drained = drain_pending(&mut w, &mut pending);
+        assert!(fully_drained);
+        assert!(pending.is_none());
+        // The wire now has the complete frame and decodes cleanly.
+        assert_eq!(w.out, &frame[..]);
+        let mut d = FrameDecoder::new();
+        d.push(&w.out);
+        let (route, payload) = d.next_frame().unwrap().unwrap();
+        assert_eq!(route, Route::Info);
+        assert_eq!(payload, b"hello world\n");
+        assert!(d.next_frame().is_none());
+    }
+
+    /// If the pending tail still cannot fully drain (EAGAIN mid-tail), the
+    /// remaining bytes stay pending and the partially-flushed bytes are on
+    /// the wire (still no complete frame, still no desync).
+    #[test]
+    fn drain_pending_eagain_keeps_remaining_tail() {
+        let frame = encode_frame(Route::Info, b"hello world\n"); // 17 bytes
+                                                                 // 14-byte pending tail (frame[3..]) with a 5-byte budget.
+        let mut pending = Some(frame[3..].to_vec());
+        let mut w = BudgetWriter {
+            out: Vec::new(),
+            budget: 5,
+            written: 0,
+        };
+        let fully_drained = drain_pending(&mut w, &mut pending);
+        assert!(!fully_drained);
+        // 5 of 14 bytes drained; the remaining 9 stay pending.
+        assert_eq!(pending.as_deref(), Some(&frame[3 + 5..]));
+        assert_eq!(w.out, &frame[3..3 + 5]);
+        // Still no complete valid frame decodable from the partial bytes.
+        let mut d = FrameDecoder::new();
+        d.push(&w.out);
+        assert!(
+            !matches!(d.next_frame(), Some(Ok(_))),
+            "partial bytes must not decode to a valid frame (would desync)"
+        );
+    }
+
+    #[test]
+    fn file_kind_writes_through_no_buffering() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let f = Arc::new(Mutex::new(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(tmp.path())
+                .unwrap(),
+        ));
+        {
+            let mut w = HookSinkWriter {
+                kind: SinkKind::File(f.clone()),
+                route: Route::Info,
+                buf: Vec::new(),
+            };
+            w.write_all(b"direct\n").unwrap();
+        }
+        let contents = std::fs::read_to_string(tmp.path()).unwrap();
+        assert!(contents.contains("direct\n"));
+    }
+
+    /// Both an Info and an Error `HookSinkWriter` sharing one
+    /// `Arc<Mutex<ConnState>>` (the single shared socket the cdylib opens when
+    /// both streams are centralized) must frame each event independently with
+    /// its own route tag. Interleaved drops produce a byte stream a real
+    /// `FrameDecoder` reassembles into two correctly-tagged frames. Guards
+    /// against a regression that reuses a single route for both streams.
+    #[test]
+    fn shared_socket_dual_route_frames_independently() {
+        let (mut a, b) = UnixStream::pair().unwrap();
+        b.set_nonblocking(true).unwrap();
+        let conn = Arc::new(Mutex::new(ConnState {
+            stream: b,
+            pending: None,
+        }));
+
+        // Interleave drops: Info writer, then Error writer, then another Info,
+        // all on the same shared connection.
+        {
+            let mut w = HookSinkWriter {
+                kind: SinkKind::Socket(conn.clone()),
+                route: Route::Info,
+                buf: Vec::new(),
+            };
+            w.write_all(b"info-1\n").unwrap();
+            // drop -> one Info frame
+        }
+        {
+            let mut w = HookSinkWriter {
+                kind: SinkKind::Socket(conn.clone()),
+                route: Route::Error,
+                buf: Vec::new(),
+            };
+            w.write_all(b"error-1\n").unwrap();
+            // drop -> one Error frame
+        }
+        {
+            let mut w = HookSinkWriter {
+                kind: SinkKind::Socket(conn.clone()),
+                route: Route::Info,
+                buf: Vec::new(),
+            };
+            w.write_all(b"info-2\n").unwrap();
+            // drop -> one Info frame
+        }
+        // Release the write end so read_to_end sees EOF.
+        drop(conn);
+
+        let mut bytes = Vec::new();
+        a.read_to_end(&mut bytes).unwrap();
+
+        let mut d = FrameDecoder::new();
+        d.push(&bytes);
+        let (r1, p1) = d.next_frame().unwrap().expect("frame 1 ok");
+        let (r2, p2) = d.next_frame().unwrap().expect("frame 2 ok");
+        let (r3, p3) = d.next_frame().unwrap().expect("frame 3 ok");
+        assert!(d.next_frame().is_none());
+
+        assert_eq!(r1, Route::Info);
+        assert_eq!(p1, b"info-1\n");
+        assert_eq!(r2, Route::Error);
+        assert_eq!(p2, b"error-1\n");
+        assert_eq!(r3, Route::Info);
+        assert_eq!(p3, b"info-2\n");
+    }
+
+    /// Mock connector for `resolve_connections`: counts how many times it is
+    /// called, records the paths it was asked to connect, and returns a fresh
+    /// dummy `ConnState` (a real socketpair end, never read). The dedup logic
+    /// is pure modulo this callback, so this exercises it without any real
+    /// abstract-namespace socket.
+    struct MockConnector {
+        calls: usize,
+        paths: Vec<String>,
+    }
+
+    impl MockConnector {
+        fn new() -> Self {
+            Self {
+                calls: 0,
+                paths: Vec::new(),
+            }
+        }
+    }
+
+    fn mock_connect(
+        state: &Mutex<MockConnector>,
+    ) -> impl Fn(&str) -> io::Result<Arc<Mutex<ConnState>>> + '_ {
+        move |path: &str| {
+            let mut g = state.lock().unwrap();
+            g.calls += 1;
+            g.paths.push(path.to_string());
+            // A throwaway socketpair end satisfies `ConnState`'s `UnixStream`
+            // field; the unit test never reads it.
+            let (_a, b) = UnixStream::pair().unwrap();
+            Ok(Arc::new(Mutex::new(ConnState {
+                stream: b,
+                pending: None,
+            })))
+        }
+    }
+
+    #[test]
+    fn resolve_connections_both_paths_equal_shares_one_connection() {
+        let state = Mutex::new(MockConnector::new());
+        let connect = mock_connect(&state);
+        let (info_conn, error_conn) =
+            resolve_connections(Some("sock"), Some("sock"), &connect).unwrap();
+        let g = state.lock().unwrap();
+        assert_eq!(g.calls, 1, "same path -> connect once");
+        assert_eq!(g.paths, vec!["sock".to_string()]);
+        drop(g);
+        let info = info_conn.expect("info_conn present");
+        let error = error_conn.expect("error_conn present");
+        assert!(
+            Arc::ptr_eq(&info, &error),
+            "same path -> error_conn is the same Arc as info_conn"
+        );
+    }
+
+    #[test]
+    fn resolve_connections_distinct_paths_open_two_connections() {
+        let state = Mutex::new(MockConnector::new());
+        let connect = mock_connect(&state);
+        let (info_conn, error_conn) =
+            resolve_connections(Some("info-sock"), Some("error-sock"), &connect).unwrap();
+        let g = state.lock().unwrap();
+        assert_eq!(g.calls, 2, "different paths -> connect twice");
+        assert_eq!(
+            g.paths,
+            vec!["info-sock".to_string(), "error-sock".to_string()]
+        );
+        drop(g);
+        let info = info_conn.expect("info_conn present");
+        let error = error_conn.expect("error_conn present");
+        assert!(
+            !Arc::ptr_eq(&info, &error),
+            "different paths -> distinct Arcs"
+        );
+    }
+
+    #[test]
+    fn resolve_connections_info_only_connects_once_error_none() {
+        let state = Mutex::new(MockConnector::new());
+        let connect = mock_connect(&state);
+        let (info_conn, error_conn) =
+            resolve_connections(Some("info-sock"), None, &connect).unwrap();
+        let g = state.lock().unwrap();
+        assert_eq!(g.calls, 1, "info-only -> connect once");
+        assert_eq!(g.paths, vec!["info-sock".to_string()]);
+        drop(g);
+        assert!(info_conn.is_some(), "info_conn present");
+        assert!(error_conn.is_none(), "error_conn absent for info-only");
+    }
+
+    #[test]
+    fn resolve_connections_error_only_connects_once_info_none() {
+        let state = Mutex::new(MockConnector::new());
+        let connect = mock_connect(&state);
+        let (info_conn, error_conn) =
+            resolve_connections(None, Some("error-sock"), &connect).unwrap();
+        let g = state.lock().unwrap();
+        assert_eq!(g.calls, 1, "error-only -> connect once");
+        assert_eq!(g.paths, vec!["error-sock".to_string()]);
+        drop(g);
+        assert!(info_conn.is_none(), "info_conn absent for error-only");
+        assert!(error_conn.is_some(), "error_conn present");
     }
 }
 

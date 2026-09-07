@@ -2,7 +2,7 @@ mod egress;
 mod ingress;
 mod level_routing;
 mod log_format;
-mod rolling;
+mod wire;
 
 pub use egress::{EgressHookMappingEntry, EgressHookMappingLookup, EgressHookMappingTable};
 pub use ingress::{
@@ -10,4 +10,4 @@ pub use ingress::{
 };
 pub use level_routing::{EitherWriter, LevelRoutingWriter};
 pub use log_format::LogFormat;
-pub use rolling::*;
+pub use wire::{encode_frame, FrameDecoder, FrameError, Route};
