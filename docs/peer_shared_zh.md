@@ -95,7 +95,7 @@
 }
 ```
 
-> **注意**：上述示例中 `attest` 和 `verify` 使用了外部 Attestation Agent 和 Attestation Service 的地址。实际上，TNG 支持内置（builtin）的远程证明验证功能，无需单独部署外部服务。内置模式下，TNG 在本地直接验证 TEE 证据（如 TDX Quote），适合单机部署或简化部署的场景。详细配置方式请参考 [configuration.md — Builtin AS Configuration](./configuration.md#background-check-模式)。
+> **注意**：上述示例中 `attest` 和 `verify` 使用了外部 Attestation Agent 和 Attestation Service 的地址。实际上，TNG 支持内置（builtin）的远程证明验证功能，无需单独部署外部服务。内置模式下，TNG 在本地直接验证 TEE 证据（如 TDX Quote），适合单机部署或简化部署的场景。详细配置方式请参考 [remote_attestation_zh.md — 内置 AS 配置](./remote_attestation_zh.md#background-check-模式)。
 
 ## 私钥定义
 

@@ -95,7 +95,7 @@ The client side uses standard `add_ingress` configuration to send encrypted traf
 }
 ```
 
-> **Note**: The examples above use external Attestation Agent and Attestation Service addresses for `attest` and `verify`. TNG also supports a **builtin** remote attestation mode that does not require deploying external services. In builtin mode, TNG verifies TEE evidence (e.g., TDX quotes) locally, which is suitable for single-machine deployments or simplified architectures. For details, see [configuration.md — Builtin AS Configuration](./configuration.md#background-check-mode).
+> **Note**: The examples above use external Attestation Agent and Attestation Service addresses for `attest` and `verify`. TNG also supports a **builtin** remote attestation mode that does not require deploying external services. In builtin mode, TNG verifies TEE evidence (e.g., TDX quotes) locally, which is suitable for single-machine deployments or simplified architectures. For details, see [remote_attestation.md — Builtin AS Configuration](./remote_attestation.md#background-check-mode).
 
 ## Key Definitions
 

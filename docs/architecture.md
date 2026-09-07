@@ -48,7 +48,7 @@ To achieve this, TNG interacts with a key component:
 In this scenario, the Attester is like a "declarant" holding a "secure hardware-certified ID card" provided by AA to prove its innocence to the other party.
 
 > [!TIP]
-> For Attester configuration fields and examples, please refer to the [Attester section](configuration.md#attester-configuration) in the configuration manual.
+> For Attester configuration fields and examples, please refer to the [Remote Attestation Configuration](remote_attestation.md).
 
 #### Verifier: Verifying "Are You Trustworthy"
 
@@ -63,7 +63,7 @@ To complete the complex evidence verification process, TNG works in coordination
 Only when the Attestation Service returns a successful verification result will the TNG Verifier be convinced that the peer is trustworthy and allow the establishment of a secure communication channel. In this scenario, the Verifier is like an "inspector" who hands the "ID card" provided by the peer to the AS, an "authoritative certification body," for authentication and decides whether to trust the other party based on the results.
 
 > [!TIP]
-> For Verifier configuration fields and examples, please refer to the [Verifier section](configuration.md#verifier-configuration) in the configuration manual.
+> For Verifier configuration fields and examples, please refer to the [Remote Attestation Configuration](remote_attestation.md).
 
 ## Encryption Protocols and Security
 
@@ -78,7 +78,7 @@ TNG employs advanced encryption protocols to achieve communication security, imp
 *   **Using L4 Load Balancers**: Since RATS-TLS runs on top of the TCP protocol, it has good compatibility with the traditional TCP/IP stack. This means when deploying TNG, you can continue using existing Layer 4 load balancers (e.g., LVS, NAT-mode load balancers, or TCP/UDP load balancers from cloud service providers).
 
 > [!TIP]
-> RATS-TLS is the default communication protocol for TNG. See the [Remote Attestation](configuration.md#remote-attestation-common-configuration) section of the configuration manual for related configurations.
+> RATS-TLS is the default communication protocol for TNG. See the [Remote Attestation Configuration](remote_attestation.md) for related configurations.
 
 ### OHTTP (Oblivious HTTP)
 

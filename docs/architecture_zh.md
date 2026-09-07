@@ -46,7 +46,7 @@ TNG 在远程证明中扮演着核心角色，根据配置可以成为**证明�
 在该场景中，Attester 就是一个“宣誓者”，它拿着由 AA 提供的、经过安全硬件认证的“身份证”，向对方证明自己的清白。
 
 > [!TIP]
-> 关于 Attester 的配置字段及示例，请参考参数手册中的 [Attester 部分](configuration_zh.md#attester-配置)。
+> 关于 Attester 的配置字段及示例，请参考 [远程证明配置说明](remote_attestation_zh.md)。
 
 #### 验证者 (Verifier)：验证“你是否可信”
 
@@ -61,7 +61,7 @@ TNG 在远程证明中扮演着核心角色，根据配置可以成为**证明�
 只有当 Attestation Service 返回验证成功的结果时，TNG Verifier 才会确信对端是可信的，并允许建立安全的通信通道。在该场景中，Verifier 就是一个“审查官”，它将对端提供的“身份证”交给 AS 这个“权威认证机构”去鉴定真伪，并根据验证结果决定是否信任对方。
 
 > [!TIP]
-> 关于 Verifier 的配置字段及示例，请参考参数手册中的 [Verifier 部分](configuration_zh.md#verifier-配置)。
+> 关于 Verifier 的配置字段及示例，请参考 [远程证明配置说明](remote_attestation_zh.md)。
 
 ## 加密协议与安全性
 
@@ -76,7 +76,7 @@ TNG 采用了先进的加密协议来实现通信安全，通过结合远程证�
 *   **使用 4 层负载均衡器**：由于 RATS-TLS 运行在 TCP 协议之上，它与传统的 TCP/IP 栈兼容性良好。这意味着在部署 TNG 时，你可以继续使用现有的 4 层负载均衡器（例如 LVS、NAT 模式的负载均衡器或云服务提供商的 TCP/UDP 负载均衡器）。
 
 > [!TIP]
-> RATS-TLS 是 TNG 的默认通信协议。相关配置见参数手册的 [远程证明](configuration_zh.md#远程证明公共配置) 章节。
+> RATS-TLS 是 TNG 的默认通信协议。相关配置见 [远程证明配置说明](remote_attestation_zh.md)。
 
 ### OHTTP (Oblivious HTTP)
 
