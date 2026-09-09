@@ -52,6 +52,8 @@ tonic-prost = {workspace = true, optional = true}
 tracing = {workspace = true}
 ttrpc = {workspace = true, optional = true}
 x509-cert = {workspace = true, optional = true}
+# dcap-qvl: QuoteCollateralV3 type + CollateralClient for attest-side tdx-carry-collateral fetch.
+dcap-qvl = {git = "https://github.com/inclavare-containers/dcap-qvl", rev = "d8a260d8c87619cce607f24d16d8bd474b458592", default-features = false, features = ["std", "ring", "default-x509", "report"], optional = true}
 zeroize = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
@@ -111,6 +113,8 @@ attester-coco = [
   "dep:flatten-json-object",
   "dep:canon-json",
 ]
+# Attest-side DCAP collateral carry; attester fetches PCCS collateral so verifier can skip PCCS.
+tdx-carry-collateral = ["attester-coco", "dep:dcap-qvl"]
 verifier-coco = [
   "dep:tonic-prost-build",
   "dep:tonic-prost",
@@ -155,14 +159,10 @@ __builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
-builtin-as-tdx-ffi = ["__builtin-as", "attestation-service/tdx-verifier"]
 # Pure-Rust dcap-qvl backend (no libtdx-verify/libsgx_dcap_quoteverify link).
-# Statically linkable; fetches TDX collateral from a PCCS over HTTPS.
-# Mutually exclusive with builtin-as-tdx-ffi (which selects the FFI backend) —
-# never enable both in a single build (a compile error is the backstop).
 builtin-as-tdx-rust = ["__builtin-as", "attestation-service/tdx-dcap-rust"]
 
-default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "builtin-as-tdx-rust"]
+default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita", "builtin-as-tdx-rust", "tdx-carry-collateral"]
 
 [dev-dependencies]
 ctor = {workspace = true}

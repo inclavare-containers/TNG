@@ -845,6 +845,7 @@ mod lazy_always_tests {
         AttestArgs::BackgroundCheck {
             attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
                 aa_addr: AA_UDS.to_owned(),
+                tdx_carry_collateral: false,
             }),
             refresh_interval: Some(0),
         }

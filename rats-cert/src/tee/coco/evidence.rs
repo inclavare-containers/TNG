@@ -73,6 +73,17 @@ pub fn tee_from_str(tee_type: &str) -> Result<Tee> {
     })
 }
 
+/// tng-layer auxiliary verification data carried attest to verify.
+/// Adjacently-tagged: kind + data. NOTE: #[serde(other)] Unknown catch-all
+/// removed because serde does not discard the content map for unit variants in
+/// adjacently-tagged enums. Forward-compat for future variants to be revisited
+/// (internally-tagged repr supports #[serde(other)], or a Map).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum EvidenceExtension {
+    TdxCollateral(Value),
+}
+
 #[derive(Clone)]
 pub struct CocoEvidence {
     pub(self) aa_tee_type: Tee,
@@ -84,6 +95,8 @@ pub struct CocoEvidence {
     pub(self) aa_runtime_data: String,
     /// The hash algorithm used for calculating hash of aa_runtime_data.
     pub(self) aa_runtime_data_hash_algo: HashAlgo,
+    /// tng-layer auxiliary verification data (attest fills, verify consumes by kind).
+    pub(self) extensions: Option<Vec<EvidenceExtension>>,
 }
 
 impl CocoEvidence {
@@ -94,6 +107,7 @@ impl CocoEvidence {
         aa_additional_evidence: Option<Vec<u8>>,
         aa_runtime_data: String,
         aa_runtime_data_hash_algo: HashAlgo,
+        extensions: Option<Vec<EvidenceExtension>>,
     ) -> Result<Self> {
         Ok(Self {
             aa_tee_type,
@@ -101,6 +115,7 @@ impl CocoEvidence {
             aa_additional_evidence,
             aa_runtime_data,
             aa_runtime_data_hash_algo,
+            extensions,
         })
     }
 
@@ -114,6 +129,10 @@ impl CocoEvidence {
 
     pub(crate) fn aa_additional_evidence_ref(&self) -> &Option<Vec<u8>> {
         &self.aa_additional_evidence
+    }
+
+    pub(crate) fn extensions_ref(&self) -> &Option<Vec<EvidenceExtension>> {
+        &self.extensions
     }
 
     pub(crate) fn aa_runtime_data_ref(&self) -> &str {
@@ -295,6 +314,8 @@ struct CocoEvidenceCborHelper {
     pub(self) aa_additional_evidence: Option<ByteBuf>,
     pub(self) aa_runtime_data: String,
     pub(self) aa_runtime_data_hash_algo: HashAlgoIanaId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(self) extensions: Option<Vec<EvidenceExtension>>,
 }
 
 impl CocoEvidence {
@@ -309,6 +330,7 @@ impl CocoEvidence {
                 .map(|e| ByteBuf::from(e.to_owned())),
             aa_runtime_data: self.aa_runtime_data.to_owned(),
             aa_runtime_data_hash_algo: self.aa_runtime_data_hash_algo.into(),
+            extensions: self.extensions.clone(),
         }
     }
 
@@ -319,6 +341,7 @@ impl CocoEvidence {
             aa_additional_evidence: helper.aa_additional_evidence.map(|e| e.into_vec()),
             aa_runtime_data: helper.aa_runtime_data,
             aa_runtime_data_hash_algo: helper.aa_runtime_data_hash_algo.try_into()?,
+            extensions: helper.extensions,
         })
     }
 }
@@ -333,6 +356,8 @@ struct CocoEvidenceJsonHelper {
     pub(self) aa_additional_evidence: Option<String>,
     pub(self) aa_runtime_data: String,
     pub(self) aa_runtime_data_hash_algo: AttestationServiceHashAlgo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(self) extensions: Option<Vec<EvidenceExtension>>,
 }
 
 impl CocoEvidence {
@@ -347,6 +372,7 @@ impl CocoEvidence {
                 .map(|e| BASE64_STANDARD.encode(e)),
             aa_runtime_data: self.aa_runtime_data.clone(),
             aa_runtime_data_hash_algo: self.aa_runtime_data_hash_algo.into(),
+            extensions: self.extensions.clone(),
         }
     }
 
@@ -366,6 +392,79 @@ impl CocoEvidence {
             },
             aa_runtime_data: helper.aa_runtime_data,
             aa_runtime_data_hash_algo: helper.aa_runtime_data_hash_algo.into(),
+            extensions: helper.extensions,
         })
+    }
+}
+
+#[cfg(test)]
+mod extensions_tests {
+    use super::*;
+
+    #[test]
+    fn extensions_cbor_round_trip() {
+        let evidence = CocoEvidence::new(
+            tee_from_str("sgx").unwrap(),
+            vec![1, 2, 3],
+            None,
+            "{}".to_string(),
+            HashAlgo::Sha256,
+            Some(vec![EvidenceExtension::TdxCollateral(serde_json::json!(
+                {"pck_crl_issuer_chain": "x"}
+            ))]),
+        )
+        .unwrap();
+        let tag = evidence.get_dice_cbor_tag();
+        let raw = evidence.get_dice_raw_evidence().unwrap();
+        match CocoEvidence::create_evidence_from_dice(tag, &raw) {
+            DiceParseEvidenceOutput::Ok(e) => {
+                let exts = e.extensions_ref().as_ref().expect("extensions present");
+                assert_eq!(exts.len(), 1);
+                assert!(matches!(exts[0], EvidenceExtension::TdxCollateral(_)));
+            }
+            _ => panic!("expected DiceParseEvidenceOutput::Ok"),
+        }
+    }
+
+    #[test]
+    fn extensions_none_round_trip() {
+        let evidence = CocoEvidence::new(
+            tee_from_str("sgx").unwrap(),
+            vec![1, 2, 3],
+            None,
+            "{}".to_string(),
+            HashAlgo::Sha256,
+            None,
+        )
+        .unwrap();
+        let tag = evidence.get_dice_cbor_tag();
+        let raw = evidence.get_dice_raw_evidence().unwrap();
+        match CocoEvidence::create_evidence_from_dice(tag, &raw) {
+            DiceParseEvidenceOutput::Ok(e) => {
+                assert!(e.extensions_ref().is_none());
+            }
+            _ => panic!("expected DiceParseEvidenceOutput::Ok"),
+        }
+    }
+
+    #[test]
+    #[test]
+    fn unknown_variant_forward_compat() {
+        // Serde #[serde(other)] does not work on adjacently-tagged enums
+        // (content map can't be discarded for a unit variant), so unknown
+        // variants currently cause a deserialize error. Revisit when a
+        // forward-compat repr is chosen (internally-tagged or Map).
+        let json = serde_json::json!({
+            "aa_tee_type": "sgx",
+            "aa_evidence": "AQID",
+            "aa_runtime_data": "{}",
+            "aa_runtime_data_hash_algo": "sha256",
+            "extensions": [{"kind": "future_thing", "data": {"x": 1}}]
+        });
+        let result = CocoEvidence::deserialize_from_json(json);
+        assert!(
+            result.is_err(),
+            "unknown variant should fail until forward-compat repr is chosen"
+        );
     }
 }

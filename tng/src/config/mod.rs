@@ -193,6 +193,7 @@ pub mod tests {
                         attest: Some(AttestArgs::BackgroundCheck {
                             attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
                                 aa_addr: "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock".to_owned(),
+                                tdx_carry_collateral: false,
                             }),
                             refresh_interval: None,
                         }),

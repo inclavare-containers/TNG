@@ -56,6 +56,7 @@ The general persistent-text rules (human voice, why-not-what comments, no versio
 
 - **Commit messages and PR descriptions are in English.** Title in imperative mood ("log: stop writing secrets into logs"); body explains what and why in plain English. The bilingual convention above applies to documentation, not to commit/PR text.
 - **Draft and edit persistent text under the `/humanizer` skill.** Whenever writing or reworking prose in docs, READMEs, commit messages, or PR descriptions, invoke `/humanizer` and follow its rules: no staged openers, no not-X-but-Y weight padding, no one-line closers, no bold-label bullet lists, no inflation. State each point in plain order and keep reference text neutral. When polishing a finished draft, run it through the skill once before committing.
+- **`Cargo.toml` comments are terse.** One short line at most above a dependency or feature. Do not write multi-line explanatory blocks; if background is truly needed, link an issue or doc instead of inlining a paragraph.
 
 ## Documentation Structure & Craft
 
@@ -82,6 +83,14 @@ These lessons come from repeated remote-attestation doc reviews; apply them to a
 ## GitHub Pages Demo Site
 
 The `tng-wasm/www/` directory is the source for the live demo published at **<https://inclavare-containers.github.io/TNG/>** (it contains `index.html`, `js/`, and the built `tng_wasm_bg.wasm` / `tng_wasm.js`). When changing the JavaScript SDK or the demo page, remember this site is a published artifact — do not delete `www/`, and rebuild/sync the `.wasm` bundle there when the SDK changes so the live demo stays up to date.
+
+## External Fork Policy
+
+Never create, push to, or update an external fork (GitHub, GitLab, or any remote, including the user's personal forks) unless the user has explicitly authorized that specific operation in the current conversation. A spec, plan, or prior approval mentioning a fork is NOT authorization; the user must explicitly confirm each external fork push.
+
+For upstream patches to dependencies the user does not own (trustee, dcap-qvl, guest-components, etc.), keep the patch as a local working tree only (local path). Do not push to a fork remote on your own. When upstreaming is needed, notify the user and let them decide when and how to publish the fork.
+
+If a `[patch]` in Cargo.toml needs a remote git URL (e.g., for CI), ask the user first; do not push to a fork to produce that URL. Keep `[patch]` as a local path (`/root/...` or `deps/...`) until the user authorizes upstreaming.
 
 ## PR Requirements
 

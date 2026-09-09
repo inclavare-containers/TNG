@@ -160,6 +160,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `model` | string | — | 设为 `"background_check"` 显式启用 |
 | `aa_type` | string | `"uds"` | Agent 类型，当前仅支持 `"uds"`（通过 Unix socket 连接外部 AA） |
 | `aa_addr` | string | — | `"uds"` 类型必填，AA 的 Unix socket 地址 |
+| `tdx_carry_collateral` | boolean | `false` | Attester 从 PCCS 拉取 DCAP 验证 collateral（CRL/TCB info/QE identity）并随 evidence 携带，使 verify 侧可跳过 PCCS 访问。仅 TDX native（dcap-qvl）路径生效，SGX 不支持。attest 侧需设置 `PCCS_URL`。 |
 | `asr_addr` | string | — | 仅 `coco_asr` 变体使用，ASR HTTP 代理地址，替代 `aa_addr` |
 | `refresh_interval` | int | `600` | Evidence 缓存时间（秒），`0` 表示每次获取最新 |
 
@@ -224,6 +225,8 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 > |---|---|
 > | 公网（按地域） | `https://sgx-dcap-server.<region>.aliyuncs.com` |
 > | VPC 内网 | `https://sgx-dcap-server-vpc.<region>.aliyuncs.com` |
+>
+> 若 verify 侧无法访问 PCCS，可启用 attest 侧 collateral 携带：在 attester 配置中设 `tdx_carry_collateral: true`（仅 TDX native，SGX 不支持）并在 attest 侧设置 `PCCS_URL`。attest 侧拉取 DCAP collateral 并随 evidence 携带；verify 侧直接使用携带的 collateral，跳过 PCCS 访问。
 
 **验证策略**
 
@@ -736,6 +739,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `model` | string | — | 设为 `"passport"` 以启用 Passport 模式 |
 | `aa_type` | string | `"uds"` | Agent 类型，当前仅支持 `"uds"`（通过 Unix socket 连接外部 AA） |
 | `aa_addr` | string | — | `"uds"` 类型必填，AA 的 Unix socket 地址 |
+| `tdx_carry_collateral` | boolean | `false` | Attester 从 PCCS 拉取 DCAP 验证 collateral（CRL/TCB info/QE identity）并随 evidence 携带，使 verify 侧可跳过 PCCS 访问。仅 TDX native（dcap-qvl）路径生效，SGX 不支持。attest 侧需设置 `PCCS_URL`。 |
 | `asr_addr` | string | — | 仅 `coco_asr` 变体使用，ASR HTTP 代理地址，替代 `aa_addr` |
 | `refresh_interval` | int | `600` | Evidence 缓存时间（秒），`0` 表示每次获取最新 |
 | `as_type` | string | `"restful"` | AS 类型：`"restful"` / `"grpc"` |

@@ -3102,8 +3102,15 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             "cc_eventlog": cc_eventlog,
         }))
         .expect("serialize aa_evidence");
-        CocoEvidence::new(tee, aa_evidence, None, "{}".to_string(), HashAlgo::Sha256)
-            .expect("build CocoEvidence")
+        CocoEvidence::new(
+            tee,
+            aa_evidence,
+            None,
+            "{}".to_string(),
+            HashAlgo::Sha256,
+            None,
+        )
+        .expect("build CocoEvidence")
     }
 
     /// Flip one base64 char (A↔B) to corrupt the decoded bytes.

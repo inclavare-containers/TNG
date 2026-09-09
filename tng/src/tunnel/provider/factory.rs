@@ -21,7 +21,12 @@ use super::verifier::TngVerifier;
 pub async fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
     match config {
         AttesterArgs::Coco(coco) => match coco {
-            CocoAttesterArgs::Uds { aa_addr } => Ok(TngAttester::Coco(CocoAttester::new(aa_addr)?)),
+            CocoAttesterArgs::Uds {
+                aa_addr,
+                tdx_carry_collateral,
+            } => Ok(TngAttester::Coco(
+                CocoAttester::new(aa_addr)?.with_tdx_carry_collateral(*tdx_carry_collateral),
+            )),
             CocoAttesterArgs::Builtin => {
                 anyhow::bail!("Builtin AA is not yet implemented")
             }

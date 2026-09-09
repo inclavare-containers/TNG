@@ -262,6 +262,7 @@ mod tests {
     fn make_attester_args() -> AttesterArgs {
         AttesterArgs::Coco(CocoAttesterArgs::Uds {
             aa_addr: TEST_AA_ADDR.to_string(),
+            tdx_carry_collateral: false,
         })
     }
 

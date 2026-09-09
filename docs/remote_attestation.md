@@ -160,6 +160,7 @@ The **Attester** is the party being verified, responsible for collecting local p
 | `model` | string | — | Set to `"background_check"` to explicitly enable |
 | `aa_type` | string | `"uds"` | Agent type; currently only `"uds"` is supported (connects to an external AA over a Unix socket) |
 | `aa_addr` | string | — | Required for `"uds"` type; AA Unix socket address |
+| `tdx_carry_collateral` | boolean | `false` | Attester fetches DCAP verification collateral from PCCS and carries it in the evidence so the verifier can skip PCCS access. TDX native (dcap-qvl) only; SGX not supported. Set `PCCS_URL` on the attester side. |
 | `asr_addr` | string | — | Only for the `coco_asr` variant; ASR HTTP proxy address, replaces `aa_addr` |
 | `refresh_interval` | int | `600` | Evidence cache time in seconds; `0` means fetch latest each time |
 
@@ -224,6 +225,8 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 > |---|---|
 > | Public (region-specific) | `https://sgx-dcap-server.<region>.aliyuncs.com` |
 > | VPC internal | `https://sgx-dcap-server-vpc.<region>.aliyuncs.com` |
+>
+> If the verifier side cannot reach a PCCS, enable attest-side collateral carry: set `tdx_carry_collateral: true` in the attester config (TDX native only, SGX not supported) and set `PCCS_URL` on the attester side. The attester fetches DCAP collateral and carries it in the evidence; the verifier then uses the carried collateral and skips PCCS access.
 
 **Verification strategies**
 
@@ -736,6 +739,7 @@ In the Passport model, the Attest configuration should include the following fie
 | `model` | string | — | Set to `"passport"` to enable the Passport model |
 | `aa_type` | string | `"uds"` | Agent type; currently only `"uds"` is supported (connects to an external AA over a Unix socket) |
 | `aa_addr` | string | — | Required for `"uds"` type; AA Unix socket address |
+| `tdx_carry_collateral` | boolean | `false` | Attester fetches DCAP verification collateral from PCCS and carries it in the evidence so the verifier can skip PCCS access. TDX native (dcap-qvl) only; SGX not supported. Set `PCCS_URL` on the attester side. |
 | `asr_addr` | string | — | Only for the `coco_asr` variant; ASR HTTP proxy address, replaces `aa_addr` |
 | `refresh_interval` | int | `600` | Evidence cache time in seconds; `0` means fetch latest each time |
 | `as_type` | string | `"restful"` | AS type: `"restful"` / `"grpc"` |

@@ -352,12 +352,30 @@ impl GenericConverter for BuiltinCocoConverter {
             });
         }
 
-        // Evaluate evidence
-        let token = self
-            .attestation_service
-            .evaluate(verification_requests, vec![DEFAULT_POLICY_ID.to_owned()])
-            .await
-            .map_err(Error::AttestationServiceVerifyFailed)?;
+        // Evaluate evidence. If a TdxCollateral extension is present, use
+        // evaluate_with_collateral so the verifier skips PCCS fetch.
+        let dcap_collateral = in_evidence.extensions_ref().as_ref().and_then(|exts| {
+            exts.iter()
+                .map(|e| match e {
+                    crate::tee::coco::evidence::EvidenceExtension::TdxCollateral(v) => v,
+                })
+                .next()
+        });
+        let token = if let Some(collateral) = dcap_collateral {
+            self.attestation_service
+                .evaluate_with_collateral(
+                    verification_requests,
+                    vec![DEFAULT_POLICY_ID.to_owned()],
+                    collateral,
+                )
+                .await
+                .map_err(Error::AttestationServiceVerifyFailed)?
+        } else {
+            self.attestation_service
+                .evaluate(verification_requests, vec![DEFAULT_POLICY_ID.to_owned()])
+                .await
+                .map_err(Error::AttestationServiceVerifyFailed)?
+        };
 
         CocoAsToken::new(token)
     }

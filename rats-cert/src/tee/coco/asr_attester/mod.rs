@@ -51,6 +51,7 @@ impl GenericAttester for CocoAsrAttester {
             additional_evidence,
             String::from_utf8(aa_runtime_data_bytes).map_err(Error::InvalidUtf8)?,
             aa_runtime_data_hash_algo,
+            None,
         )?)
     }
 }

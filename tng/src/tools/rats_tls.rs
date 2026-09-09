@@ -467,7 +467,7 @@ mod tests {
             } => {
                 assert_eq!(refresh_interval, Some(3600));
                 match attester {
-                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr }) => {
+                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr, .. }) => {
                         assert_eq!(
                             aa_addr,
                             "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"

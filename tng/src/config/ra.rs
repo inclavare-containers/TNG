@@ -145,7 +145,7 @@ impl RaArgsUnchecked {
                 AttestArgs::Passport { attester, .. }
                 | AttestArgs::BackgroundCheck { attester, .. } => match attester {
                     AttesterArgs::Coco(coco_attester) => match coco_attester {
-                        CocoAttesterArgs::Uds { aa_addr } => {
+                        CocoAttesterArgs::Uds { aa_addr, .. } => {
                             let aa_sock_file = aa_addr
                                 .strip_prefix("unix:///")
                                 .context("AA address must start with unix:///")
@@ -446,6 +446,12 @@ pub enum CocoAttesterArgs {
     Uds {
         /// Attestation agent address (unix socket path)
         aa_addr: String,
+        /// Fetch DCAP verification collateral in the attester and carry it in
+        /// the evidence so the verifier can skip PCCS access. Default false;
+        /// enable when the verify side has no PCCS connectivity. Requires the
+        /// attester-side `tdx-carry-collateral` build feature.
+        #[serde(default)]
+        tdx_carry_collateral: bool,
     },
     /// Builtin AA (embedded) - not implemented yet
     Builtin,
@@ -772,7 +778,7 @@ mod tests {
                 refresh_interval,
             }) => {
                 match attester {
-                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr }) => {
+                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr, .. }) => {
                         assert_eq!(
                             aa_addr,
                             "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -812,7 +818,7 @@ mod tests {
                 refresh_interval,
             }) => {
                 match attester {
-                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr }) => {
+                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr, .. }) => {
                         assert_eq!(
                             aa_addr,
                             "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -849,7 +855,7 @@ mod tests {
                 refresh_interval,
             }) => {
                 match attester {
-                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr }) => {
+                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr, .. }) => {
                         assert_eq!(
                             aa_addr,
                             "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -1516,7 +1522,7 @@ mod tests {
                 refresh_interval,
             }) => {
                 match attester {
-                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr }) => {
+                    AttesterArgs::Coco(CocoAttesterArgs::Uds { aa_addr, .. }) => {
                         assert_eq!(
                             aa_addr,
                             "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
