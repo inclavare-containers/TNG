@@ -64,6 +64,19 @@ Several kinds of text in this repo are read by future developers and users long 
 
 These rules apply wherever text is meant to be read later. Ephemeral output (a one-off reply in this session, a `println!` debug line) does not need to follow them.
 
+### Comment & Documentation Discipline
+
+The "Comments explain *why*, not *what*" rule above, made concrete. These apply to code comments, TOML/Cargo comment blocks, and reference docs alike. Most of them are corollaries of one test: *would deleting this comment let a future maintainer make a real mistake?* If yes, keep it, dense, free of version pins and upstream internals. If no, move it to the commit message.
+
+1. **Comment the abnormal, not the normal.** Default, obvious, or cross-platform-consistent behavior stays silent; enabling a feature on every target needs no rationale. Only the surprise needs a comment: a feature that is *mandatory* on one target, a flag whose removal breaks a build, a value that looks wrong but is deliberate. A comment exists for exactly one reason: deleting it would let someone make a real mistake (an unexplained build break, a correct config "fixed" into a bug, a re-introduced regression). "Explains a non-obvious constraint" passes; "restates what the code does" or "tells a historical story" fails.
+2. **Write why/constraint/gotcha, not what/mechanism.** The code shows what it does and the mechanism can be re-derived from source. A comment earns its place with the non-obvious: *why* a value is what it is, the *constraint* it satisfies, the *gotcha* it avoids, ideally naming the exact error a wrong choice produces. Don't restate the mechanism of another crate.
+3. **No version-pinned assertions in comments.** "As of dep vX, feature Y pulls Z" rots on the next bump and is the first thing forgotten when editing. What a dep pulls today is answerable from cargo and the lockfile in real time; don't snapshot it in prose. Version-fragile facts belong in the commit message, which is dated and immutable.
+4. **Don't explain another repo's internals.** `#[cfg(...)]` gates, internal function names, and `compile_error!` syntax of an upstream crate cannot be verified from this repo and rot when upstream refactors. State the observable contract at most ("upstream will not compile without it"), not the internal mechanism.
+5. **Make each block self-contained; don't dedupe via cross-reference.** "See the block above for the full rationale" couples two sites that must be edited together and forces the reader to jump. A short reason is restated where needed; a long reason probably shouldn't be a comment at all (see rule 6).
+6. **Constraints live in comments; rationale and history live in the commit message.** Separate the durable (a constraint the next editor must respect and that must stay true) from the transient (why we chose this in this commit). Commit messages are immutable, dated, and searchable, the right home for "why we decided X"; comments are for the live constraint.
+7. **Write dense, not long.** Three lines stating three constraints beat nine lines stating one plus mechanism and history. Every line should carry a fact the maintainer would otherwise lack; cut any line that is re-derivable or rotting.
+8. **Inheriting a bad style is not a reason to extend it.** When you arrive and existing comments are already verbose and stale, "carry over the accurate parts" does not mean "perpetuate the verbose pattern." If the pattern is the problem, fix the pattern (trim), don't append in kind.
+
 ## Documentation Structure & Craft
 
 These lessons come from repeated remote-attestation doc reviews; apply them to any `docs/*.md` / `*_zh.md` reference doc, especially reader-facing config references.
