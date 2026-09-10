@@ -52,18 +52,17 @@ x509-cert = {workspace = true, optional = true}
 zeroize = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
-# Native builds enable the attestation-service `fs` feature so the builtin
-# converter supports `file://` provenance sources (and on-disk RV storage /
-# signer key/cert paths). `policy-rvps` is also required: the upstream
-# default policy (`ear_broker::DEFAULT_POLICY`, which the builtin converter
-# loads) calls the rego builtin `query_reference_value(...)`, which is only
-# registered under attestation-service's `policy-rvps` feature. Without it,
-# policy appraisal fails with "could not find function query_reference_value".
-# wasm enables `policy-rvps` too (see the wasm target block below); `fs` is
-# native-only (the wasm verify path uses in-memory RV storage, not the fs).
-# This is a target-specific re-declaration: cargo merges it with the
+# `fs` is native-only: the builtin converter supports `file://` provenance
+# sources and on-disk RV storage / signer key/cert paths; wasm uses in-memory
+# RV storage, so `fs` stays off there.
+# `policy-rvps` is required: the default policy (`ear_broker::DEFAULT_POLICY`)
+# calls the rego builtin `query_reference_value`, registered only under that
+# feature; without it appraisal fails with "could not find function
+# query_reference_value".
+# `regorus-regovm` is enabled on both targets for cross-platform consistency.
+# Target-specific re-declaration: cargo merges this with the base
 # `[dependencies]` entry for non-wasm only.
-attestation-service = {workspace = true, default-features = false, features = ["fs", "policy-rvps"], optional = true}
+attestation-service = {workspace = true, default-features = false, features = ["fs", "policy-rvps", "regorus-regovm"], optional = true}
 rustls-webpki = {workspace = true, optional = true, features = ["alloc", "aws-lc-rs"]}
 tempfile = {workspace = true, optional = true}
 time = {workspace = true, features = ["std", "parsing"]}
@@ -71,21 +70,14 @@ tokio = {workspace = true, default-features = true, features = ["fs"]}
 tonic = {workspace = true, default-features = false, features = ["codegen", "channel"], optional = true}
 
 [target.'cfg(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown"))'.dependencies]
-# Enable attestation-service's `policy-rvps` on wasm too. The builtin
-# converter loads the upstream default policy (`ear_broker::DEFAULT_POLICY`),
-# whose rego calls `query_reference_value(...)`; that builtin is only
-# registered under `policy-rvps`. As of trustee a7cae246, `policy-rvps` is
-# wasm-compatible: it now pulls only `tokio/time` (the old `tokio/rt` — the
-# multi-thread runtime / `spawn_blocking`, unavailable on
-# wasm32-unknown-unknown — was dropped), and the rego engine (regorus,
-# pure-Rust) runs on wasm. The getrandom 0.4 that regorus 0.11 -> rand 0.10
-# transitively needs is given the `wasm_js` feature by attestation-service's
-# own renamed `getrandom_04` wasm dep (so the Makefile `getrandom_backend`
-# cfg for the 0.3 line and the `js` feature for the 0.2 line are not enough
-# on their own). `fs` stays off on wasm (in-memory RV storage only). This is
-# a target-specific re-declaration: cargo merges it with the base
-# `[dependencies]` entry for wasm only.
-attestation-service = {workspace = true, default-features = false, features = ["policy-rvps"], optional = true}
+# `policy-rvps` is required (the default policy calls `query_reference_value`,
+# registered only under it); `regorus-regovm` is mandatory on wasm: upstream
+# will not compile without it. `fs` is off (in-memory RV storage only).
+# getrandom's `wasm_js` feature is wired by attestation-service's own
+# `getrandom_04` dep, so the Makefile `getrandom_backend` cfg alone does not
+# cover the regorus path. Target-specific re-declaration: cargo merges this
+# with the base `[dependencies]` entry for wasm only.
+attestation-service = {workspace = true, default-features = false, features = ["policy-rvps", "regorus-regovm"], optional = true}
 # Web Crypto API deps for the builtin-as challenger keygen path. On wasm the
 # rustcrypto `rsa` prime generation (used by `JwtChallenger::new`) is pure
 # software and slow; instead we ask the host (hardware-accelerated) WebCrypto

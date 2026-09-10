@@ -316,7 +316,7 @@ impl BuiltinCocoConverter {
                         // `crypto-rustcrypto`, `verify_dsse_signature`
                         // (DSSEPAE + ECDSA P-256) is injected too — see
                         // `builtin_as_host_await_functions`.
-                        .with_extra_host_await_functions(builtin_as_host_await_functions()),
+                        .with_extra_extension_functions(builtin_as_host_await_functions()),
                     ),
                 ),
             )
@@ -1145,18 +1145,18 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
 /// `crypto.sha256(json.marshal(manifest)) == payload_hash` comparison works).
 ///
 /// Registered under the dotted name `crypto.sha256` (regorus's function-rule
-/// syntax accepts dotted keys) via `OPAInMemory::with_extra_host_await_functions`
+/// syntax accepts dotted keys) via `OPAInMemory::with_extra_extension_functions`
 /// so the existing, already-written rego policy is unchanged and stays
 /// forward-compatible with a future regorus that ships the builtin natively.
 /// Only the sha256 primitive is injected; manifest reconstruction
 /// (`json.marshal`) and the comparison stay in rego.
 ///
-/// The `RegoVmHostAwaitFunction` type alias already cfg-gates the `Send` bound
+/// The `ExtensionFunction` type alias already cfg-gates the `Send` bound
 /// (dropped on `wasm32-unknown-unknown`, where the RVPS resolver is `?Send`),
 /// so this closure's `Box::pin(async move { ... })` future matches both the
 /// native and wasm variants without an explicit cfg here. Mirrors the trustee
 /// fork's `evaluate_with_injected_crypto_sha256_dotted_host_await` test.
-fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::RegoVmHostAwaitFunction {
+fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::ExtensionFunction {
     use attestation_service::policy_engine::PolicyError;
 
     std::sync::Arc::new(|argument: regorus::Value| {
@@ -1200,7 +1200,7 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 /// Host-await function that verifies a DSSE publisher signature over a
 /// reconstructed ReleaseManifest. regorus 0.11 ships no ECDSA builtin, so the
 /// DSSEPAE + sha256 + ECDSA P-256 `VerifyASN1` primitive is injected here via
-/// `OPAInMemory::with_extra_host_await_functions`, alongside `crypto.sha256`.
+/// `OPAInMemory::with_extra_extension_functions`, alongside `crypto.sha256`.
 ///
 /// Takes a packed 3-element array `[payload_str, signature_b64, publisher_key_pem]`
 /// (single-arg, since the host-await wrapper is single-arg). Computes
@@ -1219,8 +1219,8 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 /// module pulls in); the rego policy that calls this is itself only generated
 /// under `crypto-rustcrypto`.
 #[cfg(feature = "crypto-rustcrypto")]
-fn verify_dsse_signature_host_await(
-) -> attestation_service::policy_engine::opa::RegoVmHostAwaitFunction {
+fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa::ExtensionFunction
+{
     use attestation_service::policy_engine::PolicyError;
     use p256::ecdsa::signature::Verifier;
 
@@ -1276,7 +1276,7 @@ fn verify_dsse_signature_host_await(
 /// sync.
 fn builtin_as_host_await_functions() -> Vec<(
     String,
-    attestation_service::policy_engine::opa::RegoVmHostAwaitFunction,
+    attestation_service::policy_engine::opa::ExtensionFunction,
 )> {
     let mut fns = vec![("crypto.sha256".to_string(), crypto_sha256_host_await())];
     #[cfg(feature = "crypto-rustcrypto")]
@@ -2004,7 +2004,7 @@ default file_system := 2"#,
         // sha256 during the behavior test below. Under `crypto-rustcrypto`,
         // `verify_dsse_signature` is injected too — see
         // `builtin_as_host_await_functions`.
-        .with_extra_host_await_functions(builtin_as_host_await_functions());
+        .with_extra_extension_functions(builtin_as_host_await_functions());
         // The four rules our templates define. The real AS also queries four more
         // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
         // skipped when a policy leaves them undefined, so they need not be queried.
