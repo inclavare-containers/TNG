@@ -116,6 +116,7 @@ x509-cert = {workspace = true}
 async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
 atty = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
+moka = {workspace = true}
 notify = {workspace = true}
 quinn = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}

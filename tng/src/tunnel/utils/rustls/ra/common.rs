@@ -9,6 +9,7 @@ use rats_cert::tee::GenericVerifier;
 use crate::tunnel::attestation_result::AttestationResult;
 use crate::tunnel::provider::{TngEvidence, TngToken};
 use crate::tunnel::ra_context::VerifyContext;
+use crate::tunnel::utils::rustls::ra::cert_cache::{cert_hash, CertVerifyCache};
 
 fn parse_token_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngToken> {
     rats_cert::errors::Result::from(TngToken::create_evidence_from_dice(cbor_tag, raw_evidence))
@@ -36,6 +37,10 @@ fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<T
 #[derive(Debug)]
 pub struct LazyCertVerifier {
     verify_ctx: Arc<VerifyContext>,
+    /// Per-config verdict cache, shared across every connection using this rustls
+    /// config. Keyed on the peer cert DER so repeated handshakes from the same attester
+    /// (which reuses its cert for a refresh window) skip the full RA appraisal.
+    cache: CertVerifyCache,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
@@ -43,6 +48,7 @@ impl LazyCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
         Self {
             verify_ctx,
+            cache: CertVerifyCache::default_sized(),
             pending_cert: spin::mutex::spin::SpinMutex::new(None),
         }
     }
@@ -81,7 +87,7 @@ impl LazyCertVerifier {
             .take()
             .context("No rats-tls cert received")?;
 
-        verify_cert(&self.verify_ctx, pending_cert).await
+        verify_cert(&self.verify_ctx, &self.cache, pending_cert).await
     }
 }
 
@@ -89,12 +95,16 @@ impl LazyCertVerifier {
 #[derive(Debug)]
 pub struct BlockingCertVerifier {
     verify_ctx: Arc<VerifyContext>,
+    cache: CertVerifyCache,
 }
 
 #[cfg(not(wasm))]
 impl BlockingCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
-        Self { verify_ctx }
+        Self {
+            verify_ctx,
+            cache: CertVerifyCache::default_sized(),
+        }
     }
 
     pub fn verify_cert_blocking(
@@ -103,17 +113,34 @@ impl BlockingCertVerifier {
     ) -> Result<AttestationResult> {
         let end_entity = end_entity.to_vec();
         let verify_ctx = self.verify_ctx.clone();
+        let cache = self.cache.clone();
 
         // Note: other code running concurrently **in the same task** will be suspended
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(verify_cert(&verify_ctx, end_entity))
+            tokio::runtime::Handle::current().block_on(verify_cert(&verify_ctx, &cache, end_entity))
         })
         .context("Failed to get cert verify result")
     }
 }
 
-async fn verify_cert(verify_ctx: &VerifyContext, end_entity: Vec<u8>) -> Result<AttestationResult> {
+async fn verify_cert(
+    verify_ctx: &VerifyContext,
+    cache: &CertVerifyCache,
+    end_entity: Vec<u8>,
+) -> Result<AttestationResult> {
     tracing::debug!("Verifying rats-tls cert");
+
+    // Fast path: if we have already verified this exact cert recently, return the cached
+    // verdict and skip the full RA appraisal. The cache is keyed on the cert DER, which
+    // embeds the evidence and the pubkey-hash binding, so identical bytes imply an
+    // identical, deterministic verdict for the lifetime of this VerifyContext.
+    let key = cert_hash(&end_entity);
+    if let Some(cached) = cache.get(&key).await {
+        // trace, not debug: this fires on nearly every cached connection and is a
+        // microscopic fast-path detail, not a meaningful per-connection diagnostic.
+        tracing::trace!("rats-tls cert verify cache hit");
+        return Ok(cached);
+    }
 
     // Step 1: Extract evidence from certificate
     let pending_result = CertVerifier::new()
@@ -164,5 +191,92 @@ async fn verify_cert(verify_ctx: &VerifyContext, end_entity: Vec<u8>) -> Result<
 
     tracing::debug!("rats-rs cert verify finished successfully");
 
-    Ok(AttestationResult::from_token(token))
+    let result = AttestationResult::from_token(token);
+    // Only cache successful verdicts; errors returned above via `?` are never cached.
+    cache.insert(key, result.clone()).await;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ra::{
+        CocoConverterArgs, CocoVerifierArgs, ConverterArgs, VerifierArgs, VerifyArgs,
+    };
+    use rats_cert::cert::verify::PolicyConfig;
+
+    /// Build a builtin (in-process AS) BackgroundCheck VerifyContext without any external
+    /// service (no AA socket, no AS HTTP, no PCCS). Construction is hermetic; the builtin AS
+    /// only talks to PCCS during `convert`, which these tests never reach.
+    async fn make_builtin_verify_context() -> VerifyContext {
+        let verify_args = VerifyArgs::BackgroundCheck {
+            converter: ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                attestation_policy: PolicyConfig::HardwareWithReferenceValues,
+                reference_values: vec![],
+            }),
+            verifier: VerifierArgs::Coco(CocoVerifierArgs::Builtin),
+        };
+        VerifyContext::from_verify_args(&verify_args)
+            .await
+            .expect("builtin VerifyContext must construct without external services")
+    }
+
+    /// A throwaway AttestationResult used to pre-seed the cache. CocoAsToken::new wraps a
+    /// string without validating it; the cache stores it opaquely.
+    fn make_cached_result() -> AttestationResult {
+        let token = crate::tunnel::provider::TngToken::from(
+            rats_cert::tee::coco::evidence::CocoAsToken::new("cached.jwt".to_string())
+                .expect("CocoAsToken::new never errors"),
+        );
+        AttestationResult::from_token(token)
+    }
+
+    // A cache hit returns the seeded verdict WITHOUT running the cert parse / RA appraisal.
+    // Proven by feeding bytes that are not a parseable cert: only a cache hit could succeed,
+    // because a miss would reach CertVerifier::verify_der and reject these bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cache_hit_short_circuits_full_verify() {
+        let ctx = make_builtin_verify_context().await;
+        let cache = CertVerifyCache::default_sized();
+        let cert_bytes = b"not-a-real-cert".to_vec();
+        let key = cert_hash(&cert_bytes);
+        let seeded = make_cached_result();
+        cache.insert(key, seeded.clone()).await;
+
+        let got = verify_cert(&ctx, &cache, cert_bytes)
+            .await
+            .expect("cache hit must return the seeded verdict");
+        assert_eq!(got.token_str(), seeded.token_str());
+    }
+
+    // A cache miss falls through to the full verify path. With the same bogus bytes (no
+    // pre-seeded entry) CertVerifier::verify_der rejects them, so verify_cert errors. This
+    // proves a miss does not skip verification.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cache_miss_falls_through_to_full_verify() {
+        let ctx = make_builtin_verify_context().await;
+        let cache = CertVerifyCache::default_sized();
+        let res = verify_cert(&ctx, &cache, b"not-a-real-cert".to_vec()).await;
+        assert!(
+            res.is_err(),
+            "cache miss must fall through to full verification, which rejects bogus cert bytes"
+        );
+    }
+
+    // Different cert bytes produce different cache keys, so a verdict seeded for one cert
+    // must not be returned for another.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cache_key_is_per_cert() {
+        let ctx = make_builtin_verify_context().await;
+        let cache = CertVerifyCache::default_sized();
+        let seeded = make_cached_result();
+        cache.insert(cert_hash(b"cert-A"), seeded.clone()).await;
+
+        // cert-B is not in the cache -> falls through -> bogus bytes rejected.
+        let res = verify_cert(&ctx, &cache, b"cert-B".to_vec()).await;
+        assert!(
+            res.is_err(),
+            "a different cert must not hit another cert's cache entry"
+        );
+    }
 }

@@ -4417,9 +4417,12 @@ version = "0.12.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9321642ca94a4282428e6ea4af8cc2ca4eac48ac7a6a4ea8f33f76d0ce70926"
 dependencies = [
+ "async-lock",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
+ "event-listener",
+ "futures-util",
  "loom",
  "parking_lot 0.12.3",
  "portable-atomic",
@@ -7791,6 +7794,7 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "local-ip-address",
+ "moka",
  "nix 0.30.1",
  "notify",
  "ohttp",

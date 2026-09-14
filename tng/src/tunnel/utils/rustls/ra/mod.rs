@@ -1,3 +1,4 @@
+pub mod cert_cache;
 #[cfg(not(wasm))]
 pub mod client_cert_verifier;
 pub mod common;
