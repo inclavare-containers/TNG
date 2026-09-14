@@ -234,5 +234,191 @@ mod tests {
                 "{error:?}"
             );
         }
+
+        /// Temp bench: measure attestation cert generation (attester, via AA)
+        /// and cert verification (verifier, builtin AS) latency on this host.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        // This is host-only bench code (cfg(test) + non-wasm __builtin-as), so
+        // std::time::Instant::now is fine here despite the repo-wide disallow
+        // (which exists only because Instant::now panics on wasm32).
+        #[allow(clippy::disallowed_methods)]
+        async fn test_bench_cert_gen_and_verify_builtin() {
+            use crate::cert::create::CertBuilder;
+            use crate::cert::verify::CertVerifier;
+            use crate::crypto::{AsymmetricAlgo, HashAlgo};
+            use crate::tee::coco::evidence::CocoEvidence;
+            use crate::tee::{GenericAttester, GenericConverter, GenericEvidence, GenericVerifier};
+            use std::time::{Duration, Instant};
+
+            const AA_ADDR: &str =
+                "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock";
+            // First verify call is the cold path: the dcap-qvl collateral cache
+            // (in-process) is empty, so it fetches TDX collateral from the PCCS
+            // over a fresh HTTPS/TLS connection. Later calls are warm cache hits.
+            const ITERS: usize = 10;
+
+            fn fmt_ms(d: Duration) -> String {
+                format!("{:.3} ms", d.as_secs_f64() * 1000.0)
+            }
+            fn stats(samples: &[Duration]) -> (Duration, Duration) {
+                let min = samples.iter().min().copied().unwrap_or_default();
+                let avg = samples.iter().sum::<Duration>() / samples.len() as u32;
+                (min, avg)
+            }
+
+            // One-time setup: builtin converter (embeds AS + RVPS + rego + signer)
+            // and the verifier it produces. Building these is not part of the
+            // measured path; only per-cert gen/verify calls are timed.
+            // Policy selectable via BENCH_POLICY env (default TrustAll) so the
+            // rego-appraisal cost can be isolated by comparing policies.
+            let policy = match std::env::var("BENCH_POLICY").as_deref() {
+                Ok("hw_rv") => PolicyConfig::HardwareWithReferenceValues,
+                Ok("hw_only") => PolicyConfig::HardwareOnly,
+                _ => PolicyConfig::TrustAll,
+            };
+            let converter = BuiltinCocoConverter::new(&policy, &[])
+                .await
+                .expect("Failed to create builtin converter");
+            let verifier = converter
+                .new_verifier()
+                .await
+                .expect("Failed to create builtin verifier");
+
+            // ---- cert generation (attester side): AA get_evidence + DICE sign ----
+            let mut gen_times: Vec<Duration> = Vec::with_capacity(ITERS);
+            let mut certs: Vec<Vec<u8>> = Vec::with_capacity(ITERS);
+            for i in 0..ITERS {
+                // CocoAttester is not Clone; a fresh ttrpc client per iter is cheap.
+                let attester = CocoAttester::new(AA_ADDR)
+                    .unwrap_or_else(|_| panic!("Failed to create attester (iter {i})"));
+                let t0 = Instant::now();
+                let bundle = CertBuilder::new(attester, HashAlgo::Sha256)
+                    .build(AsymmetricAlgo::P256)
+                    .await
+                    .expect("Failed to build cert");
+                let dt = t0.elapsed();
+                let der = bundle.cert_to_der().expect("Failed to encode cert to DER");
+                println!("[gen  {i}] {dt:?}");
+                gen_times.push(dt);
+                certs.push(der);
+            }
+            let (g_min, g_avg) = stats(&gen_times);
+
+            // ---- cert verification (verifier side, builtin AS) ----
+            // verify_der (parse + self-sig check + evidence extract) +
+            // converter.convert (builtin AS: dcap-qvl TDX quote verify + rego) +
+            // verifier.verify_evidence (JWT sig/exp). First call is cold
+            // (collateral fetch); later calls are warm (cached).
+            let mut ver_times: Vec<Duration> = Vec::with_capacity(ITERS);
+            // Sub-step accumulators for the breakdown: per-verify timing of
+            // each phase of the verifier path (cert layer + builtin AS).
+            let mut sub_verify_der = Vec::<Duration>::with_capacity(ITERS);
+            let mut sub_parse_ev = Vec::<Duration>::with_capacity(ITERS);
+            let mut sub_convert = Vec::<Duration>::with_capacity(ITERS);
+            let mut sub_verify_tok = Vec::<Duration>::with_capacity(ITERS);
+            for (i, der) in certs.iter().enumerate() {
+                let t0 = Instant::now();
+                let pending = CertVerifier::new()
+                    .verify_der(der)
+                    .await
+                    .expect("Failed to verify_der");
+                let t_verify_der = t0.elapsed();
+
+                let t1 = Instant::now();
+                let evidence: CocoEvidence = Result::from(CocoEvidence::create_evidence_from_dice(
+                    pending.cbor_tag,
+                    &pending.raw_evidence,
+                ))
+                .expect("Failed to reconstruct evidence from DICE cert");
+                let t_parse_ev = t1.elapsed();
+
+                let t2 = Instant::now();
+                let token = converter
+                    .convert(&evidence)
+                    .await
+                    .expect("Failed to convert evidence via builtin AS");
+                let t_convert = t2.elapsed();
+
+                let t3 = Instant::now();
+                let _ = verifier.verify_evidence(&token, &pending.report_data).await;
+                let t_verify_tok = t3.elapsed();
+
+                let dt = t_verify_der + t_parse_ev + t_convert + t_verify_tok;
+                if i == 0 {
+                    println!(
+                        "[cold] verify_der={} parse_ev={} convert={} verify_tok={} total={}",
+                        fmt_ms(t_verify_der),
+                        fmt_ms(t_parse_ev),
+                        fmt_ms(t_convert),
+                        fmt_ms(t_verify_tok),
+                        fmt_ms(dt)
+                    );
+                }
+                sub_verify_der.push(t_verify_der);
+                sub_parse_ev.push(t_parse_ev);
+                sub_convert.push(t_convert);
+                sub_verify_tok.push(t_verify_tok);
+                println!("[verify{i}] {dt:?}");
+                ver_times.push(dt);
+            }
+            let (v_min, v_avg) = stats(&ver_times);
+            let cold = ver_times.first().copied().unwrap_or_default();
+            let warm = if ver_times.len() > 1 {
+                stats(&ver_times[1..])
+            } else {
+                (cold, cold)
+            };
+
+            println!("================ rats-tls cert bench (builtin AS) ================");
+            println!(
+                "cert generation  : min={}, avg={} ({} iters)",
+                fmt_ms(g_min),
+                fmt_ms(g_avg),
+                ITERS
+            );
+            println!(
+                "cert verification: cold(first)={}, warm min={}, warm avg={}",
+                fmt_ms(cold),
+                fmt_ms(warm.0),
+                fmt_ms(warm.1)
+            );
+            println!(
+                "cert verification: overall min={}, avg={} ({} iters)",
+                fmt_ms(v_min),
+                fmt_ms(v_avg),
+                ITERS
+            );
+            // Per-phase breakdown (warm avg over iters 1..; cold = iter 0).
+            let warm_sub = |v: &[Duration]| -> Duration {
+                if v.len() > 1 {
+                    v[1..].iter().sum::<Duration>() / (v.len() - 1) as u32
+                } else {
+                    v[0]
+                }
+            };
+            println!("--- verify breakdown (cold | warm avg) ---");
+            println!(
+                "  verify_der    : {} | {}",
+                fmt_ms(sub_verify_der[0]),
+                fmt_ms(warm_sub(&sub_verify_der))
+            );
+            println!(
+                "  parse_evidence : {} | {}",
+                fmt_ms(sub_parse_ev[0]),
+                fmt_ms(warm_sub(&sub_parse_ev))
+            );
+            println!(
+                "  convert(AS)   : {} | {}",
+                fmt_ms(sub_convert[0]),
+                fmt_ms(warm_sub(&sub_convert))
+            );
+            println!(
+                "  verify_evidence: {} | {}",
+                fmt_ms(sub_verify_tok[0]),
+                fmt_ms(warm_sub(&sub_verify_tok))
+            );
+            println!("====================================================================");
+        }
     }
 }
