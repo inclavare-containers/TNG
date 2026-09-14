@@ -283,6 +283,16 @@ The test: **would an existing, unmodified config that worked before still work t
   tracing::error!("connection failed: {}", error);
   ```
 
+## Logging Levels
+
+`tracing` levels follow the data-path cost, not just severity. A log that fires on the main per-connection or per-request hot path must never be `info`, because `info` is enabled by default and would emit on every connection.
+
+- **`info`** — coarse, infrequent, operator-relevant events: startup, config reload, a listener binding, a rare escalation. Never a per-connection or per-request step.
+- **`debug`** — per-connection / per-request diagnostics an engineer would want while reproducing a problem (e.g. "entering cert verify"). It is off by default, so per-connection cost is acceptable.
+- **`trace`** — the most frequent and most low-level fast-path details (e.g. a cache hit, a sub-step inside a per-connection flow). If an event fires on essentially every connection AND is a microscopic sub-step, prefer `trace` over `debug`.
+
+Rule of thumb: would this line fire on every connection? If yes, `info` is forbidden. Then pick `debug` for a meaningful per-connection step, `trace` for a frequent/low-level detail inside that step.
+
 ## Testing New Features
 
 When implementing a new feature or modifying existing behavior:
