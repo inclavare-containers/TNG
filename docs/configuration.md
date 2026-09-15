@@ -97,6 +97,9 @@ The following fields are shared between Ingress and Egress, describing transport
 |---|---|---|---|
 | `multiplex` | boolean | `false` | When `true`, uses HTTP/2 CONNECT to multiplex multiple TCP streams over a single TLS connection, suitable for many short-lived connections; when `false`, each connection has an independent TLS session with higher single-stream throughput, recommended for high-bandwidth scenarios |
 
+0-RTT early data is enabled automatically for non-multiplex rats-tls tunnels. On the second and later connections to the same upstream, the first proxied bytes are sent as 0-RTT early data, saving one round trip; the server accepts and delivers them, and if the peer does not support 0-RTT the client transparently falls back to a normal 1-RTT handshake. No configuration is required. Multiplex tunnels use a single long-lived connection and do not use 0-RTT. On a full handshake the peer's remote attestation is verified after the handshake completes (the certificate is read from the stream post-handshake). 0-RTT early data is sent only on resumed connections, where the peer's attestation was already verified on the original full handshake that issued the resumption ticket; on resume the attestation is trusted via the PSK binding rather than re-verified (rustls presents no certificate on a resumed handshake).
+A resumption ticket is single-use: each resumed connection consumes one ticket and the server then issues fresh ones. Under steady or repeated traffic to the same upstream the ticket pool stays warm and most later connections resume, but a sudden burst of many simultaneous connections from a cold start can only resume as many as the tickets currently held; the rest fall back to a full handshake (with full remote-attestation verification). This is required by TLS 1.3 0-RTT replay protection, not a bug.
+
 ---
 
 <a name="ingress-mapping-port-mapping"></a>
