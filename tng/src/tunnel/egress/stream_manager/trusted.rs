@@ -5,7 +5,6 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
-        attestation_result::AttestationResult,
         egress::{
             protocol::{
                 common::transport::{MaybeDirectlyForward, TransportLayer},
@@ -18,6 +17,7 @@ use crate::{
         stream::CommonStreamTrait,
         utils::runtime::TokioRuntime,
     },
+    AttestationState,
 };
 use anyhow::bail;
 use anyhow::Context;
@@ -30,7 +30,7 @@ use futures::StreamExt;
 use super::StreamManager;
 
 pub type ProtocolStreamDecoderOutput =
-    BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, Option<AttestationResult>)>>;
+    BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, AttestationState)>>;
 
 #[async_trait]
 pub trait ProtocolStreamDecoder: StatusProvider {

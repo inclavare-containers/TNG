@@ -14,10 +14,7 @@ use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
 use crate::tunnel::ra_context::RaContext;
 use crate::CommonStreamTrait;
-use crate::{
-    config::ingress::CommonArgs,
-    tunnel::{attestation_result::AttestationResult, utils::runtime::TokioRuntime},
-};
+use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime, AttestationState};
 
 use super::StreamManager;
 
@@ -128,7 +125,7 @@ impl StreamManager for TrustedStreamManager {
         downstream: Box<dyn CommonStreamTrait + 'static>,
     ) -> Result<(
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
-        Option<AttestationResult>,
+        AttestationState,
         /* upstream_local */ Option<SocketAddr>,
     )> {
         self.stream_forwarder

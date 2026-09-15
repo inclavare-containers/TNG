@@ -9,7 +9,7 @@ use tower::ServiceBuilder;
 use tracing::Instrument;
 
 use crate::tunnel::{
-    attestation_result::AttestationResult,
+    attestation_result::AttestationState,
     utils::{self, runtime::TokioRuntime, tokio::TokioIo},
 };
 use crate::CommonStreamTrait;
@@ -26,10 +26,10 @@ pub struct RatsTlsWrappingLayer {}
 impl RatsTlsWrappingLayer {
     pub async fn unwrap_stream(
         tls_stream: impl CommonStreamTrait + Sync,
-        attestation_result: Option<AttestationResult>,
+        attestation_state: AttestationState,
         channel: tokio::sync::mpsc::UnboundedSender<(
             Box<dyn CommonStreamTrait + Sync>,
-            Option<AttestationResult>,
+            AttestationState,
         )>,
         runtime: TokioRuntime,
     ) {
@@ -43,7 +43,7 @@ impl RatsTlsWrappingLayer {
             ServiceBuilder::new().service(tower::service_fn(move |req| {
                 let channel = channel.clone();
                 let runtime = runtime.clone();
-                let attestation_result = attestation_result.clone();
+                let attestation_state = attestation_state.clone();
                 let span = span.clone();
                 let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
                 async move {
@@ -51,7 +51,7 @@ impl RatsTlsWrappingLayer {
                     Self::terminate_http_connect_svc(
                         req,
                         stream_id,
-                        attestation_result,
+                        attestation_state,
                         channel,
                         runtime,
                     )
@@ -81,10 +81,10 @@ impl RatsTlsWrappingLayer {
     async fn terminate_http_connect_svc(
         req: Request<Incoming>,
         stream_id: u64,
-        attestation_result: Option<AttestationResult>,
+        attestation_state: AttestationState,
         channel: tokio::sync::mpsc::UnboundedSender<(
             Box<dyn CommonStreamTrait + Sync>,
-            Option<AttestationResult>,
+            AttestationState,
         )>,
         runtime: TokioRuntime,
     ) -> Result<Response<Body>> {
@@ -94,7 +94,7 @@ impl RatsTlsWrappingLayer {
 
         if req.method() == Method::CONNECT {
             runtime.spawn_supervised_task_current_span({
-                let attestation_result = attestation_result.clone();
+                let attestation_state = attestation_state.clone();
                 async move {
                     match hyper::upgrade::on(req).await {
                         Ok(upgraded) => {
@@ -105,7 +105,7 @@ impl RatsTlsWrappingLayer {
                                 return;
                             };
 
-                            if let Err(e) = channel.send((Box::new(io), attestation_result)) {
+                            if let Err(e) = channel.send((Box::new(io), attestation_state)) {
                                 tracing::error!(
                                     stream_id,
                                     "Failed to send stream via channel: {e:#}"

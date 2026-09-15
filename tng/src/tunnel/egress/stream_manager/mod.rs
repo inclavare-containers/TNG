@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::stream::BoxStream;
 
-use crate::{tunnel::stream::CommonStreamTrait, AttestationResult};
+use crate::{tunnel::stream::CommonStreamTrait, AttestationState};
 
 pub mod trusted;
 
@@ -13,9 +13,14 @@ pub trait StreamManager {
 }
 
 pub enum NextStream {
-    Secured(Box<dyn CommonStreamTrait>, Option<AttestationResult>),
+    Secured(Box<dyn CommonStreamTrait>, AttestationState),
     DirectlyForward(Box<dyn CommonStreamTrait>),
 }
+
+// `DirectlyForward` has no attestation; returning a reference to a unit
+// variant const avoids relying on the implicit static-promotion of a
+// temporary `&AttestationState::Unattested`.
+const UNATTESTED: AttestationState = AttestationState::Unattested;
 
 impl NextStream {
     pub fn is_secured(&self) -> bool {
@@ -32,10 +37,10 @@ impl NextStream {
         }
     }
 
-    pub fn attestation_result(&self) -> Option<&AttestationResult> {
+    pub fn attestation_state(&self) -> &AttestationState {
         match self {
-            NextStream::Secured(_, attestation_result) => attestation_result.as_ref(),
-            NextStream::DirectlyForward(_) => None,
+            NextStream::Secured(_, state) => state,
+            NextStream::DirectlyForward(_) => &UNATTESTED,
         }
     }
 }
