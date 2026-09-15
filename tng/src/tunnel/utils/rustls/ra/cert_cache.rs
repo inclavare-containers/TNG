@@ -30,8 +30,9 @@ const CERT_VERIFY_CACHE_TTL: Duration = Duration::from_secs(60);
 /// to a JWT string), so memory is bounded by this times a small constant.
 const CERT_VERIFY_CACHE_MAX_ENTRIES: u64 = 1024;
 
-/// A cache of successful cert-verification verdicts, held by the rustls cert verifier
-/// (one per rustls config), so it is shared across all connections using that config.
+/// A cache of successful cert-verification verdicts, held by the `TlsConfigGenerator` (one per
+/// tunnel config, which outlives any single connection) and cloned via `Arc` into each
+/// per-connection verifier, so a verdict cached on connection N is still valid for connection N+1.
 #[derive(Debug, Clone)]
 pub struct CertVerifyCache {
     inner: Cache<[u8; 32], AttestationResult>,
