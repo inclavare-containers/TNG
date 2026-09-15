@@ -205,6 +205,10 @@ name = "tcp_one_way_ra"
 path = "tests/basic/tcp_one_way_ra.rs"
 
 [[test]]
+name = "tcp_one_way_ra_verify_cache"
+path = "tests/basic/tcp_one_way_ra_verify_cache.rs"
+
+[[test]]
 name = "tcp_one_way_ra_with_as_cert"
 path = "tests/basic/tcp_one_way_ra_with_as_cert.rs"
 

@@ -21,73 +21,76 @@ impl TlsConfigGenerator {
         &self,
         alpn: Alpn,
     ) -> Result<LazyOnetimeTlsClientConfig> {
-        let mut config = match self {
-            TlsConfigGenerator::NoRa => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_no_client_auth();
+        let mut config =
+            match self {
+                TlsConfigGenerator::NoRa => {
+                    let mut tls_client_config =
+                        rustls::ClientConfig::builder_with_protocol_versions(&[
+                            &rustls::version::TLS13,
+                        ])
+                        .with_root_certificates(RootCertStore::empty())
+                        .with_no_client_auth();
 
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
+                    tls_client_config
+                        .dangerous()
+                        .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
 
-                LazyOnetimeTlsClientConfig(tls_client_config, None)
-            }
-            TlsConfigGenerator::Verify(verify_ctx) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_no_client_auth();
+                    LazyOnetimeTlsClientConfig(tls_client_config, None)
+                }
+                TlsConfigGenerator::Verify(verify_ctx, cache) => {
+                    let mut tls_client_config =
+                        rustls::ClientConfig::builder_with_protocol_versions(&[
+                            &rustls::version::TLS13,
+                        ])
+                        .with_root_certificates(RootCertStore::empty())
+                        .with_no_client_auth();
 
-                let verifier: Arc<LazyServerCertVerifier> =
-                    Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(verifier.clone());
+                    let verifier: Arc<LazyServerCertVerifier> = Arc::new(
+                        LazyServerCertVerifier::new(verify_ctx.clone(), cache.clone())?,
+                    );
+                    tls_client_config
+                        .dangerous()
+                        .set_certificate_verifier(verifier.clone());
 
-                LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
-            }
-            #[cfg(unix)]
-            TlsConfigGenerator::Attest(cert_manager) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_client_cert_resolver(Arc::new(
-                        DynamicCertResolver::new(cert_manager.clone()),
-                    ));
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
+                    LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
+                }
+                #[cfg(unix)]
+                TlsConfigGenerator::Attest(cert_manager) => {
+                    let mut tls_client_config =
+                        rustls::ClientConfig::builder_with_protocol_versions(&[
+                            &rustls::version::TLS13,
+                        ])
+                        .with_root_certificates(RootCertStore::empty())
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
+                        )));
+                    tls_client_config
+                        .dangerous()
+                        .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
 
-                LazyOnetimeTlsClientConfig(tls_client_config, None)
-            }
-            #[cfg(unix)]
-            TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_client_cert_resolver(Arc::new(
-                        DynamicCertResolver::new(cert_manager.clone()),
-                    ));
+                    LazyOnetimeTlsClientConfig(tls_client_config, None)
+                }
+                #[cfg(unix)]
+                TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx, cache) => {
+                    let mut tls_client_config =
+                        rustls::ClientConfig::builder_with_protocol_versions(&[
+                            &rustls::version::TLS13,
+                        ])
+                        .with_root_certificates(RootCertStore::empty())
+                        .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(
+                            cert_manager.clone(),
+                        )));
 
-                let verifier: Arc<LazyServerCertVerifier> =
-                    Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(verifier.clone());
+                    let verifier: Arc<LazyServerCertVerifier> = Arc::new(
+                        LazyServerCertVerifier::new(verify_ctx.clone(), cache.clone())?,
+                    );
+                    tls_client_config
+                        .dangerous()
+                        .set_certificate_verifier(verifier.clone());
 
-                LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
-            }
-        };
+                    LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
+                }
+            };
 
         config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
 
@@ -175,7 +178,7 @@ impl TlsConfigGenerator {
 
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
-            TlsConfigGenerator::Verify(verify_ctx) => {
+            TlsConfigGenerator::Verify(verify_ctx, cache) => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,
@@ -183,8 +186,9 @@ impl TlsConfigGenerator {
                     .with_root_certificates(RootCertStore::empty())
                     .with_no_client_auth();
 
-                let verifier: Arc<BlockingServerCertVerifier> =
-                    Arc::new(BlockingServerCertVerifier::new(verify_ctx.clone())?);
+                let verifier: Arc<BlockingServerCertVerifier> = Arc::new(
+                    BlockingServerCertVerifier::new(verify_ctx.clone(), cache.clone())?,
+                );
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(verifier.clone());
@@ -208,7 +212,7 @@ impl TlsConfigGenerator {
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
             #[cfg(unix)]
-            TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
+            TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx, cache) => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,
@@ -218,8 +222,9 @@ impl TlsConfigGenerator {
                         DynamicCertResolver::new(cert_manager.clone()),
                     ));
 
-                let verifier: Arc<BlockingServerCertVerifier> =
-                    Arc::new(BlockingServerCertVerifier::new(verify_ctx.clone())?);
+                let verifier: Arc<BlockingServerCertVerifier> = Arc::new(
+                    BlockingServerCertVerifier::new(verify_ctx.clone(), cache.clone())?,
+                );
                 tls_client_config
                     .dangerous()
                     .set_certificate_verifier(verifier.clone());
