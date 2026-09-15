@@ -35,7 +35,7 @@ pub(crate) const HTTP_REQUEST_USER_AGENT_HEADER: &str =
 pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
     const_format::concatcp!("tng/", crate::build::PKG_VERSION);
 
-pub use crate::tunnel::attestation_result::AttestationResult;
+pub use crate::tunnel::attestation_result::{AttestationResult, AttestationState};
 pub use crate::tunnel::ra_context::RaContext;
 pub use crate::tunnel::stream::{CommonStreamTrait, ContextualStream};
 pub use crate::tunnel::utils::runtime::TokioRuntime;

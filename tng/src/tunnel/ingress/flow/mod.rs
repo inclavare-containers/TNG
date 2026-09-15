@@ -164,7 +164,7 @@ impl IngressFlow {
                     // Transition to AccessRouted: dst and encrypted are known here
                     let access_routed = access_accepted.into_routed(&dst, encrypted);
 
-                    let attestation_result;
+                    let attestation_state;
                     let upstream_local;
                     let forward_stream_task = if !encrypted {
                         // Forward via unprotected tcp
@@ -175,7 +175,7 @@ impl IngressFlow {
                                 format!("Failed to connect to upstream {dst} via unprotected tcp")
                             })?;
 
-                        attestation_result = att;
+                        attestation_state = att;
                         upstream_local = up_local;
                         forward_stream_task
                     } else {
@@ -187,13 +187,13 @@ impl IngressFlow {
                                 format!("Failed to connect to upstream {dst} via trusted tunnel")
                             })?;
 
-                        attestation_result = att;
+                        attestation_state = att;
                         upstream_local = up_local;
                         forward_stream_task
                     };
 
                     // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
-                    access_routed.into_established(upstream_local, attestation_result.is_some());
+                    access_routed.into_established(upstream_local, attestation_state.is_attested());
 
                     // let forward_stream_task = pin!(forward_stream_task);
                     match forward_stream_task.await {

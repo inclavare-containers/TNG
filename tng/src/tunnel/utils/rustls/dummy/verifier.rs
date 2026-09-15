@@ -57,3 +57,28 @@ impl rustls::client::danger::ServerCertVerifier for DummyServerCertVerifier {
         self.inner.supported_verify_schemes()
     }
 }
+
+/// A `ResolvesClientCert` that never presents a client certificate.
+///
+/// Stateless so it can be shared as one `Arc` across handshakes. rustls gates
+/// client-side TLS 1.3 resumption on `Weak::ptr_eq` of the
+/// `ResolvesClientCert` (`persist.rs`), so the no-client-auth modes (NoRa,
+/// Verify) must reuse a single `Arc<NoClientCertResolver>` per generator
+/// rather than calling `with_no_client_auth()` (which builds a fresh
+/// `FailResolveClientCert` each call and breaks resumption).
+#[derive(Debug)]
+pub struct NoClientCertResolver;
+
+impl rustls::client::ResolvesClientCert for NoClientCertResolver {
+    fn resolve(
+        &self,
+        _root_hint_subjects: &[&[u8]],
+        _sigschemes: &[rustls::SignatureScheme],
+    ) -> Option<std::sync::Arc<rustls::sign::CertifiedKey>> {
+        None
+    }
+
+    fn has_certs(&self) -> bool {
+        false
+    }
+}

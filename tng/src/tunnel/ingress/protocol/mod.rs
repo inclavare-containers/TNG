@@ -9,7 +9,7 @@ use anyhow::Result;
 
 #[cfg(not(wasm))]
 use crate::status::StatusProvider;
-use crate::AttestationResult;
+use crate::AttestationState;
 #[cfg(not(wasm))]
 use crate::{tunnel::endpoint::TngEndpoint, CommonStreamTrait};
 #[cfg(not(wasm))]
@@ -19,7 +19,7 @@ pub type ForwardTask = Pin<Box<dyn Future<Output = Result<()>> + std::marker::Se
 
 pub type ProtocolStreamForwarderOutput = (
     ForwardTask,
-    Option<AttestationResult>,
+    AttestationState,
     /* upstream_local */ Option<SocketAddr>,
 );
 

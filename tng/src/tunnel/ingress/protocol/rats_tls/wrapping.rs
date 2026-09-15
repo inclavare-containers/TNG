@@ -3,21 +3,10 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context as _, Result};
 use http::{Request, StatusCode, Version};
 use http_body_util::combinators::BoxBody;
-use tower::Service;
 
 use super::security::RatsTlsClient;
-use super::transport::RatsTlsTransportLayerCreator;
 use crate::{
-    tunnel::{
-        attestation_result::AttestationResult,
-        endpoint::TngEndpoint,
-        ingress::protocol::rats_tls::security::pool::PoolKey,
-        utils::{
-            self,
-            runtime::TokioRuntime,
-            rustls::config::{alpn::Alpn, TlsConfigGenerator},
-        },
-    },
+    tunnel::{attestation_result::AttestationState, utils},
     CommonStreamTrait,
 };
 
@@ -29,7 +18,7 @@ impl RatsTlsWrappingLayer {
     ) -> Result<(
         impl CommonStreamTrait + Sync,
         /* local_addr */ Option<SocketAddr>,
-        Option<AttestationResult>,
+        AttestationState,
         /* session_id */ u64,
     )> {
         let req = Request::connect("https://tng.internal/")
@@ -49,9 +38,9 @@ impl RatsTlsWrappingLayer {
 
         tracing::debug!(session_id = client.id, "H2 CONNECT response received");
 
-        let attestation_result = resp
+        let attestation_state = resp
             .extensions()
-            .get::<Option<AttestationResult>>()
+            .get::<AttestationState>()
             .context("Can not find attestation result")?
             .clone();
 
@@ -82,45 +71,6 @@ impl RatsTlsWrappingLayer {
             "Trusted tunnel established (H2 upgrade OK)"
         );
 
-        Ok((stream, Some(local_addr), attestation_result, client.id))
-    }
-
-    /// Create a direct TLS stream without HTTP/2 CONNECT tunneling.
-    /// Used when `multiplex=false` is configured.
-    pub async fn create_stream_raw(
-        transport_layer_creator: &RatsTlsTransportLayerCreator,
-        tls_config_generator: &TlsConfigGenerator,
-        endpoint: &TngEndpoint,
-        _runtime: &TokioRuntime,
-    ) -> Result<(
-        impl CommonStreamTrait + Sync,
-        /* local_addr */ Option<SocketAddr>,
-        Option<AttestationResult>,
-        /* session_id */ u64,
-    )> {
-        let parent_span = tracing::info_span!("wrapping", mode = "rats-tls");
-
-        let mut connector =
-            transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
-
-        let tls_client_config = tls_config_generator
-            .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
-            .await?;
-
-        let tcp_stream: tokio::net::TcpStream = connector
-            .call(http::Request::new(()))
-            .await
-            .context("Failed to establish TCP connection for rats-tls")?
-            .into_inner();
-
-        let local_addr = tcp_stream.local_addr().ok();
-
-        let (tls_stream, attestation_result) = tls_client_config
-            .handshake_with_stream(endpoint.addr(), tcp_stream)
-            .await?;
-
-        tracing::debug!("Rats-TLS tunnel established");
-
-        Ok((tls_stream, local_addr, attestation_result, 0))
+        Ok((stream, Some(local_addr), attestation_state, client.id))
     }
 }

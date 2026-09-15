@@ -10,9 +10,8 @@ use rustls::RootCertStore;
 use crate::tunnel::utils::cert_manager::DynamicCertResolver;
 #[cfg(not(wasm))]
 use crate::tunnel::utils::rustls::{
-    config::{alpn::Alpn, TlsConfigGenerator},
+    config::{alpn::Alpn, TlsConfigGenerator, TlsConfigGeneratorMode},
     dummy::verifier::DummyServerCertVerifier,
-    ra::server_cert_verifier::LazyServerCertVerifier,
 };
 
 #[cfg(not(wasm))]
@@ -21,73 +20,24 @@ impl TlsConfigGenerator {
         &self,
         alpn: Alpn,
     ) -> Result<LazyOnetimeTlsClientConfig> {
-        let mut config = match self {
-            TlsConfigGenerator::NoRa => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_no_client_auth();
+        // The verifier and resolver are shared Arcs from the generator (built
+        // once, not per handshake) so rustls's resumption ptr-eq check passes.
+        let mut tls_client_config =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(RootCertStore::empty())
+                .with_client_cert_resolver(self.client_cert_resolver.clone());
+        tls_client_config
+            .dangerous()
+            .set_certificate_verifier(self.client_server_cert_verifier.clone());
 
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
+        let mut config =
+            LazyOnetimeTlsClientConfig(tls_client_config, self.client_lazy_server_verifier.clone());
 
-                LazyOnetimeTlsClientConfig(tls_client_config, None)
-            }
-            TlsConfigGenerator::Verify(verify_ctx) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_no_client_auth();
-
-                let verifier: Arc<LazyServerCertVerifier> =
-                    Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(verifier.clone());
-
-                LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
-            }
-            #[cfg(unix)]
-            TlsConfigGenerator::Attest(cert_manager) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_client_cert_resolver(Arc::new(
-                        DynamicCertResolver::new(cert_manager.clone()),
-                    ));
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(Arc::new(DummyServerCertVerifier::new()?));
-
-                LazyOnetimeTlsClientConfig(tls_client_config, None)
-            }
-            #[cfg(unix)]
-            TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
-                let mut tls_client_config =
-                    rustls::ClientConfig::builder_with_protocol_versions(&[
-                        &rustls::version::TLS13,
-                    ])
-                    .with_root_certificates(RootCertStore::empty())
-                    .with_client_cert_resolver(Arc::new(
-                        DynamicCertResolver::new(cert_manager.clone()),
-                    ));
-
-                let verifier: Arc<LazyServerCertVerifier> =
-                    Arc::new(LazyServerCertVerifier::new(verify_ctx.clone())?);
-                tls_client_config
-                    .dangerous()
-                    .set_certificate_verifier(verifier.clone());
-
-                LazyOnetimeTlsClientConfig(tls_client_config, Some(verifier))
-            }
-        };
+        // Offer 0-RTT when a resumption ticket is available. The shared store
+        // keeps tickets across handshakes so connection N+1 to the same server
+        // can resume.
+        config.0.resumption = rustls::client::Resumption::store(self.client_session_store.clone());
+        config.0.enable_early_data = true;
 
         config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
 
@@ -96,11 +46,26 @@ impl TlsConfigGenerator {
 }
 
 #[cfg(not(wasm))]
-pub struct LazyOnetimeTlsClientConfig(rustls::ClientConfig, Option<Arc<LazyServerCertVerifier>>);
+pub struct LazyOnetimeTlsClientConfig(
+    pub rustls::ClientConfig,
+    Option<Arc<crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier>>,
+);
 
 #[cfg(not(wasm))]
 impl LazyOnetimeTlsClientConfig {
-    /// Perform TLS handshake then verify the peer certificate if a verifier was configured.
+    /// Perform the TLS handshake then classify attestation from the negotiated
+    /// handshake kind, mirroring the non-multiplex `connect_early` +
+    /// `forward_stream` path.
+    ///
+    /// The verifier is a no-op during the handshake (stateless, so it can be
+    /// shared across handshakes for resumption). After `connect().await` the
+    /// handshake is complete, so `handshake_kind()` is valid here (unlike the
+    /// 0-RTT path, which must prime first). On a full handshake the peer cert is
+    /// fetched via `peer_certificates()` and RA-verified with `verify_cert`; on
+    /// a resumed handshake rustls presents no peer cert, so verify is skipped
+    /// and the PSK binding is trusted (`Resumed`). Multiplex reuses one
+    /// long-lived connection, but a reconnect can resume if a ticket is cached,
+    /// so the branch is kept for consistency with the non-multiplex path.
     ///
     /// Takes the peer as an `EndpointAddr` rather than a pre-formatted string so that
     /// IPv4 addresses become `ServerName::IpAddress` directly (no allocation) and
@@ -111,7 +76,7 @@ impl LazyOnetimeTlsClientConfig {
         stream: S,
     ) -> Result<(
         tokio_rustls::client::TlsStream<S>,
-        Option<crate::tunnel::attestation_result::AttestationResult>,
+        crate::tunnel::attestation_result::AttestationState,
     )>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
@@ -138,17 +103,75 @@ impl LazyOnetimeTlsClientConfig {
             .await
             .context("Failed to establish TLS connection")?;
 
-        let attestation_result = match self.1 {
-            Some(verifier) => Some(
-                verifier
-                    .verity_pending_cert()
-                    .await
-                    .context("Failed to verify pending certificate")?,
-            ),
-            None => None,
+        use crate::tunnel::attestation_result::AttestationState;
+        let attestation_state = match (self.1, tls_stream.get_ref().1.handshake_kind()) {
+            // Resumed: rustls presents no peer cert, so verify is skipped. The
+            // original handshake's attestation is trusted via the PSK binding.
+            (Some(_), Some(rustls::HandshakeKind::Resumed)) => AttestationState::Resumed,
+            (Some(v), _) => {
+                // Full handshake: fetch the end-entity cert rustls validated
+                // and RA-verify it now (the handshake callback was a no-op).
+                let peer_cert = crate::tunnel::utils::rustls::ra::common::take_end_entity_cert(
+                    tls_stream.get_ref().1.peer_certificates(),
+                )?;
+                AttestationState::Fresh(
+                    v.verify_cert(peer_cert)
+                        .await
+                        .context("Failed to verify peer certificate")?,
+                )
+            }
+            (None, _) => AttestationState::Unattested,
         };
 
-        Ok((tls_stream, attestation_result))
+        Ok((tls_stream, attestation_state))
+    }
+
+    /// Start a client TLS connection that may carry 0-RTT early data.
+    ///
+    /// With a resumption ticket, `connect()` returns immediately in tokio-rustls's
+    /// `EarlyData` state: the handshake is NOT complete. The caller must perform
+    /// the first write (the early-data chunk) to drive the handshake; tokio-rustls
+    /// replays the chunk as 1-RTT if the server rejects 0-RTT. Without a ticket,
+    /// `connect()` completes a normal 1-RTT handshake before returning.
+    ///
+    /// Returns the shared lazy verifier handle; the caller primes the handshake,
+    /// reads `handshake_kind()` off the stream, and verifies the peer cert
+    /// (fetched via `peer_certificates()`) only on a full handshake. On a resumed
+    /// handshake rustls presents no fresh cert, so the verifier must be skipped
+    /// and the PSK binding trusted instead.
+    pub async fn connect_early<S>(
+        self,
+        server_name: &crate::tunnel::endpoint::EndpointAddr,
+        stream: S,
+    ) -> Result<(
+        tokio_rustls::client::TlsStream<S>,
+        Option<Arc<crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier>>,
+    )>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use rustls::pki_types::{DnsName, IpAddr, ServerName};
+
+        let server_name = match server_name {
+            crate::tunnel::endpoint::EndpointAddr::Ipv4(ip) => {
+                ServerName::IpAddress(IpAddr::V4((*ip).into()))
+            }
+            crate::tunnel::endpoint::EndpointAddr::Domain(d) => ServerName::DnsName(
+                DnsName::try_from(d.as_str())
+                    .with_context(|| format!("Invalid server name for TLS handshake ({d})"))?,
+            ),
+        };
+
+        // early_data(true) gates the 0-RTT attempt; only this path sets it so
+        // the multiplex handshake_with_stream path stays plain 1-RTT.
+        let connector =
+            tokio_rustls::TlsConnector::from(std::sync::Arc::new(self.0)).early_data(true);
+        let tls_stream = connector
+            .connect(server_name.to_owned(), stream)
+            .await
+            .context("Failed to establish TLS connection")?;
+
+        Ok((tls_stream, self.1))
     }
 }
 
@@ -160,8 +183,8 @@ impl TlsConfigGenerator {
     ) -> Result<BlockingOnetimeTlsClientConfig> {
         use crate::tunnel::utils::rustls::ra::server_cert_verifier::BlockingServerCertVerifier;
 
-        let mut config = match self {
-            TlsConfigGenerator::NoRa => {
+        let mut config = match &self.mode {
+            TlsConfigGeneratorMode::NoRa => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,
@@ -175,7 +198,7 @@ impl TlsConfigGenerator {
 
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
-            TlsConfigGenerator::Verify(verify_ctx) => {
+            TlsConfigGeneratorMode::Verify(verify_ctx) => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,
@@ -192,7 +215,7 @@ impl TlsConfigGenerator {
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
             #[cfg(unix)]
-            TlsConfigGenerator::Attest(cert_manager) => {
+            TlsConfigGeneratorMode::Attest(cert_manager) => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,
@@ -208,7 +231,7 @@ impl TlsConfigGenerator {
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
             #[cfg(unix)]
-            TlsConfigGenerator::AttestAndVerify(cert_manager, verify_ctx) => {
+            TlsConfigGeneratorMode::AttestAndVerify(cert_manager, verify_ctx) => {
                 let mut tls_client_config =
                     rustls::ClientConfig::builder_with_protocol_versions(&[
                         &rustls::version::TLS13,

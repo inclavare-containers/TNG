@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
 use crate::tunnel::{
-    attestation_result::AttestationResult,
     ra_context::RaContext,
     stream::CommonStreamTrait,
     utils::{
         runtime::TokioRuntime,
-        rustls::config::{alpn::Alpn, TlsConfigGenerator},
+        rustls::{
+            config::{alpn::Alpn, TlsConfigGenerator},
+            early_data_prefix::EarlyDataPrefixStream,
+        },
     },
 };
+use crate::AttestationState;
 use anyhow::Result;
 use tracing::Instrument;
 
@@ -35,8 +38,8 @@ impl RatsTlsSecurityLayer {
         &self,
         stream: T,
     ) -> Result<(
-        tokio_rustls::server::TlsStream<T>,
-        Option<AttestationResult>,
+        EarlyDataPrefixStream<tokio_rustls::server::TlsStream<T>>,
+        AttestationState,
     )> {
         async {
             // Prepare TLS config
@@ -52,11 +55,11 @@ impl RatsTlsSecurityLayer {
 
             tracing::debug!("Start to estabilish rats-tls connection");
 
-            let (security_layer_stream, attestation_result) =
+            let (security_layer_stream, attestation_state) =
                 tls_server_config.handshake_with_stream(stream).await?;
 
             tracing::debug!("New rats-tls connection established");
-            Ok((security_layer_stream, attestation_result))
+            Ok((security_layer_stream, attestation_state))
         }
         .instrument(tracing::info_span!("security"))
         .await

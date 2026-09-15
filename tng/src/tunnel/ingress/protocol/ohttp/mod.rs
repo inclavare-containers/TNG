@@ -103,8 +103,9 @@ mod ohttp_stream_forwarder {
                                 anyhow!("failed to serve OHTTP protocol on downstream: {error:?}")
                             })
                     }) as Pin<Box<_>>,
-                    // TODO: ohttp always return None attestation result in stream level, which may cause misunderstanding when user is reading the logs.
-                    None,
+                    // ohttp decodes attestation into its token path, not the
+                    // stream carrier; at the stream level it is unattested.
+                    crate::AttestationState::Unattested,
                     None, // OHTTP does not have a separate upstream connection
                 ))
             }

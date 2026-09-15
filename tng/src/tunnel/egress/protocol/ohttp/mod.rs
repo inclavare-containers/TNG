@@ -10,7 +10,7 @@ use crate::{
         },
         ra_context::RaContext,
     },
-    CommonStreamTrait, TokioRuntime,
+    AttestationState, CommonStreamTrait, TokioRuntime,
 };
 
 use anyhow::Result;
@@ -56,9 +56,17 @@ impl ProtocolStreamDecoder for OHttpStreamDecoder {
             }
         });
 
+        // Boundary between the ohttp attestation-token module (which keeps its
+        // own `Option<AttestationResult>` token type) and the tunnel-stream
+        // carrier (`AttestationState`). ohttp never resumes, so it only maps
+        // Some -> Fresh, None -> Unattested.
         Ok(stream! {
-            while let Some(value) = receiver.recv().await {
-                yield Ok(value); // TODO: replace the handle_stream above with return stream directly and pass error here
+            while let Some((stream, att_opt)) = receiver.recv().await {
+                let state = match att_opt {
+                    Some(ar) => AttestationState::Fresh(ar),
+                    None => AttestationState::Unattested,
+                };
+                yield Ok((stream, state)); // TODO: replace the handle_stream above with return stream directly and pass error here
             }
         }
         .boxed())
