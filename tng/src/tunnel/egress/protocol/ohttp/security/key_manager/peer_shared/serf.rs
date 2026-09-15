@@ -41,6 +41,7 @@ const SERF_QUERY_CLUSTER_KEY_SET: &str = "query_cluster_key_set";
 const SERF_QUERY_KEY: &str = "query_key";
 const SERF_USER_EVENT_BROADCAST_CLUSTER_KEY_SET: &str = "broadcast_cluster_key_set";
 
+#[derive(Clone)]
 pub struct PeerSharedKeyManager {
     pub(super) inner: Arc<PeerSharedKeyManagerInner>,
     pub(super) serf: Arc<SerfGracefulShutdown>,
@@ -883,6 +884,45 @@ impl PeerSharedKeyManager {
     }
 }
 
+// Read-only accessors for the file-exporting daemon (now in the `tools`
+// module), which lives outside `peer_shared` and must not reach `inner`/`serf`
+// directly. These only expose existing state; they do not change behavior.
+impl PeerSharedKeyManager {
+    /// Snapshot the current cluster key ring (cloned out under a short read guard).
+    pub(crate) async fn snapshot_keys(&self) -> Vec<(PublicKeyData, KeyInfo)> {
+        let cks = self.inner.cluster_key_set.read().await;
+        cks.iter_keys()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// A clone of the change-notify handle; `.notified().await` on it wakes on
+    /// key-set mutation.
+    pub(crate) fn check_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.inner.check_notify.clone()
+    }
+
+    /// Serf handle for cluster topology (local id, members) and
+    /// graceful-shutdown ownership.
+    pub(crate) fn serf(&self) -> &Arc<SerfGracefulShutdown> {
+        &self.serf
+    }
+
+    /// Test-only injection of a peer-sent key, mirroring the real
+    /// `handle_user_event` write path. Lets the moved daemon's tests drive a
+    /// key-set mutation (and thus `check_notify`) from a cloned manager that
+    /// shares the inner Arc, without exposing the inner state publicly.
+    #[cfg(test)]
+    pub(crate) async fn inject_peer_key(
+        &self,
+        public_key: PublicKeyData,
+        key_info: KeyInfo,
+    ) -> bool {
+        let mut cks = self.inner.cluster_key_set.write().await;
+        cks.insert_key_from_peer(public_key, key_info)
+    }
+}
+
 async fn resolve_peer_addresses(addr: &String) -> Result<Vec<SocketAddr>, TngError> {
     let host_addr: HostAddr<String> = HostAddr::from_str(addr)
         .with_context(|| format!("Invalid peer address: {addr}"))
@@ -1038,7 +1078,7 @@ async fn load_peers_from_file(path: &str) -> Result<Vec<String>, anyhow::Error> 
         .with_context(|| format!("Failed to parse peers file as JSON: {path}"))
 }
 
-pub(super) struct SerfGracefulShutdown {
+pub(crate) struct SerfGracefulShutdown {
     serf: Option<Serf>,
     runtime: TokioRuntime,
 }

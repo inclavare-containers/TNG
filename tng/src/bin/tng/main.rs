@@ -13,7 +13,7 @@ use tng::config::egress::EgressMode;
 use tng::config::ingress::IngressMode;
 use tng::config::TngConfig;
 use tng::runtime::TngRuntime;
-use tng::{build, show_banner};
+use tng::{build, show_banner, tools};
 use tng_hook_types::LogFormat;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -332,6 +332,14 @@ async fn main() -> anyhow::Result<()> {
 
                 tracing::info!(exit_code, "Exec session ended");
                 Ok::<i32, anyhow::Error>(exit_code)
+            }
+            GlobalSubcommand::Tools(cmd) => {
+                show_banner("tools");
+                crate::tools::run(cmd).await.map_err(|error| {
+                    tracing::error!(?error, "tools command failed");
+                    error
+                })?;
+                Ok::<i32, anyhow::Error>(0)
             }
         }
     };

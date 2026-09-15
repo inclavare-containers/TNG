@@ -5,6 +5,10 @@ mod runtime;
 mod serf;
 mod serf_message;
 
-// ClusterKeySet is used internally by serf.rs, not exposed publicly yet
-// pub use cluster_key_set::ClusterKeySet;
+// ClusterKeySet is exposed crate-wide (pub(crate)) so the file-exporting
+// daemon's tests (the daemon now lives in the `tools` module) can build
+// synthetic key sets without serf. Test-only: no production code outside
+// `peer_shared` consumes it.
+#[cfg(test)]
+pub(crate) use cluster_key_set::ClusterKeySet;
 pub use serf::PeerSharedKeyManager;

@@ -240,120 +240,55 @@ impl OHttpClientInner {
             .await
             .map_err(TngError::ClientGenerateClientKeyFailed)?;
 
-        let (server_key_config, token) = {
-            let verify_context = self.ra_context.verify_context();
+        let (server_key_config, server_attestation_result) = match self.ra_context.verify_context()
+        {
+            Some(verify_ctx @ VerifyContext::Passport { .. }) => {
+                // Request hpke configuration for server
+                let response = self
+                    .get_hpke_configuration(KeyConfigRequest {
+                        attestation_request: Some(AttestationRequest::Passport),
+                    })
+                    .await?;
+                // Passport tokens are self-contained, so no AS challenge token is bound.
+                let result = verify_keyconfig_attestation(&response, verify_ctx, None).await?;
+                (response.hpke_key_config, Some(result))
+            }
+            Some(verify_ctx @ VerifyContext::BackgroundCheck { converter, .. }) => {
+                // fetch a challenge token from attestation service
+                let challenge_token = converter
+                    .get_nonce()
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "requesting challenge token from AS at {}",
+                            converter.as_addr()
+                        )
+                    })
+                    .map_err(TngError::ClientRequestKeyConfigFailed)?;
 
-            match verify_context {
-                Some(VerifyContext::Passport { verifier }) => {
-                    // Request hpke configuration for server
-                    let response = self
-                        .get_hpke_configuration(KeyConfigRequest {
-                            attestation_request: Some(AttestationRequest::Passport),
-                        })
+                // Request hpke configuration for server
+                let response = self
+                    .get_hpke_configuration(KeyConfigRequest {
+                        attestation_request: Some(AttestationRequest::BackgroundCheck {
+                            challenge_token: challenge_token.clone(),
+                        }),
+                    })
+                    .await?;
+                // Bind the freshly-fetched challenge token to prove freshness.
+                let result =
+                    verify_keyconfig_attestation(&response, verify_ctx, Some(challenge_token))
                         .await?;
-
-                    let token = match &response.attestation_info {
-                        Some(ServerAttestationInfo::Passport {
-                            attestation_result,
-                            as_provider,
-                        }) => {
-                            let token = TngToken::from_wire(
-                                ProviderType::from_optional_wire(*as_provider),
-                                attestation_result.clone(),
-                            )
-                            .map_err(TngError::TngTokenDecodeError)?;
-
-                            let userdata = ServerUserData {
-                                // The challenge_token is not required to be check here, since it is already checked by attestation service. So that we skip the comparesion of challenge_token here.
-                                challenge_token: None,
-                                hpke_key_config: response.hpke_key_config.clone(),
-                            }
-                            .to_claims()
-                            .map_err(TngError::ClaimsEncodeError)?;
-
-                            verifier
-                                .verify_evidence(&token, &ReportData::Claims(userdata))
-                                .await
-                                .map_err(TngError::EvidenceVerifyError)?;
-                            token
-                        }
-                        Some(ServerAttestationInfo::BackgroundCheck { .. }) => {
-                            Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Passport model is expected but got background check attestation from server")))?
-                        }
-                        None => Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Missing attestation info from server")))?,
-                    };
-
-                    (response.hpke_key_config, Some(token))
-                }
-                Some(VerifyContext::BackgroundCheck {
-                    converter,
-                    verifier,
-                }) => {
-                    // fetch a challenge token from attestation service
-                    let challenge_token = converter
-                        .get_nonce()
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "requesting challenge token from AS at {}",
-                                converter.as_addr()
-                            )
-                        })
-                        .map_err(TngError::ClientRequestKeyConfigFailed)?;
-
-                    // Request hpke configuration for server
-                    let response = self
-                        .get_hpke_configuration(KeyConfigRequest {
-                            attestation_request: Some(AttestationRequest::BackgroundCheck {
-                                challenge_token: challenge_token.clone(),
-                            }),
-                        })
-                        .await?;
-
-                    let token = match response.attestation_info {
-                        Some(ServerAttestationInfo::BackgroundCheck {
-                            evidence,
-                            aa_provider,
-                        }) => {
-                            let evidence = TngEvidence::deserialize_from_json(
-                                ProviderType::from_optional_wire(aa_provider),
-                                evidence,
-                            )
-                            .map_err(TngError::TngEvidenceDecodeError)?;
-                            let token = converter.convert(&evidence).await
-                                .map_err(TngError::EvidenceVerifyError)?;
-
-                            let userdata = ServerUserData {
-                                challenge_token: Some(challenge_token),
-                                hpke_key_config: response.hpke_key_config.clone(),
-                            }
-                            .to_claims()
-                            .map_err(TngError::ClaimsEncodeError)?;
-
-                            verifier
-                                .verify_evidence(&token, &ReportData::Claims(userdata))
-                                .await
-                                .map_err(TngError::EvidenceVerifyError)?;
-                            token
-                        }
-                        Some(ServerAttestationInfo::Passport { .. }) => {
-                            Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Background check model is expected but got passport attestation from server")))?
-                        },
-                        None => Err(TngError::ClientRequestKeyConfigFailed(anyhow!("Missing attestation info from server")))?,
-                    };
-
-                    (response.hpke_key_config, Some(token))
-                }
-                // No verification required
-                None => {
-                    // Request hpke configuration for server
-                    let response = self
-                        .get_hpke_configuration(KeyConfigRequest {
-                            attestation_request: None,
-                        })
-                        .await?;
-                    (response.hpke_key_config, None)
-                }
+                (response.hpke_key_config, Some(result))
+            }
+            // No verification required
+            None => {
+                // Request hpke configuration for server
+                let response = self
+                    .get_hpke_configuration(KeyConfigRequest {
+                        attestation_request: None,
+                    })
+                    .await?;
+                (response.hpke_key_config, None)
             }
         };
 
@@ -362,17 +297,17 @@ impl OHttpClientInner {
             Expire::from_timestamp(server_key_config.expire_timestamp)?,
         );
 
-        let server_attestation_result = match token {
-            Some(token) => {
+        let server_attestation_result = match server_attestation_result {
+            Some(result) => {
                 expire = std::cmp::min(
                     expire,
                     Expire::from_timestamp(
-                        token
+                        result
                             .exp()
                             .map_err(TngError::ClientRequestKeyConfigFailed)?,
                     )?,
                 );
-                Some(AttestationResult::from_token(token))
+                Some(result)
             }
             None => None,
         };
@@ -898,6 +833,103 @@ impl OHttpClientInner {
     }
 }
 
+/// Verify the attestation bound to an ohttp `KeyConfigResponse` against a
+/// pre-built `VerifyContext`. This is the single shared attestation-verification
+/// half for the ohttp key config: the live ingress client
+/// ([`OHttpClientInner::create_key_store_value`]) and the `ohttp verify`
+/// operator tool both call it on an already-fetched `KeyConfigResponse`
+/// (the ingress path on a live fetch, the tool on a dumped JSON file) so the
+/// `ServerAttestationInfo` dispatch + `verify_evidence`/`convert` calls live in
+/// exactly one place.
+///
+/// `resp.hpke_key_config` is bound into the report_data claims, so a token
+/// whose runtime_data does not cover the server's HPKE key config is rejected
+/// (subset check inside the verifier). `challenge_token` is the AS challenge
+/// token to bind into those claims: the live ingress path passes the token it
+/// just obtained from the AS to prove freshness (`Some` for the background-check
+/// model; `None` for passport, whose token is self-contained), while the verify
+/// tool passes `None` because a dumped file carries no such token. The
+/// verifier's report_data check is subset-based, so omitting `challenge_token`
+/// still validates the hpke_key_config binding, which is the meaningful check
+/// for a dumped artifact.
+pub(crate) async fn verify_keyconfig_attestation(
+    resp: &KeyConfigResponse,
+    verify_ctx: &VerifyContext,
+    challenge_token: Option<String>,
+) -> Result<AttestationResult, TngError> {
+    let info = resp.attestation_info.as_ref().ok_or_else(|| {
+        TngError::ClientRequestKeyConfigFailed(anyhow!("ohttp key config has no attestation_info"))
+    })?;
+
+    let token = match verify_ctx {
+        VerifyContext::Passport { verifier } => {
+            let ServerAttestationInfo::Passport {
+                attestation_result,
+                as_provider,
+            } = info
+            else {
+                return Err(TngError::ClientRequestKeyConfigFailed(anyhow!(
+                    "Passport model is expected but got background check attestation from server"
+                )));
+            };
+            let token = TngToken::from_wire(
+                ProviderType::from_optional_wire(*as_provider),
+                attestation_result.clone(),
+            )
+            .map_err(TngError::TngTokenDecodeError)?;
+            // The challenge_token is not checked here; it is already checked by
+            // the attestation service, so it is omitted from the claims.
+            let userdata = ServerUserData {
+                challenge_token: None,
+                hpke_key_config: resp.hpke_key_config.clone(),
+            }
+            .to_claims()
+            .map_err(TngError::ClaimsEncodeError)?;
+            verifier
+                .verify_evidence(&token, &ReportData::Claims(userdata))
+                .await
+                .map_err(TngError::EvidenceVerifyError)?;
+            token
+        }
+        VerifyContext::BackgroundCheck {
+            converter,
+            verifier,
+        } => {
+            let ServerAttestationInfo::BackgroundCheck {
+                evidence,
+                aa_provider,
+            } = info
+            else {
+                return Err(TngError::ClientRequestKeyConfigFailed(anyhow!(
+                    "Background check model is expected but got passport attestation from server"
+                )));
+            };
+            let userdata = ServerUserData {
+                challenge_token,
+                hpke_key_config: resp.hpke_key_config.clone(),
+            }
+            .to_claims()
+            .map_err(TngError::ClaimsEncodeError)?;
+            let evidence = TngEvidence::deserialize_from_json(
+                ProviderType::from_optional_wire(*aa_provider),
+                evidence.clone(),
+            )
+            .map_err(TngError::TngEvidenceDecodeError)?;
+            let token = converter
+                .convert(&evidence)
+                .await
+                .map_err(TngError::EvidenceVerifyError)?;
+            verifier
+                .verify_evidence(&token, &ReportData::Claims(userdata))
+                .await
+                .map_err(TngError::EvidenceVerifyError)?;
+            token
+        }
+    };
+
+    Ok(AttestationResult::from_token(token))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,6 +966,52 @@ mod tests {
         assert!(
             value.get("server_attestation").is_none(),
             "server_attestation should be omitted when None"
+        );
+    }
+
+    /// A dumped key config with no `attestation_info` (e.g. a no_ra dump) must
+    /// be rejected up front, before the `VerifyContext` is touched. Uses a
+    /// Passport verifier built with `skip_as_token_cert_verify` so no AS/cert
+    /// file is contacted to construct the context.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn verify_keyconfig_attestation_errors_when_no_attestation_info() {
+        use crate::config::ra::{CocoVerifierArgs, VerifierArgs, VerifyArgs};
+        use crate::tunnel::ohttp::protocol::HpkeKeyConfig;
+        use std::collections::HashMap;
+
+        let verify_args = VerifyArgs::Passport {
+            verifier: VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                as_addr: None,
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+                #[cfg(not(wasm))]
+                trusted_certs_paths: None,
+                verify_signer_transparency: false,
+                skip_as_token_cert_verify: true,
+            }),
+        };
+        let verify_ctx = VerifyContext::from_verify_args(&verify_args)
+            .await
+            .expect("build skip-verify Passport context without AS");
+
+        let resp = KeyConfigResponse {
+            hpke_key_config: HpkeKeyConfig {
+                expire_timestamp: 0,
+                encoded_key_config_list: String::new(),
+            },
+            attestation_info: None,
+        };
+
+        let err = verify_keyconfig_attestation(&resp, &verify_ctx, None)
+            .await
+            .expect_err("no-attestation_info response should error");
+        // The helper returns a typed TngError; format its full source chain
+        // (variant message + cause) the same way IntoResponse does, so the
+        // attestation_info-missing reason is visible in the assertion text.
+        let msg = format!("{:#}", anyhow::Error::new(err));
+        assert!(
+            msg.contains("no attestation_info"),
+            "expected 'no attestation_info' error, got: {msg}"
         );
     }
 }

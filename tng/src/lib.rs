@@ -22,6 +22,8 @@ mod service;
 mod state;
 #[cfg(not(wasm))]
 pub(crate) mod status;
+#[cfg(feature = "tools")]
+pub mod tools;
 pub mod tunnel;
 
 shadow!(build);

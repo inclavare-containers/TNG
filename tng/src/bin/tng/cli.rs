@@ -5,6 +5,7 @@ use clap::{arg, Parser, Subcommand};
 use tng_hook_types::LogFormat;
 
 use crate::build::CLAP_LONG_VERSION;
+use crate::tools::cli::ToolsCommand;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -55,6 +56,9 @@ pub enum GlobalSubcommand {
 
     #[command(name = "exec")]
     Exec(ExecOptions),
+
+    #[command(name = "tools", subcommand)]
+    Tools(ToolsCommand),
 }
 
 #[derive(Parser, Debug)]

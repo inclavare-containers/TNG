@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use serde::Serialize;
 
 use super::provider::TngToken;
@@ -41,5 +42,10 @@ impl AttestationResult {
     /// Return the raw JWT token string.
     pub fn token_str(&self) -> &str {
         self.token.as_str()
+    }
+
+    /// Expiry timestamp (JWT `exp` claim) of the underlying token.
+    pub fn exp(&self) -> Result<u64> {
+        self.token.exp()
     }
 }

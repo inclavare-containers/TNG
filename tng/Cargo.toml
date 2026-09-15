@@ -165,7 +165,14 @@ default = [
   "egress-mapping",
   "egress-all",
   "builtin-as-tdx-rust",
+  "tools",
 ]
+
+# Operator CLI subcommands (rats-tls gen/dump/verify, ohttp dump/verify, key-sync
+# daemon). tng-wasm depends on tng with default-features=false, so it does NOT
+# enable `tools`, which means the `tools` module is not compiled on wasm and
+# none of its code needs `#[cfg(not(wasm))]/#[cfg(wasm)]` gates.
+tools = []
 
 __egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid", "dep:pkcs8"]
 egress-all = ["egress-mapping", "egress-netfilter", "egress-mapping-udp", "egress-netfilter-udp"]

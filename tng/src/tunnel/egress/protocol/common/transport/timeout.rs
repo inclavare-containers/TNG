@@ -15,7 +15,10 @@ pub struct FirstByteReadTimeoutStream<
 }
 
 #[pin_project(project = StateProj)]
-#[allow(clippy::enum_variant_names)]
+// The Sleep future is large (~232 B); boxing it would change pin semantics
+// for no real win since only one variant carries it and the stream is
+// short-lived, so silence the size-difference lint here.
+#[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 enum State {
     BeforeFirstRead,
     InFirstRead(#[pin] tokio::time::Sleep),

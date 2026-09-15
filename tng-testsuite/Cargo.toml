@@ -305,3 +305,19 @@ name = "log_rolling"
 path = "tests/hook/log_rolling.rs"
 required-features = ["on-bin"]
 
+[[test]]
+name = "rats_tls_gen_verify"
+path = "tests/rats_tls_gen_verify.rs"
+
+[[test]]
+name = "rats_tls_dump"
+path = "tests/rats_tls_dump.rs"
+
+[[test]]
+name = "ohttp_dump_verify"
+path = "tests/ohttp_dump_verify.rs"
+
+[[test]]
+name = "key_sync"
+path = "tests/key_sync.rs"
+
