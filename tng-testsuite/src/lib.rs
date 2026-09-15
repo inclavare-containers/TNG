@@ -1,3 +1,4 @@
+pub mod log_capture;
 pub mod netns;
 pub mod nip_io_hosts;
 pub mod task;
@@ -14,12 +15,84 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<
-    tracing_subscriber::reload::Handle<
-        Vec<Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>>,
-        tracing_subscriber::Registry,
-    >,
-> = OnceCell::const_new();
+/// The reloadable layer slot in the global tracing subscriber. Starts empty (the real output
+/// goes through the separate `fmt::layer()`); `capture_logs` swaps a capturing layer in here so
+/// an integration test can assert on events emitted by the in-process TNG runtime.
+type ReloadHandle = tracing_subscriber::reload::Handle<
+    Vec<Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>>,
+    tracing_subscriber::Registry,
+>;
+
+static BIN_TEST_LOG_RELOAD_HANDLE: OnceCell<ReloadHandle> = OnceCell::const_new();
+
+/// Initialize the global tracing subscriber once (idempotent) and return the reload handle.
+/// Shared by `run_test` and `capture_logs` so a test can install a log-capture layer before
+/// `run_test` drives any in-process TNG runtime.
+async fn ensure_tracing_initialized() -> &'static ReloadHandle {
+    BIN_TEST_LOG_RELOAD_HANDLE
+        .get_or_init(|| async {
+            // Initialize rustls crypto provider
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .expect("Failed to install rustls crypto provider");
+
+            // Initialize log tracing
+            let pending_tracing_layers: Vec<
+                Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,
+            > = vec![];
+            let (pending_tracing_layers, reload_handle) =
+                tracing_subscriber::reload::Layer::new(pending_tracing_layers);
+            tracing_subscriber::registry()
+                .with(pending_tracing_layers.with_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                        "info,tokio_graceful=off,rats_cert=trace,tng=trace".into()
+                    }),
+                ))
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_ansi(atty::is(atty::Stream::Stdout))
+                        .with_filter(
+                            tracing_subscriber::EnvFilter::try_from_default_env()
+                                .unwrap_or_else(|_| {
+                                    format!(
+                                        "info,tokio_graceful=off,rats_cert=debug,tng=debug,{}=debug",
+                                        std::module_path!().split("::").next().unwrap()
+                                    )
+                                    .into()
+                                }),
+                        ),
+                )
+                // .with(console_subscriber::spawn()) // Initialize tokio console
+                .init();
+
+            reload_handle
+        })
+        .await
+}
+
+/// Install a log-capture layer into the global subscriber and return a buffer of every
+/// formatted log line emitted afterwards. The TNG runtime runs in-process under the default
+/// `on-source-code` feature, so its `trace!`/`debug!` events flow through this subscriber
+/// directly; the buffer lets an integration test assert that a specific event fired.
+///
+/// Must be called before `run_test` so the capture layer is in place before any TNG task
+/// launches. Idempotent subscriber init means calling it first is safe.
+pub async fn capture_logs() -> Arc<std::sync::Mutex<Vec<String>>> {
+    let buf = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let handle = ensure_tracing_initialized().await;
+    let capture_layer = tracing_subscriber::fmt::Layer::new()
+        .with_writer(log_capture::CaptureMakeWriter { buf: buf.clone() });
+    // The reload slot wraps an empty Vec of layers; swap in a single capturing layer. The
+    // EnvFilter already on the slot (info + tng/rats_cert trace) still applies, so only events
+    // at those levels are captured.
+    handle
+        .reload(vec![Box::new(capture_layer)
+            as Box<
+                dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync,
+            >])
+        .expect("installing the log-capture layer must succeed once tracing is initialized");
+    buf
+}
 
 /// This is a common function to run bin tests. For each test, it will create many virtual nodes under
 /// a bridge network (192.168.1.0/24), at least there will be one node act as the server side, the other act as
@@ -38,43 +111,7 @@ pub async fn run_test(name: &str, tasks: Vec<Box<dyn Task>>) -> Result<()> {
 
     let result = {
         let test_future = async {
-            BIN_TEST_LOG_RELOAD_HANDLE
-                .get_or_init(|| async {
-                    // Initialize rustls crypto provider
-                    rustls::crypto::ring::default_provider()
-                        .install_default()
-                        .expect("Failed to install rustls crypto provider");
-
-                    // Initialize log tracing
-                    let pending_tracing_layers = vec![];
-                    let (pending_tracing_layers, reload_handle) =
-                        tracing_subscriber::reload::Layer::new(pending_tracing_layers);
-                    tracing_subscriber::registry()
-                        .with(pending_tracing_layers.with_filter(
-                            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
-                                |_| "info,tokio_graceful=off,rats_cert=trace,tng=trace".into(),
-                            ),
-                        ))
-                        .with(
-                            tracing_subscriber::fmt::layer()
-                                .with_ansi(atty::is(atty::Stream::Stdout))
-                                .with_filter(
-                                    tracing_subscriber::EnvFilter::try_from_default_env()
-                                        .unwrap_or_else(|_| {
-                                            format!(
-                                        "info,tokio_graceful=off,rats_cert=debug,tng=debug,{}=debug",
-                                        std::module_path!().split("::").next().unwrap()
-                                    )
-                                            .into()
-                                        }),
-                                ),
-                        )
-                        // .with(console_subscriber::spawn()) // Initialize tokio console
-                        .init();
-
-                    reload_handle
-                })
-                .await;
+            ensure_tracing_initialized().await;
 
             // Log test start with task topology
             let task_refs: Vec<&dyn Task> = tasks.iter().map(|t| t.as_ref()).collect();
