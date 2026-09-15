@@ -12,6 +12,7 @@ use crate::tunnel::{
     ra_context::VerifyContext,
     utils::rustls::{
         dummy::TNG_DUMMY_CERT,
+        ra::cert_cache::CertVerifyCache,
         ra::common::{BlockingCertVerifier, LazyCertVerifier},
     },
 };
@@ -28,10 +29,10 @@ fn webpki_server_verifier() -> Result<Arc<WebPkiServerVerifier>, anyhow::Error> 
 pub struct LazyServerCertVerifier(Arc<WebPkiServerVerifier>, LazyCertVerifier);
 
 impl LazyServerCertVerifier {
-    pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
+    pub fn new(verify_ctx: Arc<VerifyContext>, cache: Arc<CertVerifyCache>) -> Result<Self> {
         Ok(Self(
             webpki_server_verifier()?,
-            LazyCertVerifier::new(verify_ctx),
+            LazyCertVerifier::new(verify_ctx, cache),
         ))
     }
 
@@ -82,10 +83,10 @@ impl rustls::client::danger::ServerCertVerifier for LazyServerCertVerifier {
 pub struct BlockingServerCertVerifier(Arc<WebPkiServerVerifier>, BlockingCertVerifier);
 
 impl BlockingServerCertVerifier {
-    pub fn new(verify_ctx: Arc<VerifyContext>) -> Result<Self> {
+    pub fn new(verify_ctx: Arc<VerifyContext>, cache: Arc<CertVerifyCache>) -> Result<Self> {
         Ok(Self(
             webpki_server_verifier()?,
-            BlockingCertVerifier::new(verify_ctx),
+            BlockingCertVerifier::new(verify_ctx, cache),
         ))
     }
 }

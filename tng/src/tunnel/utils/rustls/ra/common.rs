@@ -37,18 +37,18 @@ fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<T
 #[derive(Debug)]
 pub struct LazyCertVerifier {
     verify_ctx: Arc<VerifyContext>,
-    /// Per-config verdict cache, shared across every connection using this rustls
-    /// config. Keyed on the peer cert DER so repeated handshakes from the same attester
-    /// (which reuses its cert for a refresh window) skip the full RA appraisal.
-    cache: CertVerifyCache,
+    /// Shared verdict cache, one per `TlsConfigGenerator` (not per connection): handed in from the
+    /// generator so two verifiers built from the same config share entries, letting a verdict
+    /// cached on connection N short-circuit connection N+1 within the TTL.
+    cache: Arc<CertVerifyCache>,
     pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
 impl LazyCertVerifier {
-    pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
+    pub fn new(verify_ctx: Arc<VerifyContext>, cache: Arc<CertVerifyCache>) -> Self {
         Self {
             verify_ctx,
-            cache: CertVerifyCache::default_sized(),
+            cache,
             pending_cert: spin::mutex::spin::SpinMutex::new(None),
         }
     }
@@ -95,16 +95,13 @@ impl LazyCertVerifier {
 #[derive(Debug)]
 pub struct BlockingCertVerifier {
     verify_ctx: Arc<VerifyContext>,
-    cache: CertVerifyCache,
+    cache: Arc<CertVerifyCache>,
 }
 
 #[cfg(not(wasm))]
 impl BlockingCertVerifier {
-    pub fn new(verify_ctx: Arc<VerifyContext>) -> Self {
-        Self {
-            verify_ctx,
-            cache: CertVerifyCache::default_sized(),
-        }
+    pub fn new(verify_ctx: Arc<VerifyContext>, cache: Arc<CertVerifyCache>) -> Self {
+        Self { verify_ctx, cache }
     }
 
     pub fn verify_cert_blocking(
@@ -278,5 +275,34 @@ mod tests {
             res.is_err(),
             "a different cert must not hit another cert's cache entry"
         );
+    }
+
+    // The cache handle is shared between verifier instances (one per connection) built from the
+    // same TlsConfigGenerator: a verdict seeded through one instance's handle is seen by the next.
+    // This is the whole point of moving the cache off the per-connection verifier; without sharing,
+    // every connection misses and the cache is dead weight.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_cache_survives_across_verifier_instances() {
+        // Two independent VerifyContexts (the builtin one is cheap to rebuild) — what matters is
+        // that both verifiers receive clones of the *same* Arc<CertVerifyCache>.
+        let ctx1 = Arc::new(make_builtin_verify_context().await);
+        let ctx2 = Arc::new(make_builtin_verify_context().await);
+        let shared = Arc::new(CertVerifyCache::default_sized());
+        let v1 = LazyCertVerifier::new(ctx1, shared.clone());
+        let v2 = LazyCertVerifier::new(ctx2, shared.clone());
+
+        let cert_bytes = b"not-a-real-cert".to_vec();
+        let seeded = make_cached_result();
+        // Seed through v1's handle.
+        v1.cache
+            .insert(cert_hash(&cert_bytes), seeded.clone())
+            .await;
+
+        // v2 must hit v1's entry; only a shared cache can return the seeded verdict for bytes
+        // that are not a parseable cert (a miss would reach verify_der and reject them).
+        let got = verify_cert(&v2.verify_ctx, &v2.cache, cert_bytes)
+            .await
+            .expect("v2 must hit the entry seeded through v1's shared cache handle");
+        assert_eq!(got.token_str(), seeded.token_str());
     }
 }
