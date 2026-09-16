@@ -1306,6 +1306,9 @@ Example:
 
 TNG supports three OHTTP key management strategies.
 
+> [!NOTE]
+> When an L4 load balancer sits between ingress and egress, `self_generated` requires the SLB to route each ingress's connections to one egress (sticky), while `file` and `peer_shared` do not. See [Using TNG with an L4 Load Balancer](using-with-slb.md).
+
 <a name="ohttp-key-self_generated"></a>
 
 #### self_generated Mode (Default)

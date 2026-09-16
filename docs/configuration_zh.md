@@ -1289,6 +1289,9 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 
 TNG 支持三种 OHTTP 密钥管理策略。
 
+> [!NOTE]
+> 当 ingress 与 egress 之间部署 L4 负载均衡器时，`self_generated` 要求 SLB 把每个 ingress 的连接路由到同一 egress（粘滞），而 `file` 和 `peer_shared` 不需要。见[在四层负载均衡器场景下使用 TNG](using-with-slb_zh.md)。
+
 <a name="ohttp-key-self_generated"></a>
 
 #### self_generated 模式（默认）

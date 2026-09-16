@@ -73,7 +73,7 @@ TNG 采用了先进的加密协议来实现通信安全，通过结合远程证�
 
 **适用场景**：
 *   **任意 TCP 流量**：TNG 的设计使其能够透明地处理任意基于 TCP 协议的应用层流量。这意味着无论是 HTTP、数据库连接（如 MySQL、PostgreSQL）、RPC 协议还是任何自定义的 TCP 协议，TNG 都可以通过 RATS-TLS 进行安全保护。
-*   **使用 4 层负载均衡器**：由于 RATS-TLS 运行在 TCP 协议之上，它与传统的 TCP/IP 栈兼容性良好。这意味着在部署 TNG 时，你可以继续使用现有的 4 层负载均衡器（例如 LVS、NAT 模式的负载均衡器或云服务提供商的 TCP/UDP 负载均衡器）。
+*   **使用 4 层负载均衡器**：由于 RATS-TLS 运行在 TCP 协议之上，它与传统的 TCP/IP 栈兼容性良好。这意味着在部署 TNG 时，你可以继续使用现有的 4 层负载均衡器（例如 LVS、NAT 模式的负载均衡器或云服务提供商的 TCP/UDP 负载均衡器）。关于 ingress 与 egress 之间部署 4 层负载均衡器时的连接模型与粘滞行为，见[在四层负载均衡器场景下使用 TNG](using-with-slb_zh.md)。
 
 > [!TIP]
 > RATS-TLS 是 TNG 的默认通信协议。相关配置见 [远程证明配置说明](remote_attestation_zh.md)。

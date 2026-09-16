@@ -75,7 +75,7 @@ TNG employs advanced encryption protocols to achieve communication security, imp
 
 **Applicable Scenarios**:
 *   **Arbitrary TCP Traffic**: TNG's design allows it to transparently handle any application-layer traffic based on the TCP protocol. This means whether it's HTTP, database connections (such as MySQL, PostgreSQL), RPC protocols, or any custom TCP protocol, TNG can protect them through RATS-TLS.
-*   **Using L4 Load Balancers**: Since RATS-TLS runs on top of the TCP protocol, it has good compatibility with the traditional TCP/IP stack. This means when deploying TNG, you can continue using existing Layer 4 load balancers (e.g., LVS, NAT-mode load balancers, or TCP/UDP load balancers from cloud service providers).
+*   **Using L4 Load Balancers**: Since RATS-TLS runs on top of the TCP protocol, it has good compatibility with the traditional TCP/IP stack. This means when deploying TNG, you can continue using existing Layer 4 load balancers (e.g., LVS, NAT-mode load balancers, or TCP/UDP load balancers from cloud service providers). For the connection model and stickiness behavior when an L4 load balancer sits between ingress and egress, see [Using TNG with an L4 Load Balancer](using-with-slb.md).
 
 > [!TIP]
 > RATS-TLS is the default communication protocol for TNG. See the [Remote Attestation Configuration](remote_attestation.md) for related configurations.
