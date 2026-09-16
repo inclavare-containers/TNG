@@ -254,7 +254,7 @@ def cmd_bench(args):
 
 
 def main():
-    # NOTE: do not use add_subparsers(required=True) — that kwarg is Python 3.7+
+    # NOTE: do not use add_subparsers(required=True): that kwarg is Python 3.7+
     # and the test runtime may be 3.6. Check dest manually instead.
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd")

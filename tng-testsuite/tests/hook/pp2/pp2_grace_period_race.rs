@@ -22,7 +22,12 @@ async fn test() -> Result<()> {
         "add_ingress": [{"hook":{"capture_dst":[{"port":32000}],"proxy_port":49000},"no_ra":true}]
     }"#;
     run_test!(vec![
-        // rank0: host store but delay the bind to open the race window.
+        // rank0: host store but delay the bind to open the race window. Pass an
+        // EMPTY staging range (31000..30999) so the server does no staging
+        // bind/connect: rank1 is a connect-once probe that hosts no staging
+        // servers, so any staging connect from rank0 would only retry for the
+        // full --wait window and could fail the test on exit code 2 if the
+        // client ever ran past 20s. With an empty range, --wait is irrelevant.
         TngExecTask::new(
             cfg0.to_string(),
             vec![
@@ -30,7 +35,7 @@ async fn test() -> Result<()> {
                 "serve".to_string(), "--rank".to_string(), "0".to_string(),
                 "--peer-ip".to_string(), "192.168.1.253".to_string(),
                 "--staging-base".to_string(), "31000".to_string(),
-                "--staging-end".to_string(), "31000".to_string(),
+                "--staging-end".to_string(), "30999".to_string(),
                 "--store-server".to_string(),
                 "--delay-store-bind".to_string(), "6".to_string(),
                 "--plain-port".to_string(), "0".to_string(),

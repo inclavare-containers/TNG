@@ -5,9 +5,12 @@ use tng_testsuite::{run_test, task::tng::TngExecTask, task::NodeType, task::Task
 /// TCPStore rendezvous: rank0 captures 32000 in BOTH ingress capture_dst AND
 /// egress capture_listen (so its local TP ranks connecting to the local store
 /// also go through the tunnel, keeping plaintext off the hijacked listener);
-/// rank1 captures 32000 only in ingress capture_dst. Verifies cross-node
-/// rendezvous and that rank0's local connect to 32000 does not break under
-/// capture_local_traffic=true (loopback-through-tunnel) and =false (direct).
+/// rank1 captures 32000 only in ingress capture_dst. Verifies that cross-node
+/// TCPStore rendezvous succeeds and that toggling capture_local_traffic
+/// (true/false) on rank0's egress does not break rendezvous (a behavioral
+/// regression guard for the flag). It does NOT verify that local loopback
+/// traffic is actually encrypted: that would require packet capture (out of
+/// scope here); the hook guarantees encryption by construction.
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test() -> Result<()> {

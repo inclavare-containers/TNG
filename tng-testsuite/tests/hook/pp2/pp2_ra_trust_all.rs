@@ -35,9 +35,11 @@ async fn test() -> Result<()> {
     // verify uses the builtin converter + trust_all policy (local appraisal).
     let cfg = r#"{
         "add_ingress": [{"hook":{"capture_dst":[{"port":31000,"port_end":31005}],"proxy_port":49000},
+            "rats_tls":{"multiplex":false},
             "attest":{"model":"background_check","aa_addr":"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"},
             "verify":{"model":"background_check","as_type":"builtin","attestation_policy":{"type":"trust_all"}}}],
         "add_egress":  [{"hook":{"capture_listen":[{"port":31000,"port_end":31005}]},
+            "rats_tls":{"multiplex":false},
             "attest":{"model":"background_check","aa_addr":"unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"},
             "verify":{"model":"background_check","as_type":"builtin","attestation_policy":{"type":"trust_all"}}}]
     }"#;

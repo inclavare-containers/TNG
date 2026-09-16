@@ -18,8 +18,8 @@ async fn test() -> Result<()> {
         env!("CARGO_MANIFEST_DIR")
     );
     let cfg = r#"{
-        "add_ingress": [{"hook":{"capture_dst":[{"port":31000,"port_end":31005}],"proxy_port":49000},"no_ra":true}],
-        "add_egress":  [{"hook":{"capture_listen":[{"port":31000,"port_end":31005}]},"no_ra":true}]
+        "add_ingress": [{"hook":{"capture_dst":[{"port":31000,"port_end":31005}],"proxy_port":49000},"no_ra":true,"rats_tls":{"multiplex":false}}],
+        "add_egress":  [{"hook":{"capture_listen":[{"port":31000,"port_end":31005}]},"no_ra":true,"rats_tls":{"multiplex":false}}]
     }"#;
     run_test!(vec![
         // Server (rank0): bind staging range + plain port, connect to peer,
