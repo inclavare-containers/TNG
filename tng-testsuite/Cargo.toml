@@ -231,6 +231,11 @@ path = "tests/hook/egress_hook_basic.rs"
 required-features = ["on-bin"]
 
 [[test]]
+name = "pp2_bidirectional_topology"
+path = "tests/hook/pp2/pp2_bidirectional_topology.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "ingress_hook_basic"
 path = "tests/hook/ingress_hook_basic.rs"
 required-features = ["on-bin"]
