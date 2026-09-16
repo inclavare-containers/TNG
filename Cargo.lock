@@ -566,7 +566,7 @@ checksum = "41e67cd8309bbd06cd603a9e693a784ac2e5d1e955f11286e355089fcab3047c"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=4998682d7ec00e1d3b3a0a638fce11fa0301233a#4998682d7ec00e1d3b3a0a638fce11fa0301233a"
+source = "git+https://github.com/openanolis/trustee/?rev=3089a70239e62f89c9a413b05763a768e02ee96b#3089a70239e62f89c9a413b05763a768e02ee96b"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -2316,7 +2316,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=4998682d7ec00e1d3b3a0a638fce11fa0301233a#4998682d7ec00e1d3b3a0a638fce11fa0301233a"
+source = "git+https://github.com/openanolis/trustee/?rev=3089a70239e62f89c9a413b05763a768e02ee96b#3089a70239e62f89c9a413b05763a768e02ee96b"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -6182,7 +6182,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=4998682d7ec00e1d3b3a0a638fce11fa0301233a#4998682d7ec00e1d3b3a0a638fce11fa0301233a"
+source = "git+https://github.com/openanolis/trustee/?rev=3089a70239e62f89c9a413b05763a768e02ee96b#3089a70239e62f89c9a413b05763a768e02ee96b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8815,7 +8815,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=4998682d7ec00e1d3b3a0a638fce11fa0301233a#4998682d7ec00e1d3b3a0a638fce11fa0301233a"
+source = "git+https://github.com/openanolis/trustee/?rev=3089a70239e62f89c9a413b05763a768e02ee96b#3089a70239e62f89c9a413b05763a768e02ee96b"
 dependencies = [
  "anyhow",
  "asn1-rs",

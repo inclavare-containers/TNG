@@ -5,7 +5,9 @@ use tracing::Instrument;
 
 use crate::task::tagged_spawn::spawn_with_span_output;
 
-use super::readyz::{patch_config_with_control_interface, wait_for_readyz, ProcessStatus};
+use super::readyz::{
+    patch_config_with_control_interface, pick_control_port, wait_for_readyz, ProcessStatus,
+};
 use super::TngInstance;
 
 #[cfg(feature = "on-bin")]
@@ -26,7 +28,7 @@ impl TngInstance {
         }
         .to_string();
 
-        let free_port = portpicker::pick_unused_port().context("Failed to pick a free port")?;
+        let free_port = pick_control_port(&config_json)?;
 
         let config_json = patch_config_with_control_interface(&config_json, free_port)?;
 

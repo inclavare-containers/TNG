@@ -94,7 +94,7 @@ pub fn verify_signer_transparency(jwt_str: &str) -> anyhow::Result<()> {
     }
 
     // Step 5b: Verify DSSE payload hash from Rekor entry matches payload_metadata digest
-    verify_dsse_payload(
+    verify_rekor_payload(
         &transparency.rekor,
         &transparency.payload_metadata.digest.sha256,
     )?;
@@ -235,12 +235,16 @@ fn verify_rekor_checkpoint(rekor: &RekorClaim) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Verify the DSSE payload hash in the Rekor v2 entry matches the transparency payload digest.
+/// Verify the rekor entry in the signer_transparency claim binds to the
+/// transparency payload.
 ///
-/// In Rekor v2 DSSE entries, the `canonicalizedBody` contains a DSSE envelope with a
-/// `payloadHash.digest` field. We verify this digest matches the `payload_metadata.digest.sha256`,
-/// linking the Rekor entry to the claimed transparency payload.
-fn verify_dsse_payload(rekor: &RekorClaim, payload_metadata_digest: &str) -> anyhow::Result<()> {
+/// Legacy DSSE v2 entries record `sha256(payload)` in `payloadHash.digest`, which
+/// must match `payload_metadata.digest.sha256`. hashedrekord v2 entries (the only
+/// kind log2025-1 accepts for new entries) record `sha256(DSSE PAE)` in
+/// `hashedRekordV002.data.digest`; the bundle carries the parsed payload (not the
+/// raw signed bytes), so the PAE is not reconstructable here. Instead the
+/// provisioning tool embeds `rekor.pae_sha256` (= `sha256(PAE)`) and we compare.
+fn verify_rekor_payload(rekor: &RekorClaim, payload_metadata_digest: &str) -> anyhow::Result<()> {
     let entry_v2 = &rekor.rekor_entry_v2;
 
     let canonicalized_body = entry_v2
@@ -249,35 +253,61 @@ fn verify_dsse_payload(rekor: &RekorClaim, payload_metadata_digest: &str) -> any
         .ok_or_else(|| anyhow::anyhow!("Missing canonicalizedBody in rekorEntryV2"))?;
 
     // Decode base64url canonicalized body
-    let dsse_bytes = BASE64_URL_SAFE_NO_PAD
+    let body_bytes = BASE64_URL_SAFE_NO_PAD
         .decode(canonicalized_body)
         .map_err(|e| anyhow::anyhow!("Failed to decode canonicalizedBody: {}", e))?;
 
-    // Parse as DSSE envelope
-    let dsse: serde_json::Value = serde_json::from_slice(&dsse_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to parse DSSE envelope: {}", e))?;
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to parse canonicalizedBody: {}", e))?;
 
-    // Extract the payloadHash digest from the DSSE v002 spec
-    let dsse_digest = dsse
-        .get("spec")
-        .and_then(|s| s.get("dsseV002"))
-        .and_then(|d| d.get("payloadHash"))
-        .and_then(|p| p.get("digest"))
+    let kind = body
+        .get("kind")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing payloadHash.digest in DSSE envelope"))?;
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match kind.as_str() {
+        // Legacy DSSE v2 entry: payloadHash.digest = sha256(payload) (base64).
+        "dsse" => {
+            let dsse_digest = body
+                .pointer("/spec/dsseV002/payloadHash/digest")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing payloadHash.digest in DSSE envelope"))?;
+            let dsse_digest_bytes = BASE64_STANDARD
+                .decode(dsse_digest)
+                .map_err(|e| anyhow::anyhow!("Failed to decode DSSE payload digest: {}", e))?;
+            let dsse_digest_hex = hex::encode(&dsse_digest_bytes);
 
-    // Convert DSSE digest (base64) to hex for comparison
-    let dsse_digest_bytes = BASE64_STANDARD
-        .decode(dsse_digest)
-        .map_err(|e| anyhow::anyhow!("Failed to decode DSSE payload digest: {}", e))?;
-    let dsse_digest_hex = hex::encode(&dsse_digest_bytes);
-
-    if dsse_digest_hex != payload_metadata_digest {
-        anyhow::bail!(
-            "DSSE payload hash mismatch: Rekor entry {} != payload_metadata {}",
-            dsse_digest_hex,
-            payload_metadata_digest
-        );
+            if dsse_digest_hex != payload_metadata_digest {
+                anyhow::bail!(
+                    "DSSE payload hash mismatch: Rekor entry {} != payload_metadata {}",
+                    dsse_digest_hex,
+                    payload_metadata_digest
+                );
+            }
+        }
+        // hashedrekord v2 entry: data.digest = sha256(DSSE PAE) (base64), compared
+        // to the pae_sha256 embedded in the signer_transparency claim.
+        "hashedrekord" => {
+            let entry_digest = body
+                .pointer("/spec/hashedRekordV002/data/digest")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Missing hashedRekordV002.data.digest in canonicalizedBody")
+                })?;
+            let pae_sha256 = rekor.pae_sha256.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("Missing rekor.pae_sha256 for hashedrekord verification")
+            })?;
+            if entry_digest != pae_sha256 {
+                anyhow::bail!(
+                    "hashedrekord digest mismatch: Rekor entry {} != pae_sha256 {}",
+                    entry_digest,
+                    pae_sha256
+                );
+            }
+        }
+        other => {
+            anyhow::bail!("Unsupported Rekor entry kind `{other}` (expected dsse or hashedrekord)");
+        }
     }
 
     Ok(())
@@ -477,6 +507,13 @@ pub struct RekorClaim {
     pub api_version: String,
     pub request_type: String,
     pub key_details: String,
+    /// sha256(DSSE PAE) as base64, embedded by the provisioning tool. Present for
+    /// hashedrekord entries (log2025-1 only accepts those for new entries); absent
+    /// for legacy DSSE entries. Used to bind the rekor entry to the signer-binding
+    /// payload without reconstructing the PAE bytes (the claim carries the parsed
+    /// payload, not the raw signed bytes).
+    #[serde(default)]
+    pub pae_sha256: Option<String>,
     #[serde(rename = "rekorEntryV2")]
     pub rekor_entry_v2: serde_json::Value,
 }
@@ -624,7 +661,7 @@ mod tests {
         let transparency = payload.signer_transparency.unwrap();
 
         // The DSSE payloadHash should match the payload_metadata digest
-        let result = verify_dsse_payload(
+        let result = verify_rekor_payload(
             &transparency.rekor,
             &transparency.payload_metadata.digest.sha256,
         );
@@ -633,6 +670,65 @@ mod tests {
             "DSSE payload verification failed: {:?}",
             result
         );
+    }
+
+    // Build a RekorClaim whose rekorEntryV2.canonicalizedBody is a hashedrekord v2
+    // entry recording `data.digest`, plus the embedded `pae_sha256` bridge.
+    fn hashedrekord_rekor_claim(digest_b64: &str) -> RekorClaim {
+        let body = serde_json::json!({
+            "kind": "hashedrekord",
+            "apiVersion": "0.0.2",
+            "spec": {
+                "hashedRekordV002": {
+                    "data": { "algorithm": "SHA2_256", "digest": digest_b64 }
+                }
+            }
+        });
+        let canonicalized_body = BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&body).unwrap());
+        RekorClaim {
+            url: "https://log2025-1.rekor.sigstore.dev".to_string(),
+            api_version: "v2".to_string(),
+            request_type: "hashedRekordRequestV002".to_string(),
+            key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
+            pae_sha256: Some(digest_b64.to_string()),
+            rekor_entry_v2: serde_json::json!({ "canonicalizedBody": canonicalized_body }),
+        }
+    }
+
+    #[test]
+    fn test_verify_rekor_payload_hashedrekord_match() {
+        // sha256(PAE) base64 from a real log2025-1 hashedrekord upload.
+        let digest = "fr6LASPaL4t4s82twv8Rddk6KQZTlCBrkCE6Co0XM3Y=";
+        let rekor = hashedrekord_rekor_claim(digest);
+        let result = verify_rekor_payload(&rekor, "ignored-for-hashedrekord");
+        assert!(
+            result.is_ok(),
+            "hashedrekord match must succeed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_rekor_payload_hashedrekord_mismatch() {
+        let rekor = hashedrekord_rekor_claim("fr6LASPaL4t4s82twv8Rddk6KQZTlCBrkCE6Co0XM3Y=");
+        // Embedded pae_sha256 disagrees with the entry's data.digest.
+        let rekor = RekorClaim {
+            pae_sha256: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string()),
+            ..rekor
+        };
+        let result = verify_rekor_payload(&rekor, "ignored");
+        assert!(result.is_err(), "hashedrekord mismatch must fail");
+    }
+
+    #[test]
+    fn test_verify_rekor_payload_hashedrekord_missing_pae_sha256() {
+        let rekor = hashedrekord_rekor_claim("fr6LASPaL4t4s82twv8Rddk6KQZTlCBrkCE6Co0XM3Y=");
+        let rekor = RekorClaim {
+            pae_sha256: None,
+            ..rekor
+        };
+        let result = verify_rekor_payload(&rekor, "ignored");
+        assert!(result.is_err(), "hashedrekord without pae_sha256 must fail");
     }
 
     #[test]

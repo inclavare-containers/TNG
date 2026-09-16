@@ -308,16 +308,20 @@ required-features = ["on-bin"]
 [[test]]
 name = "rats_tls_gen_verify"
 path = "tests/rats_tls_gen_verify.rs"
+required-features = ["on-source-code"]
 
 [[test]]
 name = "rats_tls_dump"
 path = "tests/rats_tls_dump.rs"
+required-features = ["on-source-code"]
 
 [[test]]
 name = "ohttp_dump_verify"
 path = "tests/ohttp_dump_verify.rs"
+required-features = ["on-source-code"]
 
 [[test]]
 name = "key_sync"
 path = "tests/key_sync.rs"
+required-features = ["on-source-code"]
 

@@ -477,7 +477,7 @@ test-dep-as:
 		chmod +x /usr/local/bin/rekor-cli; \
 	fi; \
 	if ! command -v rv-release-tool > /dev/null; then \
-		curl -sSL -o /usr/local/bin/rv-release-tool https://raw.githubusercontent.com/openanolis/trustee/28ce0c67eb7caf3356f1759d77ec0add56d39a46/tools/slsa/rv-release-tool; \
+		curl -sSL -o /usr/local/bin/rv-release-tool https://raw.githubusercontent.com/openanolis/trustee/3089a70239e62f89c9a413b05763a768e02ee96b/tools/slsa/rv-release-tool; \
 		chmod +x /usr/local/bin/rv-release-tool; \
 	fi; \
 	if ! command -v python3 > /dev/null; then \
