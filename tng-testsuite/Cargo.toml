@@ -207,6 +207,7 @@ path = "tests/basic/tcp_one_way_ra.rs"
 [[test]]
 name = "tcp_one_way_ra_verify_cache"
 path = "tests/basic/tcp_one_way_ra_verify_cache.rs"
+required-features = ["on-source-code"]
 
 [[test]]
 name = "tcp_one_way_ra_with_as_cert"

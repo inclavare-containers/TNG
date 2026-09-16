@@ -9,6 +9,7 @@ use crate::config::ra::VerifyArgs;
 #[cfg(unix)]
 use crate::tunnel::ra_context::AttestContext;
 use crate::tunnel::ra_context::VerifyContext;
+use crate::tunnel::utils::rustls::ra::cert_cache::CertVerifyCache;
 use crate::tunnel::utils::rustls::ra::common::LazyCertVerifier;
 #[cfg(unix)]
 use rats_cert::{
@@ -154,7 +155,7 @@ async fn verify_cmd(cert_path: &std::path::Path, verify_json: &str) -> Result<()
     // Reuse the same LazyCertVerifier the TLS handshake uses: store the cert
     // then drive verify_pending_cert, which runs the verify_cert engine
     // (Passport: parse+verify AS token; BackgroundCheck: convert via AS, verify).
-    let verifier = LazyCertVerifier::new(verify_ctx);
+    let verifier = LazyCertVerifier::new(verify_ctx, Arc::new(CertVerifyCache::default_sized()));
     verifier
         .set_to_pending_cert(&rustls::pki_types::CertificateDer::from(cert_der))
         .map_err(|e| anyhow::Error::from(e).context("store pending rats-tls cert"))?;
