@@ -135,6 +135,14 @@ impl Task for TngExecTask {
 
         tracing::info!(?cmd, "Launching tng exec");
 
+        // Run tng exec as its own process-group leader so the wrapped
+        // grandchild (sglang / mock) inherits this PGID. The cancellation
+        // branch below kills the whole group; without this, SIGKILLing only
+        // the tng exec PID would orphan the grandchild to init. This mirrors
+        // production, which reaps the tree via cgroup teardown.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let mut child = spawn_with_span_output(&mut cmd)
             .await
             .context("Failed to spawn tng process")?;
@@ -163,8 +171,45 @@ impl Task for TngExecTask {
                         Ok::<_, anyhow::Error>(())
                     }
                     _ = token.cancelled() => {
-                        let _ = child.start_kill();
-                        let _ = child.wait().await;
+                        // Kill the whole process group so the wrapped
+                        // grandchild is reaped too (process_group(0) above
+                        // made child_id the PGID). SIGTERM first, give a
+                        // 2s grace window, then SIGKILL the group. Falls
+                        // back to single-PID start_kill only if we have no
+                        // PID (shouldn't happen on Unix).
+                        #[cfg(unix)]
+                        if let Some(pgid) = child_id {
+                            let neg_pgid = nix::unistd::Pid::from_raw(
+                                -i32::try_from(pgid).unwrap_or(i32::MAX),
+                            );
+                            let _ = nix::sys::signal::kill(
+                                neg_pgid,
+                                nix::sys::signal::SIGTERM,
+                            );
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(2),
+                                child.wait(),
+                            )
+                            .await
+                            {
+                                Ok(_) => {} // reaped during the grace window
+                                Err(_) => {
+                                    let _ = nix::sys::signal::kill(
+                                        neg_pgid,
+                                        nix::sys::signal::SIGKILL,
+                                    );
+                                    let _ = child.wait().await;
+                                }
+                            }
+                        } else {
+                            let _ = child.start_kill();
+                            let _ = child.wait().await;
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            let _ = child.start_kill();
+                            let _ = child.wait().await;
+                        }
                         Ok::<_, anyhow::Error>(())
                     }
                 }
