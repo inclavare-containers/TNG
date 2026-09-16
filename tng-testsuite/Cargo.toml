@@ -256,6 +256,11 @@ path = "tests/hook/pp2/pp2_stress_throughput.rs"
 required-features = ["on-bin"]
 
 [[test]]
+name = "pp2_ra_trust_all"
+path = "tests/hook/pp2/pp2_ra_trust_all.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "ingress_hook_basic"
 path = "tests/hook/ingress_hook_basic.rs"
 required-features = ["on-bin"]
