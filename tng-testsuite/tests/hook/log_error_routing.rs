@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 use tng_testsuite::{
@@ -21,6 +22,7 @@ use tng_testsuite::{
 /// Requires `on-bin` (external tng binary + libtng_hook.so).
 
 /// Part 1: valid run → INFO in info.log, error.log empty.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_non_error_routes_to_info() -> Result<()> {
     let dir = TempDir::new()?;
@@ -75,6 +77,7 @@ async fn test_non_error_routes_to_info() -> Result<()> {
 }
 
 /// Part 2: `{}` config bails with ERROR → ERROR in error.log, INFO in info.log.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_error_routes_to_error_file() -> Result<()> {
     let dir = TempDir::new()?;

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use tng::tools::cli::RatsTlsCommand;
 use tng::tools::rats_tls;
 use tng_testsuite::{
@@ -13,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 /// captures the server's end-entity cert as PEM. The server here is an egress
 /// `rats_tls`/`no_ra` instance listening on 20001; the dump client runs in
 /// the client node and connects to 192.168.1.1:20001.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn rats_tls_dump_captures_no_ra_server_cert() -> Result<()> {
     run_test!(vec![
@@ -52,6 +54,7 @@ async fn rats_tls_dump_captures_no_ra_server_cert() -> Result<()> {
 /// handshake completes once the client presents a cert and the server cert is
 /// recorded. Requires AA (CoCo UDS) and AS (192.168.1.254:8080) to be up: AA
 /// builds the client cert, AS backs the server's verify context.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn rats_tls_dump_captures_mutual_ra_server_cert() -> Result<()> {
     run_test!(vec![

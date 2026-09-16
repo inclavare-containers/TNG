@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use tng::tools::cli::OhttpCommand;
 use tng::tools::ohttp;
 use tng_testsuite::{
@@ -13,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 /// JSON. The server here is a no_ra egress mapping + ohttp instance on port
 /// 20001; the dump client runs in the client node and posts to
 /// http://192.168.1.1:20001. The dumped JSON must carry `hpke_key_config`.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn ohttp_dump_writes_key_config() -> Result<()> {
     run_test!(vec![
@@ -72,6 +74,7 @@ fn ohttp_dump_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>>
 /// context uses a Passport verifier with `skip_as_token_cert_verify` so it
 /// builds without contacting an AS; the helper rejects the response before
 /// the verifier is used. No AA/AS services are required for this test.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn ohttp_verify_rejects_no_ra_dump() -> Result<()> {
     run_test!(vec![
@@ -141,6 +144,7 @@ fn ohttp_verify_no_ra_client(token: CancellationToken) -> Result<JoinHandle<Resu
 /// re-runs the same Passport verify dispatch the ingress client uses and must
 /// succeed. Requires the Attestation Agent (AA) and Attestation Service (AS)
 /// to be running; without them it will fail at the attest/convert step.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn ohttp_dump_then_verify_passport() -> Result<()> {
     run_test!(vec![
@@ -215,6 +219,7 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
 /// check accepts the hpke_key_config binding even though the dumped file
 /// carries no challenge_token (the helper passes challenge_token: None).
 /// Requires AA and AS to be running.
+#[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn ohttp_dump_then_verify_background_check() -> Result<()> {
     run_test!(vec![
