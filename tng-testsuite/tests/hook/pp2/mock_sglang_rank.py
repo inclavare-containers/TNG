@@ -128,7 +128,13 @@ def cmd_serve(args):
     ports = staging_ports(args.staging_base, args.staging_end)
     bound = [bind_echo(p, stop) for p in ports]
     if args.store_server:
-        bind_echo(args.store_port, stop)
+        if args.delay_store_bind > 0:
+            threading.Thread(
+                target=lambda: (time.sleep(args.delay_store_bind), bind_echo(args.store_port, stop)),
+                daemon=True,
+            ).start()
+        else:
+            bind_echo(args.store_port, stop)
     if args.plain_port:
         bind_echo(args.plain_port, stop)
     # Give the peer's hook listeners a moment to come up.
@@ -171,18 +177,19 @@ def cmd_serve(args):
 
 
 def cmd_connect_once(args):
-    """Single connect+exchange to peer:port. --expect-fail asserts the connect
-    fails within --timeout (race window); otherwise asserts success."""
-    if args.expect_fail:
-        try:
-            socket.create_connection((args.peer_ip, args.port), timeout=args.timeout)
-            print(f"FAIL: connect {args.peer_ip}:{args.port} unexpectedly succeeded", flush=True)
-            return 2
-        except OSError:
-            print(f"OK: connect {args.peer_ip}:{args.port} failed cleanly (race window)", flush=True)
-            return 0
+    """Single connect+exchange to peer:port. --expect-fail asserts the
+    connect+exchange fails within --timeout (race window: in hook mode the
+    connect itself succeeds because the hook short-circuits it to the already-up
+    local proxy listener, so the failure surfaces at the exchange, bounded by
+    the socket timeout); otherwise asserts the connect+exchange succeeds."""
     ok, err = connect_one(args.peer_ip, args.port, args.payload_size,
                            timeout=args.timeout, conn_id=args.port)
+    if args.expect_fail:
+        if ok:
+            print(f"FAIL: connect+exchange {args.peer_ip}:{args.port} unexpectedly succeeded", flush=True)
+            return 2
+        print(f"OK: connect+exchange {args.peer_ip}:{args.port} failed cleanly within {args.timeout}s (race window)", flush=True)
+        return 0
     if not ok:
         print(f"FAIL: {err}", flush=True)
         return 2
@@ -258,6 +265,7 @@ def main():
     sp.add_argument("--staging-end", type=int, default=DEFAULT_STAGING_END)
     sp.add_argument("--store-port", type=int, default=STORE_PORT)
     sp.add_argument("--store-server", action="store_true")
+    sp.add_argument("--delay-store-bind", type=float, default=0.0)
     sp.add_argument("--connect-store", action="store_true")
     sp.add_argument("--plain-port", type=int, default=PLAIN_PORT)
     sp.add_argument("--payload-size", type=int, default=256)

@@ -241,6 +241,11 @@ path = "tests/hook/pp2/pp2_tcpstore_rendezvous.rs"
 required-features = ["on-bin"]
 
 [[test]]
+name = "pp2_grace_period_race"
+path = "tests/hook/pp2/pp2_grace_period_race.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "ingress_hook_basic"
 path = "tests/hook/ingress_hook_basic.rs"
 required-features = ["on-bin"]
