@@ -20,6 +20,10 @@ use tng_testsuite::{run_test, task::tng::TngExecTask, task::NodeType, task::Task
 /// test-dep-aa running; the builtin verify appraises locally, so test-dep-as is
 /// not required. Verifies the RA handshake completes and encrypted data still
 /// flows both ways.
+///
+/// Manual run: set `TNG_BINARY=target/release/tng` (or any source-built tng
+/// with `__builtin-as`), because the pre-installed system binary may lack the
+/// feature.
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 #[serial]
 async fn test() -> Result<()> {

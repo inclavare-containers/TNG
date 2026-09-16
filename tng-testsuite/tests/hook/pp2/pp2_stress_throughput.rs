@@ -29,6 +29,13 @@ async fn test() -> Result<()> {
                 "0".to_string(),
                 "--peer-ip".to_string(),
                 "192.168.1.253".to_string(),
+                // Match the client's staging range so the server only binds
+                // capture_listen ports 31000-31002 instead of the default
+                // 31000-31005 (the extra binds are uncaptured/unused).
+                "--staging-base".to_string(),
+                "31000".to_string(),
+                "--staging-end".to_string(),
+                "31002".to_string(),
             ],
             false,
             NodeType::Server,
