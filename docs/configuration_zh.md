@@ -97,6 +97,7 @@
 |---|---|---|---|
 | `multiplex` | boolean | `false` | `true` 时使用 HTTP/2 CONNECT 在单条 TLS 连接上复用多个 TCP 流，适合大量短连接；`false` 时每条连接独立 TLS 会话，单流吞吐量更高，推荐高带宽场景 |
 
+
 ---
 
 <a name="ingress-mapping端口映射"></a>

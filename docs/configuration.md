@@ -97,6 +97,7 @@ The following fields are shared between Ingress and Egress, describing transport
 |---|---|---|---|
 | `multiplex` | boolean | `false` | When `true`, uses HTTP/2 CONNECT to multiplex multiple TCP streams over a single TLS connection, suitable for many short-lived connections; when `false`, each connection has an independent TLS session with higher single-stream throughput, recommended for high-bandwidth scenarios |
 
+
 ---
 
 <a name="ingress-mapping-port-mapping"></a>

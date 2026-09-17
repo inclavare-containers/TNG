@@ -105,7 +105,7 @@ The `tng-wasm/www/` directory is the source for the live demo published at **<ht
 
 When creating a pull request, always:
 
-1. Update relevant documentation **in both languages** — the English file and its `*_zh.md` counterpart (see the Bilingual Documentation Convention above; this includes each crate's `README.md`/`README_zh.md` and `docs/*.md`/`docs/*_zh.md`, notably `docs/configuration.md` ↔ `docs/configuration_zh.md`).
+1. Update relevant documentation **in both languages** — the English file and its `*_zh.md` counterpart (see the Bilingual Documentation Convention above; this includes each crate's `README.md`/`README_zh.md` and `docs/*.md`/`docs/*_zh.md`, notably `docs/configuration.md` ↔ `docs/configuration_zh.md`). Only document what the user needs to know: new config options, new user-visible features, or breaking changes. Do not add documentation for internal optimizations that have no new config option or user-visible behavior change. Do not document standard protocol behaviors (e.g. TLS 1.3 ticket lifecycle, anti-replay rules) that the project follows without modification. Do not explain internal implementation details (e.g. how session resumption works, ticket consumption mechanics) in user-facing docs — those belong in commit messages or code comments.
 2. Add or update integration tests for new features
 3. Never mention "🤖 Generated with Claude Code" in the PR description
 
@@ -321,3 +321,7 @@ When implementing a new feature or modifying existing behavior:
 
 - **Never remove a failing test to make CI pass.** When a test fails, investigate the root cause — it's either a bug in the test (fix the test), a bug in the code (fix the code), or an infrastructure issue (document and work around). Deleting a failing test hides real problems.
 - **Never hide a failing test behind `#[ignore]` to make CI green.** This is dishonest — CI reports "passed" but the test never ran. If stuck, leave the test as-is and tell the user explicitly: "Test X fails because of Y, I cannot fix it because Z."
+
+## Commit Gardening
+
+At the end of a development branch's implementation, before merging or opening a PR, invoke the `commit-gardening` skill (`.claude/skills/commit-gardening/SKILL.md`) to reorganize commits into clean, independently verifiable logical blocks. The skill runs a gradient-descent loop (analyze, snapshot, execute, verify, loop) and internally hands off to `superpowers:finishing-a-development-branch` as its terminal step. Do not call `finishing-a-development-branch` directly when `commit-gardening` is available.
