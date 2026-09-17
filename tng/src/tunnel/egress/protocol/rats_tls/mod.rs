@@ -46,10 +46,10 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
     ) -> Result<ProtocolStreamDecoderOutput> {
-        let (tls_stream, attestation_result) = self.security_layer.handshake(input).await?;
+        let (tls_stream, attestation_state) = self.security_layer.handshake(input).await?;
 
         // Check negotiated ALPN protocol
-        let (_, tls_session) = tls_stream.get_ref();
+        let (_, tls_session) = tls_stream.inner().get_ref();
         let negotiated_alpn = tls_session.alpn_protocol();
         tracing::debug!(?negotiated_alpn, "ALPN negotiated on egress TLS handshake");
 
@@ -61,7 +61,7 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
                 .spawn_supervised_task_fn_current_span(move |runtime| async move {
                     RatsTlsWrappingLayer::unwrap_stream(
                         tls_stream,
-                        attestation_result,
+                        attestation_state,
                         sender,
                         runtime,
                     )
@@ -77,7 +77,7 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
         } else {
             // Direct TLS mode (multiplex=false): return TLS stream directly
             Ok(stream! {
-                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_result));
+                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_state));
             }
             .boxed())
         }

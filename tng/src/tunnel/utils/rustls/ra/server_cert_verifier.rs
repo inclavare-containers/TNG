@@ -36,23 +36,28 @@ impl LazyServerCertVerifier {
         ))
     }
 
-    pub async fn verity_pending_cert(&self) -> Result<AttestationResult> {
-        self.1.verify_pending_cert().await
+    /// Borrow the inner stateless lazy verifier so callers can pass a uniform
+    /// `&LazyCertVerifier` to `classify_attestation` regardless of whether the
+    /// wrapper is the client- or server-side cert verifier.
+    pub fn lazy_verifier(&self) -> &LazyCertVerifier {
+        &self.1
     }
 }
 
 impl rustls::client::danger::ServerCertVerifier for LazyServerCertVerifier {
     fn verify_server_cert(
         &self,
-        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
         _intermediates: &[rustls::pki_types::CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        self.1
-            .set_to_pending_cert(end_entity)
-            .map(|_| ServerCertVerified::assertion())
+        // No-op: the cert is fetched and verified post-handshake via
+        // `peer_certificates()`. Returning success here without storing state
+        // keeps the verifier stateless so one Arc can be shared across
+        // handshakes, which rustls requires (`Weak::ptr_eq`) for resumption.
+        Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(

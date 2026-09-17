@@ -4,7 +4,7 @@ pub mod unprotected;
 use std::{future::Future, net::SocketAddr, pin::Pin};
 
 use crate::{
-    tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint},
+    tunnel::{attestation_result::AttestationState, endpoint::TngEndpoint},
     CommonStreamTrait,
 };
 use anyhow::Result;
@@ -18,7 +18,7 @@ pub trait StreamManager {
     ) -> Result<(
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
-        Option<AttestationResult>,
+        AttestationState,
         /* upstream_local */ Option<SocketAddr>,
     )>;
 }

@@ -136,9 +136,9 @@ async fn write_or_stdout(data: &[u8], path: Option<PathBuf>) -> Result<()> {
 ///
 /// The verify path is cross-platform (it does not touch the unix-only AA
 /// attester), so unlike `gen` this is not `#[cfg(unix)]`-gated. Reuses the
-/// same `LazyCertVerifier` the TLS handshake uses: store the cert then drive
-/// verify_pending_cert, which runs the verify_cert engine (Passport: parse+verify
-/// AS token; BackgroundCheck: convert via AS, verify).
+/// same `LazyCertVerifier` the TLS handshake uses: pass the cert directly to
+/// `verify_cert`, which runs the verify engine (Passport: parse+verify AS
+/// token; BackgroundCheck: convert via AS, verify).
 async fn verify_cmd(cert_path: &std::path::Path, verify_json: &str) -> Result<()> {
     let verify_args: VerifyArgs =
         serde_json::from_str(verify_json).context("parse --verify as VerifyArgs JSON")?;
@@ -152,15 +152,12 @@ async fn verify_cmd(cert_path: &std::path::Path, verify_json: &str) -> Result<()
         std::fs::read(cert_path).with_context(|| format!("read cert {}", cert_path.display()))?;
     let cert_der = pem_or_der_to_der(&raw)?;
 
-    // Reuse the same LazyCertVerifier the TLS handshake uses: store the cert
-    // then drive verify_pending_cert, which runs the verify_cert engine
-    // (Passport: parse+verify AS token; BackgroundCheck: convert via AS, verify).
+    // Reuse the same stateless LazyCertVerifier the TLS handshake uses: pass
+    // the cert directly to verify_cert (Passport: parse+verify AS token;
+    // BackgroundCheck: convert via AS, verify).
     let verifier = LazyCertVerifier::new(verify_ctx, Arc::new(CertVerifyCache::default_sized()));
-    verifier
-        .set_to_pending_cert(&rustls::pki_types::CertificateDer::from(cert_der))
-        .map_err(|e| anyhow::Error::from(e).context("store pending rats-tls cert"))?;
     let result = verifier
-        .verify_pending_cert()
+        .verify_cert(cert_der)
         .await
         .context("verify rats-tls cert")?;
 

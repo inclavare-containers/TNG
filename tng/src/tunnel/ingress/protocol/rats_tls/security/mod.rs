@@ -22,7 +22,7 @@ use tracing::{Instrument, Span};
 
 use crate::{
     tunnel::{
-        attestation_result::AttestationResult,
+        attestation_result::AttestationState,
         endpoint::{EndpointAddr, TngEndpoint},
         ingress::protocol::rats_tls::wrapping::RatsTlsWrappingLayer,
         ra_context::RaContext,
@@ -53,6 +53,10 @@ pub struct RatsTlsSecurityLayer {
 }
 
 impl RatsTlsSecurityLayer {
+    pub fn is_multiplex(&self) -> bool {
+        self.multiplex
+    }
+
     pub async fn new(
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
@@ -156,35 +160,92 @@ impl RatsTlsSecurityLayer {
         Ok(client)
     }
 
-    pub async fn allocate_secured_stream(
+    pub async fn allocate_multiplex_stream(
         &self,
         endpoint: TngEndpoint,
     ) -> Result<(
         Box<dyn CommonStreamTrait + Sync>,
         /* local_addr */ Option<SocketAddr>,
-        Option<AttestationResult>,
+        AttestationState,
         /* session_id */ u64,
     )> {
-        if !self.multiplex {
-            let (stream, local_addr, att, session_id) = RatsTlsWrappingLayer::create_stream_raw(
-                &self.transport_layer_creator,
-                &self.tls_config_generator,
-                &endpoint,
-                &self.runtime,
-            )
-            .instrument(tracing::info_span!("wrapping", mode = "rats-tls"))
-            .await?;
-            Ok((Box::new(stream), local_addr, att, session_id))
-        } else {
-            let pool_key = PoolKey::new(endpoint);
-            let client = self.get_client(&pool_key).await?;
-            let (stream, local_addr, att, session_id) =
-                RatsTlsWrappingLayer::create_stream_from_hyper(&client)
-                    .instrument(tracing::info_span!("wrapping", mode = "h2"))
-                    .await?;
-            Ok((Box::new(stream), local_addr, att, session_id))
+        // Multiplex path: a single long-lived TLS connection. The non-multiplex
+        // path goes through connect_0rtt + prime in forward_stream, not here.
+        // handshake_with_stream already classified attestation into the tri-state
+        // carrier (Fresh / Resumed / Unattested); a reconnect can resume if a
+        // ticket is cached, so Resumed is possible here too.
+        let pool_key = PoolKey::new(endpoint);
+        let client = self.get_client(&pool_key).await?;
+        let (stream, local_addr, state, session_id) =
+            RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+                .instrument(tracing::info_span!("wrapping", mode = "h2"))
+                .await?;
+        Ok((Box::new(stream), local_addr, state, session_id))
+    }
+
+    /// Open the non-multiplex upstream TLS connection for 0-RTT. Thin delegator
+    /// over [`RatsTlsWrappingLayer::create_stream_raw_0rtt`] so `forward_stream`
+    /// can keep calling the security layer; the stream-building logic lives in
+    /// the wrapping layer alongside `create_stream_from_hyper`.
+    pub async fn connect_0rtt(
+        &self,
+        endpoint: &TngEndpoint,
+    ) -> Result<(
+        tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
+        Option<Arc<crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier>>,
+        Option<SocketAddr>,
+    )> {
+        RatsTlsWrappingLayer::create_stream_raw_0rtt(
+            &self.transport_layer_creator,
+            &self.tls_config_generator,
+            endpoint,
+        )
+        .await
+    }
+}
+
+/// Max bytes attempted as 0-RTT early data from the first downstream read.
+/// Capped below the server's MAX_EARLY_DATA_SIZE so the whole first chunk
+/// qualifies as 0-RTT; the forward loop handles the rest as 1-RTT.
+const EARLY_DATA_PRIME_BUF: usize = 64 * 1024;
+
+/// Race the first downstream read against an upstream flush.
+///
+/// In tokio-rustls's EarlyData state (a resumption ticket was available),
+/// `connect_0rtt` returned before the handshake completed; the first write
+/// drives the 0-RTT send and completes the handshake (rejected 0-RTT is
+/// auto-replayed as 1-RTT by tokio-rustls). If the downstream has no data
+/// ready, the flush branch completes the handshake as plain 1-RTT so the
+/// connection cannot hang waiting on a write.
+///
+/// Generic over the upstream so it can drive the raw `TlsStream` (the caller
+/// must read `handshake_kind()` off it after this returns, which requires the
+/// unboxed stream).
+pub(super) async fn prime_0rtt<U: CommonStreamTrait>(
+    upstream: &mut U,
+    downstream: &mut Box<dyn CommonStreamTrait>,
+) -> Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut buf = vec![0u8; EARLY_DATA_PRIME_BUF];
+    tokio::select! {
+        biased; // prefer sending downstream data as 0-RTT when it is ready
+        r = downstream.read(&mut buf) => {
+            match r.context("read downstream for 0-RTT prime")? {
+                0 => upstream.flush().await.context("flush upstream (downstream EOF)")?,
+                n => {
+                    upstream
+                        .write_all(&buf[..n])
+                        .await
+                        .context("write upstream 0-RTT prime")?;
+                    upstream.flush().await.context("flush upstream 0-RTT prime")?;
+                }
+            }
+        }
+        _ = upstream.flush() => {
+            // No downstream data ready in time: complete the handshake as 1-RTT.
         }
     }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -229,7 +290,7 @@ impl tower::Service<Uri> for SecurityConnector {
                     // handshake can build a `ServerName` without formatting a
                     // string for the IPv4 case.
                     let server_name = EndpointAddr::from_host(host);
-                    let (security_layer_stream, attestation_result) = tls_client_config
+                    let (security_layer_stream, attestation_state) = tls_client_config
                         .handshake_with_stream(&server_name, transport_layer_stream.into_inner())
                         .await?;
 
@@ -237,7 +298,7 @@ impl tower::Service<Uri> for SecurityConnector {
                     Ok::<_, anyhow::Error>(
                         StreamWithAttestationResult::wrap_with_attestation_result(
                             TokioIo::new(security_layer_stream),
-                            attestation_result,
+                            attestation_state,
                         ),
                     )
                 }
@@ -256,14 +317,11 @@ pub type RatsTlsConnection =
 pub struct StreamWithAttestationResult<T> {
     #[pin]
     inner: T,
-    attestation_result: Option<AttestationResult>,
+    attestation_result: AttestationState,
 }
 
 impl<T> StreamWithAttestationResult<T> {
-    pub fn wrap_with_attestation_result(
-        inner: T,
-        attestation_result: Option<AttestationResult>,
-    ) -> Self {
+    pub fn wrap_with_attestation_result(inner: T, attestation_result: AttestationState) -> Self {
         Self {
             inner,
             attestation_result,

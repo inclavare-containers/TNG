@@ -11,6 +11,46 @@ use crate::tunnel::provider::{TngEvidence, TngToken};
 use crate::tunnel::ra_context::VerifyContext;
 use crate::tunnel::utils::rustls::ra::cert_cache::{cert_hash, CertVerifyCache};
 
+/// Take the end-entity (first) peer certificate from a `peer_certificates()`
+/// result. Errors if no cert was presented, which on a full rats-tls handshake
+/// should never happen: a resumed handshake skips cert verification and never
+/// reaches here, so a missing cert on the full-handshake path is a real error.
+pub fn take_end_entity_cert(
+    certs: Option<&[rustls::pki_types::CertificateDer<'static>]>,
+) -> Result<Vec<u8>> {
+    certs
+        .and_then(|certs| certs.first().map(|c| c.as_ref().to_vec()))
+        .context("No peer certificate on full rats-tls handshake")
+}
+
+/// Classify a rats-tls connection's attestation outcome from the negotiated
+/// handshake kind. Centralizes the tri-state logic shared by the non-multiplex
+/// 0-RTT path, the multiplex client handshake, and the server handshake:
+///
+/// - `Some` verifier + `Resumed`: rustls presented no fresh cert, so RA is not
+///   re-run; the original full handshake's attestation is trusted via the PSK
+///   binding (`Resumed`).
+/// - `Some` verifier + any non-resumed kind: full handshake; fetch the peer
+///   end-entity cert rustls validated and RA-verify it now (`Fresh`). The
+///   rustls-facing `verify_*_cert` callback was a no-op (stateless), so this is
+///   where the real appraisal happens.
+/// - `None` verifier: no RA mode (`Unattested`), even on a resumed handshake.
+pub async fn classify_attestation(
+    verifier: Option<&LazyCertVerifier>,
+    handshake_kind: Option<rustls::HandshakeKind>,
+    peer_certs: Option<&[rustls::pki_types::CertificateDer<'static>]>,
+) -> Result<crate::tunnel::attestation_result::AttestationState> {
+    use crate::tunnel::attestation_result::AttestationState;
+    match (verifier, handshake_kind) {
+        (Some(_), Some(rustls::HandshakeKind::Resumed)) => Ok(AttestationState::Resumed),
+        (Some(v), _) => {
+            let cert = take_end_entity_cert(peer_certs)?;
+            Ok(AttestationState::Fresh(v.verify_cert(cert).await?))
+        }
+        (None, _) => Ok(AttestationState::Unattested),
+    }
+}
+
 fn parse_token_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngToken> {
     rats_cert::errors::Result::from(TngToken::create_evidence_from_dice(cbor_tag, raw_evidence))
         .map_err(|e| {
@@ -34,6 +74,16 @@ fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<T
     })
 }
 
+/// Stateless lazy RA verifier.
+///
+/// Holds only immutable context (`verify_ctx`) and a verdict `cache` shared
+/// across every connection using this rustls config. The rustls-facing
+/// `verify_*_cert` callbacks are pure no-ops: they return success without
+/// inspecting or storing the peer cert. Statelessness is what lets one
+/// `LazyCertVerifier` be shared as a single `Arc` across handshakes, which is
+/// the condition rustls checks (`Weak::ptr_eq` on the verifier) to allow TLS
+/// 1.3 resumption. The peer cert is obtained post-handshake via
+/// `peer_certificates()` and verified with [`Self::verify_cert`].
 #[derive(Debug)]
 pub struct LazyCertVerifier {
     verify_ctx: Arc<VerifyContext>,
@@ -41,53 +91,19 @@ pub struct LazyCertVerifier {
     /// generator so two verifiers built from the same config share entries, letting a verdict
     /// cached on connection N short-circuit connection N+1 within the TTL.
     cache: Arc<CertVerifyCache>,
-    pending_cert: spin::mutex::spin::SpinMutex<Option<Vec<u8>>>,
 }
 
 impl LazyCertVerifier {
     pub fn new(verify_ctx: Arc<VerifyContext>, cache: Arc<CertVerifyCache>) -> Self {
-        Self {
-            verify_ctx,
-            cache,
-            pending_cert: spin::mutex::spin::SpinMutex::new(None),
-        }
+        Self { verify_ctx, cache }
     }
 
-    /// Stores the peer's certificate for later async RA verification.
-    ///
-    /// This method is called during the TLS handshake by rustls's
-    /// `verify_client_cert()` / `verify_server_cert()` callbacks, which are
-    /// **synchronous**. Since RA verification requires contacting a remote
-    /// Attestation Service (HTTP call with evidence conversion), it cannot be
-    /// done synchronously.
-    ///
-    /// Instead, we capture the raw certificate here and return `Ok(())` to let
-    /// the TLS handshake complete. After the handshake, the caller must invoke
-    /// [`Self::verity_pending_cert`] (async) to perform the actual RA
-    /// verification. If that step fails, the connection is rejected.
-    ///
-    /// Call chain:
-    ///   1. TLS handshake → rustls calls `verify_client_cert()` (sync)
-    ///      → this method stores the cert in `pending_cert`
-    ///   2. Handshake complete → caller awaits `verity_pending_cert()` (async)
-    ///      → extracts evidence, converts via AS, verifies token
-    pub fn set_to_pending_cert(
-        &self,
-        end_entity: &rustls::pki_types::CertificateDer<'_>,
-    ) -> std::result::Result<(), rustls::Error> {
-        // We just return ok here, and store the end entity certificate and verify it later.
-        self.pending_cert.lock().replace(end_entity.to_vec());
-        Ok(())
-    }
-
-    pub async fn verify_pending_cert(&self) -> Result<AttestationResult> {
-        let pending_cert = self
-            .pending_cert
-            .lock()
-            .take()
-            .context("No rats-tls cert received")?;
-
-        verify_cert(&self.verify_ctx, &self.cache, pending_cert).await
+    /// Verify the peer's end-entity cert post-handshake. The caller obtains the
+    /// cert from `peer_certificates()` after the TLS handshake completes; on a
+    /// resumed handshake the cert is skipped (the PSK binding is trusted
+    /// instead) so this is only reached on a full handshake.
+    pub async fn verify_cert(&self, cert: Vec<u8>) -> Result<AttestationResult> {
+        verify_cert(&self.verify_ctx, &self.cache, cert).await
     }
 }
 

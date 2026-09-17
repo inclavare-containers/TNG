@@ -209,11 +209,11 @@ impl EgressFlow {
                         // paths match the direct_forward rules.
                         //
                         // Three sub-stream outcomes:
-                        // - Secured(stream, Some(attestation)): OHTTP decrypted + attested
-                        // - Secured(stream, None): OHTTP/RATS-TLS decrypted, no attestation
+                        // - Secured(stream, Fresh/Resumed): decrypted + attested
+                        // - Secured(stream, Unattested): OHTTP/RATS-TLS decrypted, no attestation
                         // - DirectlyForward(stream): plain HTTP matched by direct_forward rule
                         let encrypted = next_stream.is_secured();
-                        let attested = next_stream.attestation_result().is_some();
+                        let attested = next_stream.attestation_state().is_attested();
                         let downstream = next_stream.into_stream();
 
                         if let Err(error) = forward_to_upstream(

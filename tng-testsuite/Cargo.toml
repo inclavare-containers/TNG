@@ -136,6 +136,18 @@ name = "no_ra"
 path = "tests/basic/no_ra.rs"
 
 [[test]]
+name = "rats_tls_0rtt"
+path = "tests/rats_tls_0rtt.rs"
+
+[[test]]
+name = "rats_tls_resumption_ra"
+path = "tests/rats_tls_resumption_ra.rs"
+
+[[test]]
+name = "rats_tls_multiplex"
+path = "tests/rats_tls_multiplex.rs"
+
+[[test]]
 name = "no_ra_http_encapulation_with_egress_mapping"
 path = "tests/http/no_ra_http_encapulation_with_egress_mapping.rs"
 

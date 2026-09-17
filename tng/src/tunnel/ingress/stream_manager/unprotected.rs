@@ -3,7 +3,7 @@ use std::{future::Future, net::SocketAddr, pin::Pin};
 use anyhow::{Context as _, Result};
 
 use crate::{
-    tunnel::{attestation_result::AttestationResult, endpoint::TngEndpoint, utils},
+    tunnel::{attestation_result::AttestationState, endpoint::TngEndpoint, utils},
     CommonStreamTrait, ContextualStream,
 };
 
@@ -41,7 +41,7 @@ impl StreamManager for UnprotectedStreamManager {
     ) -> Result<(
         /* forward_stream_task */
         Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
-        Option<AttestationResult>,
+        AttestationState,
         /* upstream_local */ Option<SocketAddr>,
     )> {
         let upstream = endpoint
@@ -61,7 +61,7 @@ impl StreamManager for UnprotectedStreamManager {
                 let _: () = utils::forward::forward_stream(upstream, downstream).await;
                 Ok(())
             }) as Pin<Box<_>>,
-            None,
+            AttestationState::Unattested,
             Some(upstream_local),
         ))
     }
