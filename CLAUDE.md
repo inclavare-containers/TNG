@@ -325,3 +325,11 @@ When implementing a new feature or modifying existing behavior:
 ## Commit Gardening
 
 At the end of a development branch's implementation, before merging or opening a PR, invoke the `commit-gardening` skill (`.claude/skills/commit-gardening/SKILL.md`) to reorganize commits into clean, independently verifiable logical blocks. The skill runs a gradient-descent loop (analyze, snapshot, execute, verify, loop) and internally hands off to `superpowers:finishing-a-development-branch` as its terminal step. Do not call `finishing-a-development-branch` directly when `commit-gardening` is available.
+
+## Subagent Transient API Failures
+
+When a dispatched subagent aborts on a transient model API error (rate limit, overloaded, gateway timeout, mid-run disconnect), **do not fall back to "I'll do it myself"** and do not silently inline the work into the main session. Re-dispatch the task to a fresh subagent, passing along the accumulated context (prior findings, partial output, the exact sub-goal). The whole point of delegating is to keep that work out of the main context window; pulling it inline defeats the delegation and re-bloats context. Keep re-dispatching on successive transient failures.
+
+Only after **multiple** re-dispatch attempts still fail with the same API error should you fall back to doing the work directly. When you do, state plainly that subagent dispatch was retried N times and kept hitting API errors, so you completed the task inline as a last resort. Report this to the user so the context-cost tradeoff is visible.
+
+The trigger is a transient *infrastructure* error from the model API, not a subagent that returned a wrong answer or hit a code bug. A subagent that finished but produced bad output gets re-dispatched with a corrected prompt; a subagent that never finished because the API itself errored gets re-dispatched with the same intent and the prior context.
