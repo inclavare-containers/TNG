@@ -14,36 +14,56 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: GlobalSubcommand,
 
-    #[clap(long, global = true)]
+    #[clap(long, global = true, help_heading = "Global options")]
     /// Enable tokio console
     pub tokio_console: bool,
 
-    #[clap(long, global = true, value_name = "FILE")]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global options",
+        value_name = "FILE"
+    )]
     /// Path to log file (writes to stdout/stderr if not set)
     pub log_file: Option<PathBuf>,
 
-    #[clap(long, global = true, value_name = "FORMAT")]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global options",
+        value_name = "FORMAT"
+    )]
     /// Log output format: text | json.
     /// The `TNG_LOG_FORMAT` env var takes priority over this flag when set.
     pub log_format: Option<LogFormat>,
 
-    #[clap(long, global = true, value_name = "FILE")]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global options",
+        value_name = "FILE"
+    )]
     /// Path to a separate error-level log file. When set, ERROR+ events go
     /// to this file only; non-error events go to --log-file. The
     /// `TNG_LOG_ERROR_FILE` env var takes priority over this flag.
     pub log_error_file: Option<PathBuf>,
 
-    #[clap(long, global = true)]
+    #[clap(long, global = true, help_heading = "Global options")]
     /// Enable size-based log rolling (requires --log-file).
     /// The `TNG_LOG_ROLLING` env var takes priority over this flag.
     pub log_rolling: bool,
 
-    #[clap(long, global = true, value_name = "SIZE")]
+    #[clap(
+        long,
+        global = true,
+        help_heading = "Global options",
+        value_name = "SIZE"
+    )]
     /// Max bytes per log file before rolling (e.g. 64MB, 1GB, or a byte count).
     /// Default 64MB. `TNG_LOG_MAX_SIZE` env overrides this flag.
     pub log_max_size: Option<String>,
 
-    #[clap(long, global = true, value_name = "N")]
+    #[clap(long, global = true, help_heading = "Global options", value_name = "N")]
     /// Number of rotated backups to keep (Debian-style file.1..file.N).
     /// Default 5. `TNG_LOG_MAX_BACKUPS` env overrides this flag.
     pub log_max_backups: Option<usize>,
