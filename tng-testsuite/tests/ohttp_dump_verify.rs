@@ -53,7 +53,7 @@ fn ohttp_dump_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>>
         let out_path = dir.path().join("keyconfig.json");
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20001".to_string(),
-            attest_request: Some("none".to_string()),
+            verify: None,
             out: Some(out_path.clone()),
         })
         .await
@@ -111,7 +111,7 @@ fn ohttp_verify_no_ra_client(token: CancellationToken) -> Result<JoinHandle<Resu
         let out_path = dir.path().join("keyconfig.json");
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20010".to_string(),
-            attest_request: Some("none".to_string()),
+            verify: None,
             out: Some(out_path.clone()),
         })
         .await
@@ -138,12 +138,15 @@ fn ohttp_verify_no_ra_client(token: CancellationToken) -> Result<JoinHandle<Resu
     }))
 }
 
-/// End-to-end `ohttp dump` (passport) then `ohttp verify` against a passport
-/// verify config. The ohttp egress carries a passport attest context, so the
-/// dumped key config carries a Passport attestation_result; `ohttp verify`
-/// re-runs the same Passport verify dispatch the ingress client uses and must
-/// succeed. Requires the Attestation Agent (AA) and Attestation Service (AS)
-/// to be running; without them it will fail at the attest/convert step.
+/// End-to-end `ohttp dump --verify` (passport) then `ohttp verify` against a
+/// passport verify config. The ohttp egress carries a passport attest context,
+/// so the dumped key config carries a Passport attestation_result. `dump
+/// --verify` mints no nonce (passport is self-contained) and verifies the
+/// attestation inline; `ohttp verify` then re-runs the same Passport verify
+/// dispatch the ingress client uses and must also succeed (a passport token
+/// carries its own AS-signed attestation result, so it re-verifies offline).
+/// Requires the Attestation Agent (AA) and Attestation Service (AS) to be
+/// running; without them it will fail at the attest/convert step.
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn ohttp_dump_then_verify_passport() -> Result<()> {
@@ -184,9 +187,13 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
 
         let dir = tempfile::tempdir()?;
         let out_path = dir.path().join("keyconfig.json");
+        // dump --verify (passport) fetches the key config with a Passport
+        // attestation and verifies it inline; the same config re-verifies the
+        // dumped file below.
+        let verify_json = r#"{"model":"passport","as_provider":"coco","as_type":"restful","as_addr":"http://192.168.1.254:8080/","policy_ids":["default"]}"#;
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20011".to_string(),
-            attest_request: Some("passport".to_string()),
+            verify: Some(verify_json.to_string()),
             out: Some(out_path.clone()),
         })
         .await
@@ -199,7 +206,6 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
             "dumped passport key config missing attestation_info: {body}"
         );
 
-        let verify_json = r#"{"model":"passport","as_provider":"coco","as_type":"restful","as_addr":"http://192.168.1.254:8080/","policy_ids":["default"]}"#;
         ohttp::run(OhttpCommand::Verify {
             keyconfig: out_path.clone(),
             verify: verify_json.to_string(),
@@ -210,14 +216,16 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
     }))
 }
 
-/// End-to-end `ohttp dump` (background_check) then `ohttp verify` against a
-/// background_check verify config. The ohttp egress carries a background_check
-/// attest context (AA only; the converter lives on the verify side), so the
-/// dumped key config carries raw evidence; `ohttp verify` converts it via the
-/// AS and verifies the resulting token. This exercises the BackgroundCheck arm
-/// of `verify_keyconfig_attestation`, confirming the subset-based report_data
-/// check accepts the hpke_key_config binding even though the dumped file
-/// carries no challenge_token (the helper passes challenge_token: None).
+/// End-to-end `ohttp dump --verify` (background_check) then `ohttp verify`
+/// against a background_check verify config. The ohttp egress carries a
+/// background_check attest context (AA only; the converter lives on the
+/// verify side), so the dumped key config carries raw evidence. `dump --verify`
+/// mints the challenge token via `converter.get_nonce()` and verifies inline
+/// (freshness holds, same converter); `ohttp verify` then re-converts the
+/// evidence against the same external AS, which is stateful across processes
+/// and re-validates the challenge token it issued. (A builtin AS would NOT
+/// re-verify in a separate process, and `verify` errors with a clear pointer
+/// to `dump --verify` in that case; this test uses the external restful AS.)
 /// Requires AA and AS to be running.
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
@@ -255,31 +263,16 @@ fn ohttp_dump_verify_bc_client(token: CancellationToken) -> Result<JoinHandle<Re
     Ok(tokio::spawn(async move {
         let _drop_guard = token.drop_guard();
 
-        // Obtain a challenge token from the AS, mirroring converter.get_nonce()
-        // (POST {as_addr}/challenge -> extra-params.jwt). The dump tool takes
-        // the token via --attest-request backgroundcheck:<token>; the live
-        // ingress client obtains it the same way from the AS.
-        let challenge = reqwest::Client::new()
-            .post("http://192.168.1.254:8080/challenge")
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .context("request AS challenge token")?
-            .text()
-            .await
-            .context("read AS challenge response")?;
-        let challenge_value: serde_json::Value =
-            serde_json::from_str(&challenge).context("parse AS challenge response")?;
-        let challenge_token = challenge_value["extra-params"]["jwt"]
-            .as_str()
-            .context("challenge response missing extra-params.jwt")?
-            .to_string();
-
         let dir = tempfile::tempdir()?;
         let out_path = dir.path().join("keyconfig.json");
+        // dump --verify (background_check) mints the challenge token itself via
+        // converter.get_nonce() (POST {as_addr}/challenge), fetches the key
+        // config with the evidence, and verifies it inline; the same config
+        // re-verifies the dumped file below against the same external AS.
+        let verify_json = r#"{"model":"background_check","as_provider":"coco","as_type":"restful","as_addr":"http://192.168.1.254:8080/","policy_ids":["default"]}"#;
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20012".to_string(),
-            attest_request: Some(format!("backgroundcheck:{challenge_token}")),
+            verify: Some(verify_json.to_string()),
             out: Some(out_path.clone()),
         })
         .await
@@ -292,7 +285,6 @@ fn ohttp_dump_verify_bc_client(token: CancellationToken) -> Result<JoinHandle<Re
             "dumped background_check key config missing attestation_info: {body}"
         );
 
-        let verify_json = r#"{"model":"background_check","as_provider":"coco","as_type":"restful","as_addr":"http://192.168.1.254:8080/","policy_ids":["default"]}"#;
         ohttp::run(OhttpCommand::Verify {
             keyconfig: out_path.clone(),
             verify: verify_json.to_string(),

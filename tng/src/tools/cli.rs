@@ -48,9 +48,12 @@ pub enum OhttpCommand {
     Dump {
         #[arg(long)]
         endpoint: String,
-        /// passport | backgroundcheck:<token> | none
-        #[arg(long, value_name = "MODEL[:token]")]
-        attest_request: Option<String>,
+        /// flat `VerifyArgs` JSON. When set, dump builds the AS converter, mints
+        /// the background-check challenge token itself, and sends the key-config
+        /// request with that attestation, so the response carries
+        /// `attestation_info`. Absent -> bare HPKE key config (no attestation).
+        #[arg(long, value_name = "JSON")]
+        verify: Option<String>,
         #[arg(long, value_name = "JSON")]
         out: Option<PathBuf>,
     },

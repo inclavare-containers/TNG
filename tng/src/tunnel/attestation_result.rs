@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use rats_cert::tee::claims::Claims;
+use rats_cert::tee::GenericEvidence;
 use serde::Serialize;
 
 use super::provider::TngToken;
@@ -86,5 +88,11 @@ impl AttestationResult {
     /// Expiry timestamp (JWT `exp` claim) of the underlying token.
     pub fn exp(&self) -> Result<u64> {
         self.token.exp()
+    }
+
+    /// Decoded JWT payload claims of the underlying attestation-result token.
+    /// Pure local decode (split + base64url + parse); no AS call.
+    pub fn claims(&self) -> Result<Claims> {
+        self.token.get_claims().map_err(Into::into)
     }
 }

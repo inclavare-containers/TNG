@@ -213,23 +213,25 @@ tng tools rats-tls verify --cert captured.pem \
 
 ## tng tools ohttp
 
-ohttp 密钥配置工具。`dump` 拉取 ohttp egress 公告的密钥配置响应 JSON；`verify` 对已 dump 的密钥配置中嵌入的证明执行完整 RA 验证，并与 HPKE 公钥绑定。
+ohttp 密钥配置工具。`dump` 拉取 ohttp egress 公告的密钥配置响应 JSON，并在带 `--verify` 时驱动完整证明流程并就地验证；`verify` 对已 dump 的密钥配置文件中的证明进行验证与解码。
 
 ### ohttp dump
 
-向 ohttp 服务端的密钥配置端点 POST 一个 `KeyConfigRequest`，写出返回的 `KeyConfigResponse` JSON。`dump` 不验证证明，验证是 `ohttp verify` 对已 dump 文件要做的事。
+向 ohttp 服务端的密钥配置端点 POST 一个 `KeyConfigRequest`，写出返回的 `KeyConfigResponse` JSON。带 `--verify` 时，`dump` 依据 `VerifyArgs` JSON 构建 AS 转换器，通过 `converter.get_nonce()` 生成 background-check challenge token，带上该证明发送请求使响应携带 `attestation_info`（证据），再用生成 token 的同一个转换器就地验证证明，并解码 attestation-result JWT 的 claims。Passport 模型发送 `Passport`（无 nonce）并就地验证其自包含 token。不带 `--verify` 时，`dump` 发送裸请求（无证明）并仅打印密钥配置。
+
+background-check 的当场性绑定到生成 nonce 的那个 AS 实例：builtin AS 会拒绝其未签发的 challenge token 所对应的证据，因此一次 `dump` 产出的 background-check 密钥配置无法在另一次 `ohttp verify` 调用中重新验证。`dump --verify` 在一个进程内跑完整条实时链（生成、拉取、验证、解码），与 ingress 隧道一致。需要离线重验请用 `ohttp verify`，它适用于 Passport 证据与可被外部 AS 转换的 background-check 证据。
 
 ```bash
-tng tools ohttp dump --endpoint <url> [--attest-request none|passport|backgroundcheck:<token>] [--out keyconfig.json]
+tng tools ohttp dump --endpoint <url> [--verify '<VerifyArgs json>'] [--out keyconfig.json]
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `--endpoint` | URL | — | ohttp 密钥配置端点 URL（必填） |
-| `--attest-request` | 字符串 | `none` | 服务端返回何种证明：`none`（裸密钥配置）、`passport`、或 `backgroundcheck:<token>`（token 为 AS 下发的 challenge） |
-| `--out` | JSON 路径 | stdout | 将 `KeyConfigResponse` JSON 写入该文件；省略时打印到 stdout |
+| `--verify` | JSON 字符串 | — | 扁平 `VerifyArgs` JSON。带此项时，`dump` 生成 background-check challenge token，拉取带 `attestation_info` 的密钥配置，就地验证并解码 attestation-result 的 claims；不带此项表示裸密钥配置，无证明、不验证 |
+| `--out` | JSON 路径 | stdout | 将 `KeyConfigResponse` JSON 写入该文件；省略时打印到 stdout。带 `--verify` 时密钥配置写入 `--out`（或 stdout），`verified OK` 块与解码后的 claims 打印到 stdout |
 
-请求携带 `x-tng-ohttp-api: key_config` 头，与运行中 ingress 使用的一致。`dump` 使用独立的 reqwest 客户端，以保持其为独立的运维工具。
+请求携带 `x-tng-ohttp-api: key_config` 头，与运行中 ingress 使用的一致。拉取使用独立的 reqwest 客户端以保持其为独立运维工具；仅证明这半边复用运行中的 `verify_keyconfig_attestation`，因此 dump 与隧道以逐字节一致的方式验证。
 
 <details>
 <summary>示例：拉取裸密钥配置（无证明）</summary>
@@ -240,17 +242,35 @@ tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key --out keyconfig.
 </details>
 
 <details>
-<summary>示例：拉取带 Background Check 证据的密钥配置</summary>
+<summary>示例：拉取 background-check 密钥配置、验证并解码 claims（builtin AS）</summary>
 
 ```bash
 tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key \
-  --attest-request backgroundcheck:eyJhbGciOi... --out keyconfig.json
+  --verify '{"model":"background_check","as_provider":"coco","as_type":"builtin","attestation_policy":{"type":"default"},"reference_values":[]}' \
+  --out keyconfig.json
 ```
+
+成功时 `dump` 打印密钥配置（写入 `--out` 或 stdout），随后：
+
+```
+verified OK
+attestation_result: eyJ0eXAi...
+claims:
+{ "eat_profile": "...", "iat": ..., "exp": ...,
+  "submods.cpu0.ear.status": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.mr_config_id": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.rtmr_0": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.tcb_verification.tcb_status": "UpToDate",
+  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.challenge_token": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.hpke_key_config.encoded_key_config_list": "..." }
+```
+
+`runtime_data_claims` 携带 challenge token 与绑定的 HPKE 密钥配置，`tcb_status` 报告 TCB 等级。完整 claim 集合见 attestation-result JWT 规范。
 </details>
 
 ### ohttp verify
 
-依据一份 `VerifyArgs` 配置，验证已 dump 的密钥配置 JSON 中嵌入的证明。该证明（Passport token 或 Background Check 证据）与响应中的 HPKE 公钥绑定，因此验证它可证明密钥配置来自一个已证明的 egress。需要 AS。
+依据一份 `VerifyArgs` 配置，验证已 dump 的密钥配置 JSON 中嵌入的证明并解码其 claims。该证明（Passport token 或 Background Check 证据）与响应中的 HPKE 公钥绑定，因此验证它可证明密钥配置来自一个已证明的 egress。需要 AS（或 builtin AS，无需外部服务）。
 
 ```bash
 tng tools ohttp verify --keyconfig <file> --verify '<json>'
@@ -261,7 +281,7 @@ tng tools ohttp verify --keyconfig <file> --verify '<json>'
 | `--keyconfig` | 文件路径 | — | 待验证的已 dump `KeyConfigResponse` JSON 文件（必填） |
 | `--verify` | JSON 字符串 | — | 用于验证证明的扁平 `VerifyArgs` JSON（必填） |
 
-验证复用 ingress 客户端的 `verify_keyconfig_attestation`，因此 dump 与运行中隧道走完全一致的 Passport/BackgroundCheck 分发。以 `--attest-request none` dump（无 `attestation_info`）的密钥配置会以 `no attestation_info` 报错。成功时打印 `verified OK` 及格式化的 `AttestationResult`。
+验证复用 ingress 客户端的 `verify_keyconfig_attestation`，因此工具与运行中隧道走完全一致的 Passport/BackgroundCheck 分发。`verify` 是对已 dump 文件的离线重验，故传入 `challenge_token = None`，不重校验抗重放/当场性。它适用于 Passport 证据（自包含 token，无 nonce）与 external-AS background-check 证据（外部 AS 跨进程保留状态）。`dump --verify` 产出的 builtin-AS background-check 密钥配置**无法**在此重验：evidence 里的 challenge token 是 `dump --verify` 那个 builtin AS 实例签的，而本进程新建的 builtin AS 用了不同的进程内签名密钥，`convert` 会拒绝。`verify` 检测到此配置（builtin + background-check）会直接报错，明确指引用 `dump --verify`，而非给出含糊的证明错误。无证明 dump（无 `attestation_info`）的密钥配置会以 `no attestation_info` 报错。成功时 `verify` 打印 `verified OK`、原始 attestation-result JWT 与格式化的 `claims:` 块。
 
 <details>
 <summary>示例：验证已 dump 的密钥配置</summary>

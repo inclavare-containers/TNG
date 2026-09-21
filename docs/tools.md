@@ -213,23 +213,25 @@ tng tools rats-tls verify --cert captured.pem \
 
 ## tng tools ohttp
 
-ohttp key-config tools. `dump` fetches the key-config response JSON an ohttp egress advertises; `verify` runs full RA verification of the attestation embedded in a dumped key config, bound to the HPKE public key.
+ohttp key-config tools. `dump` fetches the key-config response JSON an ohttp egress advertises and, with `--verify`, drives the full attestation flow and verifies it inline; `verify` checks and decodes the attestation in an already-dumped key-config file.
 
 ### ohttp dump
 
-POST a `KeyConfigRequest` to an ohttp server's key-config endpoint and write the returned `KeyConfigResponse` JSON. `dump` does not verify attestation; that is `ohttp verify`'s job on the dumped file.
+POST a `KeyConfigRequest` to an ohttp server's key-config endpoint and write the returned `KeyConfigResponse` JSON. With `--verify`, `dump` builds the AS converter from the `VerifyArgs` JSON, mints the background-check challenge token via `converter.get_nonce()`, sends the request with that attestation so the response carries `attestation_info` (evidence), then verifies the attestation inline with the same converter that minted the token and decodes the attestation-result JWT claims. Passport model sends `Passport` (no nonce) and verifies the self-contained token inline. Without `--verify`, `dump` sends a bare request (no attestation) and only prints the key config.
+
+Background-check freshness is bound to the AS instance that minted the nonce: the builtin AS rejects an evidence whose challenge token it did not issue, so a background-check key config dumped by one `dump` run cannot be re-verified in a separate `ohttp verify` call. `dump --verify` runs the full live chain (mint, fetch, verify, decode) in one process, mirroring the ingress tunnel. For offline re-verification use `ohttp verify`, which suits Passport evidence and external-AS-convertible background-check evidence.
 
 ```bash
-tng tools ohttp dump --endpoint <url> [--attest-request none|passport|backgroundcheck:<token>] [--out keyconfig.json]
+tng tools ohttp dump --endpoint <url> [--verify '<VerifyArgs json>'] [--out keyconfig.json]
 ```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--endpoint` | URL | — | ohttp key-config endpoint URL (required) |
-| `--attest-request` | string | `none` | What attestation the server returns: `none` (bare key config), `passport`, or `backgroundcheck:<token>` (the token is the challenge the AS issued) |
-| `--out` | JSON path | stdout | Write the `KeyConfigResponse` JSON to this file; print to stdout if omitted |
+| `--verify` | JSON string | — | Flat `VerifyArgs` JSON. When set, `dump` mints the background-check challenge token, fetches a key config with `attestation_info`, verifies it inline, and decodes the attestation-result claims. Absent means a bare key config with no attestation and no verification |
+| `--out` | JSON path | stdout | Write the `KeyConfigResponse` JSON to this file; print to stdout if omitted. When `--verify` is set, the key config goes to `--out` (or stdout) and the `verified OK` block with the decoded claims is printed to stdout |
 
-The request is sent with the `x-tng-ohttp-api: key_config` header, the same header the live ingress uses. `dump` uses its own reqwest client so it stays a standalone operator tool.
+The request is sent with the `x-tng-ohttp-api: key_config` header, the same header the live ingress uses. The fetch uses its own reqwest client so it stays a standalone operator tool; only the attestation half reuses the live `verify_keyconfig_attestation`, so dump and tunnel verify byte-for-byte the same way.
 
 <details>
 <summary>Example: fetch the bare key config (no attestation)</summary>
@@ -240,17 +242,35 @@ tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key --out keyconfig.
 </details>
 
 <details>
-<summary>Example: fetch a key config with Background Check evidence</summary>
+<summary>Example: fetch a background-check key config, verify it, decode the claims (builtin AS)</summary>
 
 ```bash
 tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key \
-  --attest-request backgroundcheck:eyJhbGciOi... --out keyconfig.json
+  --verify '{"model":"background_check","as_provider":"coco","as_type":"builtin","attestation_policy":{"type":"default"},"reference_values":[]}' \
+  --out keyconfig.json
 ```
+
+On success `dump` prints the key config (to `--out` or stdout) and then:
+
+```
+verified OK
+attestation_result: eyJ0eXAi...
+claims:
+{ "eat_profile": "...", "iat": ..., "exp": ...,
+  "submods.cpu0.ear.status": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.mr_config_id": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.rtmr_0": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.tdx.tcb_verification.tcb_status": "UpToDate",
+  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.challenge_token": "...",
+  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.hpke_key_config.encoded_key_config_list": "..." }
+```
+
+The `runtime_data_claims` carry the challenge token and the bound HPKE key config, and `tcb_status` reports the TCB level. See the attestation-result JWT spec for the full claim set.
 </details>
 
 ### ohttp verify
 
-Verify the attestation embedded in a dumped key-config JSON against a `VerifyArgs` config. The attestation (a Passport token or Background Check evidence) is bound to the HPKE public key in the response, so verifying it proves the key config came from an attested egress. Needs the AS.
+Verify the attestation embedded in a dumped key-config JSON against a `VerifyArgs` config and decode its claims. The attestation (a Passport token or Background Check evidence) is bound to the HPKE public key in the response, so verifying it proves the key config came from an attested egress. Needs the AS (or the builtin AS, which needs no external service).
 
 ```bash
 tng tools ohttp verify --keyconfig <file> --verify '<json>'
@@ -261,7 +281,7 @@ tng tools ohttp verify --keyconfig <file> --verify '<json>'
 | `--keyconfig` | file path | — | Dumped `KeyConfigResponse` JSON file to verify (required) |
 | `--verify` | JSON string | — | Flat `VerifyArgs` JSON the attestation is verified against (required) |
 
-Verification reuses the ingress client's `verify_keyconfig_attestation`, so the dump and the live tunnel follow the exact same Passport/BackgroundCheck dispatch. A key config dumped with `--attest-request none` (no `attestation_info`) errors with `no attestation_info`. On success it prints `verified OK` followed by the pretty-printed `AttestationResult`.
+Verification reuses the ingress client's `verify_keyconfig_attestation`, so the tool and the live tunnel follow the exact same Passport/BackgroundCheck dispatch. `verify` re-verifies an already-dumped file offline, so it passes `challenge_token = None` and does not re-check anti-replay/freshness. It works for Passport evidence (self-contained token, no nonce) and external-AS background-check evidence (the external AS keeps state across processes). A builtin-AS background-check key config dumped by `dump --verify` CANNOT be re-verified here: the challenge token in the evidence was signed by the builtin AS instance that minted it in the `dump --verify` process, and a fresh builtin AS in this process uses a different per-process signing key, so `convert` rejects it. `verify` detects this config (builtin + background-check) and errors out with a clear message pointing at `dump --verify` rather than failing with a cryptic attestation error. A key config dumped without attestation (no `attestation_info`) errors with `no attestation_info`. On success `verify` prints `verified OK`, the raw attestation-result JWT, and a pretty-printed `claims:` block.
 
 <details>
 <summary>Example: verify a dumped key config</summary>
