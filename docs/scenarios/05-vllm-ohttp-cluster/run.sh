@@ -35,11 +35,59 @@ AS_GRACE="${TNG_TEST_AS_GRACE:-15}"
 # COMPLETIONS_BASE = COMPLETIONS_URL up to and including /v1
 COMPLETIONS_BASE="${COMPLETIONS_URL%/v1/*}/v1"
 
+# ---- color (tty-only; stripped when piped so grep/awk/CI logs stay clean) ----
+# stdout color (result lines) and stderr color (header/progress/summary) are
+# independent: piping stdout to grep keeps result lines plain while stderr
+# chatter can still be colored on an interactive terminal.
+if [ -t 1 ]; then
+  C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_X=$'\033[0m'
+else
+  C_G=''; C_R=''; C_Y=''; C_X=''
+fi
+if [ -t 2 ]; then
+  E_B=$'\033[1m'; E_D=$'\033[2m'; E_G=$'\033[32m'; E_R=$'\033[31m'; E_Y=$'\033[33m'; E_C=$'\033[36m'; E_X=$'\033[0m'
+else
+  E_B=''; E_D=''; E_G=''; E_R=''; E_Y=''; E_C=''; E_X=''
+fi
+
+declare -a RESULTS=()
+
 # ---- helpers ----------------------------------------------------------------
-log()  { printf '[tngtest] %s\n' "$*" >&2; }
-pass() { printf 'PASS\t%s\n' "$1"; }
-fail() { printf 'FAIL\t%s\t%s\n' "$1" "$2"; }
-skip() { printf 'SKIP\t%s\t%s\n' "$1" "$2"; }
+log()  { printf '%s[tngtest]%s %s\n' "$E_D" "$E_X" "$*" >&2; }
+# Result lines go to stdout (one per method, machine-greppable); the leading
+# token stays PASS/FAIL/SKIP so `grep -E 'PASS|FAIL|SKIP'` works colored or not.
+pass() { printf '%sPASS%s\t%s\n' "$C_G" "$C_X" "$1"; RESULTS+=("PASS:$1"); }
+fail() { printf '%sFAIL%s\t%s\t%s\n' "$C_R" "$C_X" "$1" "$2"; RESULTS+=("FAIL:$1"); }
+skip() { printf '%sSKIP%s\t%s\t%s\n' "$C_Y" "$C_X" "$1" "$2"; RESULTS+=("SKIP:$1"); }
+
+# print_header / print_summary — context + recap on stderr, never on stdout.
+print_header() {
+  local host as_desc
+  host=$(printf '%s' "$COMPLETIONS_URL" | sed -E 's#^[a-z]+://([^/]+).*#\1#')
+  if [ "$AS_MODE" = "builtin" ]; then
+    as_desc="builtin (embedded TDX verifier)"
+  else
+    as_desc="external: $AS_URL"
+  fi
+  printf '%s== TNG access-method test ==%s\n' "$E_B" "$E_X" >&2
+  printf '  endpoint : %s\n' "$host" >&2
+  printf '  as mode  : %s\n' "$as_desc" >&2
+  printf '  model    : %s\n' "$MODEL" >&2
+  printf '  tng bin  : %s\n' "$TNG_BIN" >&2
+}
+
+print_summary() {
+  local np=0 nf=0 ns=0 r
+  for r in "${RESULTS[@]:-}"; do
+    case "$r" in
+      PASS:*) np=$((np+1));;
+      FAIL:*) nf=$((nf+1));;
+      SKIP:*) ns=$((ns+1));;
+    esac
+  done
+  printf '%ssummary:%s %s%d passed%s, %s%d failed%s, %s%d skipped%s\n' \
+    "$E_B" "$E_X" "$E_G" "$np" "$E_X" "$E_R" "$nf" "$E_X" "$E_Y" "$ns" "$E_X" >&2
+}
 
 # logtail FILE [LINES] — print the last LINES (default 30) of FILE, framed so
 # failure diagnostics are easy to spot. Used to surface daemon logs on failure.
@@ -252,10 +300,12 @@ run_one() {
 }
 
 rc=0
+print_header
 if [ "$METHOD" = "all" ]; then
   for m in daemon exec python go wasm; do run_one "$m" || rc=$?; done
 else
   run_one "$METHOD" || rc=$?
 fi
+print_summary
 
 exit "$rc"

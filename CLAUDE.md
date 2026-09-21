@@ -305,6 +305,16 @@ The test: **would an existing, unmodified config that worked before still work t
 
 Rule of thumb: would this line fire on every connection? If yes, `info` is forbidden. Then pick `debug` for a meaningful per-connection step, `trace` for a frequent/low-level detail inside that step.
 
+## CLI & Output Design
+
+User-facing CLIs and test/automation scripts should be both beautiful and practical, following Unix philosophy and modern CLI conventions. Apply to `docs/scenarios/*/run.sh`, the `tng` CLI, and any new script that prints results a human reads.
+
+- **Machine-parseable result lines on stdout.** Each unit of work (a test method, a subcommand) prints exactly one greppable result line, e.g. `PASS\t<name>`, `FAIL\t<name>\t<reason>`, `SKIP\t<name>\t<reason>`. A consumer can `grep -E 'PASS|FAIL|SKIP'` and rely on one line per unit. Chatter, progress, diagnostics, log tails go to **stderr**, so stdout stays a clean record of outcomes.
+- **Color on a TTY, plain text when piped.** Emit ANSI color only when the output fd is a terminal (`[ -t 1 ]` / `[ -t 2 ]`); strip color when piped or redirected so downstream `grep`/`awk`/CI logs stay clean. Never make color a precondition for parsing.
+- **Short header, short summary.** Print a one-block header (what is under test: endpoint host, AS mode, model, binary path) and, for multi-unit runs, a one-line summary at the end (`X passed, Y failed, Z skipped`). Both go to stderr. The stdout contract (one line per unit) is unchanged.
+- **Plain, direct language.** No robotic openers. Progress lines carry the specific thing waited on ("waiting for port 41000 (12/90s)") not "please wait". Failures surface the actionable cause and where to find the log.
+- **Composable and exit-correct.** Non-zero exit on any failure. Prefer composable pieces (one function per access method, sourced helpers) over a monolithic script. `-h/--help` prints usage; unknown args exit non-zero.
+
 ## Testing New Features
 
 When implementing a new feature or modifying existing behavior:
