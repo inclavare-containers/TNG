@@ -37,6 +37,7 @@ pub trait ProtocolStreamDecoder: StatusProvider {
     async fn decode_stream(
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<ProtocolStreamDecoderOutput>;
 }
 
@@ -116,6 +117,7 @@ impl StreamManager for TrustedStreamManager {
     async fn consume_stream(
         &self,
         in_stream: Box<dyn CommonStreamTrait + Sync + 'static>,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<BoxStream<'static, Result<NextStream>>> {
         let maybe_direct_forward = self
             .transport_layer
@@ -127,7 +129,7 @@ impl StreamManager for TrustedStreamManager {
             MaybeDirectlyForward::ContinueAsTngTraffic(stream) => {
                 let mut pending = self
                     .decoder
-                    .decode_stream(stream)
+                    .decode_stream(stream, peer)
                     .await
                     .context("Failed to decode stream")?;
                 Ok(stream! {

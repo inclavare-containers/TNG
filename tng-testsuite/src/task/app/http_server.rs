@@ -15,9 +15,19 @@ pub async fn launch_http_server(
     port: u16,
     expected_host_header: &str,
     expected_path_and_query: &str,
+    expected_request_headers: Vec<(String, String)>,
 ) -> Result<JoinHandle<Result<()>>> {
     let expected_host_header = expected_host_header.to_owned();
     let expected_path_and_query = expected_path_and_query.to_owned();
+    let expected_request_headers = expected_request_headers
+        .iter()
+        .map(|(k, v)| {
+            (
+                http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
@@ -48,6 +58,13 @@ pub async fn launch_http_server(
                             let path_and_query = request.uri().path_and_query();
                             if path_and_query.map(|t| t.as_str()) != Some(&expected_path_and_query) {
                                 bail!("Got path and query `{path_and_query:?}`, but `{expected_path_and_query}` is expected");
+                            }
+
+                            for (name, expected) in &expected_request_headers {
+                                let got = request.headers().get(name).and_then(|v| v.to_str().ok());
+                                if got != Some(expected.as_str()) {
+                                    bail!("Header `{name}` was `{got:?}` but `{expected}` is expected");
+                                }
                             }
 
                             tracing::info!("Got request from client, now sending response to client");

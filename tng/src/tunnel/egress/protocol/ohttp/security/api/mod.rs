@@ -56,6 +56,8 @@ pub struct OhttpServerApi {
     passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Headers to copy from the inner (upstream) response to the outer response.
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// Whether to inject X-Real-IP / X-Forwarded-For from the direct peer.
+    forward_client_ip: bool,
 }
 
 impl OhttpServerApi {
@@ -68,6 +70,7 @@ impl OhttpServerApi {
         runtime: TokioRuntime,
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+        forward_client_ip: bool,
     ) -> Result<Self, TngError> {
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
@@ -89,6 +92,7 @@ impl OhttpServerApi {
             passport_cache: Arc::new(RwLock::new(None)),
             passthrough_request_headers,
             passthrough_response_headers,
+            forward_client_ip,
         })
     }
 }

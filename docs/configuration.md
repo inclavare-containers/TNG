@@ -1222,6 +1222,7 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 |---|---|---|---|
 | `cors` | [CorsConfig](#corsconfig) | None | CORS configuration for browser access to OHTTP endpoints |
 | `key` | [KeyConfig](#key-management) | None | Key management configuration (see [Key Management](#key-management) below) |
+| `forward_client_ip` | bool | `true` | When `true`, the egress injects `X-Real-IP` (set to the direct TCP peer) and `X-Forwarded-For` (append the direct peer) into the decrypted inner request before forwarding upstream. The direct peer is whoever delivered the OHTTP POST, which in the relay topology is the relay, not the real client. Set `false` to disable. |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` is deprecated since 2.2.4; use `direct_forward` instead.

@@ -9,6 +9,7 @@ pub trait StreamManager {
     async fn consume_stream(
         &self,
         stream: Box<dyn CommonStreamTrait + std::marker::Sync + 'static>,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<BoxStream<'static, Result<NextStream>>>;
 }
 

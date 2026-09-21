@@ -29,6 +29,13 @@ pub enum AppType {
         expected_path_and_query: &'static str,
     },
     #[allow(dead_code)]
+    HttpServerWithHeaders {
+        port: u16,
+        expected_host_header: &'static str,
+        expected_path_and_query: &'static str,
+        expected_request_headers: Vec<(&'static str, &'static str)>,
+    },
+    #[allow(dead_code)]
     HttpClient {
         host: &'static str,
         port: u16,
@@ -77,7 +84,9 @@ pub enum AppType {
 impl Task for AppType {
     fn name(&self) -> String {
         match self {
-            AppType::HttpServer { .. } | AppType::TcpServer { .. } => "app_server",
+            AppType::HttpServer { .. }
+            | AppType::HttpServerWithHeaders { .. }
+            | AppType::TcpServer { .. } => "app_server",
             AppType::UdpServer { .. } | AppType::UdpClient { .. } => "app_udp",
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
@@ -92,7 +101,9 @@ impl Task for AppType {
 
     fn node_type(&self) -> NodeType {
         match self {
-            AppType::HttpServer { .. } | AppType::TcpServer { .. } => NodeType::Server,
+            AppType::HttpServer { .. }
+            | AppType::HttpServerWithHeaders { .. }
+            | AppType::TcpServer { .. } => NodeType::Server,
             AppType::UdpServer { .. } => NodeType::Server,
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
@@ -117,6 +128,25 @@ impl Task for AppType {
                     *port,
                     expected_host_header,
                     expected_path_and_query,
+                    Vec::new(),
+                )
+                .await
+            }
+            AppType::HttpServerWithHeaders {
+                port,
+                expected_host_header,
+                expected_path_and_query,
+                expected_request_headers,
+            } => {
+                http_server::launch_http_server(
+                    token,
+                    *port,
+                    expected_host_header,
+                    expected_path_and_query,
+                    expected_request_headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
                 )
                 .await
             }

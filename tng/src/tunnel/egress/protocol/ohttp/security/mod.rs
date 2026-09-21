@@ -47,11 +47,13 @@ impl OHttpSecurityLayer {
             Box<dyn CommonStreamTrait + Sync>,
             Option<AttestationResult>,
         )>,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         async {
             let state = TngStreamContext {
                 runtime: self.runtime.clone(),
                 sender,
+                peer_addr: peer,
             };
             let app = self
                 .ohttp_server

@@ -94,6 +94,10 @@ name = "egress_netfilter_port_range"
 path = "tests/netfilter/egress_netfilter_port_range.rs"
 
 [[test]]
+name = "forwarded_client_ip"
+path = "tests/ohttp/forwarded_client_ip.rs"
+
+[[test]]
 name = "http_encapulation_with_egress_mapping"
 path = "tests/http/http_encapulation_with_egress_mapping.rs"
 

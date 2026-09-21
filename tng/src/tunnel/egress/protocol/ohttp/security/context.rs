@@ -9,6 +9,9 @@ pub struct TngStreamContext {
         Box<dyn CommonStreamTrait + Sync>,
         Option<AttestationResult>,
     )>,
+    /// Direct TCP peer of the OHTTP POST (the relay in the relay topology).
+    /// Used to inject X-Real-IP / X-Forwarded-For on the inner request.
+    pub peer_addr: Option<std::net::SocketAddr>,
 }
 
 impl TngStreamContext {

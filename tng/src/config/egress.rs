@@ -373,6 +373,15 @@ pub struct OHttpArgs {
     /// outer OHTTP HTTP response.
     #[serde(default)]
     pub header_passthrough: Option<EgressHeaderPassthroughConfig>,
+
+    /// Inject nginx-standard forwarded-client-IP headers into the decrypted
+    /// inner request before forwarding upstream: `X-Real-IP` (set to the
+    /// direct TCP peer) and `X-Forwarded-For` (append the direct peer). The
+    /// direct peer is whoever delivered the OHTTP POST. In the relay
+    /// topology that is the relay, never the real client, which is the point.
+    /// Default true. Set false to disable.
+    #[serde(default = "default_true")]
+    pub forward_client_ip: bool,
 }
 
 /// Defines the strategy for obtaining the HPKE private key used in OHTTP decryption.
@@ -477,6 +486,10 @@ fn default_peer_host() -> String {
 
 fn default_peer_port() -> u16 {
     8301
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // Default: rotate self-generated OHTTP keys every 5 minutes.
@@ -925,5 +938,22 @@ mod tests {
             serde_json::to_value(config2)?
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod forward_client_ip_tests {
+    use crate::config::egress::OHttpArgs;
+
+    #[test]
+    fn defaults_true() {
+        let args: OHttpArgs = serde_json::from_str("{}").unwrap();
+        assert!(args.forward_client_ip);
+    }
+
+    #[test]
+    fn can_disable() {
+        let args: OHttpArgs = serde_json::from_str(r#"{"forward_client_ip": false}"#).unwrap();
+        assert!(!args.forward_client_ip);
     }
 }

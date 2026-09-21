@@ -45,13 +45,14 @@ impl ProtocolStreamDecoder for OHttpStreamDecoder {
     async fn decode_stream(
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<ProtocolStreamDecoderOutput> {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
 
         // Should be spawned as background task
         let security_layer = self.security_layer.clone();
         self.runtime.spawn_supervised_task(async move {
-            if let Err(error) = security_layer.handle_stream(input, sender).await {
+            if let Err(error) = security_layer.handle_stream(input, sender, peer).await {
                 tracing::error!(?error, "Failed to handle OHTTP stream")
             }
         });

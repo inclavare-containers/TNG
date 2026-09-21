@@ -173,6 +173,15 @@ impl OhttpServerApi {
             inner_headers.insert(name, value);
         }
 
+        // Inject nginx-standard forwarded-client-IP headers from the direct
+        // TCP peer (the relay) so the upstream backend can see which relay
+        // forwarded this request. No-op when disabled or peer unknown.
+        inject_forwarded_client_ip(
+            request.headers_mut(),
+            context.peer_addr,
+            self.forward_client_ip,
+        );
+
         tracing::debug!(
             method = ?request.method(),
             version = ?request.version(),
@@ -300,5 +309,91 @@ impl OhttpServerApi {
         }
 
         Ok(())
+    }
+}
+
+/// Inject nginx-standard forwarded-client-IP headers onto the decrypted
+/// inner request headers, using the egress's direct TCP peer. `X-Real-IP`
+/// is set/overwritten; `X-Forwarded-For` appends the peer to any existing
+/// chain (nginx `$proxy_add_x_forwarded_for`). No-op when disabled or when
+/// the peer is unknown (e.g. unix socket).
+fn inject_forwarded_client_ip(
+    headers: &mut http::HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+    enabled: bool,
+) {
+    if !enabled {
+        return;
+    }
+    let Some(peer) = peer else {
+        return;
+    };
+    let peer_ip = peer.ip().to_string();
+
+    if let Ok(v) = http::HeaderValue::from_str(&peer_ip) {
+        headers.insert(http::HeaderName::from_static("x-real-ip"), v);
+    }
+    let new_xff = match headers.get("x-forwarded-for") {
+        Some(existing) => match existing.to_str() {
+            Ok(s) => format!("{s}, {peer_ip}"),
+            Err(_) => peer_ip.clone(),
+        },
+        None => peer_ip,
+    };
+    if let Ok(v) = http::HeaderValue::from_str(&new_xff) {
+        headers.insert(http::HeaderName::from_static("x-forwarded-for"), v);
+    }
+}
+
+#[cfg(test)]
+mod forwarded_client_ip_tests {
+    use super::inject_forwarded_client_ip;
+    use http::HeaderMap;
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    fn peer() -> Option<SocketAddr> {
+        Some(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 7), 443)))
+    }
+
+    #[test]
+    fn disabled_is_noop() {
+        let mut h = HeaderMap::new();
+        inject_forwarded_client_ip(&mut h, peer(), false);
+        assert!(h.get("x-real-ip").is_none());
+        assert!(h.get("x-forwarded-for").is_none());
+    }
+
+    #[test]
+    fn no_peer_is_noop() {
+        let mut h = HeaderMap::new();
+        inject_forwarded_client_ip(&mut h, None, true);
+        assert!(h.get("x-real-ip").is_none());
+        assert!(h.get("x-forwarded-for").is_none());
+    }
+
+    #[test]
+    fn sets_real_ip_and_xff_when_absent() {
+        let mut h = HeaderMap::new();
+        inject_forwarded_client_ip(&mut h, peer(), true);
+        assert_eq!(h.get("x-real-ip").unwrap().to_str().unwrap(), "203.0.113.7");
+        assert_eq!(
+            h.get("x-forwarded-for").unwrap().to_str().unwrap(),
+            "203.0.113.7"
+        );
+    }
+
+    #[test]
+    fn appends_to_existing_xff() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            http::HeaderName::from_static("x-forwarded-for"),
+            http::HeaderValue::from_static("198.51.100.1"),
+        );
+        inject_forwarded_client_ip(&mut h, peer(), true);
+        assert_eq!(
+            h.get("x-forwarded-for").unwrap().to_str().unwrap(),
+            "198.51.100.1, 203.0.113.7"
+        );
+        assert_eq!(h.get("x-real-ip").unwrap().to_str().unwrap(), "203.0.113.7");
     }
 }

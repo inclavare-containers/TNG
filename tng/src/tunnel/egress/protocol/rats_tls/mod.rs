@@ -45,7 +45,9 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
     async fn decode_stream(
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
+        _peer: Option<std::net::SocketAddr>,
     ) -> Result<ProtocolStreamDecoderOutput> {
+        // rats_tls does raw byte forwarding; peer is unused.
         let (tls_stream, attestation_state) = self.security_layer.handshake(input).await?;
 
         // Check negotiated ALPN protocol

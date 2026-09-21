@@ -1210,6 +1210,7 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 |---|---|---|---|
 | `cors` | [CorsConfig](#corsconfig) | 无 | CORS 配置，用于浏览器端访问 OHTTP 端点 |
 | `key` | [KeyConfig](#密钥管理) | 无 | 密钥管理配置（见下方 [密钥管理](#密钥管理)） |
+| `forward_client_ip` | bool | `true` | 为 `true` 时，egress 在转发解密后的内层请求给上游前，注入 `X-Real-IP`（设为直连 TCP 对端）与 `X-Forwarded-For`（追加直连对端）。直连对端是投递 OHTTP POST 的一方，在 relay 拓扑里即 relay，而非真实客户端。设为 `false` 关闭。 |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` 在 2.2.4+ 已弃用，请使用 `direct_forward` 替代。

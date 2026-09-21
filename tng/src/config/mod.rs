@@ -178,6 +178,7 @@ pub mod tests {
                                 "x-custom-header".to_owned()
                             ]),
                         }),
+                        forward_client_ip: true,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -303,6 +304,7 @@ pub mod tests {
                                 "x-custom".to_owned()
                             ]),
                         }),
+                        forward_client_ip: true,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -355,6 +357,7 @@ pub mod tests {
                             request_headers: HeaderPassthroughSpec::default(),
                             response_headers: HeaderPassthroughSpec::default(),
                         }),
+                        forward_client_ip: true,
                     }),
                     rats_tls: None,
                     quic: None,

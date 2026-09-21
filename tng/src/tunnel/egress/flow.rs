@@ -172,7 +172,10 @@ impl EgressFlow {
             }
 
             // Existing trusted stream path
-            let mut pending = match trusted_stream_manager.consume_stream(stream).await {
+            let mut pending = match trusted_stream_manager
+                .consume_stream(stream, Some(src))
+                .await
+            {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::error!(?error, "Failed to consume stream from client");

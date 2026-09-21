@@ -52,6 +52,7 @@ impl OhttpServer {
         ohttp_args: OHttpArgs,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        let forward_client_ip = ohttp_args.forward_client_ip;
         let (passthrough_request_headers, passthrough_response_headers) = (
             Arc::new(
                 ohttp_args
@@ -77,6 +78,7 @@ impl OhttpServer {
                     runtime,
                     passthrough_request_headers,
                     passthrough_response_headers,
+                    forward_client_ip,
                 )
                 .await?,
             ),
