@@ -196,8 +196,35 @@ try:
         context.close(); context = None
     httpd.shutdown()
     sys.stdout.write(json.dumps(result) + "\n"); sys.stdout.flush()
-    ok = bool(result and result.get("ok") and
-              any(s in (result.get("text") or "") for s in ("choices", '"text"', "data:")))
+    # Strict validation of the response body via the shared validator. The
+    # harness already captured HTTP status in result["status"]; here we assert
+    # 200 and run validate_response.py on result["text"], which checks the
+    # vLLM schema, non-empty completion text, model match, and [DONE].
+    ok = False
+    verdict = None
+    if result and result.get("ok") and result.get("status") == 200:
+        text = result.get("text") or ""
+        vpy = os.environ.get("TNG_VALIDATE_PY", "")
+        model = os.environ.get("TNG_MODEL", "")
+        if vpy:
+            import subprocess, tempfile
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
+                tf.write(text); tmp = tf.name
+            try:
+                out = subprocess.run([sys.executable, vpy, tmp, model],
+                                     capture_output=True, text=True, timeout=30)
+                verdict = (out.stdout or out.stderr).strip()
+                ok = (out.returncode == 0)
+            except Exception as e:
+                verdict = "INVALID: validator crashed: %s" % e
+            finally:
+                os.unlink(tmp)
+        else:
+            # No validator path: fall back to the structural heuristic.
+            ok = any(s in result.get("text", "") for s in ("choices", '"text"', "data:"))
+            verdict = "VALID (fallback, no validator)"
+    if verdict:
+        sys.stderr.write("[driver] response: %s\n" % verdict)
     sys.exit(0 if ok else 1)
 except Exception as e:
     sys.stderr.write("[driver] ERROR %s\n" % (e,))
@@ -229,6 +256,7 @@ PYEOF
     log "wasm: launching headless chromium ($chrome_desc, --disable-web-security) + tng_fetch"
     TNG_WASM_PKG="$pkg" TNG_COMPLETIONS="$COMPLETIONS_URL" TNG_AS="$AS_URL" TNG_TOKEN="$TOKEN" \
       TNG_MODEL="$MODEL" TNG_CHROME="$chrome" TNG_CHROME_PROFILE="$profile" \
+      TNG_VALIDATE_PY="$SCRIPT_DIR/validate_response.py" \
       TNG_TIMEOUT_MS=90000 timeout --kill-after=10 150 "$PYTHON" "$driver" >"$driver_log" 2>&1
     local rc=$?
 

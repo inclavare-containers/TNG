@@ -59,9 +59,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 	tng "github.com/inclavare-containers/tng/tng-go"
@@ -86,28 +89,55 @@ func main() {
 	ocfg.HTTPClient = &http.Client{Transport: rt}
 	client := openai.NewClientWithConfig(ocfg)
 
+	model := "___MODEL___"
 	stream, err := client.CreateCompletionStream(
 		context.Background(),
 		openai.CompletionRequest{
-			Model:  "___MODEL___",
+			Model:  model,
 			Prompt: "Do you know the book Traction by Gino Wickman",
 		},
 	)
 	if err != nil {
-		log.Fatalf("CreateCompletionStream: %v", err)
+		log.Fatalf("INVALID: CreateCompletionStream: %v", err)
 	}
 	defer stream.Close()
 
+	// Strict validation at the SDK level: accumulate the streamed choices
+	// text, record the model the server echoed, and require a clean EOF (the
+	// SDK returns io.EOF on the [DONE] sentinel). Anything else is a failure.
+	var sb strings.Builder
+	var respModel string
+	gotChunk := false
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
-			break
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			log.Fatalf("INVALID: stream recv: %v", err)
+		}
+		gotChunk = true
+		if respModel == "" && resp.Model != "" {
+			respModel = resp.Model
 		}
 		if len(resp.Choices) > 0 {
-			fmt.Print(resp.Choices[0].Text)
+			sb.WriteString(resp.Choices[0].Text)
 		}
 	}
-	fmt.Println()
+	if !gotChunk {
+		log.Fatalf("INVALID: no stream chunks")
+	}
+	if sb.Len() == 0 {
+		log.Fatalf("INVALID: empty completion text (no model output)")
+	}
+	if respModel != "" && respModel != model {
+		log.Fatalf("INVALID: model mismatch: response=%s expected=%s", respModel, model)
+	}
+	preview := sb.String()
+	if len(preview) > 40 {
+		preview = preview[:40]
+	}
+	fmt.Printf("VALID model=%s text_len=%d preview=%q\n", respModel, sb.Len(), preview)
 }
 GOEOF
         if [[ "$AS_MODE" == "builtin" ]]; then
@@ -137,17 +167,11 @@ GOEOF
         done
     fi
 
-    if [[ $rc -ne 0 ]]; then
-        fail go "go run failed (rc=$rc); see $testdir/out.log"
-        return 1
-    fi
-
-    # PASS if the streamed output looks like model text.
-    if grep -Eiq 'traction|book|wickman|yes|familiar|know' "$testdir/out.log" \
-       || [[ $(tr -d '[:space:]' < "$testdir/out.log" | wc -c) -gt 20 ]]; then
+    if [[ $rc -eq 0 ]] && grep -q '^VALID model=' "$testdir/out.log" 2>/dev/null; then
         pass go
         return 0
     fi
-    fail go "no streamed model output; see $testdir/out.log"
+    fail go "invalid/no model response (rc=$rc; see $testdir/out.log)"
+    logtail "$testdir/out.log" 40 >&2
     return 1
 }

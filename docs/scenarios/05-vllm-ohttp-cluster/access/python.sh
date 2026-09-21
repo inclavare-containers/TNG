@@ -128,9 +128,20 @@ try:
         "temperature": 0.0, "best_of": 1, "max_tokens": 132, "stream": True,
     }, stream=True, timeout=120)
     print("HTTP_STATUS:", resp.status_code)
-    for line in resp.iter_lines():
-        if line:
-            print(line.decode(errors="replace"))
+    sys.stdout.flush()
+    # Write the raw SSE body to a file for strict validation (the stdout
+    # stream stays for human diagnostics). Reconstructs one `data: ...` line
+    # per chunk, which the validator parses back as SSE.
+    resp_file = os.environ.get("PYTHON_RESP_FILE")
+    w = open(resp_file, "w", errors="replace") if resp_file else None
+    try:
+        for line in resp.iter_lines():
+            if line:
+                s = line.decode(errors="replace")
+                print(s)
+                if w: w.write(s + "\n")
+    finally:
+        if w: w.close()
     sys.exit(0)
 except Exception as e:
     print("__REQUEST_FAILED__: %s" % e); sys.exit(4)
@@ -146,26 +157,22 @@ PYEOF
   #    repo's Rust tng/ dir doesn't shadow the installed tng package)
   # ------------------------------------------------------------------
   local out rc
+  local resp_file="$WORKDIR/python_resp.txt"
+  : >"$resp_file" 2>/dev/null || true
+  # NOTE: no subshell EXIT trap here — cleanup_tng removes $WORKDIR, which
+  # would delete $resp_file before the strict validator below can read it.
+  # The outer run.sh EXIT trap reaps WORKDIR + TNG_TEST_PIDS after all methods.
   out=$(
-    if [ "${KEEP:-0}" != "1" ]; then
-      trap 'command -v cleanup_tng >/dev/null 2>&1 && cleanup_tng' EXIT
-    fi
     cd "$WORKDIR"
     timeout 200 env ${tng_bin:+TNG_BINARY=$tng_bin} AS_MODE="$AS_MODE" \
         AS_URL="$AS_URL" COMPLETIONS_URL="$COMPLETIONS_URL" TOKEN="$TOKEN" MODEL="$MODEL" \
-        RUST_LOG=error "$PYTHON" run_python.py 2>&1
+        PYTHON_RESP_FILE="$resp_file" RUST_LOG=error "$PYTHON" run_python.py 2>&1
   )
   rc=$?
   log "python: runner exit=$rc"
 
-  # Backup cleanup (python's finally/atexit should already have killed the
-  # subprocess; this catches the killed-mid-run case).
-  if [ "${KEEP:-0}" != "1" ]; then
-    command -v cleanup_tng >/dev/null 2>&1 && cleanup_tng
-  fi
-
   # ------------------------------------------------------------------
-  # 6. Evaluate
+  # 6. Evaluate strictly: require HTTP 200 + a valid vLLM completion body.
   # ------------------------------------------------------------------
   if echo "$out" | grep -q "__BUILTIN_UNSUPPORTED__"; then
     skip python "builtin AS not in published wheel"
@@ -183,9 +190,11 @@ PYEOF
     fail python "request failed: $(echo "$out" | grep '__REQUEST_FAILED__' | head -1)"
     return
   fi
-  if echo "$out" | grep -Eq 'data:|"text"|"choices"'; then
+  local http_code
+  http_code=$(echo "$out" | sed -nE 's/^HTTP_STATUS: *([0-9]+)/\1/p' | head -1)
+  if [ "$http_code" = "200" ] && validate_response "$resp_file" "$MODEL"; then
     pass python
     return
   fi
-  fail python "no streamed model output (rc=$rc): $(echo "$out" | tail -3 | tr '\n' ' ')"
+  fail python "invalid/no model response (rc=$rc http=$http_code): $(echo "$out" | tail -3 | tr '\n' ' ')"
 }

@@ -206,13 +206,19 @@ EOF
 )
 
     local resp_file="$WORKDIR/daemon_resp.txt"
+    local status_file="$WORKDIR/daemon_status.txt"
+    local curl_err="$WORKDIR/daemon_curl.err"
     : >"$resp_file" 2>/dev/null || true
+    # Body → resp_file; HTTP status (via --write-out) → status_file; curl
+    # diagnostics → curl_err. Keeping stderr out of the body file lets the
+    # strict validator parse a clean vLLM response instead of curl error text.
     env all_proxy="http://127.0.0.1:$PROXY_PORT/" \
-        curl -sS -N --max-time "$REQ_TIMEOUT" "$COMPLETIONS_URL" \
+        curl -sS -N --max-time "$REQ_TIMEOUT" \
+        --write-out '%{http_code}' -o "$resp_file" "$COMPLETIONS_URL" \
         -X POST \
         -H "Authorization: $TOKEN" \
         -H "Content-Type: application/json" \
-        -d "$body" >"$resp_file" 2>&1 &
+        -d "$body" >"$status_file" 2>"$curl_err" &
     local curl_pid=$!
 
     local j=0
@@ -230,18 +236,25 @@ EOF
     done
     wait "$curl_pid" 2>/dev/null
     local curl_rc=$?
+    local http_code
+    http_code=$(tr -dc '0-9' <"$status_file" 2>/dev/null | head -c 3)
 
-    # 5. Evaluate. On any failure, dump BOTH the curl output and the daemon log
-    #    so a hung tng (empty/timeout response) is diagnosable instead of silent.
-    if grep -qE 'data:|"text"|"choices"' "$resp_file" 2>/dev/null; then
+    # 5. Evaluate strictly. Require a 200 + a valid vLLM completion body
+    #    (non-empty choices text, model match, [DONE]); a grep on "data:" alone
+    #    would pass on a truncated or error-shaped response. On any failure,
+    #    dump the curl output, status, and daemon log so a hung/empty response
+    #    is diagnosable instead of silent.
+    if [ "$curl_rc" -eq 0 ] && [ "$http_code" = "200" ] \
+       && validate_response "$resp_file" "$MODEL"; then
         pass "$method"
         _daemon_cleanup
         trap cleanup_tng EXIT INT TERM
         return 0
     fi
 
-    fail "$method" "no model response (curl rc=$curl_rc; see curl output + daemon log below)"
-    { echo "### curl output ($resp_file):"; cat "$resp_file" 2>/dev/null; } >&2
+    fail "$method" "invalid/no model response (curl rc=$curl_rc http=$http_code; see output + daemon log below)"
+    { echo "### curl output ($resp_file):"; head -c 2000 "$resp_file" 2>/dev/null; } >&2
+    [ -s "$curl_err" ] && { echo "### curl stderr:"; cat "$curl_err" 2>/dev/null; } >&2
     logtail "$log" >&2
     _daemon_cleanup
     trap cleanup_tng EXIT INT TERM

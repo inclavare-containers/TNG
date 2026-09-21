@@ -81,12 +81,16 @@ run_exec() {
 EOF
 )
 
-    local resp_file="$WORKDIR/exec_resp.txt"
-    : >"$resp_file" 2>/dev/null || true
+    local body_file="$WORKDIR/exec_body.txt"
+    : >"$body_file" 2>/dev/null || true
 
-    # Run tng exec with curl as the child. stdout (the streamed model output)
-    # goes to resp_file; tng's own logs go to $log. Wrap in timeout so a stuck
-    # hook/OHTTP stage can't hang the test past REQ_TIMEOUT.
+    # Run tng exec with curl as the child. The hook intercepts curl's
+    # connect() to the completions URL and tunnels it through TNG. Body →
+    # body_file (clean, for the strict validator). tng exec's own tracing
+    # mixes onto the child's stdout, so we can't read an HTTP status from
+    # there; a non-2xx vLLM reply carries an {"error":...} body which the
+    # validator rejects, so status is covered by body validation. Wrap in
+    # timeout so a stuck hook/OHTTP stage can't hang past REQ_TIMEOUT.
     local run_prefix=""
     if command -v timeout >/dev/null 2>&1; then
         run_prefix="timeout $((REQ_TIMEOUT + 30))"
@@ -95,12 +99,12 @@ EOF
     (
         cd "$REPO"
         $run_prefix "$tngpath" exec --config-content "$cfg" -- \
-            curl -sS -N --max-time "$REQ_TIMEOUT" "$COMPLETIONS_URL" \
+            curl -sS -N --max-time "$REQ_TIMEOUT" -o "$body_file" "$COMPLETIONS_URL" \
             -X POST \
             -H "Authorization: $TOKEN" \
             -H "Content-Type: application/json" \
             -d "$body"
-    ) >"$resp_file" 2>"$log" &
+    ) >"$log" 2>&1 &
     local cpid=$!
 
     local j=0
@@ -119,26 +123,29 @@ EOF
     done
     wait "$cpid" 2>/dev/null; local rc=$?
 
-    # Surface a tng-side failure (hook load error, config reject, RA/OHTTP
-    # failure) clearly: the child curl gets nothing back in those cases.
-    if grep -qiE "libtng_hook|not found|unknown variant|panic|failed to load config|error\[|error:|fatal|cannot bind|tng exec requires" "$log" 2>/dev/null; then
+    # Surface a tng-side failure (config reject, missing hook lib, RA/OHTTP
+    # failure) clearly: the child curl gets nothing back in those cases. The
+    # "not found" keyword covers `libtng_hook.so not found.`; we don't grep for
+    # the bare lib name because the normal "Resolved hook library path" line
+    # mentions it.
+    if grep -qiE "not found|unknown variant|panic|failed to load config|error\[|error:|fatal|cannot bind|tng exec requires" "$log" 2>/dev/null; then
         fail "$method" "tng exec failed (rc=$rc; see exec log below)"
         logtail "$log" >&2
         return 1
     fi
 
-    local resp
-    resp=$(cat "$resp_file" 2>/dev/null)
-
-    if printf '%s' "$resp" | grep -Eq 'data:|"text"|"choices"'; then
+    # Strict: require a valid vLLM completion body (non-empty choices text,
+    # model match, [DONE]); a grep on "data:" alone would pass on a truncated
+    # or error-shaped response.
+    if [ "$rc" -eq 0 ] && validate_response "$body_file" "$MODEL"; then
         pass "$method"
         return 0
     fi
 
-    fail "$method" "no model response (rc=$rc; see curl output + exec log below)"
+    fail "$method" "invalid/no model response (rc=$rc; see body + exec log below)"
     {
-        printf -- '--- curl output (%s) ---\n' "$resp_file"
-        printf '%s\n' "$resp" | head -c 2000
+        printf -- '--- body (%s) ---\n' "$body_file"
+        head -c 2000 "$body_file" 2>/dev/null
         printf -- '\n--- end ---\n'
     } >&2
     logtail "$log" >&2

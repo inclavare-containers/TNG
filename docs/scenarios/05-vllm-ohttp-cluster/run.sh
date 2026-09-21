@@ -89,6 +89,33 @@ print_summary() {
     "$E_B" "$E_X" "$E_G" "$np" "$E_X" "$E_R" "$nf" "$E_X" "$E_Y" "$ns" "$E_X" >&2
 }
 
+# validate_response RESP_FILE [EXPECTED_MODEL] — strictly verify a vLLM
+# /v1/completions response body (well-formed JSON/SSE, non-empty choices text,
+# model match, [DONE] for streams) via validate_response.py. Falls back to a
+# basic structural grep only when no python is available (logged as a fallback,
+# so a python-less host still gets a check, just not the strict one). Returns
+# the validator's exit code; the one-line VALID/INVALID verdict goes to stderr.
+validate_response() {
+  local resp="$1" model="${2:-}" py="" out rc
+  for cand in python3 python; do
+    command -v "$cand" >/dev/null 2>&1 || continue
+    if "$cand" -c 'import sys; sys.exit(0 if sys.version_info>=(3,6) else 1)' 2>/dev/null; then
+      py="$cand"; break
+    fi
+  done
+  if [ -z "$py" ]; then
+    if grep -qE 'data:|"text"|"choices"' "$resp" 2>/dev/null; then
+      log "  (no python; basic structural check only, not strict)"
+      return 0
+    fi
+    return 1
+  fi
+  out=$("$py" "$SCRIPT_DIR/validate_response.py" "$resp" "$model" 2>&1)
+  rc=$?
+  [ -n "$out" ] && log "  $out"
+  return "$rc"
+}
+
 # logtail FILE [LINES] — print the last LINES (default 30) of FILE, framed so
 # failure diagnostics are easy to spot. Used to surface daemon logs on failure.
 logtail() {
