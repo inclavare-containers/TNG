@@ -25,7 +25,7 @@
 # Helpers: log | pass | fail | skip | cleanup_tng
 
 run_wasm() {
-    log "=== wasm (JS SDK / browser) ==="
+    log "=== js-sdk (JS SDK / browser) ==="
 
     # --- requirements: python >=3.8 + the built wasm pkg ---
     local PYTHON="" cand
@@ -35,11 +35,11 @@ run_wasm() {
             PYTHON="$cand"; break
         fi
     done
-    [[ -n "$PYTHON" ]] || { skip wasm "no python >=3.8 (for Playwright)"; return 0; }
+    [[ -n "$PYTHON" ]] || { skip js-sdk "no python >=3.8 (for Playwright)"; return 0; }
 
     local pkg="$REPO/tng-wasm/pkg"
     [[ -f "$pkg/tng_wasm.js" && -f "$pkg/tng_wasm_bg.wasm" ]] || {
-        skip wasm "wasm pkg not built ($pkg/tng_wasm.js missing); run: (cd tng-wasm && wasm-pack build --dev --target web)"
+        skip js-sdk "wasm pkg not built ($pkg/tng_wasm.js missing); run: (cd tng-wasm && wasm-pack build --dev --target web)"
         return 0
     }
 
@@ -235,25 +235,25 @@ PYEOF
 
     # --- install Playwright (pip) if missing ---
     if ! "$PYTHON" -c 'import playwright' >/dev/null 2>&1; then
-        log "wasm: installing playwright via pip"
+        log "js-sdk: installing playwright via pip"
         if ! "$PYTHON" -m pip install --break-system-packages playwright >"$pip_log" 2>&1 \
            && ! "$PYTHON" -m pip install playwright >"$pip_log" 2>&1; then
-            skip wasm "pip install playwright failed (no network? see $pip_log)"
+            skip js-sdk "pip install playwright failed (no network? see $pip_log)"
             _wasm_cleanup; trap - INT TERM EXIT; trap cleanup_tng EXIT INT TERM; return 0
         fi
     fi
 
     # --- ensure a browser binary: system chrome, else download bundled chromium ---
     if [[ -z "$chrome" ]]; then
-        log "wasm: no system chrome; downloading Playwright's bundled chromium"
+        log "js-sdk: no system chrome; downloading Playwright's bundled chromium"
         if ! "$PYTHON" -m playwright install chromium >"$pip_log" 2>&1; then
-            skip wasm "playwright install chromium failed (no network? see $pip_log)"
+            skip js-sdk "playwright install chromium failed (no network? see $pip_log)"
             _wasm_cleanup; trap - INT TERM EXIT; trap cleanup_tng EXIT INT TERM; return 0
         fi
     fi
 
     local chrome_desc="$([ -n "$chrome" ] && echo "$chrome" || echo "bundled chromium")"
-    log "wasm: launching headless chromium ($chrome_desc, --disable-web-security) + tng_fetch"
+    log "js-sdk: launching headless chromium ($chrome_desc, --disable-web-security) + tng_fetch"
     TNG_WASM_PKG="$pkg" TNG_COMPLETIONS="$COMPLETIONS_URL" TNG_AS="$AS_URL" TNG_TOKEN="$TOKEN" \
       TNG_MODEL="$MODEL" TNG_CHROME="$chrome" TNG_CHROME_PROFILE="$profile" \
       TNG_VALIDATE_PY="$SCRIPT_DIR/validate_response.py" \
@@ -261,14 +261,16 @@ PYEOF
     local rc=$?
 
     if [[ $rc -eq 0 ]]; then
-        pass wasm
+        grep -m1 'response: VALID\|response: INVALID' "$driver_log" 2>/dev/null \
+            | sed 's/.*response: /  /' | { read -r v; [ -n "$v" ] && log "$v"; }
+        pass js-sdk
         _wasm_cleanup; trap - INT TERM EXIT; trap cleanup_tng EXIT INT TERM
         return 0
     fi
 
     local result
     result=$(grep -m1 '^{' "$driver_log" 2>/dev/null || true)
-    fail wasm "wasm fetch did not return model output (rc=$rc; see $driver_log)"
+    fail js-sdk "wasm fetch did not return model output (rc=$rc; see $driver_log)"
     [[ -n "$result" ]] && printf '### result: %s\n' "$result" >&2
     printf '### last driver/browser lines:\n' >&2
     tail -n 30 "$driver_log" >&2

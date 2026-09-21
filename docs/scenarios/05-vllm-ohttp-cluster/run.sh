@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Internal test for the 05-vllm-ohttp-cluster scenario: exercise TNG's 4
-# access methods (daemon / python / go / wasm) end-to-end.
+# Internal test for the 05-vllm-ohttp-cluster scenario: exercise TNG's 5
+# access methods (tng-launch / tng-exec / python-sdk / go-sdk / js-sdk)
+# end-to-end.
 #
-# The four method implementations live in ./access/ (daemon.sh, python.sh,
-# go.sh, wasm.sh) and are sourced by this entry; each defines only its
-# run_<method>() function, sharing the globals/helpers set below.
+# The method implementations live in ./access/ (daemon.sh, exec.sh,
+# python.sh, go.sh, wasm.sh) and are sourced by this entry; each defines
+# only its run_<method>() function, sharing the globals/helpers set below.
 
 set -uo pipefail
 
@@ -217,18 +218,18 @@ trap cleanup_tng EXIT INT TERM
 
 usage() {
   cat <<'USAGE'
-Usage: docs/scenarios/05-vllm-ohttp-cluster/run.sh -m <daemon|exec|python|go|wasm|all> [options]
+Usage: docs/scenarios/05-vllm-ohttp-cluster/run.sh -m <tng-launch|tng-exec|python-sdk|go-sdk|js-sdk|all> [options]
 
 Drive TNG's access methods against a real /v1/completions endpoint.
 Each method lives in ./access/<name>.sh and is sourced by this entry.
 
 Methods:
-  daemon   tng binary as an http_proxy ingress; request via all_proxy
-  exec     tng exec (LD_PRELOAD hook) wrapping the client command; no proxy env
-  python   tng-python SDK (requests session)
-  go       tng-go SDK (go-openai streaming client)
-  wasm     tng-wasm SDK (browser fetch via Playwright + Chrome)
-  all      run every method above in turn (default)
+  tng-launch   tng binary as an http_proxy ingress; request via all_proxy
+  tng-exec    tng exec (LD_PRELOAD hook) wrapping the client command
+  python-sdk   tng-python SDK (requests session)
+  go-sdk       tng-go SDK (go-openai streaming client)
+  js-sdk       tng-wasm SDK (browser fetch via Playwright + Chrome)
+  all          run every method above in turn (default)
 
 Options:
   -m, --method METHOD      method to run (default: all)
@@ -315,13 +316,21 @@ source "$SCRIPT_DIR/access/go.sh"
 source "$SCRIPT_DIR/access/wasm.sh"
 
 # ---- dispatch ---------------------------------------------------------------
+# Per-method banner: a labelled rule on stderr so each case's progress is
+# visually grouped (result lines stay on stdout). Ephemeral box-drawing is
+# fine here; it's not prose.
+method_header() {
+  printf '\n%s── %s ──────────────────────────────────%s\n' "$E_C" "$1" "$E_X" >&2
+}
+
 run_one() {
+  method_header "$1"
   case "$1" in
-    daemon) run_daemon;;
-    exec)   run_exec;;
-    python) run_python;;
-    go)     run_go;;
-    wasm)   run_wasm;;
+    tng-launch) run_daemon;;
+    tng-exec)   run_exec;;
+    python-sdk)  run_python;;
+    go-sdk)      run_go;;
+    js-sdk)      run_wasm;;
     *) log "unknown method: $1"; return 2;;
   esac
 }
@@ -329,7 +338,7 @@ run_one() {
 rc=0
 print_header
 if [ "$METHOD" = "all" ]; then
-  for m in daemon exec python go wasm; do run_one "$m" || rc=$?; done
+  for m in tng-launch tng-exec python-sdk go-sdk js-sdk; do run_one "$m" || rc=$?; done
 else
   run_one "$METHOD" || rc=$?
 fi

@@ -8,7 +8,7 @@
 # (python3 first, then python) and log which interpreter was used.
 
 run_python() {
-  log "python: start (AS_MODE=${AS_MODE:-external})"
+  log "python-sdk: start (AS_MODE=${AS_MODE:-external})"
 
   # ------------------------------------------------------------------
   # 1. Resolve a Python >=3.8
@@ -21,10 +21,10 @@ run_python() {
     fi
   done
   if [ -z "$PYTHON" ]; then
-    fail python "no python >=3.8 found (python3=$(python3 --version 2>&1))"
+    fail python-sdk "no python >=3.8 found (python3=$(python3 --version 2>&1))"
     return
   fi
-  log "python: using $PYTHON ($($PYTHON --version 2>&1))"
+  log "python-sdk: using $PYTHON ($($PYTHON --version 2>&1))"
 
   # ------------------------------------------------------------------
   # 2. Ensure the SDK + requests are importable
@@ -51,10 +51,10 @@ run_python() {
   # Verify the *installed* package is importable from a neutral cwd (running
   # from $REPO would pick up the Rust tng/ crate dir as a namespace package).
   if ! (cd /tmp && "$PYTHON" -c "from tng import Tng; import requests") >/dev/null 2>&1; then
-    fail python "tng not installed"
+    fail python-sdk "tng not installed"
     return
   fi
-  log "python: SDK importable"
+  log "python-sdk: SDK importable"
 
   # ------------------------------------------------------------------
   # 3. Point the SDK at a matching tng binary
@@ -65,7 +65,7 @@ run_python() {
   elif [ -x "$REPO/target/debug/tng" ]; then
     tng_bin="$REPO/target/debug/tng"
   fi
-  [ -n "$tng_bin" ] && log "python: TNG_BINARY=$tng_bin"
+  [ -n "$tng_bin" ] && log "python-sdk: TNG_BINARY=$tng_bin"
 
   # ------------------------------------------------------------------
   # 4. Generate the runner script
@@ -169,32 +169,32 @@ PYEOF
         PYTHON_RESP_FILE="$resp_file" RUST_LOG=error "$PYTHON" run_python.py 2>&1
   )
   rc=$?
-  log "python: runner exit=$rc"
+  log "python-sdk: runner exit=$rc"
 
   # ------------------------------------------------------------------
   # 6. Evaluate strictly: require HTTP 200 + a valid vLLM completion body.
   # ------------------------------------------------------------------
   if echo "$out" | grep -q "__BUILTIN_UNSUPPORTED__"; then
-    skip python "builtin AS not in published wheel"
+    skip python-sdk "builtin AS not in published wheel"
     return 0
   fi
   if echo "$out" | grep -q "__IMPORT_FAILED__"; then
-    fail python "tng import failed: $(echo "$out" | grep '__IMPORT_FAILED__' | head -1)"
+    fail python-sdk "tng import failed: $(echo "$out" | grep '__IMPORT_FAILED__' | head -1)"
     return
   fi
   if echo "$out" | grep -q "__START_FAILED__"; then
-    fail python "Tng() start failed: $(echo "$out" | grep '__START_FAILED__' | head -1)"
+    fail python-sdk "Tng() start failed: $(echo "$out" | grep '__START_FAILED__' | head -1)"
     return
   fi
   if echo "$out" | grep -q "__REQUEST_FAILED__"; then
-    fail python "request failed: $(echo "$out" | grep '__REQUEST_FAILED__' | head -1)"
+    fail python-sdk "request failed: $(echo "$out" | grep '__REQUEST_FAILED__' | head -1)"
     return
   fi
   local http_code
   http_code=$(echo "$out" | sed -nE 's/^HTTP_STATUS: *([0-9]+)/\1/p' | head -1)
   if [ "$http_code" = "200" ] && validate_response "$resp_file" "$MODEL"; then
-    pass python
+    pass python-sdk
     return
   fi
-  fail python "invalid/no model response (rc=$rc http=$http_code): $(echo "$out" | tail -3 | tr '\n' ' ')"
+  fail python-sdk "invalid/no model response (rc=$rc http=$http_code): $(echo "$out" | tail -3 | tr '\n' ' ')"
 }

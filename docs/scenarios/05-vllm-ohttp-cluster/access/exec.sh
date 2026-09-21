@@ -22,7 +22,7 @@
 # Helpers (from run.sh): log | pass | fail | skip | verify_json | logtail
 
 run_exec() {
-    local method="exec"
+    local method="tng-exec"
     local log="$WORKDIR/tng_exec.log"
     : >"$log" 2>/dev/null || true
 

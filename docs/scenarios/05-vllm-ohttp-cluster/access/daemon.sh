@@ -21,7 +21,7 @@
 #                              | skip METHOD REASON | cleanup_tng
 
 run_daemon() {
-    local method="daemon"
+    local method="tng-launch"
     local pid=""
     local pgid=""
     local cleaned=0

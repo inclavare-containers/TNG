@@ -11,7 +11,7 @@
 #       line that the TNG http_proxy ingress expects). No patching needed.
 
 run_go() {
-    command -v go >/dev/null 2>&1 || { skip go "go toolchain missing"; return 0; }
+    command -v go >/dev/null 2>&1 || { skip go-sdk "go toolchain missing"; return 0; }
 
     # --- Resolve a tng binary for the SDK subprocess (it spawns `tng launch`).
     # Prefer the repo's own build over a system `tng` on PATH: the system one
@@ -31,7 +31,7 @@ run_go() {
         tngpath="$(command -v tng)"
     fi
     if [[ -z "$tngpath" ]]; then
-        skip go "tng binary not found for Go SDK subprocess"
+        skip go-sdk "tng binary not found for Go SDK subprocess"
         return 0
     fi
     export TNG_BINARY="$tngpath"
@@ -168,10 +168,11 @@ GOEOF
     fi
 
     if [[ $rc -eq 0 ]] && grep -q '^VALID model=' "$testdir/out.log" 2>/dev/null; then
-        pass go
+        grep '^VALID model=' "$testdir/out.log" | head -1 | { read -r v; [ -n "$v" ] && log "  $v"; }
+        pass go-sdk
         return 0
     fi
-    fail go "invalid/no model response (rc=$rc; see $testdir/out.log)"
+    fail go-sdk "invalid/no model response (rc=$rc; see $testdir/out.log)"
     logtail "$testdir/out.log" 40 >&2
     return 1
 }
