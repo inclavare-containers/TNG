@@ -13,13 +13,6 @@
 run_go() {
     command -v go >/dev/null 2>&1 || { skip go "go toolchain missing"; return 0; }
 
-    # The default `tng` binary is not built with __builtin-as, so the Go SDK
-    # subprocess cannot honour as_type:"builtin". Skip cleanly per contract.
-    if [[ "$AS_MODE" == "builtin" ]]; then
-        skip go "builtin AS not in default tng build"
-        return 0
-    fi
-
     # --- Resolve a tng binary for the SDK subprocess (it spawns `tng launch`).
     # Prefer the repo's own build over a system `tng` on PATH: the system one
     # may be an older release that doesn't know newer config fields (e.g.
@@ -79,11 +72,7 @@ func main() {
 		OHttp: map[string]any{
 			"path_default": "original",
 		},
-		Verify: map[string]any{
-			"model":      "background_check",
-			"as_addr":    "___AS_URL___",
-			"policy_ids": []string{"default"},
-		},
+		Verify: ___VERIFY_BODY___,
 	}
 
 	rt, err := tng.NewRoundTripper(cfg)
@@ -121,7 +110,13 @@ func main() {
 	fmt.Println()
 }
 GOEOF
+        if [[ "$AS_MODE" == "builtin" ]]; then
+            verify_body='map[string]any{"model":"background_check","as_type":"builtin","attestation_policy":map[string]any{"type":"default"},"reference_values":[]any{}}'
+        else
+            verify_body='map[string]any{"model":"background_check","as_addr":"'"$AS_URL"'","policy_ids":[]string{"default"}}'
+        fi
         sed -i \
+            -e "s#___VERIFY_BODY___#$verify_body#g" \
             -e "s#___AS_URL___#$AS_URL#g" \
             -e "s#___TOKEN___#$TOKEN#g" \
             -e "s#___COMPLETIONS_BASE___#$COMPLETIONS_BASE#g" \

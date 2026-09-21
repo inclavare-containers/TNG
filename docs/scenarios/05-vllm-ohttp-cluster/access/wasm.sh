@@ -27,14 +27,6 @@
 run_wasm() {
     log "=== wasm (JS SDK / browser) ==="
 
-    # The wasm crate enables only __ingress-common; the Builtin variant is
-    # #[cfg(feature = "__builtin-as")] (ra.rs:518), so as_type:"builtin" is
-    # rejected by the shipped wasm SDK. Skip cleanly.
-    if [[ "${AS_MODE:-}" == "builtin" ]]; then
-        skip wasm "wasm crate not built with __builtin-as (Builtin variant cfg-gated at ra.rs:518)"
-        return 0
-    fi
-
     # --- requirements: python >=3.8 + the built wasm pkg ---
     local PYTHON="" cand
     for cand in python3 python; do
@@ -87,7 +79,7 @@ import tng_init, { fetch as tng_fetch } from "./tng_wasm.js";
 const COMPLETIONS = window.__TNG_COMPLETIONS, AS = window.__TNG_AS, TOKEN = window.__TNG_TOKEN, MODEL = window.__TNG_MODEL;
 const cfg = {
   ohttp: { path_default: "original" },
-  verify: { model: "background_check", as_addr: AS, policy_ids: ["default"] },
+  verify: __VERIFY_CFG__,
 };
 const body = JSON.stringify({ model: MODEL, prompt: "Do you know the book Traction by Gino Wickman", temperature: 0.0, best_of: 1, max_tokens: 132, stream: true });
 
@@ -111,6 +103,15 @@ tng_init().then(async () => {
 </script>
 </body></html>
 HTMLEOF
+
+    # Substitute the verify config: builtin AS embeds the verifier (no as_addr);
+    # external AS points at $AS_URL (injected as window.__TNG_AS at runtime).
+    if [[ "${AS_MODE:-}" == "builtin" ]]; then
+        verify_cfg='{ model: "background_check", as_type: "builtin", attestation_policy: { type: "default" }, reference_values: [] }'
+    else
+        verify_cfg='{ model: "background_check", as_addr: AS, policy_ids: ["default"] }'
+    fi
+    sed -i "s#__VERIFY_CFG__#$verify_cfg#g" "$harness"
 
     # --- wasm_driver.py (static; reads env, serves pkg, drives Playwright) ---
     cat > "$driver" <<'PYEOF'
