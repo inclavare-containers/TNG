@@ -150,6 +150,16 @@ The following failures are pre-existing environment issues, not caused by code c
   apt-get install protobuf-compiler
   ```
 
+### builtin-as-tdx verify needs no TDX device
+
+The builtin AS (used by a TNG *client* to verify a remote TDX server's quote)
+does pure quote parsing plus Intel cert-chain crypto. It does **not** open
+`/dev/tdx_guest` and does **not** require running inside a TDX guest. The
+`/dev/tdx_guest` device is only for the *attester* (generating a local quote),
+i.e. the server side. Do not skip or gate builtin-as-tdx on a client/verifier
+box for lack of TDX hardware; `cargo build --release` already enables it via
+the default features, and it verifies fine on a non-TDX host.
+
 ### Cross-Platform / Cross-Compile Verification
 
 TNG is built for non-Linux targets in CI (macOS `aarch64`/`x86_64-apple-darwin`, Windows `x86_64-pc-windows-gnu`, and `wasm32-unknown-unknown`). Code that depends on Linux-only facilities — **netfilter / iptables / TPROXY / `SO_MARK` (`socket2::Socket::set_mark`) / raw `libc` recvmsg ancillary data (`IP_ORIGDSTADDR`)** — must be `#[cfg(target_os = "linux")]`-gated so the crate still compiles on macOS/Windows/wasm. The `netfilter`, `netfilter_udp`, and `utils/udp` (TPROXY) modules are already Linux-gated; when adding a new Linux-only mode, mirror that gating and use the runtime `#[cfg(not(target_os = "linux"))]` bail pattern (see `IngressMode::Netfilter`/`NetfilterUdp` arms in `tng/src/runtime.rs`) so enum `match`es stay exhaustive on every platform.
