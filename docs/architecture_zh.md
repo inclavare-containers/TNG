@@ -87,4 +87,4 @@ TNG 采用了先进的加密协议来实现通信安全，通过结合远程证�
 *   **使用 7 层负载均衡**：TNG 将在会话层对 HTTP 进行消息级加密，且密文仍然为 HTTP 消息格式，因此加密后的 TNG 流量可以与现有的 7 层负载均衡器（例如 Nginx、HAProxy、应用网关等）无缝集成。此外，TNG 还提供了一组自定义参数配置，能够适配业务现有的 7 层负载均衡器流量分发和路由规则，从而允许 TNG 的安全通道在不改变现有 L7 基础设施的情况下工作。
 
 > [!TIP]
-> 关于 OHTTP 的详细配置说明及限制，请参考参数手册中的 [OHTTP 章节](configuration_zh.md#ohttp-协议)。
+> 关于 OHTTP 的详细配置说明及限制，请参考参数手册中的 [OHTTP 章节](configuration_zh.md#ohttp-协议)。若需了解插入公共 OHTTP relay 实现该隐私收益的部署拓扑，参见[场景 8](scenarios/08-ohttp-relay-privacy/README_zh.md)。

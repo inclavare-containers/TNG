@@ -89,4 +89,4 @@ TNG employs advanced encryption protocols to achieve communication security, imp
 *   **Using L7 Load Balancing**: TNG performs message-level encryption on HTTP at the session layer, and the ciphertext remains in HTTP message format. Therefore, encrypted TNG traffic can integrate seamlessly with existing Layer 7 load balancers (e.g., Nginx, HAProxy, Application Gateways, etc.). Additionally, TNG provides a set of custom parameter configurations that can adapt to existing L7 load balancer traffic distribution and routing rules, allowing TNG's secure channel to work without changing existing L7 infrastructure.
 
 > [!TIP]
-> For detailed configuration instructions and limitations of OHTTP, please refer to the [OHTTP section](configuration.md#ohttp-protocol) in the configuration manual.
+> For detailed configuration instructions and limitations of OHTTP, please refer to the [OHTTP section](configuration.md#ohttp-protocol) in the configuration manual. For a deployment topology that inserts a public OHTTP relay for this privacy benefit, see [Use Case 8](scenarios/08-ohttp-relay-privacy/README.md).

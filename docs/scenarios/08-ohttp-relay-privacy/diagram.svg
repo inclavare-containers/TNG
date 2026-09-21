@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1160px" height="260px" viewBox="0 0 1160 260" font-family="Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 z" fill="#444444"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="260" fill="#ffffff"/>
+
+  <text x="580" y="40" text-anchor="middle" font-size="20" font-weight="bold">TNG + OHTTP Relay Topology</text>
+
+  <!-- Outer blue container: User Application + TNG Ingress together play the OHTTP Client role. -->
+  <rect x="22" y="108" width="418" height="104" rx="10" fill="#eef4fc" stroke="#6c8eb6" stroke-width="2"/>
+  <text x="32" y="124" font-size="11" font-weight="bold" fill="#3d5a80">OHTTP Client</text>
+
+  <g id="row">
+    <rect x="40" y="130" width="150" height="70" rx="8" fill="#f8cecc" stroke="#b85450"/>
+    <text x="115" y="170" text-anchor="middle" font-size="13">User Application</text>
+
+    <rect x="250" y="130" width="170" height="70" rx="8" fill="#dae8fc" stroke="#6c8eb6"/>
+    <text x="335" y="162" text-anchor="middle" font-size="13">TNG Ingress</text>
+    <text x="335" y="182" text-anchor="middle" font-size="11">(OHTTP Client)</text>
+
+    <rect x="470" y="130" width="200" height="70" rx="8" fill="#fff2cc" stroke="#d6b656"/>
+    <text x="570" y="158" text-anchor="middle" font-size="13">OHTTP Relay</text>
+    <text x="570" y="178" text-anchor="middle" font-size="10" fill="#7a5c00">sees: client IP + ciphertext</text>
+
+    <rect x="720" y="130" width="200" height="70" rx="8" fill="#d5e8d4" stroke="#82b366"/>
+    <text x="820" y="158" text-anchor="middle" font-size="13">TNG Egress (Gateway)</text>
+    <text x="820" y="178" text-anchor="middle" font-size="10" fill="#3d6b2f">sees: relay IP + plaintext</text>
+
+    <rect x="980" y="130" width="150" height="70" rx="8" fill="#f8cecc" stroke="#b85450"/>
+    <text x="1055" y="170" text-anchor="middle" font-size="13">Backend (vLLM)</text>
+  </g>
+
+  <g id="arrows" stroke="#444444" stroke-width="1.6" fill="none">
+    <line x1="190" y1="165" x2="246" y2="165" marker-end="url(#arrow)"/>
+    <line x1="420" y1="165" x2="466" y2="165" marker-end="url(#arrow)"/>
+    <line x1="670" y1="165" x2="716" y2="165" marker-end="url(#arrow)"/>
+    <line x1="920" y1="165" x2="976" y2="165" marker-end="url(#arrow)"/>
+  </g>
+  <g id="arrow-labels" font-size="10" fill="#444444" text-anchor="middle">
+    <text x="218" y="120">HTTP (plaintext)</text>
+    <text x="443" y="120">HTTPS · OHTTP ciphertext</text>
+    <text x="693" y="120">forward body+headers (opaque)</text>
+    <text x="948" y="120">HTTP (plaintext)</text>
+  </g>
+</svg>

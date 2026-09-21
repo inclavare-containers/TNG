@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1000px" height="260px" viewBox="0 0 1000 260" font-family="Helvetica,Arial,'PingFang SC','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="arrow-zh" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 z" fill="#444444"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="260" fill="#ffffff"/>
+
+  <text x="500" y="40" text-anchor="middle" font-size="20" font-weight="bold">OHTTP 隐私保护模型</text>
+
+  <g id="row">
+    <rect x="40" y="130" width="170" height="70" rx="8" fill="#dae8fc" stroke="#6c8eb6"/>
+    <text x="125" y="162" text-anchor="middle" font-size="13">客户端</text>
+    <text x="125" y="182" text-anchor="middle" font-size="11">（加密）</text>
+
+    <rect x="280" y="130" width="200" height="70" rx="8" fill="#fff2cc" stroke="#d6b656"/>
+    <text x="380" y="158" text-anchor="middle" font-size="13">OHTTP Relay</text>
+    <text x="380" y="178" text-anchor="middle" font-size="10" fill="#7a5c00">可见：客户端 IP + 密文</text>
+
+    <rect x="560" y="130" width="200" height="70" rx="8" fill="#d5e8d4" stroke="#82b366"/>
+    <text x="660" y="158" text-anchor="middle" font-size="13">网关（Gateway）</text>
+    <text x="660" y="178" text-anchor="middle" font-size="10" fill="#3d6b2f">可见：relay IP + 明文</text>
+
+    <rect x="820" y="130" width="150" height="70" rx="8" fill="#f8cecc" stroke="#b85450"/>
+    <text x="895" y="170" text-anchor="middle" font-size="13">源站</text>
+  </g>
+
+  <g id="arrows" stroke="#444444" stroke-width="1.6" fill="none">
+    <line x1="210" y1="165" x2="276" y2="165" marker-end="url(#arrow-zh)"/>
+    <line x1="480" y1="165" x2="556" y2="165" marker-end="url(#arrow-zh)"/>
+    <line x1="760" y1="165" x2="816" y2="165" marker-end="url(#arrow-zh)"/>
+  </g>
+  <g id="arrow-labels" font-size="10" fill="#444444" text-anchor="middle">
+    <text x="243" y="120">OHTTP 密文</text>
+    <text x="518" y="120">透传不透明 body</text>
+    <text x="788" y="120">明文 HTTP</text>
+  </g>
+</svg>

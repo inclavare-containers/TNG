@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# The forked alicloud provider, cloned + built by setup-provider.sh (NOT a submodule).
+terraform-provider-alicloud/
+# The generated Terraform CLI config (dev_overrides).
+.terraformrc
