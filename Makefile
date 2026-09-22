@@ -522,10 +522,12 @@ test-dep-as:
 		http://127.0.0.1:5000/v2/trustee/provenance/manifests/cvm_container_proxy-1.0.0 | jq .;
 	echo "=== Starting Attestation Service ==="; \
 	if ! command -v restful-as > /dev/null; then \
-		systemctl mask trustee || true; \
-		yum install -y trustee; \
+		command -v systemctl >/dev/null 2>&1 && systemctl mask trustee 2>/dev/null || true; \
+		echo "Installing the Attestation Service (trustee) package"; \
+		yum install -y trustee || { echo "ERROR: failed to install the Attestation Service (trustee) package (yum exit $$?)"; exit 1; }; \
 	fi; \
-	systemctl stop trustee || true; \
+	command -v restful-as >/dev/null 2>&1 || { echo "ERROR: restful-as binary not found after trustee install"; exit 1; }; \
+	command -v systemctl >/dev/null 2>&1 && systemctl stop trustee 2>/dev/null || true; \
 	killall restful-as 2>/dev/null || true; \
 	if ! command -v jq > /dev/null; then yum install -y jq; fi; \
 	if ! command -v openssl > /dev/null; then yum install -y openssl; fi; \
