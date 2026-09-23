@@ -61,6 +61,23 @@ pass() { printf '%sPASS%s\t%s\n' "$C_G" "$C_X" "$1"; RESULTS+=("PASS:$1"); }
 fail() { printf '%sFAIL%s\t%s\t%s\n' "$C_R" "$C_X" "$1" "$2"; RESULTS+=("FAIL:$1"); }
 skip() { printf '%sSKIP%s\t%s\t%s\n' "$C_Y" "$C_X" "$1" "$2"; RESULTS+=("SKIP:$1"); }
 
+# _ensure_make_target FILE TARGET DESC — if FILE is missing, build it via
+# `make -C "$REPO" TARGET` (the Makefile's canonical build path; never run raw
+# cargo/wasm-pack/pip for these — the Makefile sets the right flags/toolchain).
+# Logs progress to stderr. Returns 0 if FILE is present (before or after build),
+# non-zero if the build failed to produce it.
+_ensure_make_target() {
+  local file="$1" target="$2" desc="${3:-$2}"
+  [ -e "$file" ] && return 0
+  log "$desc: not built; running \`make $target\` (one-time, may take a while)"
+  if ! make -C "$REPO" "$target" >&2; then
+    log "error: make $target failed"
+    return 1
+  fi
+  [ -e "$file" ] || { log "error: $file still missing after make $target"; return 1; }
+  return 0
+}
+
 # print_header / print_summary — context + recap on stderr, never on stdout.
 print_header() {
   local host as_desc

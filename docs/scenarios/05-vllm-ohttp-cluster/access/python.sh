@@ -36,9 +36,15 @@ run_python() {
       || "$PYTHON" -m pip install "$@" >/dev/null 2>&1
   }
   local installed=0 wheel
-  # Prefer a built wheel from the repo (local, matches bundled binary), then
-  # PyPI, then an editable install from source as last resort.
+  # Prefer a wheel built from the repo via the Makefile (matches the bundled
+  # binary + builtin AS), then PyPI, then an editable install from source.
   wheel=$(ls "$REPO"/tng-python/dist/tng_sdk-*.whl 2>/dev/null | head -1)
+  if [ -z "$wheel" ]; then
+    log "python-sdk: no built wheel; running make python-wheel"
+    if make -C "$REPO" python-wheel >&2; then
+      wheel=$(ls "$REPO"/tng-python/dist/tng_sdk-*.whl 2>/dev/null | head -1)
+    fi
+  fi
   if [ -n "$wheel" ]; then
     pip_install "$wheel" requests && installed=1
   fi
@@ -64,6 +70,8 @@ run_python() {
     tng_bin="$REPO/target/release/tng"
   elif [ -x "$REPO/target/debug/tng" ]; then
     tng_bin="$REPO/target/debug/tng"
+  elif _ensure_make_target "$REPO/target/release/tng" bin-build "tng binary"; then
+    tng_bin="$REPO/target/release/tng"
   fi
   [ -n "$tng_bin" ] && log "python-sdk: TNG_BINARY=$tng_bin"
 

@@ -28,6 +28,14 @@ run_daemon() {
     local log="$WORKDIR/tng_daemon.log"
     : >"$log" 2>/dev/null || true
 
+    # If using the default `cargo run` prefix and no prebuilt binary exists,
+    # build via `make bin-build` first (the Makefile sets RUSTFLAGS=tokio_unstable
+    # + default features incl builtin-as-tdx; faster startup than letting `cargo
+    # run` compile on the launch path, and ensures builtin AS is present).
+    if [[ "$TNG_BIN" == *cargo* ]] && [[ ! -x "$REPO/target/release/tng" ]]; then
+        _ensure_make_target "$REPO/target/release/tng" bin-build "tng binary" || true
+    fi
+
     # --- cleanup: kill the daemon we started unless KEEP==1. Idempotent so the
     # EXIT trap and explicit calls are both safe. Escalates SIGTERM→SIGKILL so a
     # hung tng can't keep the proxy port bound and block the next run.

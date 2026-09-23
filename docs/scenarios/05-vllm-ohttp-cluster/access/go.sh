@@ -27,11 +27,17 @@ run_go() {
     if [[ -z "$tngpath" ]] && [[ -x "$REPO/target/debug/tng" ]]; then
         tngpath="$REPO/target/debug/tng"
     fi
-    if [[ -z "$tngpath" ]] && command -v tng >/dev/null 2>&1; then
-        tngpath="$(command -v tng)"
+    if [[ -z "$tngpath" ]]; then
+        # Build via the Makefile (default features incl builtin-as-tdx); fall
+        # back to a system tng only if the build fails.
+        if _ensure_make_target "$REPO/target/release/tng" bin-build "tng binary"; then
+            tngpath="$REPO/target/release/tng"
+        elif command -v tng >/dev/null 2>&1; then
+            tngpath="$(command -v tng)"
+        fi
     fi
     if [[ -z "$tngpath" ]]; then
-        skip go-sdk "tng binary not found for Go SDK subprocess"
+        skip go-sdk "tng binary not found and make bin-build failed"
         return 0
     fi
     export TNG_BINARY="$tngpath"

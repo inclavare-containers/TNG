@@ -200,6 +200,20 @@ The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service R
 - If a test fails with "Connection refused" on a netfilter test, check for stale `TNG_EGRESS_*` iptables rules and clean them up before re-running.
 - **Every test in an integration test binary that calls `run_test!` (or otherwise brings up the test netns) MUST be marked `#[serial]`** (from the `serial_test` crate, already a dependency). `run_test!` runs `init_bridge` (see `tng-testsuite/src/netns.rs`), which creates and tears down **host-global** iptables chains `TNG_TEST_NETNS_POSTROUTING` / `TNG_TEST_NETNS_FORWARD`. The cargo test harness runs the test functions inside one binary concurrently, so two un-serialised tests race on those chains: one's `iptables -N` hits `Chain already exists` (or `RULE_APPEND failed: No such file or directory` when the other's `Drop` deletes the chain mid-append), the bridge setup bails with `exit code: Some(1)`, and the test fails even though its logic is correct. `#[serial]` makes the harness run those tests one at a time within the binary. Every existing multi-test integration file (`ohttp.rs`, `mapping_udp.rs`, `netfilter/*`, ...) already does this — mirror it when adding a new test to any of them, and add `#[serial]` to every test in any new integration file that uses `run_test!`.
 
+## Scenario Access-Method Harness (`docs/scenarios/05-vllm-ohttp-cluster/`)
+
+`run.sh` and `access/*.sh` exercise the five TNG access methods (tng-launch, tng-exec, python-sdk, go-sdk, js-sdk) end-to-end. Each method's prerequisite build (the tng binary, libtng_hook.so, the wasm pkg, the python wheel, the go SDK) **MUST go through the Makefile targets** via the shared `_ensure_make_target FILE TARGET` helper in `run.sh`. Never invoke raw `cargo`, `wasm-pack`, or `pip` from these scripts — the Makefile sets the flags the raw commands miss:
+
+| Artifact | Make target | Why the Makefile, not the raw command |
+|---|---|---|
+| tng binary | `make bin-build` | sets `RUSTFLAGS="--cfg tokio_unstable"` + default features incl `builtin-as-tdx` |
+| libtng_hook.so | `make tng-hook-build` | `cargo build -p tng-hook-cdylib` via the canonical target |
+| wasm pkg | `make wasm-build-debug` | nightly toolchain + `getrandom_backend="wasm_js"` + atomics/bulk-memory target features; raw `wasm-pack build` does NOT compile (getrandom fails on wasm32) |
+| python wheel | `make python-wheel` | builds the tng binary first, then the wheel from source (matches the bundled binary + builtin AS) |
+| go SDK | `make go-build` | `cd tng-go && go build ./...` via the target |
+
+When a method finds a prerequisite missing, it builds it with the matching `make` target and only SKIPs if the build itself fails. A new access method or a new prerequisite must add a Makefile target and use `_ensure_make_target`, not a raw tool invocation.
+
 ## Pre-Push Checks
 
 Before pushing, verify the following:

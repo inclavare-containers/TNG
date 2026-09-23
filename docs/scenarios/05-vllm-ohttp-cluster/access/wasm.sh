@@ -38,10 +38,14 @@ run_wasm() {
     [[ -n "$PYTHON" ]] || { skip js-sdk "no python >=3.8 (for Playwright)"; return 0; }
 
     local pkg="$REPO/tng-wasm/pkg"
-    [[ -f "$pkg/tng_wasm.js" && -f "$pkg/tng_wasm_bg.wasm" ]] || {
-        skip js-sdk "wasm pkg not built ($pkg/tng_wasm.js missing); run: (cd tng-wasm && wasm-pack build --dev --target web)"
-        return 0
-    }
+    if [[ ! -f "$pkg/tng_wasm.js" || ! -f "$pkg/tng_wasm_bg.wasm" ]]; then
+        # Build via the Makefile target (sets nightly toolchain + the wasm_js
+        # getrandom backend + target features); never run raw wasm-pack here.
+        if ! _ensure_make_target "$pkg/tng_wasm.js" wasm-build-debug "wasm pkg"; then
+            skip js-sdk "wasm pkg build failed (make wasm-build-debug)"
+            return 0
+        fi
+    fi
 
     # Resolve a Chrome binary: prefer the system google-chrome (no download);
     # allow override via $TNG_CHROME. If none, we let Playwright download its

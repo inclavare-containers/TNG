@@ -26,8 +26,9 @@ run_exec() {
     local log="$WORKDIR/tng_exec.log"
     : >"$log" 2>/dev/null || true
 
-    # --- Resolve a real tng binary (cargo run works but slows each invocation;
-    # prefer a prebuilt one so the hook lib sits beside it). ---
+    # --- Resolve a real tng binary; build via `make bin-build` if missing
+    # (the Makefile sets RUSTFLAGS=tokio_unstable + default features incl
+    # builtin-as-tdx; never run raw cargo here). ---
     local tngpath=""
     if [[ -n "${TNG_BINARY:-}" && -f "$TNG_BINARY" ]]; then
         tngpath="$TNG_BINARY"
@@ -38,20 +39,25 @@ run_exec() {
         tngpath="$REPO/target/debug/tng"
     fi
     if [[ -z "$tngpath" ]]; then
-        skip "$method" "no prebuilt tng binary (run cargo build --release); TNG_BIN='$TNG_BIN'"
-        return 0
+        if ! _ensure_make_target "$REPO/target/release/tng" bin-build "tng binary"; then
+            skip "$method" "tng binary build failed (make bin-build)"
+            return 0
+        fi
+        tngpath="$REPO/target/release/tng"
     fi
 
-    # --- libtng_hook.so must exist beside the binary (or via $TNG_HOOK_LIB). ---
+    # --- libtng_hook.so must exist beside the binary (or via $TNG_HOOK_LIB);
+    # build via `make tng-hook-build` if missing. ---
     local hooklib="${TNG_HOOK_LIB:-}"
     if [[ -z "$hooklib" ]]; then
-        local bindir
-        bindir="$(dirname "$tngpath")"
-        hooklib="$bindir/libtng_hook.so"
+        hooklib="$(dirname "$tngpath")/libtng_hook.so"
     fi
     if [[ ! -f "$hooklib" ]]; then
-        skip "$method" "libtng_hook.so not found (set \$TNG_HOOK_LIB or run: make tng-hook-build)"
-        return 0
+        if ! _ensure_make_target "$REPO/target/release/libtng_hook.so" tng-hook-build "libtng_hook.so"; then
+            skip "$method" "libtng_hook.so build failed (make tng-hook-build)"
+            return 0
+        fi
+        hooklib="$REPO/target/release/libtng_hook.so"
     fi
     export TNG_HOOK_LIB="$hooklib"
 
