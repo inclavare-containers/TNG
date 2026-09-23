@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.9.2
+Version: 2.10.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,49 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Wed Sep 23 2026 Kun Lai <laikun@linux.alibaba.com> - 2.10.0-1
+- test(scenarios): auto-build all access-method prereqs via Makefile targets
+- ci: surface Attestation Service install errors, silence systemctl noise
+- docs(scenario-08): add OHTTP relay privacy scenario with Aliyun demo
+- docs(claude): add documentation craft rules and self-contained persistent-text rule
+- feat(egress-ohttp): inject X-Real-IP and X-Forwarded-For from the direct peer
+- cli: group global options under a "Global options" heading
+- tools(ohttp): dump drives attestation via --verify; verify decodes claims
+- test(scenarios): per-method separators, rename access methods, surface verdicts
+- test(scenarios): strictly validate vLLM completion responses
+- docs(claude): forbid hardcoding proprietary domains/URLs/trustee addresses
+- docs(claude): add CLI/output design philosophy; polish scenario test output
+- docs(claude): clarify builtin-as-tdx verify needs no TDX device
+- test(scenarios): add tng exec method, model auto-detect, scrub AS URL
+- test(scenarios): enable builtin AS for go and wasm access methods
+- docs(claude): handle subagent transient API failures
+- chore: add commit-gardening skill for pre-merge commit reorganization
+- feat(rats-tls): TLS 1.3 0-RTT early data and session resumption
+- docs(claude): add merge-pr skill and forbid leaking local remote config
+- docs(skills): add fix-ci-failure skill for CI failure triage/fix
+- test(hook): fix final-review minors (em-dash, explicit multiplex, doc accuracy, race noise)
+- test(hook): fold in pp2 minor tweaks + fmt
+- test(hook): add pp2 teardown cascade + reap child group on cancel
+- test(hook): add pp2 bidirectional RA (background_check + trust_all) test
+- test(hook): add pp2 concurrency-isolation + stress-throughput tests
+- test(hook): add pp2 startup-race / grace-period test
+- test(hook): add pp2 TCPStore rendezvous + capture_local_traffic test
+- test(hook): add pp2 bidirectional topology + port-range capture test
+- test(hook): add mock sglang pp2 rank for hook-mode tests
+- test(tng-testsuite): serialise netns integration tests to stop iptables chain collision
+- fix(tng-testsuite): gate cert-verify cache test to on-source-code + update tools call site
+- test: add cert-verify cache-hit integration test
+- ra: share cert-verify cache across connections via TlsConfigGenerator
+- perf(ra-tls): verify DICE cert self-sig via webpki (aws-lc-rs native, ring wasm)
+- deps: bump trustee to rekor hashedrekord; fix tng test gating + control port
+- docs(tng): add bilingual guide on using TNG with an L4 load balancer
+- tools: add tng tools subcommand group (rats-tls, ohttp, key-sync)
+- docs(claude): add tracing log-level guidance for the data path
+- ra: cache peer cert verification verdict to skip repeated RA appraisal
+- test(rats-cert): bench RA cert gen/verify latency with builtin AS
+- docs(claude): add comment & documentation discipline rules
+- deps: bump trustee pin to latest main, adopt regorus-regovm backend
+
 * Tue Sep 08 2026 Kun Lai <laikun@linux.alibaba.com> - 2.9.2-1
 - test(log): egress multi-process centralization + rolling under tng exec
 - test(log): hook centralization under recursion, fork, and great-grandchild
