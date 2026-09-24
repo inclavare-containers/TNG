@@ -274,6 +274,40 @@ docker-build:
 docker-build-ubuntu:
 	docker build -t tng:${VERSION}-ubuntu2404 -f Dockerfile.ubuntu2404 .
 
+# Mirror an OCI image from one registry to another, preserving the manifest
+# list so multi-arch images (e.g. amd64 + arm64) stay multi-arch on the target.
+# Registry-agnostic: the caller supplies both refs fully qualified; no built-in
+# endpoints or credentials live here. crane copies the exact manifest bytes and
+# all referenced blobs, then the digests are compared as a parity check.
+#
+# Usage:
+#   make image-mirror SRC=<source-ref> DST=<destination-ref>
+# Example:
+#   make image-mirror SRC=ghcr.io/owner/name:1.2.3 DST=registry.example.com/ns/name:1.2.3
+.PHONY: image-mirror
+image-mirror:
+	@if [ -z "$(SRC)" ] || [ -z "$(DST)" ]; then \
+		echo "Usage: make image-mirror SRC=<source-ref> DST=<destination-ref>" >&2; \
+		echo "Both refs must be fully qualified (registry/repo:tag or registry/repo@digest)." >&2; \
+		exit 2; \
+	fi
+	@command -v crane >/dev/null 2>&1 || { \
+		echo "crane not found; install: https://github.com/google/go-containerregistry/releases" >&2; \
+		exit 1; \
+	}
+	@echo "Mirroring multi-arch image: $(SRC) -> $(DST)"
+	@crane copy "$(SRC)" "$(DST)"
+	@src_digest=$$(crane digest "$(SRC)"); \
+	dst_digest=$$(crane digest "$(DST)"); \
+	if [ "$$src_digest" = "$$dst_digest" ]; then \
+		echo "Verified manifest parity: $$dst_digest"; \
+		crane manifest "$(DST)" | grep -oE '"architecture":[[:space:]]*"[^"]*"' | sort -u | sed 's/.*"architecture":[[:space:]]*"//; s/"//' | sed 's/^/  platform: /'; \
+	else \
+		echo "ERROR: manifest digest mismatch (src=$$src_digest dst=$$dst_digest)" >&2; \
+		exit 1; \
+	fi
+
+
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \
