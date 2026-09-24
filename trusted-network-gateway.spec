@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.10.0
+Version: 2.10.1
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,13 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Thu Sep 24 2026 Kun Lai <laikun@linux.alibaba.com> - 2.10.1-1
+- claude: ban internal incident details from persistent text
+- forward: abort bidirectional transfer on fatal read/write errors
+- deps: bump rustls 0.23.27 -> 0.23.45, rustls-webpki 0.103.3 -> 0.103.15
+- docs(claude): note make image-mirror for container image sync
+- make: add generic image-mirror target
+
 * Wed Sep 23 2026 Kun Lai <laikun@linux.alibaba.com> - 2.10.0-1
 - test(scenarios): auto-build all access-method prereqs via Makefile targets
 - ci: surface Attestation Service install errors, silence systemctl noise
