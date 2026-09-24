@@ -653,9 +653,9 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.0"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ec2f1fc3ec205783a5da9a7e6c1509cc69dedf09a1949e412c1e18469326d00"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -663,14 +663,15 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.41.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a2f9779ce85b93ab6170dd940ad0169b5766ff848247aff13bb788b832fe3f4"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
  "dunce",
  "fs_extra",
+ "pkg-config",
 ]
 
 [[package]]
@@ -5632,7 +5633,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -5652,7 +5653,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -5684,7 +5685,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -5697,7 +5698,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -6559,8 +6560,8 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.27"
-source = "git+https://github.com/inclavare-containers/rustls.git?branch=v%2F0.23.27-patched#c7a96cd777b6c0f668077f92fc30538ecc2f33da"
+version = "0.23.45"
+source = "git+https://github.com/inclavare-containers/rustls.git?branch=v%2F0.23.45-patched#9b1e82050653e312ce997ccf99e68accfde004b4"
 dependencies = [
  "aws-lc-rs",
  "brotli",
@@ -6616,8 +6617,8 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.3"
-source = "git+https://github.com/inclavare-containers/webpki.git?branch=v%2F0.103.3-patched#8d61b9680918bb7eb4ad8378adce1d589f582c82"
+version = "0.103.15"
+source = "git+https://github.com/inclavare-containers/webpki.git?branch=v%2F0.103.15-patched#02c1253f6d35fa6be9181cc0c533d46a2c6d4cef"
 dependencies = [
  "aws-lc-rs",
  "ring",
