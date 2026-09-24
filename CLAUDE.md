@@ -181,6 +181,10 @@ make wasm-build-release     # wasm-pack build --release --target web ./tng-wasm
 
 Any change touching `cfg(target_os = ...)` gates, `socket2` usage, or the `netfilter_udp`/`utils/udp` modules should be verified with at least `make mac-cross-build` and `make windows-cross-build` before pushing — CI builds all of these on every PR.
 
+### Mirroring Container Images
+
+To sync an OCI image (including multi-arch manifest lists) from one registry to another, use the generic `make image-mirror` target — see `Makefile`. Both the source and destination refs are fully qualified by the caller; the target ships no built-in registry endpoints or credentials.
+
 ## Running Tests with Service Dependencies
 
 Several integration tests require external services to be running. Before running `cargo test`, start the following in the background and wait for them to be ready:
