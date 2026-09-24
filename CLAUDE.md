@@ -67,6 +67,8 @@ Several kinds of text in this repo are read by future developers and users long 
 
 These rules apply wherever text is meant to be read later. Ephemeral output (a one-off reply in this session, a `println!` debug line) does not need to follow them.
 
+- **Never leak internal incident info into the repo.** Commit messages, code comments, PR descriptions, documentation, and tests must not carry details tied to a specific internal incident: no incident dates, no internal host or deployment identifiers, no customer or workload names (e.g. a specific service or a job/replica identifier), no internal ticket or dashboard links, and no incident-narrative framing. Describe the bug by its technical mechanism and observable behavior only ("a long-lived TLS 1.3 connection eventually fails with `PeerMisbehaved::TooManyKeyUpdateRequests` after 32 peer-initiated key updates"), never by when or where it happened. Public upstream facts (rustls issue/PR numbers, error-variant names like `TooManyKeyUpdateRequests`) are fine; the internal outage narrative is not. If a fix was driven by an incident, scrub the incident specifics before committing, and keep that context in the session instead.
+
 ### Comment & Documentation Discipline
 
 The "Comments explain *why*, not *what*" rule above, made concrete. These apply to code comments, TOML/Cargo comment blocks, and reference docs alike. Most of them are corollaries of one test: *would deleting this comment let a future maintainer make a real mistake?* If yes, keep it, dense, free of version pins and upstream internals. If no, move it to the commit message.
