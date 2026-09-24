@@ -1,18 +1,79 @@
+//! Bidirectional stream forwarding between two sockets.
+//!
+//! Custom implementation instead of `tokio::io::copy_bidirectional`:
+//! - `ForwardError` captures direction-aware context (which stream and which
+//!   side failed), which makes production debugging much easier.
+//! - 512 KB buffers instead of tokio's 8 KB default, for throughput.
+//!
+//! Do not replace it with `tokio::io::copy_bidirectional`: the loss of error
+//! directionality would make forwarding failures hard to diagnose.
+//!
+//! # Model
+//!
+//! Two endpoints, two directions sharing them:
+//! - `D` downstream (client-facing), `U` upstream (server-facing).
+//! - Dir1 = `D.read -> U.write` (client to server).
+//! - Dir2 = `U.read -> D.write` (server to client).
+//!
+//! A TCP endpoint's read and write halves are independent (half-close). A TLS
+//! session corruption (`PeerMisbehaved`) or a TCP RST makes that endpoint's
+//! read AND write halves unusable. That asymmetry drives the close rules.
+//!
+//! # Close rules
+//!
+//! A direction that ends with a clean read EOF is a cooperative half-close:
+//! it flushes and shuts down the peer's write half, and the other direction is
+//! left to drain its in-flight data (the classic teardown race).
+//!
+//! A direction that ends with an error must not leave the other direction
+//! pending forever. `classify_error` sorts the error and `apply_abort` finishes
+//! the other direction accordingly.
+//!
+//! ## Read anomalies (on a direction's read; the other direction is symmetric)
+//!
+//! | case | meaning | endpoint state | action |
+//! |------|--------|-----------------|--------|
+//! | R1 | `Ok(0)` clean EOF | peer cleanly FIN'd its write half | cooperative half-close; let the other direction drain |
+//! | R2 | `Err(UnexpectedEof)` (TLS close without close_notify) | peer gone | fatal: force-finish the other direction now |
+//! | R3 | `Err(InvalidData)` incl. TLS `PeerMisbehaved` (e.g. `TooManyKeyUpdateRequests`) | session corrupt, both halves dead | fatal |
+//! | R4 | `Err(ConnectionReset/ConnectionAborted)` (TCP RST) | endpoint dead | fatal |
+//! | R5 | `Err(other)` (TimedOut, etc.) | unrecoverable | fatal (conservative) |
+//!
+//! Any non-EOF read error is fatal: the source endpoint can no longer produce
+//! trusted data, and if it is TLS-corrupt or RST its write half (the other
+//! direction's sink) is dead too, so draining is impossible. The forward
+//! returns promptly so the owning task drops both sockets and the application
+//! sees the connection close instead of hanging.
+//!
+//! ## Write anomalies (on a direction's write)
+//!
+//! | case | meaning | other direction | action |
+//! |------|--------|-----------------|--------|
+//! | W1 | benign kind (`BrokenPipe`/`ConnectionReset`/`ConnectionAborted`) + other already done | done | soft: both done, return (teardown race) |
+//! | W2 | benign kind + other still active (buffered/in-flight data, write blocked) | draining | soft: let it drain; force-finish once idle |
+//! | W3 | `WriteZero` | as W2 | soft |
+//! | W4 | non-benign kind (e.g. `PermissionDenied`) | any | fatal: discard the other direction's in-flight data, return |
+//!
+//! A benign write error means the peer closed its read half; the same
+//! endpoint's read half (the other direction's source) may still be sending
+//! valid data, so the other direction is allowed to drain. A non-benign write
+//! error is treated as a broken connection and force-finishes the other
+//! direction.
+//!
+//! `ForwardError::WriteZero` and write errors whose `io::ErrorKind` is in
+//! {BrokenPipe, ConnectionReset, ConnectionAborted, WriteZero, NotConnected}
+//! are benign; all other write errors are fatal. Every read error is fatal.
+//!
+//! A failed direction is parked as `Done(sent)` on error (see
+//! `transfer_one_direction`) so it is not re-driven on the next poll, which
+//! would otherwise stall the forward when the other direction is still active.
+
 use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-// This module provides a custom bidirectional stream forwarding implementation
-// instead of using `tokio::io::copy_bidirectional`. We intentionally avoid the
-// tokio built-in because:
-// 1. Our `ForwardError` enum captures direction-aware error context (which stream
-//    and which side failed), making production debugging much easier.
-// 2. We use 512 KB buffers instead of tokio's 8 KB default for better throughput.
-// Do NOT replace this with `tokio::io::copy_bidirectional` — the loss of error
-// directionality would make it very hard to diagnose forwarding failures.
 
 /// Error that captures the direction and read/write side of a forward failure,
 /// while preserving the original `io::Error` as the source.
@@ -208,16 +269,26 @@ where
         match state {
             TransferState::Running(buf) => {
                 let result = buf.poll_copy(cx, r.as_mut(), w.as_mut(), &read_err, &write_err);
-                let count = match result {
-                    Poll::Ready(Ok(n)) => n,
+                match result {
+                    Poll::Ready(Ok(count)) => {
+                        *state = TransferState::ShuttingDown(count);
+                    }
                     Poll::Ready(Err(e)) => {
                         let sent = buf.amt;
                         let remain = (buf.cap.saturating_sub(buf.pos)) as u64;
+                        // Make the error sticky: a direction that failed (TLS
+                        // corruption, RST, EPIPE) cannot reliably make more
+                        // progress, so park it as Done(sent) instead of
+                        // re-polling it on the next iteration. Without this a
+                        // write error leaves the buffer's unwritten bytes
+                        // stranded and the direction re-enters poll_fill_buf,
+                        // stalling the whole forward when the other direction
+                        // is still active.
+                        *state = TransferState::Done(sent);
                         return Poll::Ready(Err((sent, remain, e)));
                     }
                     Poll::Pending => return Poll::Pending,
-                };
-                *state = TransferState::ShuttingDown(count);
+                }
             }
             TransferState::ShuttingDown(count) => match w.as_mut().poll_shutdown(cx) {
                 Poll::Ready(Ok(())) => {
@@ -226,6 +297,7 @@ where
                 }
                 Poll::Ready(Err(err)) => {
                     let sent = *count;
+                    *state = TransferState::Done(sent);
                     return Poll::Ready(Err((sent, 0, write_err(err))));
                 }
                 Poll::Pending => return Poll::Pending,
@@ -235,11 +307,151 @@ where
     }
 }
 
+// How a direction's failure should affect the other direction inside
+// `copy_bidirectional_impl`. The asymmetry is deliberate: a read error means
+// the source endpoint is dead, and because TLS corruption or a TCP RST makes
+// that endpoint's write half unusable too, the other direction (whose sink is
+// that endpoint) cannot deliver anything more, so it is force-finished now. A
+// benign write error means only that the peer stopped accepting our data; its
+// read half may still be sending valid response bytes, so the other direction
+// is allowed to drain its in-flight data and is force-finished only once it
+// goes idle. Without this, a read error on one direction left the other
+// direction pending forever: the peer had nothing to send and never EOFed, so
+// the forward never returned and the TCP connection stayed open.
+#[derive(Clone, Copy)]
+enum AbortKind {
+    None,
+    // Read error, or an unrecoverable write error: force the other direction to
+    // finish immediately, discarding any unwritten buffered data.
+    Fatal,
+    // Benign write error (peer closed its read side): let the other direction
+    // drain buffered/in-flight data; force it only once it is idle.
+    Soft,
+}
+
+fn is_benign_write_kind(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::WriteZero
+            | io::ErrorKind::NotConnected
+    )
+}
+
+fn classify_error(error: &ForwardError) -> AbortKind {
+    match error {
+        // A read that returns an error (non-EOF) means the source endpoint can
+        // no longer produce trusted data: TLS PeerMisbehaved/InvalidData
+        // (including TooManyKeyUpdateRequests), UnexpectedEof, ConnectionReset,
+        // etc. The endpoint's write half is unusable too, so the other
+        // direction cannot deliver anything more.
+        ForwardError::ReadDownstream(_) | ForwardError::ReadUpstream(_) => AbortKind::Fatal,
+        ForwardError::WriteZero => AbortKind::Soft,
+        ForwardError::WriteUpstream(e) | ForwardError::WriteDownstream(e) => {
+            if is_benign_write_kind(e.kind()) {
+                AbortKind::Soft
+            } else {
+                AbortKind::Fatal
+            }
+        }
+    }
+}
+
+fn state_amt_remain(state: &TransferState) -> (u64, u64) {
+    match state {
+        TransferState::Running(buf) => {
+            let remain = (buf.cap.saturating_sub(buf.pos)) as u64;
+            (buf.amt, remain)
+        }
+        TransferState::ShuttingDown(n) | TransferState::Done(n) => (*n, 0),
+    }
+}
+
+/// Records a per-direction error and lifts `abort` to the strongest kind seen
+/// so far (`Fatal` wins over `Soft`).
+fn record_error(
+    abort: &mut AbortKind,
+    error: ForwardError,
+    sent: u64,
+    remain: u64,
+    dir: &'static str,
+) {
+    match classify_error(&error) {
+        AbortKind::Fatal => {
+            tracing::error!(
+                ?error,
+                sent,
+                remain,
+                direction = dir,
+                "fatal forward error, aborting bidirectional transfer"
+            );
+            *abort = AbortKind::Fatal;
+        }
+        AbortKind::Soft => {
+            if remain > 0 {
+                tracing::error!(?error, sent, remain, direction = dir, "transfer lost data");
+            } else {
+                tracing::debug!(
+                    ?error,
+                    sent,
+                    direction = dir,
+                    "transfer completed with error"
+                );
+            }
+            if matches!(*abort, AbortKind::None) {
+                *abort = AbortKind::Soft;
+            }
+        }
+        AbortKind::None => {}
+    }
+}
+
+/// Finishes the other direction once one direction has failed, so the forward
+/// never waits forever for a peer that has nothing more to send.
+fn apply_abort(abort: AbortKind, state: &TransferState, done: &mut Option<u64>, dir: &'static str) {
+    if done.is_some() {
+        return;
+    }
+    let (sent, remain) = state_amt_remain(state);
+    match abort {
+        AbortKind::None => {}
+        AbortKind::Fatal => {
+            if remain > 0 {
+                tracing::error!(
+                    sent,
+                    remain,
+                    direction = dir,
+                    "discarding unwritten data: fatal error on the other direction"
+                );
+            }
+            *done = Some(sent);
+        }
+        AbortKind::Soft => {
+            // Let in-flight buffered data drain on a subsequent poll; only
+            // force once the buffer is empty so we don't hang on an idle peer.
+            if remain == 0 {
+                *done = Some(sent);
+            }
+        }
+    }
+}
+
 /// Copies data bidirectionally between two streams with specified buffer sizes.
 ///
-/// Returns `(a_to_b_bytes, b_to_a_bytes)`.  Errors in either direction are
-/// logged as debug-level events and treated as that direction completing
-/// with zero bytes — they never bubble up to the caller.
+/// Returns `(a_to_b_bytes, b_to_a_bytes)`. A direction that ends with a clean
+/// read EOF is a cooperative half-close: that direction flushes and shuts down
+/// the peer's write half, and the other direction is left to drain its
+/// in-flight data (the classic teardown race, handled as before).
+///
+/// A direction that ends with an error does not leave the other direction
+/// pending forever. A read error is fatal (the source endpoint is dead, so the
+/// other direction's sink is dead too) and force-finishes the other direction
+/// in the same poll. A benign write error (peer closed its read half) lets the
+/// other direction drain its buffered data and force-finishes it once idle.
+/// Either way the forward returns promptly so the owning task drops both
+/// sockets and the application sees the connection close instead of hanging.
 async fn copy_bidirectional_impl<A, B>(
     a: &mut A,
     b: &mut B,
@@ -252,6 +464,10 @@ where
 {
     let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size));
     let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size));
+
+    // Set when one direction fails; persists across polls until the forward
+    // returns so the other direction is handled consistently.
+    let mut abort = AbortKind::None;
 
     poll_fn(|cx| {
         // Transfer from a to b (downstream -> upstream)
@@ -273,55 +489,28 @@ where
             ForwardError::WriteDownstream,
         );
 
-        // Each direction completes independently — errors are logged and
-        // treated as "direction finished with N bytes transferred".  This
-        // prevents the classic teardown race: one side EOFs → the other
-        // side's write hits ECONNRESET/EPIPE → we return Ok because the
-        // EOF direction completed legitimately.
-        let a_to_b_done = match a_to_b_result {
+        let mut a_to_b_done = match a_to_b_result {
             Poll::Ready(Ok(n)) => Some(n),
             Poll::Ready(Err((sent, remain, error))) => {
-                if remain > 0 {
-                    tracing::error!(
-                        ?error,
-                        sent,
-                        remain,
-                        "downstream to upstream transfer lost data"
-                    );
-                } else {
-                    tracing::debug!(
-                        ?error,
-                        sent,
-                        "downstream to upstream transfer completed with error"
-                    );
-                }
+                record_error(&mut abort, error, sent, remain, "downstream to upstream");
                 Some(sent)
             }
             Poll::Pending => None,
         };
-        let b_to_a_done = match b_to_a_result {
+        let mut b_to_a_done = match b_to_a_result {
             Poll::Ready(Ok(n)) => Some(n),
             Poll::Ready(Err((sent, remain, error))) => {
-                if remain > 0 {
-                    tracing::error!(
-                        ?error,
-                        sent,
-                        remain,
-                        "upstream to downstream transfer lost data"
-                    );
-                } else {
-                    tracing::debug!(
-                        ?error,
-                        sent,
-                        "upstream to downstream transfer completed with error"
-                    );
-                }
+                record_error(&mut abort, error, sent, remain, "upstream to downstream");
                 Some(sent)
             }
             Poll::Pending => None,
         };
 
-        // Only return when both directions have finished (success or error).
+        apply_abort(abort, &a_to_b, &mut a_to_b_done, "downstream to upstream");
+        apply_abort(abort, &b_to_a, &mut b_to_a_done, "upstream to downstream");
+
+        // Return once both directions have finished: cleanly, by error, or by
+        // force-finish from a fatal/soft abort.
         match (a_to_b_done, b_to_a_done) {
             (Some(a), Some(b)) => Poll::Ready((a, b)),
             _ => Poll::Pending,
@@ -356,6 +545,7 @@ pub async fn forward_stream(
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     // =====================================================================
     // MockStream: a single, independent stream endpoint
@@ -375,6 +565,9 @@ mod tests {
         write_err: Option<io::ErrorKind>,
         /// If set, poll_write succeeds until this many bytes are written, then returns the error.
         write_err_after: Option<(io::ErrorKind, u32)>,
+        /// If set, poll_write returns Ok(0) (writer reports zero capacity),
+        /// which the copy loop turns into ForwardError::WriteZero.
+        write_zero: bool,
         /// Whether the stream has been "read-closed" — poll_read returns EOF.
         read_eof: bool,
         /// Bytes written to this stream (for assertions).
@@ -388,6 +581,7 @@ mod tests {
                 read_err: None,
                 write_err: None,
                 write_err_after: None,
+                write_zero: false,
                 read_eof: false,
                 written: Vec::new(),
             }
@@ -408,6 +602,10 @@ mod tests {
         /// Make poll_write fail after `bytes` bytes are written.
         fn set_write_err_after(&mut self, kind: io::ErrorKind, bytes: u32) {
             self.write_err_after = Some((kind, bytes));
+        }
+
+        fn set_write_zero(&mut self) {
+            self.write_zero = true;
         }
 
         fn close_read(&mut self) {
@@ -445,6 +643,11 @@ mod tests {
         /// Make poll_write fail after `bytes` bytes are written.
         fn set_write_err_after(&self, kind: io::ErrorKind, bytes: u32) {
             self.inner.lock().unwrap().set_write_err_after(kind, bytes);
+        }
+
+        /// Make poll_write return Ok(0) (WriteZero).
+        fn set_write_zero(&self) {
+            self.inner.lock().unwrap().set_write_zero();
         }
 
         /// Make poll_read return EOF immediately (no data).
@@ -493,6 +696,10 @@ mod tests {
 
             if let Some(kind) = inner.write_err.take() {
                 return Poll::Ready(Err(io::Error::from(kind)));
+            }
+
+            if inner.write_zero {
+                return Poll::Ready(Ok(0));
             }
 
             if let Some((kind, remaining)) = &mut inner.write_err_after {
@@ -754,5 +961,247 @@ mod tests {
             (0, 0),
             "both sides already EOF, no more data to transfer"
         );
+    }
+
+    /// Scenario 11: one side read-errors (e.g. TLS `PeerMisbehaved`), the other
+    /// side is idle with no data and no EOF. The idle direction would never
+    /// produce data and never EOF, so the forward would hang forever.
+    ///
+    /// After fix: fatal read error force-finishes the idle direction in the
+    /// same poll, the forward returns promptly instead of hanging.
+    #[tokio::test]
+    async fn test_read_error_other_side_idle_does_not_hang() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+        upstream.set_read_err(reset());
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            run_copy(&mut downstream, &mut upstream),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "forward must not hang when one direction read-errors and the other is idle"
+        );
+        let (ds_to_us, us_to_ds) = result.unwrap();
+        assert_eq!(ds_to_us, 0, "downstream had nothing to send");
+        assert_eq!(us_to_ds, 0, "upstream read errored before any data");
+    }
+
+    /// Scenario 12: a benign write error on one direction (peer closed its read
+    /// side) must NOT abort in-flight response data on the other direction.
+    ///
+    /// downstream sends a request then EOF; upstream rejects our write
+    /// (ConnectionReset, benign) but still has a response to deliver back.
+    /// The response must still reach downstream.
+    #[tokio::test]
+    async fn test_benign_write_error_other_side_data_delivered() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        downstream.inject_read_data(b"client request");
+        downstream.close_read();
+
+        upstream.set_write_err(reset());
+        upstream.inject_read_data(b"server response");
+        upstream.close_read();
+
+        let (ds_to_us, us_to_ds) = run_copy(&mut downstream, &mut upstream).await;
+        assert_eq!(
+            ds_to_us, 0,
+            "write to upstream failed immediately, nothing delivered upstream"
+        );
+        assert_eq!(
+            us_to_ds, 15,
+            "server response (15 bytes) must still be delivered to downstream"
+        );
+    }
+
+    /// Scenario 13: a benign write error on one direction while the other
+    /// direction is idle (no data, no EOF) must not hang. The peer stopped
+    /// accepting our data and has no response coming, so waiting would block
+    /// forever. After fix: the idle direction is force-finished once it is
+    /// empty, and the forward returns.
+    #[tokio::test]
+    async fn test_benign_write_error_other_side_idle_does_not_hang() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        downstream.inject_read_data(b"client request");
+        downstream.close_read();
+
+        upstream.set_write_err(reset());
+        // upstream: no data, never EOFs -> the other direction is idle.
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            run_copy(&mut downstream, &mut upstream),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "forward must not hang after a benign write error when the other direction is idle"
+        );
+        let (ds_to_us, us_to_ds) = result.unwrap();
+        assert_eq!(ds_to_us, 0, "write to upstream failed, nothing delivered");
+        assert_eq!(us_to_ds, 0, "upstream had nothing to send back");
+    }
+
+    // =====================================================================
+    // Coverage for the close-rule matrix (R1-R5 read, W1-W4 write).
+    // Already covered by earlier scenarios:
+    //   R1 clean EOF drains ............ test_one_side_eof_other_side_data
+    //   R4 read ConnectionReset ........ test_read_error_other_side_idle_does_not_hang
+    //   W1 benign write + other done ... test_one_side_eof_other_side_write_error,
+    //                                    test_upstream_eof_downstream_write_error
+    //   W2a benign write + other data .. test_benign_write_error_other_side_data_delivered
+    //   W2b benign write + other idle .. test_benign_write_error_other_side_idle_does_not_hang
+    // Below: the remaining cases (R2, R3, R5, W3, W4) plus the Fatal-vs-Soft
+    // distinction for in-flight data blocked from being written out.
+    // =====================================================================
+
+    /// R2/R3/R5: any non-EOF read error is fatal regardless of io::ErrorKind.
+    /// With the other direction idle, the forward must force-finish it and
+    /// return promptly instead of hanging.
+    async fn read_error_on_idle_aborts(kind: io::ErrorKind) {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+        upstream.set_read_err(kind);
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            run_copy(&mut downstream, &mut upstream),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "read error {:?} must not hang the forward",
+            kind
+        );
+        let (ds_to_us, us_to_ds) = result.unwrap();
+        assert_eq!(ds_to_us, 0, "downstream had nothing to send");
+        assert_eq!(us_to_ds, 0, "upstream read errored before any data");
+    }
+
+    /// R2: TLS peer closed TCP without close_notify, surfaced as UnexpectedEof.
+    #[tokio::test]
+    async fn test_r2_read_unexpected_eof_aborts() {
+        read_error_on_idle_aborts(io::ErrorKind::UnexpectedEof).await;
+    }
+
+    /// R3: TLS PeerMisbehaved (e.g. TooManyKeyUpdateRequests) is mapped by
+    /// tokio-rustls to io::Error(InvalidData, ..) on the read path.
+    #[tokio::test]
+    async fn test_r3_read_invalid_data_aborts() {
+        read_error_on_idle_aborts(io::ErrorKind::InvalidData).await;
+    }
+
+    /// R5: any other read error kind is fatal (conservative).
+    #[tokio::test]
+    async fn test_r5_read_other_error_aborts() {
+        read_error_on_idle_aborts(io::ErrorKind::TimedOut).await;
+    }
+
+    /// W3: WriteZero is classified as Soft, so the other direction's in-flight
+    /// response is still delivered.
+    #[tokio::test]
+    async fn test_w3_write_zero_other_side_data_delivered() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        downstream.inject_read_data(b"client request");
+        downstream.close_read();
+
+        upstream.set_write_zero();
+        upstream.inject_read_data(b"server response");
+        upstream.close_read();
+
+        let (ds_to_us, us_to_ds) = run_copy(&mut downstream, &mut upstream).await;
+        assert_eq!(
+            ds_to_us, 0,
+            "upstream write returned zero, nothing delivered upstream"
+        );
+        assert_eq!(
+            us_to_ds, 15,
+            "server response (15 bytes) still delivered (WriteZero is soft)"
+        );
+    }
+
+    /// W4: a non-benign write error is Fatal. The other direction has a large
+    /// response in flight whose write to the downstream sink is blocked (tiny
+    /// duplex buffer, not drained). Fatal must force-finish it and discard the
+    /// buffered remainder instead of waiting for a peer that will never drain.
+    #[tokio::test]
+    async fn test_w4_fatal_write_error_discards_blocked_inflight() {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut ds_a, mut ds_b) = tokio::io::duplex(8);
+        // Prime Dir1's read so it reaches the failing upstream write.
+        ds_b.write_all(b"req").await.unwrap();
+        // ds_b stays alive but is never drained, so Dir2's writes to ds_a block
+        // once the 8-byte buffer fills.
+        let mut upstream = MockStream::new();
+        let resp: &[u8] = b"server response payload that exceeds the tiny duplex buffer";
+        upstream.inject_read_data(resp);
+        upstream.close_read();
+        upstream.set_write_err(io::ErrorKind::PermissionDenied);
+
+        let (ds_to_us, us_to_ds) =
+            copy_bidirectional_impl(&mut ds_a, &mut upstream, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE)
+                .await;
+        assert_eq!(ds_to_us, 0, "write to upstream failed immediately");
+        assert!(
+            us_to_ds < resp.len() as u64,
+            "Fatal abort must discard the blocked in-flight response (got {} of {})",
+            us_to_ds,
+            resp.len()
+        );
+        drop(ds_b);
+    }
+
+    /// W2 contrast: a benign write error is Soft, so the other direction is
+    /// allowed to drain its in-flight response to completion once the
+    /// downstream sink is drained. This is the dual of the W4 test above and
+    /// is what makes Fatal-vs-Soft observable.
+    #[tokio::test]
+    async fn test_w2_soft_write_error_drains_blocked_inflight() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut ds_a, mut ds_b) = tokio::io::duplex(8);
+        ds_b.write_all(b"req").await.unwrap();
+        let mut upstream = MockStream::new();
+        let resp: &[u8] = b"server response payload that exceeds the tiny duplex buffer";
+        upstream.inject_read_data(resp);
+        upstream.close_read();
+        upstream.set_write_err(broken_pipe());
+
+        // Drive run_copy and drain ds_b concurrently in one task (no spawn):
+        // Dir2's writes to ds_a only progress while ds_b is being read.
+        let copy_fut =
+            copy_bidirectional_impl(&mut ds_a, &mut upstream, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE);
+        let drain_fut = async {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 64];
+            loop {
+                match ds_b.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            got
+        };
+        let ((ds_to_us, us_to_ds), got) = tokio::join!(copy_fut, drain_fut);
+
+        assert_eq!(ds_to_us, 0, "write to upstream failed immediately");
+        assert_eq!(
+            us_to_ds,
+            resp.len() as u64,
+            "Soft must let the other direction drain all in-flight data (got {} of {})",
+            us_to_ds,
+            resp.len()
+        );
+        assert_eq!(got, resp, "drained bytes must equal the full response");
     }
 }
