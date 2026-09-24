@@ -213,82 +213,103 @@ tng tools rats-tls verify --cert captured.pem \
 
 ## tng tools ohttp
 
-ohttp 密钥配置工具。`dump` 拉取 ohttp egress 公告的密钥配置响应 JSON，并在带 `--verify` 时驱动完整证明流程并就地验证；`verify` 对已 dump 的密钥配置文件中的证明进行验证与解码。
+ohttp 密钥配置工具。`dump` 拉取 ohttp egress 公告的密钥配置响应，写出原始 body 及派生产物（HPKE 密钥、TDX quote、event log、attestation result、claims）；`verify` 对已 dump 的 body 离线重验；`decode` 不打服务端、不打 AS，从已 dump 的 body 复现派生产物。
 
 ### ohttp dump
 
-向 ohttp 服务端的密钥配置端点 POST 一个 `KeyConfigRequest`，写出返回的 `KeyConfigResponse` JSON。带 `--verify` 时，`dump` 依据 `VerifyArgs` JSON 构建 AS 转换器，通过 `converter.get_nonce()` 生成 background-check challenge token，带上该证明发送请求使响应携带 `attestation_info`（证据），再用生成 token 的同一个转换器就地验证证明，并解码 attestation-result JWT 的 claims。Passport 模型发送 `Passport`（无 nonce）并就地验证其自包含 token。不带 `--verify` 时，`dump` 发送裸请求（无证明）并仅打印密钥配置。
+向 ohttp 服务端的密钥配置端点 POST 一个 `KeyConfigRequest`，写出返回的 `KeyConfigResponse` 及派生产物。不带 `--verify` 时为裸请求（无 `attestation_info`），dump 仅写 `raw.json`、`hpke.base64`、`hpke.json`。带 `--verify <VerifyArgs json>` 时，dump 构建 AS 转换器，生成 background-check challenge token（passport 模型则发送 `Passport`），拉取带证明的响应，并就地跑 `verify_keyconfig_attestation` 产出 attestation-result JWT 与解码后的 claims；bundle 随之还包含 `quote.bin`、`eventlog.json`（仅 background-check）、`attestation_result.jwt`、`attestation_result.claims.json`。
 
-background-check 的当场性绑定到生成 nonce 的那个 AS 实例：builtin AS 会拒绝其未签发的 challenge token 所对应的证据，因此一次 `dump` 产出的 background-check 密钥配置无法在另一次 `ohttp verify` 调用中重新验证。`dump --verify` 在一个进程内跑完整条实时链（生成、拉取、验证、解码），与 ingress 隧道一致。需要离线重验请用 `ohttp verify`，它适用于 Passport 证据与可被外部 AS 转换的 background-check 证据。
+background-check 的当场性绑定到生成 nonce 的那个 AS 实例，故 `dump --verify` 在一个进程内跑完整条实时链（生成、拉取、验证、解码），与 ingress 隧道一致。Passport 证明不携带裸 quote/event log（服务端已将其蒸馏为签名 token），故 passport 下省略 `quote.bin`/`eventlog.json`。
 
 ```bash
-tng tools ohttp dump --endpoint <url> [--verify '<VerifyArgs json>'] [--out keyconfig.json]
+tng tools ohttp dump --endpoint <url> [--verify '<VerifyArgs json>'] (--raw <file> | --out-dir <dir>)
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `--endpoint` | URL | — | ohttp 密钥配置端点 URL（必填） |
-| `--verify` | JSON 字符串 | — | 扁平 `VerifyArgs` JSON。带此项时，`dump` 生成 background-check challenge token，拉取带 `attestation_info` 的密钥配置，就地验证并解码 attestation-result 的 claims；不带此项表示裸密钥配置，无证明、不验证 |
-| `--out` | JSON 路径 | stdout | 将 `KeyConfigResponse` JSON 写入该文件；省略时打印到 stdout。带 `--verify` 时密钥配置写入 `--out`（或 stdout），`verified OK` 块与解码后的 claims 打印到 stdout |
+| `--verify` | JSON 字符串 | — | 扁平 `VerifyArgs` JSON。带此项时，dump 生成 challenge token，拉取带证明的密钥配置，就地验证并写出 attestation 产物；不带此项为裸密钥配置（无 attestation 产物） |
+| `--raw` | 文件路径 | stdout | 仅将原始 `KeyConfigResponse` body 写入该文件（格式化 JSON）；`--raw` 与 `--out-dir` 均不指定时打印到 stdout |
+| `--out-dir` | 目录 | — | 将完整产物 bundle 写入该目录（见下表）。与 `--raw` 互斥 |
 
 请求携带 `x-tng-ohttp-api: key_config` 头，与运行中 ingress 使用的一致。拉取使用独立的 reqwest 客户端以保持其为独立运维工具；仅证明这半边复用运行中的 `verify_keyconfig_attestation`，因此 dump 与隧道以逐字节一致的方式验证。
+
+`--out-dir` 下的 bundle 文件：
+
+| 文件 | 格式 | 总是有 | 需 `--verify` | 仅 background-check |
+|---|---|---|---|---|
+| `raw.json` | JSON（原始 `KeyConfigResponse` body） | 是 | | |
+| `hpke.base64` | base64（`encoded_key_config_list`） | 是 | | |
+| `hpke.json` | JSON（RFC 9458：key_id/kem/public_key/suites/expire） | 是 | | |
+| `quote.bin` | 二进制（TDX quote） | | 是 | 是 |
+| `eventlog.json` | JSON（解析后的 UEFI event log） | | 是 | 是 |
+| `attestation_result.jwt` | JWT（AS 签名的 attestation result） | | 是 | |
+| `attestation_result.claims.json` | JSON（解码后的 JWT payload） | | 是 | |
 
 <details>
 <summary>示例：拉取裸密钥配置（无证明）</summary>
 
 ```bash
-tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key --out keyconfig.json
+tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key --out-dir bundle
 ```
 </details>
 
 <details>
-<summary>示例：拉取 background-check 密钥配置、验证并解码 claims（builtin AS）</summary>
+<summary>示例：拉取 background-check 密钥配置、验证并写出完整 bundle（builtin AS）</summary>
 
 ```bash
 tng tools ohttp dump --endpoint http://127.0.0.1:8080/ohttp/key \
   --verify '{"model":"background_check","as_provider":"coco","as_type":"builtin","attestation_policy":{"type":"default"},"reference_values":[]}' \
-  --out keyconfig.json
+  --out-dir bundle
 ```
 
-成功时 `dump` 打印密钥配置（写入 `--out` 或 stdout），随后：
-
-```
-verified OK
-attestation_result: eyJ0eXAi...
-claims:
-{ "eat_profile": "...", "iat": ..., "exp": ...,
-  "submods.cpu0.ear.status": "...",
-  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.mr_config_id": "...",
-  "submods.cpu0.ear.veraison.annotated-evidence.tdx.quote.body.rtmr_0": "...",
-  "submods.cpu0.ear.veraison.annotated-evidence.tdx.tcb_verification.tcb_status": "UpToDate",
-  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.challenge_token": "...",
-  "submods.cpu0.ear.veraison.annotated-evidence.runtime_data_claims.hpke_key_config.encoded_key_config_list": "..." }
-```
-
-`runtime_data_claims` 携带 challenge token 与绑定的 HPKE 密钥配置，`tcb_status` 报告 TCB 等级。完整 claim 集合见 attestation-result JWT 规范。
+`bundle/` 目录随后含 `raw.json`、`hpke.base64`、`hpke.json`、`quote.bin`、`eventlog.json`、`attestation_result.jwt`、`attestation_result.claims.json`。`attestation_result.claims.json` 是解码后的 attestation-result JWT payload：EAR 裁决（`submods.cpu0.ear.status`）、解析后的 TDX quote（`...tdx.quote.body.*`）、`tcb_verification.tcb_status`、UEFI event log，以及 `runtime_data_claims`（challenge token 与绑定的 HPKE 密钥配置）。
 </details>
 
 ### ohttp verify
 
-依据一份 `VerifyArgs` 配置，验证已 dump 的密钥配置 JSON 中嵌入的证明并解码其 claims。该证明（Passport token 或 Background Check 证据）与响应中的 HPKE 公钥绑定，因此验证它可证明密钥配置来自一个已证明的 egress。需要 AS（或 builtin AS，无需外部服务）。
+依据一份 `VerifyArgs` 配置，对已 dump 的密钥配置 body（`raw.json`）重新验证，打印 attestation-result JWT 与解码后的 claims。复用 ingress 客户端的 `verify_keyconfig_attestation`。
 
 ```bash
-tng tools ohttp verify --keyconfig <file> --verify '<json>'
+tng tools ohttp verify --raw <file> --verify '<json>'
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--keyconfig` | 文件路径 | — | 待验证的已 dump `KeyConfigResponse` JSON 文件（必填） |
+| `--raw` | 文件路径 | — | 待验证的已 dump `KeyConfigResponse` JSON 文件（必填） |
 | `--verify` | JSON 字符串 | — | 用于验证证明的扁平 `VerifyArgs` JSON（必填） |
 
-验证复用 ingress 客户端的 `verify_keyconfig_attestation`，因此工具与运行中隧道走完全一致的 Passport/BackgroundCheck 分发。`verify` 是对已 dump 文件的离线重验，故传入 `challenge_token = None`，不重校验抗重放/当场性。它适用于 Passport 证据（自包含 token，无 nonce）与 external-AS background-check 证据（外部 AS 跨进程保留状态）。`dump --verify` 产出的 builtin-AS background-check 密钥配置**无法**在此重验：evidence 里的 challenge token 是 `dump --verify` 那个 builtin AS 实例签的，而本进程新建的 builtin AS 用了不同的进程内签名密钥，`convert` 会拒绝。`verify` 检测到此配置（builtin + background-check）会直接报错，明确指引用 `dump --verify`，而非给出含糊的证明错误。无证明 dump（无 `attestation_info`）的密钥配置会以 `no attestation_info` 报错。成功时 `verify` 打印 `verified OK`、原始 attestation-result JWT 与格式化的 `claims:` 块。
+`verify` 是对已 dump 文件的离线重验，故传入 `challenge_token = None`，不重校验抗重放/当场性。它适用于 Passport 证据（自包含 token，无 nonce）与 external-AS background-check 证据（外部 AS 跨进程保留状态）。`dump --verify` 产出的 builtin-AS background-check 密钥配置**无法**在此重验：evidence 里的 challenge token 是 `dump --verify` 那个 builtin AS 实例签的，而本进程新建的 builtin AS 用了不同的进程内签名密钥，`convert` 会拒绝。`verify` 检测到此配置（builtin + background-check）会直接报错，明确指引用 `dump --verify`。无证明 dump（无 `attestation_info`）的密钥配置会以 `no attestation_info` 报错。成功时 `verify` 打印 `verified OK`、原始 attestation-result JWT 与格式化的 `claims:` 块。
 
 <details>
 <summary>示例：验证已 dump 的密钥配置</summary>
 
 ```bash
-tng tools ohttp verify --keyconfig keyconfig.json \
+tng tools ohttp verify --raw bundle/raw.json \
   --verify '{"model":"background_check","as_provider":"coco","as_type":"restful","as_addr":"http://127.0.0.1:8080","policy_ids":["default"],"as_headers":{}}'
+```
+</details>
+
+### ohttp decode
+
+对已 dump 的密钥配置 body（`raw.json`）解码出派生产物，不打服务端、不打 AS（纯本地解码，不验签）。写出 `raw.json`、`hpke.base64`、`hpke.json`，以及 background-check body 的 `quote.bin`。带 `--attestation-result <jwt 文件>` 时，还写出从 JWT payload 解出的 `attestation_result.claims.json` 与 `eventlog.json`。
+
+```bash
+tng tools ohttp decode --raw <file> [--attestation-result <jwt 文件>] --out-dir <dir>
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--raw` | 文件路径 | — | 待解码的已 dump `KeyConfigResponse` JSON 文件（必填） |
+| `--attestation-result` | 文件路径 | — | 先前 `dump --verify` 产出的 `attestation_result.jwt`；提供时 decode 还写出 `attestation_result.claims.json` 与 `eventlog.json` |
+| `--out-dir` | 目录 | — | 解码产物的输出目录（必填） |
+
+<details>
+<summary>示例：离线重新解码已 dump 的 bundle</summary>
+
+```bash
+tng tools ohttp decode --raw bundle/raw.json \
+  --attestation-result bundle/attestation_result.jwt --out-dir decoded
 ```
 </details>
 

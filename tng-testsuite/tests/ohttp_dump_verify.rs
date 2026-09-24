@@ -54,7 +54,8 @@ fn ohttp_dump_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>>
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20001".to_string(),
             verify: None,
-            out: Some(out_path.clone()),
+            raw: Some(out_path.clone()),
+            out_dir: None,
         })
         .await
         .context("ohttp dump failed")?;
@@ -112,7 +113,8 @@ fn ohttp_verify_no_ra_client(token: CancellationToken) -> Result<JoinHandle<Resu
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20010".to_string(),
             verify: None,
-            out: Some(out_path.clone()),
+            raw: Some(out_path.clone()),
+            out_dir: None,
         })
         .await
         .context("ohttp dump failed")?;
@@ -122,7 +124,7 @@ fn ohttp_verify_no_ra_client(token: CancellationToken) -> Result<JoinHandle<Resu
         // on the missing attestation_info before the verifier is consulted.
         let verify_json = r#"{"model":"passport","as_provider":"coco","as_type":"restful","policy_ids":["default"],"skip_as_token_cert_verify":true}"#;
         let err = ohttp::run(OhttpCommand::Verify {
-            keyconfig: out_path.clone(),
+            raw: out_path.clone(),
             verify: verify_json.to_string(),
         })
         .await
@@ -194,7 +196,8 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20011".to_string(),
             verify: Some(verify_json.to_string()),
-            out: Some(out_path.clone()),
+            raw: Some(out_path.clone()),
+            out_dir: None,
         })
         .await
         .context("ohttp dump (passport) failed")?;
@@ -207,7 +210,7 @@ fn ohttp_dump_verify_passport_client(token: CancellationToken) -> Result<JoinHan
         );
 
         ohttp::run(OhttpCommand::Verify {
-            keyconfig: out_path.clone(),
+            raw: out_path.clone(),
             verify: verify_json.to_string(),
         })
         .await
@@ -273,7 +276,8 @@ fn ohttp_dump_verify_bc_client(token: CancellationToken) -> Result<JoinHandle<Re
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20012".to_string(),
             verify: Some(verify_json.to_string()),
-            out: Some(out_path.clone()),
+            raw: Some(out_path.clone()),
+            out_dir: None,
         })
         .await
         .context("ohttp dump (background_check) failed")?;
@@ -286,11 +290,138 @@ fn ohttp_dump_verify_bc_client(token: CancellationToken) -> Result<JoinHandle<Re
         );
 
         ohttp::run(OhttpCommand::Verify {
-            keyconfig: out_path.clone(),
+            raw: out_path.clone(),
             verify: verify_json.to_string(),
         })
         .await
         .context("ohttp verify (background_check) failed")?;
+        Ok(())
+    }))
+}
+
+/// `ohttp dump --out-dir` (bare, no_ra) writes the artifact bundle: `raw.json`,
+/// `hpke.base64`, `hpke.json`. No attestation is present, so no quote/eventlog/
+/// attestation_result files. No AA/AS services required.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn ohttp_dump_bundle_no_ra() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"{
+                "add_egress": [{
+                    "mapping": {
+                        "in": { "host": "0.0.0.0", "port": 20020 },
+                        "out": { "host": "127.0.0.1", "port": 30020 }
+                    },
+                    "ohttp": {},
+                    "no_ra": true
+                }]
+            }"#,
+        )
+        .boxed(),
+        FunctionTask {
+            name: "ohttp_dump_bundle".to_string(),
+            node_type: NodeType::Client,
+            func: Box::new(ohttp_dump_bundle_client),
+        }
+        .boxed(),
+    ])
+    .await?;
+    Ok(())
+}
+
+fn ohttp_dump_bundle_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+    Ok(tokio::spawn(async move {
+        let _drop_guard = token.drop_guard();
+        let dir = tempfile::tempdir()?;
+        let bundle = dir.path().join("bundle");
+        ohttp::run(OhttpCommand::Dump {
+            endpoint: "http://192.168.1.1:20020".to_string(),
+            verify: None,
+            raw: None,
+            out_dir: Some(bundle.clone()),
+        })
+        .await
+        .context("ohttp dump --out-dir failed")?;
+
+        for name in ["raw.json", "hpke.base64", "hpke.json"] {
+            let p = bundle.join(name);
+            assert!(p.exists(), "bundle missing {name}");
+        }
+        assert!(!bundle.join("attestation_result.jwt").exists());
+        assert!(!bundle.join("quote.bin").exists());
+
+        let hpke: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(bundle.join("hpke.json"))?)?;
+        assert!(
+            hpke["configs"].is_array(),
+            "hpke.json missing configs array"
+        );
+        assert!(
+            hpke["configs"][0]["kem"].is_string(),
+            "hpke.json missing kem"
+        );
+        Ok(())
+    }))
+}
+
+/// `ohttp decode --raw --out-dir` reproduces the hpke artifacts from a dumped
+/// raw body without contacting the server or an AS. No AA/AS required.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn ohttp_decode_no_ra() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"{
+                "add_egress": [{
+                    "mapping": {
+                        "in": { "host": "0.0.0.0", "port": 20021 },
+                        "out": { "host": "127.0.0.1", "port": 30021 }
+                    },
+                    "ohttp": {},
+                    "no_ra": true
+                }]
+            }"#,
+        )
+        .boxed(),
+        FunctionTask {
+            name: "ohttp_decode".to_string(),
+            node_type: NodeType::Client,
+            func: Box::new(ohttp_decode_client),
+        }
+        .boxed(),
+    ])
+    .await?;
+    Ok(())
+}
+
+fn ohttp_decode_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+    Ok(tokio::spawn(async move {
+        let _drop_guard = token.drop_guard();
+        let dir = tempfile::tempdir()?;
+        let raw_path = dir.path().join("raw.json");
+        ohttp::run(OhttpCommand::Dump {
+            endpoint: "http://192.168.1.1:20021".to_string(),
+            verify: None,
+            raw: Some(raw_path.clone()),
+            out_dir: None,
+        })
+        .await
+        .context("ohttp dump --raw failed")?;
+
+        let out = dir.path().join("decoded");
+        ohttp::run(OhttpCommand::Decode {
+            raw: raw_path.clone(),
+            attestation_result: None,
+            out_dir: out.clone(),
+        })
+        .await
+        .context("ohttp decode failed")?;
+
+        for name in ["raw.json", "hpke.base64", "hpke.json"] {
+            assert!(out.join(name).exists(), "decode missing {name}");
+        }
+        assert!(!out.join("attestation_result.claims.json").exists());
         Ok(())
     }))
 }

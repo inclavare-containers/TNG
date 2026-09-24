@@ -44,25 +44,48 @@ pub enum RatsTlsCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum OhttpCommand {
-    /// dump an ohttp server's key-config response JSON
+    /// dump an ohttp server's key-config response and derived artifacts
     Dump {
         #[arg(long)]
         endpoint: String,
         /// flat `VerifyArgs` JSON. When set, dump builds the AS converter, mints
-        /// the background-check challenge token itself, and sends the key-config
-        /// request with that attestation, so the response carries
-        /// `attestation_info`. Absent -> bare HPKE key config (no attestation).
+        /// the background-check challenge token, sends the key-config request
+        /// with that attestation (so the response carries `attestation_info`),
+        /// and runs `verify_keyconfig_attestation` to produce the
+        /// attestation-result JWT and decoded claims. Absent -> bare key config
+        /// (no attestation artifacts).
         #[arg(long, value_name = "JSON")]
         verify: Option<String>,
-        #[arg(long, value_name = "JSON")]
-        out: Option<PathBuf>,
+        /// write only the raw `KeyConfigResponse` body to this file
+        /// (pretty JSON). Mutually exclusive with `--out-dir`.
+        #[arg(long, value_name = "FILE")]
+        raw: Option<PathBuf>,
+        /// write the full artifact bundle to this directory: `raw.json`,
+        /// `hpke.base64`, `hpke.json`, and (with `--verify`) `quote.bin`,
+        /// `eventlog.json`, `attestation_result.jwt`,
+        /// `attestation_result.claims.json`. Mutually exclusive with `--raw`.
+        #[arg(long, value_name = "DIR")]
+        out_dir: Option<PathBuf>,
     },
     /// verify the attestation in a dumped ohttp key-config JSON
     Verify {
-        #[arg(long)]
-        keyconfig: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        raw: PathBuf,
         #[arg(long, value_name = "JSON")]
         verify: String,
+    },
+    /// decode a dumped ohttp key-config JSON into derived artifacts without
+    /// contacting the server or an AS
+    Decode {
+        #[arg(long, value_name = "FILE")]
+        raw: PathBuf,
+        /// attestation-result JWT file to also decode `claims` and `eventlog`
+        /// from (the JWT payload). Without this, decode only produces
+        /// `hpke.*` and `quote.bin` from the raw body.
+        #[arg(long, value_name = "FILE")]
+        attestation_result: Option<PathBuf>,
+        #[arg(long, value_name = "DIR")]
+        out_dir: PathBuf,
     },
 }
 
