@@ -501,6 +501,7 @@ mod tests {
     /// rekor-v1 entry whose authenticated `payloadHash` matches
     /// `sha256(JCS(manifest))` → `Ok(Bool(true))`.
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_true_on_valid_entries() {
         // `RESOLVE_CACHE` is process-global and `cargo test` runs tests in
         // parallel — clear it so a prior success in `caches_success` (same
@@ -532,6 +533,7 @@ mod tests {
     /// `Ok(Bool(false))`, never `Err`. Asserts on the raw `Result` (not
     /// `invoke_extension`'s `.expect()`, which would mask an `Err`).
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_network_error() {
         let hv = resolve_artifact_server_host_await();
         let arg = regorus::Value::from(vec![
@@ -556,6 +558,7 @@ mod tests {
     /// succeeds, the comparison fails → `Ok(Bool(false))`, and the failure is
     /// NOT cached.
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_payload_hash_mismatch() {
         let server = MockServer::start().await;
         let (_manifest, log_entry, entry_url) = cmaas_resolve_triple();
@@ -589,6 +592,7 @@ mod tests {
     /// authenticate and the call would (incorrectly) return `true`, so this
     /// test pins Finding 1's contract.
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_duplicate_entry() {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
@@ -642,6 +646,7 @@ mod tests {
     /// → `Ok(Bool(false))`. Pins Finding 1's "all requested must be covered"
     /// contract.
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_missing_requested_log_service() {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
@@ -679,6 +684,7 @@ mod tests {
     /// prevents cross-test pollution from `true_on_valid_entries`, which
     /// shares the same `(manifest_hash, canonical_log_services)` cache key.
     #[tokio::test]
+    #[serial_test::serial]
     async fn resolve_artifact_server_caches_success() {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
