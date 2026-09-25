@@ -7,7 +7,7 @@
 //! This module only EXTRACTS the DSSE signature; the actual signature
 //! verification (DSSEPAE + SHA-256 + ECDSA P-256) and JCS canonicalization
 //! happen later, at appraisal time, in the generated Rego policy's
-//! `verify_dsse_signature` host-await layer (see the supplement spec
+//! `tng.verify_dsse_signature` host-await layer (see the supplement spec
 //! `docs/superpowers/specs/2026-08-23-rekor-transparency-policy-dsse-supplement-design.md`).
 
 use anyhow::{Context, Result};
@@ -90,7 +90,7 @@ pub(crate) struct AuthenticatedRekorEntry {
     pub(crate) payload_hash: String,
     // Read in the non-test build via `resolve_dsse_signature` (builtin/mod.rs),
     // which threads it into the generated Rego policy as the DSSE signature
-    // literal for `verify_dsse_signature`.
+    // literal for `tng.verify_dsse_signature`.
     pub(crate) dsse_signature: String,
 }
 
@@ -186,7 +186,7 @@ mod key {
     }
 
     /// Parse a PEM-encoded P-256 public key (`-----BEGIN PUBLIC KEY-----`) into
-    /// a `VerifyingKey`. Reused by the `verify_dsse_signature` host-await
+    /// a `VerifyingKey`. Reused by the `tng.verify_dsse_signature` host-await
     /// primitive to parse the transparency-log publisher key — the same SPKI
     /// decode path as `rekor_public_key`, minus the built-in hostname table.
     pub(crate) fn parse_p256_public_key(pem: &str) -> Result<VerifyingKey> {
