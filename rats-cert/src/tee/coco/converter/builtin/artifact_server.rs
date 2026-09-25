@@ -250,11 +250,18 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
 }
 
 /// Resolve the manifest via the Artifact Server and authenticate every
-/// returned rekor-v1 entry. Returns `Ok(())` only when the resolve status is
-/// `"resolved"`, at least one entry is returned, every entry authenticates
-/// (checkpoint + inclusion + SET via `rekor_v1::authenticate_entry`), and
-/// every entry's `payloadHash == expected_hash`. Any error → `Err` (mapped to
-/// `false` by the caller, never cached).
+/// returned rekor-v1 entry. Returns `Ok(())` only when:
+/// - the resolve status is `"resolved"`,
+/// - at least one entry is returned,
+/// - every returned entry's `(type, url)` matches exactly one requested
+///   `logService` (no unrequested, duplicate, or missing entries — request
+///   binding for a non-trusted resolver, spec §7/§8.1; URLs are normalized by
+///   trimming trailing slashes),
+/// - every entry authenticates (checkpoint + inclusion + SET via
+///   `rekor_v1::authenticate_entry`), and
+/// - every entry's `payloadHash == expected_hash`.
+///
+/// Any error → `Err` (mapped to `false` by the caller, never cached).
 #[cfg(feature = "crypto-rustcrypto")]
 async fn resolve_and_authenticate(
     url: &str,
@@ -264,6 +271,24 @@ async fn resolve_and_authenticate(
 ) -> Result<()> {
     let manifest: ReleaseManifest = serde_json::from_str(manifest_json)?;
     let log_services: Vec<LogService> = serde_json::from_str(log_services_json)?;
+    // Build the requested (type, url) set BEFORE moving `log_services` into
+    // the request — used to verify the response covers exactly the requested
+    // services (no unrequested / duplicate / missing entries). URLs are
+    // normalized by trimming trailing slashes so a caller that appends `/`
+    // still matches a response without one.
+    let mut remaining: std::collections::HashSet<(String, String)> = log_services
+        .iter()
+        .map(|ls| {
+            (
+                ls.type_.clone(),
+                ls.url
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim_end_matches('/')
+                    .to_string(),
+            )
+        })
+        .collect();
     let req = ResolveRequest::new(manifest).with_log_services(log_services);
     let client = ResolveClient::new(url)?;
     let resp = client.resolve(&req).await?;
@@ -280,6 +305,21 @@ async fn resolve_and_authenticate(
         if entry.type_ != "rekor-v1" {
             anyhow::bail!("unsupported log entry type {:?}", entry.type_);
         }
+        // Request-binding: each returned entry must match exactly one requested
+        // logService. `remove` returns false on an unrequested OR duplicate
+        // entry → reject. A malicious resolver cannot substitute a valid entry
+        // for an unrequested rekor instance to yield `true`.
+        let entry_key = (
+            entry.type_.clone(),
+            entry.url.trim_end_matches('/').to_string(),
+        );
+        if !remaining.remove(&entry_key) {
+            anyhow::bail!(
+                "unrequested or duplicate log entry: type={:?} url={:?}",
+                entry.type_,
+                entry.url
+            );
+        }
         // The sdk's `log_entry` is a raw JSON value carrying the rekor v1
         // entry object (body/integratedTime/logID/logIndex/verification).
         let rekor_entry: rekor_v1::RekorEntry = serde_json::from_value(entry.log_entry.clone())?;
@@ -295,6 +335,13 @@ async fn resolve_and_authenticate(
                 expected_hash
             );
         }
+    }
+    // Every requested logService must have been covered exactly once.
+    if !remaining.is_empty() {
+        anyhow::bail!(
+            "artifact-server resolve did not cover all requested log services; missing: {:?}",
+            remaining
+        );
     }
     Ok(())
 }
@@ -455,20 +502,22 @@ mod tests {
     /// `sha256(JCS(manifest))` → `Ok(Bool(true))`.
     #[tokio::test]
     async fn resolve_artifact_server_true_on_valid_entries() {
+        // `RESOLVE_CACHE` is process-global and `cargo test` runs tests in
+        // parallel — clear it so a prior success in `caches_success` (same
+        // cache key) cannot short-circuit this call into a no-network hit.
+        RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(&manifest, &log_entry, &entry_url);
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1) // must hit the network (not a stale cache hit)
             .mount(&server)
             .await;
 
         let hv = resolve_artifact_server_host_await();
         let manifest_json = serde_json::to_string(&manifest).unwrap();
-        // Trailing slash on the log-services URL yields a distinct cache key
-        // from the cache-hit test (which uses no trailing slash), preventing
-        // process-global cache cross-talk between the two tests.
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
             regorus::Value::from(server.uri().as_str()),
@@ -533,20 +582,112 @@ mod tests {
         assert_eq!(result.unwrap(), regorus::Value::Bool(false));
     }
 
-    /// Cache hit: after a successful resolve, a second call with the same
-    /// `(manifest, log_services)` returns `true` WITHOUT hitting the mock
-    /// (`up_to_n_times(1)` — without the cache the second call would get a
-    /// wiremock default 404 → false). Uses a no-trailing-slash log-services URL
-    /// (distinct cache key from the `true_on_valid_entries` test).
+    /// Request-binding (dedup): the mock returns TWO copies of the same valid
+    /// entry (both authenticable, payloadHash matches). The second is a
+    /// duplicate of a requested logService → `remaining.remove` returns false
+    /// → reject → `Ok(Bool(false))`. Without the dedup check both would
+    /// authenticate and the call would (incorrectly) return `true`, so this
+    /// test pins Finding 1's contract.
     #[tokio::test]
-    async fn resolve_artifact_server_caches_success() {
+    async fn resolve_artifact_server_false_on_duplicate_entry() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // Two copies of the same (type, url) entry — a malicious resolver
+        // trying to pad the response. Both are individually authenticable.
+        let body = serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [
+                {
+                    "type": "rekor-v1",
+                    "url": entry_url,
+                    "log_entry": log_entry,
+                    "entry_verifier": {"type": "public_key", "content": "dummy"},
+                    "log_verifier": {"public_key_pem": "dummy"}
+                },
+                {
+                    "type": "rekor-v1",
+                    "url": entry_url,
+                    "log_entry": log_entry,
+                    "entry_verifier": {"type": "public_key", "content": "dummy"},
+                    "log_verifier": {"public_key_pem": "dummy"}
+                }
+            ]
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Request-binding (coverage): the caller requests TWO log services but the
+    /// mock returns only one (the fixture sigstore entry). After the loop
+    /// `remaining` still contains the uncovered openanolis service → reject
+    /// → `Ok(Bool(false))`. Pins Finding 1's "all requested must be covered"
+    /// contract.
+    #[tokio::test]
+    async fn resolve_artifact_server_false_on_missing_requested_log_service() {
+        RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(&manifest, &log_entry, &entry_url);
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
-            .up_to_n_times(1) // only ONE real hit; second call must come from cache
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        // Request two log services; only the sigstore one is returned.
+        let ls = format!(
+            r#"[{{"type":"rekor-v1","url":"{entry_url}"}},{{"type":"rekor-v1","url":"https://rekor.openanolis.cn"}}]"#
+        );
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Cache hit: after a successful resolve, a second call with the same
+    /// `(manifest, log_services)` returns `true` WITHOUT hitting the mock
+    /// again. `expect(1)` requires EXACTLY one network hit — without the
+    /// cache the second call would hit the mock a second time (panicking on
+    /// verify); with the cache the second call is served from cache (0
+    /// additional hits → verify passes). `invalidate_all()` at the start
+    /// prevents cross-test pollution from `true_on_valid_entries`, which
+    /// shares the same `(manifest_hash, canonical_log_services)` cache key.
+    #[tokio::test]
+    async fn resolve_artifact_server_caches_success() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1) // exactly ONE network hit — second call must come from cache
             .mount(&server)
             .await;
 
@@ -561,7 +702,8 @@ mod tests {
         // first call hits the mock → success → cached.
         let r1 = invoke_extension(&hv, arg.clone()).await;
         assert_eq!(r1, regorus::Value::Bool(true));
-        // second call must NOT hit the mock (would 404) — served from cache.
+        // second call must NOT hit the mock (expect(1) would panic on a 2nd)
+        // — served from cache.
         let r2 = invoke_extension(&hv, arg).await;
         assert_eq!(r2, regorus::Value::Bool(true));
     }
