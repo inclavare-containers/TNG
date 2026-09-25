@@ -467,6 +467,70 @@ mod tests {
 
     // ---- tng.resolve_artifact_server tests (Task 5) ----
 
+    /// Build a rekor `/api/v1/log/entries` response body (`{uuid: entry}`) from
+    /// the cmaas evidence fixture's matched `(release_manifest, log_entry)`
+    /// pair. The entry's authenticated `payloadHash` ==
+    /// `sha256(JCS(release_manifest))` == `b40611d4...` (pinned by the
+    /// `mod.rs`/fixture tests), so a `fetch_rekor_on_demand` call passing the
+    /// cmaas release manifest exercises the full fetch → authenticate →
+    /// payloadHash-compare → `Ok(Bool(true))` happy path.
+    fn cmaas_fetch_rekor_response_body() -> (String, String, i64) {
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+        ))
+        .unwrap();
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let log_index = evidence["transparency"]["log_entries"][0]["log_entry"]["logIndex"]
+            .as_i64()
+            .unwrap();
+        let uuid = "00000000-0000-0000-0000-000000000000";
+        let body = serde_json::json!({ uuid: log_entry }).to_string();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        (body, manifest_json, log_index)
+    }
+
+    /// True-path: `tng.fetch_rekor_on_demand` returns `Ok(Bool(true))` when a
+    /// real rekor entry's authenticated `payloadHash` matches
+    /// `sha256(JCS(manifest))`. Uses the cmaas evidence fixture's matched
+    /// `(release_manifest, log_entry)` pair (logIndex 2310520944, payloadHash
+    /// `b40611d4...`). Wiremock mocks `GET /api/v1/log/entries?logIndex=...`
+    /// returning the cmaas entry as the `{uuid: entry}` rekor response. Asserts
+    /// directly on the raw `Result` (not `invoke_extension`'s `.expect()`, which
+    /// would mask an `Err` as a test failure rather than proving the `Ok(true)`
+    /// outcome). `#[serial]` + `invalidate_host_await_caches_for_test()` avoids
+    /// cache cross-talk with the `caches_after_first_hit` test (distinct
+    /// logIndex, but the process-global cache is shared).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn fetch_rekor_on_demand_true_on_matched_payload_hash() {
+        invalidate_host_await_caches_for_test();
+        let server = MockServer::start().await;
+        let (body, manifest_json, log_index) = cmaas_fetch_rekor_response_body();
+        Mock::given(method("GET"))
+            .and(path("/api/v1/log/entries"))
+            .and(query_param("logIndex", &log_index.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let hv = fetch_rekor_on_demand_host_await();
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(log_index),
+            regorus::Value::from(manifest_json.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(
+            result.is_ok(),
+            "host-await must return Ok(Bool(true)) on a matched payloadHash, got Err: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), regorus::Value::Bool(true));
+    }
+
     /// Load the cmaas evidence fixture and extract the matched
     /// `(release_manifest, log_entry, entry_url)` triple: the entry's
     /// `payloadHash` == `sha256(JCS(release_manifest))` (verified in

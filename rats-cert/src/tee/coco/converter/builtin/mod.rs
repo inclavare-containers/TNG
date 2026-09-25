@@ -670,6 +670,17 @@ impl BuiltinCocoConverter {
                 fallback_published_measurements,
                 fallback_services,
             } => {
+                // Validate the full §5.3 config shape BEFORE dispatching on the
+                // primary service type. This turns every operator-supplied config
+                // violation (empty/missing fields, artifact-server-not-sole-primary,
+                // fallback-requires-artifact-server-primary, non-rekor-v1 in
+                // fallbackServices, fallbackPublishedMeasurements-not-subset,
+                // duplicate logServices, etc.) into a clean `Err` at load time
+                // rather than a process panic (e.g. `unreachable!` / `fs[0]` in
+                // `build_artifact_server_policy`) downstream.
+                policy
+                    .validate_transparency_config()
+                    .map_err(Error::TransparencyLogFetchFailed)?;
                 // Dispatch on the primary service type. `RekorV1` keeps the
                 // existing init-bake path verbatim (fetch + bake payloadHash);
                 // `ArtifactServer` generates Branch-B Rego that resolves the
@@ -1381,11 +1392,20 @@ fn build_artifact_server_policy(
     let (fallback_lit, fallback_rules) = match (fallback_published_measurements, fallback_services)
     {
         (Some(fpm), Some(fs)) => {
-            let first = match &fs[0] {
-                TransparencyServiceConfig::RekorV1 {
+            let first = match fs.first() {
+                Some(TransparencyServiceConfig::RekorV1 {
                     log_url, log_index, ..
-                } => (log_url.clone(), *log_index),
-                _ => unreachable!("fallbackServices must be rekor-v1 (validated upstream)"),
+                }) => (log_url.clone(), *log_index),
+                Some(_) => {
+                    return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                        "fallbackServices must contain only rekor-v1 services"
+                    )))
+                }
+                None => {
+                    return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                        "fallbackServices is empty"
+                    )))
+                }
             };
             let fpm_lit = format!(
                 "[{}]",
