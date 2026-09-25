@@ -356,6 +356,19 @@ fn canonicalize_log_services(log_services_json: &str) -> Result<String> {
     Ok(rekor_v1::jcs_compact(&v))
 }
 
+/// Test-only helper: clear both process-global host-await caches so a test can
+/// exercise the real network path (and avoid cross-test cache pollution). The
+/// mod.rs Branch-B short-circuit test uses this to force the artifact-server
+/// mock to be hit rather than served from a stale `RESOLVE_CACHE` entry.
+/// `moka`'s `invalidate_all` is synchronous (it marks entries for lazy
+/// eviction); no `async` needed.
+#[cfg(test)]
+#[cfg(feature = "crypto-rustcrypto")]
+pub(crate) fn invalidate_host_await_caches_for_test() {
+    RESOLVE_CACHE.invalidate_all();
+    REKOR_ON_DEMAND_CACHE.invalidate_all();
+}
+
 #[cfg(test)]
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
