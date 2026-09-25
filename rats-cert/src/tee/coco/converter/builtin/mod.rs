@@ -3809,4 +3809,247 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
              host-await (carry #2): switch to a combined host-await"
         );
     }
+
+    // ---- Task 7: end-to-end Branch-B integration + config parity ------------
+
+    /// Load the cmaas evidence fixture and extract the matched
+    /// `(release_manifest, log_entry, entry_url, log_index)` tuple. The entry's
+    /// authenticated `payloadHash` == `sha256(JCS(release_manifest))` ==
+    /// `b40611d4...` (verified in `rekor_v1` fixture tests + the §14.4 e2e), so a
+    /// resolve/fetch response built from it exercises real inclusion/checkpoint/SET
+    /// crypto and the payloadHash comparison → `true`.
+    fn cmaas_transparency_tuple() -> (serde_json::Value, serde_json::Value, String, i64) {
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+        ))
+        .expect("parse cmaas fixture");
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
+            .as_str()
+            .expect("entry url")
+            .to_string();
+        let log_index = log_entry["logIndex"].as_i64().expect("logIndex");
+        (manifest, log_entry, entry_url, log_index)
+    }
+
+    /// Build a resolve-response JSON body from the cmaas fixture pair. The SDK's
+    /// `LogEntry` requires non-optional `entry_verifier`/`log_verifier` fields, so
+    /// dummy values are supplied; `authenticate_entry` ignores both (the rekor
+    /// key is resolved via the entry URL's hostname → built-in sigstore key).
+    fn resolve_response_body(
+        manifest: &serde_json::Value,
+        log_entry: &serde_json::Value,
+        entry_url: &str,
+    ) -> String {
+        serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "public_key", "content": "dummy"},
+                "log_verifier": {"public_key_pem": "dummy"}
+            }]
+        })
+        .to_string()
+    }
+
+    /// Build a rekor-v1 `GET /api/v1/log/entries?logIndex=` response body
+    /// (`{uuid: entry}` wire format) from the fixture log_entry.
+    fn rekor_entries_body(log_entry: &serde_json::Value) -> String {
+        let uuid = "00000000-0000-0000-0000-000000000000";
+        serde_json::json!({ uuid: log_entry }).to_string()
+    }
+
+    /// Build the TDX rego `input` carrying the cmaas fixture's measurement digest
+    /// in an AAEL kangaroo/pull-image event, plus valid non-debug TDX platform
+    /// evidence. The `full_manifest` Rego reconstructs from this digest hashes to
+    /// the entry's authenticated `payloadHash`, so `primary_ok`/`fallback_ok`
+    /// can reach `true` when the mock serves the fixture entry.
+    fn cmaas_tdx_input(manifest: &serde_json::Value) -> String {
+        let digest = manifest["measurements"][0]["value"]
+            .as_str()
+            .expect("fixture manifest measurement value");
+        format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EVENT_TAG","details":{{"unicode_name":"AAEL","data":{{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{{"reference":"registry.example.com/ns/cmaas-runtime:latest","digest":{digest:?}}}}}}}}}]}}}}"#
+        )
+    }
+
+    /// Build a Branch-B policy from the cmaas fixture + per-scenario mock URLs.
+    /// `published_measurements` = the fixture's cmaas-runtime type; the fallback
+    /// rekor service points at the given `fallback_log_url`/`fallback_log_index`.
+    async fn build_branch_b_policy(
+        artifact_url: &str,
+        entry_url: &str,
+        fallback_log_url: &str,
+        fallback_log_index: i64,
+    ) -> String {
+        let cfg_json = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["container.image.cmaas-runtime"],
+            "schemaVersion":"1.0.0",
+            "services":[{"type":"artifact-server","url":artifact_url,
+                "logServices":[{"type":"rekor-v1","url":entry_url}]}],
+            "fallbackPublishedMeasurements":["container.image.cmaas-runtime"],
+            "fallbackServices":[{"type":"rekor-v1",
+                "logUrl":fallback_log_url,"logIndex":fallback_log_index}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg_json).expect("parse cfg");
+        p.validate_transparency_config().expect("validate cfg");
+        let encoded = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .expect("encode")
+            .expect("policy");
+        String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap()
+    }
+
+    /// §14.5 end-to-end Branch-B integration: drive the full policy through the
+    /// real regorus evaluator (`eval_policy_vector`, which injects
+    /// `builtin_as_host_await_functions()` — `tng.resolve_artifact_server` +
+    /// `tng.fetch_rekor_on_demand`) across the three appraisal outcomes:
+    ///
+    ///  (a) **Primary success** — the artifact-server mock returns a valid
+    ///      resolved entry for the evidence's reconstructed manifest →
+    ///      `primary_ok` true → `executables == 2` (fallback never fires).
+    ///  (b) **Fallback success** — the artifact-server mock returns 500 →
+    ///      `primary_ok` false; the fallback rekor mock returns the cmaas fixture
+    ///      entry by `logIndex` for the fallback manifest → `fallback_ok` true →
+    ///      `executables == 2`.
+    ///  (c) **Both fail** — artifact-server 500 and fallback rekor 500 →
+    ///      `primary_ok` false, `fallback_ok` false → `executables == 97` (deny).
+    ///
+    /// Each scenario clears the process-global host-await caches
+    /// (`invalidate_host_await_caches_for_test`) so a prior scenario's cached
+    /// success/failure cannot short-circuit the next (the resolve cache key is
+    /// `(manifest_hash, canonical_log_services)` — shared across (a) and (b)
+    /// despite different artifact-server URLs).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn branch_b_e2e_primary_success_then_fallback_then_deny() {
+        let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        // --- Scenario (a): primary success → executables == 2 --------------
+        // Fallback points at a dead port; if the primary failed and the
+        // short-circuit did not hold, the fallback would fail too → 97. So
+        // asserting 2 proves the primary path resolved + authenticated.
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(resolve_body.clone()),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let policy =
+                build_branch_b_policy(&server.uri(), &entry_url, "http://127.0.0.1:1", log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "primary success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // --- Scenario (b): fallback success → executables == 2 -------------
+        // Artifact-server returns 500; the fallback rekor mock serves the cmaas
+        // fixture entry at the fallback logIndex, authenticates, and its
+        // payloadHash matches the reconstructed fallback manifest.
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(rekor_body.clone()),
+                )
+                .expect(1)
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "fallback success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // --- Scenario (c): both fail → executables == 97 --------------------
+        // Artifact-server 500 and fallback rekor 500: primary_ok false,
+        // fallback_ok false → `measurements_verified` undefined → executables
+        // stays at its contraindicated default (97).
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("rekor down"))
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(vec.0, 97, "both-fail must deny executables (got {vec:?})");
+        }
+    }
+
+    /// Config parity: the exact artifact-server + fallback example from the
+    /// secure-proxy README (wrapped in the §5.1 `PolicyConfig::TransparencyLog`
+    /// top-level shape) must parse into `PolicyConfig`, pass
+    /// `validate_transparency_config`, and round-trip (serialize → parse →
+    /// Debug-equal). Pins wire compatibility between the secure-proxy config
+    /// writer and the tng `PolicyConfig` schema (Tasks 1–6).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn secure_proxy_readme_json_round_trips() {
+        let json = std::fs::read_to_string(
+            "src/tee/coco/converter/builtin/tests/fixtures/secure_proxy_artifact_server_config.json",
+        )
+        .expect("read fixture");
+        let p: PolicyConfig = serde_json::from_str(&json).expect("parse into PolicyConfig");
+        p.validate_transparency_config()
+            .expect("validate_transparency_config succeeds");
+        let round = serde_json::to_string(&p).expect("serialize");
+        let p2: PolicyConfig = serde_json::from_str(&round).expect("re-parse");
+        assert_eq!(
+            format!("{p:?}"),
+            format!("{p2:?}"),
+            "PolicyConfig must round-trip (serialize → parse → Debug-equal)"
+        );
+    }
 }
