@@ -9,6 +9,7 @@ version.workspace = true
 anyhow = {workspace = true}
 as-any = {workspace = true}
 async-trait = {workspace = true}
+artifact-resolve-sdk = { git = "https://github.com/aliyun/artifact-server-rust-sdk.git", rev = "e5ce1955940fb7da29e58a89d3b7d635091500ea", default-features = false, optional = true }
 attestation-service = {workspace = true, default-features = false, optional = true}
 base64 = {workspace = true}
 bitflags = {workspace = true}
@@ -145,7 +146,7 @@ crypto-rustcrypto = [
 # `dep:sha2` is included here so the `crypto.sha256` host-await helper compiles
 # whenever builtin-as is on, regardless of the `crypto-rustcrypto` feature —
 # honoring the non-crypto fallback path in `load_policy_as_base64_url_safe_no_pad`.
-__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:regorus", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen", "dep:sha2"]
+__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:regorus", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen", "dep:sha2", "dep:artifact-resolve-sdk"]
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]

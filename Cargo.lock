@@ -280,6 +280,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "artifact-resolve-sdk"
+version = "0.1.0"
+source = "git+https://github.com/aliyun/artifact-server-rust-sdk.git?rev=e5ce1955940fb7da29e58a89d3b7d635091500ea#e5ce1955940fb7da29e58a89d3b7d635091500ea"
+dependencies = [
+ "reqwest 0.12.9",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "as-any"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6044,6 +6055,7 @@ name = "rats-cert"
 version = "2.10.1"
 dependencies = [
  "anyhow",
+ "artifact-resolve-sdk",
  "as-any",
  "async-trait",
  "attestation-service",

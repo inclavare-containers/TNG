@@ -3390,4 +3390,13 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             .iter()
             .any(|n| n == &"crypto.sha256" || n == &"verify_dsse_signature"));
     }
+
+    #[test]
+    fn artifact_resolve_sdk_link_smoke() {
+        // Trivial use proving the dep resolves + builds under the feature.
+        let req = artifact_resolve_sdk::ResolveRequest::new(
+            artifact_resolve_sdk::ReleaseManifest::new(vec![]),
+        );
+        assert!(req.log_services.is_none());
+    }
 }
