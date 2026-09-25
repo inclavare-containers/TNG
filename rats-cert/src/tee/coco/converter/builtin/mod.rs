@@ -2957,29 +2957,10 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// Serialize a `serde_json::Value` as compact JSON with object keys sorted
     /// (RFC 8785 JCS ordering for this shape — no numbers, so JCS == sorted
     /// compact). Needed because TNG's `serde_json` preserves insertion order.
+    /// Delegate to the single shared `rekor_v1::jcs_compact` so the init-bake
+    /// tests and the on-demand host-await path compute identical bytes.
     fn jcs_compact(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                let mut s = String::from("{");
-                for (i, k) in keys.iter().enumerate() {
-                    if i > 0 {
-                        s.push(',');
-                    }
-                    s.push_str(&serde_json::to_string(k).unwrap());
-                    s.push(':');
-                    s.push_str(&jcs_compact(&map[*k]));
-                }
-                s.push('}');
-                s
-            }
-            serde_json::Value::Array(arr) => {
-                let items: Vec<String> = arr.iter().map(jcs_compact).collect();
-                format!("[{}]", items.join(","))
-            }
-            _ => serde_json::to_string(value).unwrap(),
-        }
+        rekor_v1::jcs_compact(value)
     }
 
     /// Prove the real fixture's DSSE signature verifies with its own

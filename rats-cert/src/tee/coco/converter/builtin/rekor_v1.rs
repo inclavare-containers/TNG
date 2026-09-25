@@ -100,6 +100,41 @@ pub(crate) struct PayloadHash {
     pub(crate) value: String,
 }
 
+/// Serialize a `serde_json::Value` as compact JSON with object keys sorted
+/// (RFC 8785 JCS ordering for this shape — no numbers, so JCS == sorted
+/// compact). Needed because `serde_json` preserves insertion order, whereas
+/// Rego's `json.marshal` of an object emits keys in sorted order, so the
+/// `payloadHash` baked at init must match what Rego recomputes at appraisal.
+///
+/// Shared by the init-bake `build_transparency_log_policy` tests (via
+/// `mod.rs`) and the on-demand `tng.fetch_rekor_on_demand` host-await
+/// (`artifact_server::canonical_manifest_sha256`) so both paths compute the
+/// identical canonical bytes for the same manifest — a single source of truth.
+pub(crate) fn jcs_compact(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut s = String::from("{");
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&serde_json::to_string(k).unwrap());
+                s.push(':');
+                s.push_str(&jcs_compact(&map[*k]));
+            }
+            s.push('}');
+            s
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(jcs_compact).collect();
+            format!("[{}]", items.join(","))
+        }
+        _ => serde_json::to_string(value).unwrap(),
+    }
+}
+
 /// Base64-decode `entry.body` and deserialize into [`RekorBody`]. Requires
 /// `kind == "dsse"`.
 pub(crate) fn decode_rekor_body(entry: &RekorEntry) -> Result<RekorBody> {
