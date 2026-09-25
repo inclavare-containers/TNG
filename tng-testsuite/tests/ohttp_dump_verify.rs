@@ -267,30 +267,60 @@ fn ohttp_dump_verify_bc_client(token: CancellationToken) -> Result<JoinHandle<Re
         let _drop_guard = token.drop_guard();
 
         let dir = tempfile::tempdir()?;
-        let out_path = dir.path().join("keyconfig.json");
-        // dump --verify (background_check) mints the challenge token itself via
-        // converter.get_nonce() (POST {as_addr}/challenge), fetches the key
-        // config with the evidence, and verifies it inline; the same config
-        // re-verifies the dumped file below against the same external AS.
+        let bundle = dir.path().join("bundle");
+        // dump --verify --out-dir (background_check) mints the challenge token
+        // via converter.get_nonce(), fetches the key config with the evidence,
+        // verifies it inline, and writes the full bundle: raw.json, hpke.*,
+        // quote.bin, eventlog.json, attestation_result.jwt,
+        // attestation_result.claims.json. The same config re-verifies the dumped
+        // body below against the same external AS.
         let verify_json = r#"{"model":"background_check","as_provider":"coco","as_type":"restful","as_addr":"http://192.168.1.254:8080/","policy_ids":["default"]}"#;
         ohttp::run(OhttpCommand::Dump {
             endpoint: "http://192.168.1.1:20012".to_string(),
             verify: Some(verify_json.to_string()),
-            raw: Some(out_path.clone()),
-            out_dir: None,
+            raw: None,
+            out_dir: Some(bundle.clone()),
         })
         .await
-        .context("ohttp dump (background_check) failed")?;
+        .context("ohttp dump --out-dir (background_check) failed")?;
 
-        let body = std::fs::read_to_string(&out_path)
-            .with_context(|| format!("read dumped keyconfig {}", out_path.display()))?;
+        let raw_path = bundle.join("raw.json");
+        let body = std::fs::read_to_string(&raw_path)
+            .with_context(|| format!("read {}", raw_path.display()))?;
         assert!(
             body.contains("attestation_info"),
-            "dumped background_check key config missing attestation_info: {body}"
+            "bc bundle raw missing attestation_info: {body}"
         );
+        // background-check exposes the raw TDX quote and parsed event log.
+        for name in [
+            "quote.bin",
+            "eventlog.json",
+            "attestation_result.jwt",
+            "attestation_result.claims.json",
+        ] {
+            assert!(bundle.join(name).exists(), "bc bundle missing {name}");
+        }
+
+        // decode the bundle offline (no server/AS) from the raw body + the
+        // saved attestation-result JWT.
+        let decoded = dir.path().join("decoded");
+        ohttp::run(OhttpCommand::Decode {
+            raw: raw_path.clone(),
+            attestation_result: Some(bundle.join("attestation_result.jwt")),
+            out_dir: decoded.clone(),
+        })
+        .await
+        .context("ohttp decode (attested bc) failed")?;
+        for name in [
+            "quote.bin",
+            "attestation_result.claims.json",
+            "eventlog.json",
+        ] {
+            assert!(decoded.join(name).exists(), "decode missing {name}");
+        }
 
         ohttp::run(OhttpCommand::Verify {
-            raw: out_path.clone(),
+            raw: raw_path.clone(),
             verify: verify_json.to_string(),
         })
         .await
@@ -422,6 +452,109 @@ fn ohttp_decode_client(token: CancellationToken) -> Result<JoinHandle<Result<()>
             assert!(out.join(name).exists(), "decode missing {name}");
         }
         assert!(!out.join("attestation_result.claims.json").exists());
+        Ok(())
+    }))
+}
+
+/// `ohttp dump` with neither `--raw` nor `--out-dir` prints the raw body to
+/// stdout. No AA/AS services required.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn ohttp_dump_stdout_no_ra() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"{
+                "add_egress": [{
+                    "mapping": {
+                        "in": { "host": "0.0.0.0", "port": 20022 },
+                        "out": { "host": "127.0.0.1", "port": 30022 }
+                    },
+                    "ohttp": {},
+                    "no_ra": true
+                }]
+            }"#,
+        )
+        .boxed(),
+        FunctionTask {
+            name: "ohttp_dump_stdout".to_string(),
+            node_type: NodeType::Client,
+            func: Box::new(ohttp_dump_stdout_client),
+        }
+        .boxed(),
+    ])
+    .await?;
+    Ok(())
+}
+
+fn ohttp_dump_stdout_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+    Ok(tokio::spawn(async move {
+        let _drop_guard = token.drop_guard();
+        let dir = tempfile::tempdir()?;
+        // Neither --raw nor --out-dir: dump prints the raw body to stdout and
+        // writes no files.
+        ohttp::run(OhttpCommand::Dump {
+            endpoint: "http://192.168.1.1:20022".to_string(),
+            verify: None,
+            raw: None,
+            out_dir: None,
+        })
+        .await
+        .context("ohttp dump (stdout) failed")?;
+        assert!(
+            dir.path().read_dir()?.next().is_none(),
+            "stdout dump wrote files"
+        );
+        Ok(())
+    }))
+}
+
+/// `--raw` and `--out-dir` are mutually exclusive. No AA/AS required.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn ohttp_dump_rejects_raw_and_out_dir() -> Result<()> {
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"{
+                "add_egress": [{
+                    "mapping": {
+                        "in": { "host": "0.0.0.0", "port": 20023 },
+                        "out": { "host": "127.0.0.1", "port": 30023 }
+                    },
+                    "ohttp": {},
+                    "no_ra": true
+                }]
+            }"#,
+        )
+        .boxed(),
+        FunctionTask {
+            name: "ohttp_dump_mutual_exclusive".to_string(),
+            node_type: NodeType::Client,
+            func: Box::new(ohttp_dump_mutual_exclusive_client),
+        }
+        .boxed(),
+    ])
+    .await?;
+    Ok(())
+}
+
+fn ohttp_dump_mutual_exclusive_client(token: CancellationToken) -> Result<JoinHandle<Result<()>>> {
+    Ok(tokio::spawn(async move {
+        let _drop_guard = token.drop_guard();
+        let dir = tempfile::tempdir()?;
+        let err = ohttp::run(OhttpCommand::Dump {
+            endpoint: "http://192.168.1.1:20023".to_string(),
+            verify: None,
+            raw: Some(dir.path().join("raw.json")),
+            out_dir: Some(dir.path().join("bundle")),
+        })
+        .await
+        .err()
+        .expect("dump with both --raw and --out-dir should error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("mutually exclusive"),
+            "expected 'mutually exclusive' error, got: {msg}"
+        );
         Ok(())
     }))
 }
