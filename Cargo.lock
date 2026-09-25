@@ -6074,6 +6074,8 @@ dependencies = [
  "js-sys",
  "jsonwebtoken",
  "kbs-types",
+ "moka",
+ "once_cell",
  "p256",
  "pkcs8",
  "prost 0.14.3",

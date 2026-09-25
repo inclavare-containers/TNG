@@ -23,6 +23,8 @@ hex = {workspace = true}
 itertools = {workspace = true}
 jsonwebtoken = {workspace = true}
 kbs-types = {workspace = true}
+moka = {workspace = true, optional = true}
+once_cell = {workspace = true, optional = true}
 p256 = {workspace = true, optional = true}
 pkcs8 = {workspace = true, optional = true}
 prost = {workspace = true, optional = true}
@@ -139,6 +141,11 @@ crypto-rustcrypto = [
   "dep:signature",
   "dep:rustls-webpki",
   "dep:rustls-pki-types",
+  # On-demand rekor fallback cache (artifact_server module): the host-await
+  # `tng.fetch_rekor_on_demand` reuses the rekor_v1 crypto path and caches
+  # authenticated payload hashes in a process-global moka cache.
+  "dep:moka",
+  "dep:once_cell",
 ]
 
 # Builtin Attestation Service features (local evidence verification)

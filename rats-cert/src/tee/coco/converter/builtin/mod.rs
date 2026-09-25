@@ -3,6 +3,7 @@
 //! This module implements local evidence verification using the embedded attestation-service crate.
 //! It converts CocoEvidence to CocoAsToken by running attestation-service in-process.
 
+mod artifact_server;
 mod rekor_v1;
 
 use std::path::{Path, PathBuf};
@@ -1440,6 +1441,16 @@ fn builtin_as_host_await_functions() -> Vec<(
     fns.push((
         "tng.verify_dsse_signature".to_string(),
         verify_dsse_signature_host_await(),
+    ));
+    // On-demand rekor fallback (transparency_log artifact-server path).
+    // Fetch+authenticate a Rekor v1 entry by logIndex at appraisal time and
+    // compare its trusted payloadHash to sha256(canonical manifest). Caches
+    // successes only; failures re-try. Same feature gate as
+    // `verify_dsse_signature` — it needs the `rekor_v1` crypto path.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fns.push((
+        "tng.fetch_rekor_on_demand".to_string(),
+        artifact_server::fetch_rekor_on_demand_host_await(),
     ));
     fns
 }
