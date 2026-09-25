@@ -1452,6 +1452,17 @@ fn builtin_as_host_await_functions() -> Vec<(
         "tng.fetch_rekor_on_demand".to_string(),
         artifact_server::fetch_rekor_on_demand_host_await(),
     ));
+    // Primary artifact-server path: resolve the manifest via the Artifact
+    // Server `POST /api/v1/transparency/resolve`, authenticate each returned
+    // rekor-v1 entry locally, and verify payloadHash == sha256(canonical
+    // manifest). On any failure returns `false` (not cached) so Rego falls
+    // back to `tng.fetch_rekor_on_demand`. Same feature gate — it needs the
+    // `rekor_v1` crypto path + the `artifact_resolve_sdk` dep.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fns.push((
+        "tng.resolve_artifact_server".to_string(),
+        artifact_server::resolve_artifact_server_host_await(),
+    ));
     fns
 }
 

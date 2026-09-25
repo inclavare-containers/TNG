@@ -29,6 +29,9 @@ use sha2::Digest;
 #[cfg(feature = "crypto-rustcrypto")]
 use crate::tee::coco::converter::builtin::rekor_v1;
 
+#[cfg(feature = "crypto-rustcrypto")]
+use artifact_resolve_sdk::{Client as ResolveClient, LogService, ReleaseManifest, ResolveRequest};
+
 /// Process-global cache: `(log_url, log_index) -> authenticated payload_hash`.
 /// Successes only; failures are never cached (re-try every failed appraisal).
 // Capacity 64 is plenty for the small set of transparency-log entries a single
@@ -172,6 +175,140 @@ fn canonical_manifest_sha256(manifest_json: &str) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Process-global cache for `tng.resolve_artifact_server`: successes only,
+/// keyed by `(manifest_hash, canonical_log_services)`. Failures are never
+/// cached (re-try every failed appraisal, then Rego falls back to
+/// `tng.fetch_rekor_on_demand`).
+#[cfg(feature = "crypto-rustcrypto")]
+static RESOLVE_CACHE: Lazy<Cache<([u8; 32], String), ()>> =
+    Lazy::new(|| Cache::builder().max_capacity(1024).build());
+
+/// `tng.resolve_artifact_server(artifact_server_url, manifest_json, log_services_json) -> bool`.
+///
+/// Primary artifact-server path. Resolve the manifest via the Artifact Server
+/// `POST /api/v1/transparency/resolve` (using `artifact_resolve_sdk`), then
+/// authenticate each returned rekor-v1 entry locally (checkpoint + Merkle
+/// inclusion + SET, reusing `rekor_v1::authenticate_entry`) and verify each
+/// entry's authenticated `payloadHash == sha256(JCS(manifest))`. On success
+/// returns `Ok(Bool(true))` and caches the result keyed by
+/// `(manifest_hash, canonical_log_services)`; on ANY failure returns
+/// `Ok(Bool(false))` (not cached) so the Rego caller falls back to
+/// `tng.fetch_rekor_on_demand`.
+///
+/// Fail-closed / clean-deny: ALL failures (bad args, HTTP, decode, key
+/// resolution, auth, manifest mismatch) return `Ok(Bool(false))` — never `Err`.
+/// An `Err` would abort the entire policy evaluation (verified via the
+/// in-tree `evaluate_with_regovm_propagates_async_builtin_error` test),
+/// breaking the §11 clean-deny contract. This mirrors the established
+/// `fetch_rekor_on_demand` pattern (Option + `unwrap_or(false)`).
+#[cfg(feature = "crypto-rustcrypto")]
+pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
+    use regorus::Value;
+
+    Arc::new(move |argument: regorus::Value| {
+        Box::pin(async move {
+            // All failures map to a clean `false` (clean-deny, never `Err`).
+            // `inner` returns `Option<bool>`: `Some(true)` on a successful
+            // resolve+authenticate+compare, `None` on any failure. `.unwrap_or(false)`
+            // then yields the clean deny.
+            let inner = || async {
+                let arr = argument.as_array().ok()?;
+                if arr.len() != 3 {
+                    return None;
+                }
+                let url = arr[0].as_string().ok()?.to_string();
+                let manifest_json = arr[1].as_string().ok()?.to_string();
+                let log_services_json = arr[2].as_string().ok()?.to_string();
+
+                let expected = canonical_manifest_sha256(&manifest_json).ok()?;
+                let expected_bytes: [u8; 32] =
+                    hex::decode(&expected).ok()?.as_slice().try_into().ok()?;
+                let ls_canon = canonicalize_log_services(&log_services_json).ok()?;
+
+                if RESOLVE_CACHE
+                    .get(&(expected_bytes, ls_canon.clone()))
+                    .await
+                    .is_some()
+                {
+                    return Some(true);
+                }
+
+                let ok =
+                    resolve_and_authenticate(&url, &manifest_json, &log_services_json, &expected)
+                        .await
+                        .is_ok();
+                if ok {
+                    RESOLVE_CACHE.insert((expected_bytes, ls_canon), ()).await;
+                    Some(true)
+                } else {
+                    None
+                }
+            };
+            Ok(Value::Bool(inner().await.unwrap_or(false)))
+        })
+    })
+}
+
+/// Resolve the manifest via the Artifact Server and authenticate every
+/// returned rekor-v1 entry. Returns `Ok(())` only when the resolve status is
+/// `"resolved"`, at least one entry is returned, every entry authenticates
+/// (checkpoint + inclusion + SET via `rekor_v1::authenticate_entry`), and
+/// every entry's `payloadHash == expected_hash`. Any error → `Err` (mapped to
+/// `false` by the caller, never cached).
+#[cfg(feature = "crypto-rustcrypto")]
+async fn resolve_and_authenticate(
+    url: &str,
+    manifest_json: &str,
+    log_services_json: &str,
+    expected_hash: &str,
+) -> Result<()> {
+    let manifest: ReleaseManifest = serde_json::from_str(manifest_json)?;
+    let log_services: Vec<LogService> = serde_json::from_str(log_services_json)?;
+    let req = ResolveRequest::new(manifest).with_log_services(log_services);
+    let client = ResolveClient::new(url)?;
+    let resp = client.resolve(&req).await?;
+    if resp.status != "resolved" {
+        anyhow::bail!(
+            "artifact-server resolve status {:?} != resolved",
+            resp.status
+        );
+    }
+    if resp.log_entries.is_empty() {
+        anyhow::bail!("artifact-server resolve returned no log entries");
+    }
+    for entry in &resp.log_entries {
+        if entry.type_ != "rekor-v1" {
+            anyhow::bail!("unsupported log entry type {:?}", entry.type_);
+        }
+        // The sdk's `log_entry` is a raw JSON value carrying the rekor v1
+        // entry object (body/integratedTime/logID/logIndex/verification).
+        let rekor_entry: rekor_v1::RekorEntry = serde_json::from_value(entry.log_entry.clone())?;
+        // Resolve the Rekor public key: hostname-based first (the entry URL is
+        // the real Rekor URL — e.g. https://rekor.sigstore.dev), falling back
+        // to built-in keys by logID for proxy/mock URLs.
+        let key = resolve_rekor_key(&rekor_entry, &entry.url)?;
+        let auth = rekor_v1::authenticate_entry(&rekor_entry, &key)?;
+        if auth.payload_hash != expected_hash {
+            anyhow::bail!(
+                "payloadHash mismatch: entry={} expected={}",
+                auth.payload_hash,
+                expected_hash
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize a `log_services_json` string into a stable cache-key component:
+/// parse to a `serde_json::Value` (normalizing key order / whitespace) then
+/// re-serialize via the shared `rekor_v1::jcs_compact` (sorted compact). Two
+/// semantically-equal log-services lists produce the same canonical string.
+#[cfg(feature = "crypto-rustcrypto")]
+fn canonicalize_log_services(log_services_json: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(log_services_json)?;
+    Ok(rekor_v1::jcs_compact(&v))
+}
+
 #[cfg(test)]
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
@@ -266,5 +403,166 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    // ---- tng.resolve_artifact_server tests (Task 5) ----
+
+    /// Load the cmaas evidence fixture and extract the matched
+    /// `(release_manifest, log_entry, entry_url)` triple: the entry's
+    /// `payloadHash` == `sha256(JCS(release_manifest))` (verified in
+    /// `mod.rs`/fixture tests), so a resolve response built from it exercises
+    /// both `authenticate_entry` (real inclusion/checkpoint/SET crypto) and the
+    /// payloadHash comparison → `true`.
+    fn cmaas_resolve_triple() -> (serde_json::Value, serde_json::Value, String) {
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+        ))
+        .unwrap();
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (manifest, log_entry, entry_url)
+    }
+
+    /// Build a resolve-response JSON body from the cmaas fixture pair. The SDK's
+    /// `LogEntry` requires non-optional `entry_verifier`/`log_verifier` fields,
+    /// so dummy values are supplied; `authenticate_entry` ignores both (the
+    /// rekor key is resolved via the built-in sigstore key by the entry's URL).
+    fn resolve_response_body(
+        manifest: &serde_json::Value,
+        log_entry: &serde_json::Value,
+        entry_url: &str,
+    ) -> String {
+        serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "public_key", "content": "dummy"},
+                "log_verifier": {"public_key_pem": "dummy"}
+            }]
+        })
+        .to_string()
+    }
+
+    /// Primary path: the Artifact Server resolves the manifest and returns a
+    /// rekor-v1 entry whose authenticated `payloadHash` matches
+    /// `sha256(JCS(manifest))` → `Ok(Bool(true))`.
+    #[tokio::test]
+    async fn resolve_artifact_server_true_on_valid_entries() {
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        // Trailing slash on the log-services URL yields a distinct cache key
+        // from the cache-hit test (which uses no trailing slash), preventing
+        // process-global cache cross-talk between the two tests.
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(true));
+    }
+
+    /// §11 clean-deny on network failure: a dead port → any error →
+    /// `Ok(Bool(false))`, never `Err`. Asserts on the raw `Result` (not
+    /// `invoke_extension`'s `.expect()`, which would mask an `Err`).
+    #[tokio::test]
+    async fn resolve_artifact_server_false_on_network_error() {
+        let hv = resolve_artifact_server_host_await();
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from("http://127.0.0.1:1"),
+            regorus::Value::from(
+                r#"{"schemaVersion":"1.0.0","measurements":[{"type":"tdx.td-shim","value":"sha256:deadbeef"}]}"#,
+            ),
+            regorus::Value::from(r#"[{"type":"rekor-v1","url":"https://rekor.sigstore.dev"}]"#),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(
+            result.is_ok(),
+            "host-await must return Ok(Bool(false)) on network error, got Err: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// payloadHash mismatch: the mock returns a valid (authentic) entry but the
+    /// manifest arg does NOT hash to the entry's `payloadHash` → authenticate
+    /// succeeds, the comparison fails → `Ok(Bool(false))`, and the failure is
+    /// NOT cached.
+    #[tokio::test]
+    async fn resolve_artifact_server_false_on_payload_hash_mismatch() {
+        let server = MockServer::start().await;
+        let (_manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // A manifest with a different measurement value → different sha256.
+        let mismatch_manifest = serde_json::json!({"schemaVersion":"1.0.0","measurements":[{"type":"tdx.td-shim","value":"sha256:deadbeef"}]});
+        let body = resolve_response_body(&mismatch_manifest, &log_entry, &entry_url);
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&mismatch_manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Cache hit: after a successful resolve, a second call with the same
+    /// `(manifest, log_services)` returns `true` WITHOUT hitting the mock
+    /// (`up_to_n_times(1)` — without the cache the second call would get a
+    /// wiremock default 404 → false). Uses a no-trailing-slash log-services URL
+    /// (distinct cache key from the `true_on_valid_entries` test).
+    #[tokio::test]
+    async fn resolve_artifact_server_caches_success() {
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .up_to_n_times(1) // only ONE real hit; second call must come from cache
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        // first call hits the mock → success → cached.
+        let r1 = invoke_extension(&hv, arg.clone()).await;
+        assert_eq!(r1, regorus::Value::Bool(true));
+        // second call must NOT hit the mock (would 404) — served from cache.
+        let r2 = invoke_extension(&hv, arg).await;
+        assert_eq!(r2, regorus::Value::Bool(true));
     }
 }
