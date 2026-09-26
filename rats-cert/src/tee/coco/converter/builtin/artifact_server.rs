@@ -169,12 +169,47 @@ fn resolve_rekor_key(entry: &rekor_v1::RekorEntry, log_url: &str) -> Result<reko
 /// truth shared with the init-bake tests in `mod.rs`) and sha256s it.
 #[cfg(feature = "crypto-rustcrypto")]
 fn canonical_manifest_sha256(manifest_json: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(manifest_json)?;
-    let canon = rekor_v1::jcs_compact(&v);
+    let canon = canonical_manifest_bytes(manifest_json)?;
     let mut hasher = sha2::Sha256::new();
     hasher.update(canon.as_bytes());
     Ok(hex::encode(hasher.finalize()))
 }
+
+/// JCS (RFC 8785) canonical bytes of a manifest JSON string — the shared
+/// intermediate used by both `canonical_manifest_sha256` (for the payloadHash
+/// comparison) and the DSSE PAE construction (for the publisher-signature
+/// verification), so both paths agree on the canonical payload for a given
+/// manifest. See `canonical_manifest_sha256` for the canonicalization rationale.
+#[cfg(feature = "crypto-rustcrypto")]
+fn canonical_manifest_bytes(manifest_json: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(manifest_json)?;
+    Ok(rekor_v1::jcs_compact(&v))
+}
+
+/// DSSE Pre-Authentication Encoding (DSSEv1), mirroring cmaas's
+/// `utils.DSSEPAE`. Format: `DSSEv1 <len(type)> <type> <len(payload)> <payload>`
+/// where `<len>` is the ASCII decimal byte length. The DSSE publisher signature
+/// is verified over `sha256(PAE(canonical_manifest))` — see
+/// `verify_entry_dsse_signature` — matching cmaas's `verifyLogEntrySignature`
+/// (`pae := DSSEPAE(DSSEPayloadType, payload); h := sha256(pae);
+/// ecdsa.VerifyASN1(pub, h, sig)`).
+#[cfg(feature = "crypto-rustcrypto")]
+fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
+    let prefix = format!(
+        "DSSEv1 {} {} {} ",
+        payload_type.len(),
+        payload_type,
+        payload.len()
+    );
+    let mut out = prefix.into_bytes();
+    out.extend_from_slice(payload);
+    out
+}
+
+/// The DSSE payload type for an Alibaba Cloud CMAAS release manifest, mirroring
+/// cmaas's `DSSEPayloadType` constant (`source/pkg/transparency/transparency.go`).
+#[cfg(feature = "crypto-rustcrypto")]
+const DSSE_PAYLOAD_TYPE: &str = "application/vnd.alibabacloud.confidential-computing.release+json";
 
 /// Process-global cache for `tng.resolve_artifact_server`: successes only,
 /// keyed by `(manifest_hash, canonical_log_services)`. Failures are never
@@ -327,6 +362,10 @@ async fn resolve_and_authenticate(
     if resp.log_entries.is_empty() {
         anyhow::bail!("artifact-server resolve returned no log entries");
     }
+    // Canonical manifest bytes, shared by the payloadHash comparison and the
+    // DSSE PAE construction (publisher-signature verification) below — computed
+    // once so every entry sees the same canonical payload.
+    let canonical_manifest = canonical_manifest_bytes(manifest_json)?;
     for entry in &resp.log_entries {
         if entry.type_ != "rekor-v1" {
             anyhow::bail!("unsupported log entry type {:?}", entry.type_);
@@ -349,10 +388,17 @@ async fn resolve_and_authenticate(
         // The sdk's `log_entry` is a raw JSON value carrying the rekor v1
         // entry object (body/integratedTime/logID/logIndex/verification).
         let rekor_entry: rekor_v1::RekorEntry = serde_json::from_value(entry.log_entry.clone())?;
-        // Resolve the Rekor public key: hostname-based first (the entry URL is
-        // the real Rekor URL — e.g. https://rekor.sigstore.dev), falling back
-        // to built-in keys by logID for proxy/mock URLs.
-        let key = resolve_rekor_key(&rekor_entry, &entry.url)?;
+        // Rekor key (checkpoint + inclusion + SET): prefer the response
+        // `log_verifier.public_key_pem` (cmaas-audit's `VerifyLogEntry`
+        // response-key path — the artifact-server is semi-trusted for key
+        // transport); fall back to the built-in hostname→logID resolution when
+        // the response omits it (so proxy / mock URLs still resolve via the
+        // built-in key table). Mirrors cmaas `VerifyLogEntry` lines 183-187.
+        let key = if !entry.log_verifier.public_key_pem.is_empty() {
+            rekor_v1::rekor_public_key(&entry.url, Some(&entry.log_verifier.public_key_pem))?
+        } else {
+            resolve_rekor_key(&rekor_entry, &entry.url)?
+        };
         let auth = rekor_v1::authenticate_entry(&rekor_entry, &key)?;
         if auth.payload_hash != expected_hash {
             anyhow::bail!(
@@ -360,6 +406,40 @@ async fn resolve_and_authenticate(
                 auth.payload_hash,
                 expected_hash
             );
+        }
+        // DSSE publisher-signature verification with the response
+        // `entry_verifier` (cmaas-audit's `verifyLogEntrySignature`). The
+        // signature in `body.spec.signatures[0].signature` is verified over
+        // `sha256(DSSEPAE(canonical_manifest))` (the PAE — NOT the bare
+        // manifest — per cmaas `verifyLogEntrySignature` lines 386-400). TNG is
+        // lenient where cmaas-audit requires both verifiers together: if
+        // `entry_verifier` is absent or has an unsupported type, DSSE
+        // verification is SKIPPED (not rejected) — this keeps the built-in-only
+        // fallback working for resolvers that omit the response verifiers while
+        // still failing closed on a present-but-wrong key.
+        if entry.entry_verifier.type_ == "public_key" && !entry.entry_verifier.content.is_empty() {
+            verify_entry_dsse_signature(
+                &rekor_entry,
+                &entry.entry_verifier.content,
+                canonical_manifest.as_bytes(),
+            )?;
+        }
+        // Baseline-compare + warn (cmaas `VerifyLogEntry` lines 195-200): after
+        // successful verification with the response key, compare it to the SDK
+        // built-in key for this URL by SPKI DER. A mismatch is logged but NOT
+        // rejected (cmaas-audit warns + passes). Best-effort: if the built-in
+        // resolution fails (e.g. a proxy URL with no built-in hostname match),
+        // skip the compare silently rather than denying.
+        if !entry.log_verifier.public_key_pem.is_empty() {
+            if let Ok(builtin) = rekor_v1::rekor_public_key(&entry.url, None) {
+                if key.spki_der != builtin.spki_der {
+                    tracing::warn!(
+                        url = %entry.url,
+                        "transparency verification key differs from built-in baseline; \
+                         the artifact-server supplied a different rekor key"
+                    );
+                }
+            }
         }
     }
     // Every requested logService must have been covered exactly once.
@@ -369,6 +449,47 @@ async fn resolve_and_authenticate(
             remaining
         );
     }
+    Ok(())
+}
+
+/// Verify the DSSE publisher signature carried in a Rekor v1 entry body against
+/// the response-supplied `entry_verifier` public key, mirroring cmaas-audit's
+/// `verifyLogEntrySignature` (rekorv1.go lines 386-400). The signature
+/// (`body.spec.signatures[0].signature`, base64) is verified over
+/// `sha256(DSSEPAE(canonical_manifest))` — `VerifyingKey::verify` hashes the PAE
+/// with SHA-256 internally, which is equivalent to Go's
+/// `h := sha256(pae); ecdsa.VerifyASN1(pub, h, sig)`. Returns `Err` on any
+/// decode/parse/verify failure (the caller's `inner` closure maps `Err`→`None`
+/// → clean-deny `Ok(Bool(false))`, per the §11 contract).
+#[cfg(feature = "crypto-rustcrypto")]
+fn verify_entry_dsse_signature(
+    entry: &rekor_v1::RekorEntry,
+    publisher_pem: &str,
+    canonical_manifest: &[u8],
+) -> Result<()> {
+    use anyhow::Context;
+    use base64::Engine;
+    use p256::ecdsa::signature::Verifier;
+
+    let publisher_key = rekor_v1::parse_p256_public_key(publisher_pem)?;
+    let body = rekor_v1::decode_rekor_body(entry)?;
+    let sigs = body
+        .spec
+        .signatures
+        .as_ref()
+        .context("Rekor body has no DSSE signatures")?;
+    let sig_str = sigs
+        .first()
+        .context("Rekor body has zero DSSE signatures")?;
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&sig_str.signature)
+        .context("base64-decode DSSE publisher signature")?;
+    let signature = p256::ecdsa::Signature::from_der(&sig_bytes)
+        .context("parse DSSE publisher ECDSA signature")?;
+    let pae = dsse_pae(DSSE_PAYLOAD_TYPE, canonical_manifest);
+    publisher_key
+        .verify(&pae, &signature)
+        .context("DSSE publisher signature verification failed")?;
     Ok(())
 }
 
@@ -410,6 +531,20 @@ mod tests {
         serde_json::json!({ uuid: serde_json::from_str::<serde_json::Value>(raw).unwrap() })
             .to_string()
     }
+
+    /// The Sigstore Rekor v1 public key PEM (checkpoint + SET verification key),
+    /// copied from cmaas's `SigstoreRekorV1PubKeyPEM` constant
+    /// (`source/pkg/transparency/rekorv1.go`). The fixture entry's `logID` ==
+    /// `sha256(SPKI)` of this key, so `authenticate_entry` (logID + checkpoint +
+    /// inclusion + SET) verifies against it.
+    const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
+
+    /// The DSSE publisher PEM that signed the fixture's DSSE envelope, copied
+    /// from cmaas's `LogEntryPubKeyPEM` constant (same key the fixture carries
+    /// in `body.spec.signatures[0].verifier`). `verify_entry_dsse_signature`
+    /// verifies `body.spec.signatures[0].signature` over
+    /// `sha256(DSSEPAE(canonical_manifest))` with this key.
+    const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
 
     /// A manifest that does NOT hash to the fixture entry's payloadHash.
     /// Used to assert the *mismatch* path (bool false) while still exercising
@@ -577,14 +712,19 @@ mod tests {
         (manifest, log_entry, entry_url)
     }
 
-    /// Build a resolve-response JSON body from the cmaas fixture pair. The SDK's
-    /// `LogEntry` requires non-optional `entry_verifier`/`log_verifier` fields,
-    /// so dummy values are supplied; `authenticate_entry` ignores both (the
-    /// rekor key is resolved via the built-in sigstore key by the entry's URL).
+    /// Build a resolve-response JSON body from the cmaas fixture pair. The
+    /// `entry_verifier.content` / `log_verifier.public_key_pem` are now USED by
+    /// the impl (cmaas-audit response-key path): the real Sigstore rekor PEM
+    /// (for checkpoint/SET) and the real DSSE publisher PEM (for the publisher
+    /// signature) must be supplied so the full verification succeeds. Negative
+    /// tests pass a WRONG pem for one of the two to exercise the fail-closed
+    /// paths.
     fn resolve_response_body(
         manifest: &serde_json::Value,
         log_entry: &serde_json::Value,
         entry_url: &str,
+        entry_verifier_content: &str,
+        log_verifier_pem: &str,
     ) -> String {
         serde_json::json!({
             "status": "resolved",
@@ -593,8 +733,8 @@ mod tests {
                 "type": "rekor-v1",
                 "url": entry_url,
                 "log_entry": log_entry,
-                "entry_verifier": {"type": "public_key", "content": "dummy"},
-                "log_verifier": {"public_key_pem": "dummy"}
+                "entry_verifier": {"type": "public_key", "content": entry_verifier_content},
+                "log_verifier": {"public_key_pem": log_verifier_pem}
             }]
         })
         .to_string()
@@ -612,7 +752,13 @@ mod tests {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
-        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -667,7 +813,13 @@ mod tests {
         let (_manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // A manifest with a different measurement value → different sha256.
         let mismatch_manifest = serde_json::json!({"schemaVersion":"1.0.0","measurements":[{"type":"tdx.td-shim","value":"sha256:deadbeef"}]});
-        let body = resolve_response_body(&mismatch_manifest, &log_entry, &entry_url);
+        let body = resolve_response_body(
+            &mismatch_manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -701,7 +853,8 @@ mod tests {
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Two copies of the same (type, url) entry — a malicious resolver
-        // trying to pad the response. Both are individually authenticable.
+        // trying to pad the response. Both are individually authenticable (real
+        // response verifiers supplied).
         let body = serde_json::json!({
             "status": "resolved",
             "release_manifest": manifest,
@@ -710,15 +863,15 @@ mod tests {
                     "type": "rekor-v1",
                     "url": entry_url,
                     "log_entry": log_entry,
-                    "entry_verifier": {"type": "public_key", "content": "dummy"},
-                    "log_verifier": {"public_key_pem": "dummy"}
+                    "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                    "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
                 },
                 {
                     "type": "rekor-v1",
                     "url": entry_url,
                     "log_entry": log_entry,
-                    "entry_verifier": {"type": "public_key", "content": "dummy"},
-                    "log_verifier": {"public_key_pem": "dummy"}
+                    "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                    "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
                 }
             ]
         })
@@ -743,7 +896,87 @@ mod tests {
         assert_eq!(result.unwrap(), regorus::Value::Bool(false));
     }
 
-    /// Request-binding (coverage): the caller requests TWO log services but the
+    /// Negative: the response supplies a WRONG `entry_verifier.content` (a
+    /// different valid P-256 PEM — the Sigstore rekor key, NOT the DSSE
+    /// publisher key). Rekor auth (logID/checkpoint/inclusion/SET) passes (the
+    /// `log_verifier` is the real Sigstore key) and payloadHash matches, but the
+    /// DSSE publisher signature fails to verify against the wrong key over
+    /// `sha256(DSSEPAE(canonical_manifest))` → `Ok(Bool(false))`. Mirrors
+    /// cmaas-audit's `verifyLogEntrySignature` failure path.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_false_on_wrong_entry_verifier() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // Wrong publisher PEM (the Sigstore rekor key — a valid P-256 key that
+        // did NOT sign the DSSE envelope) → DSSE verification fails.
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM, // wrong publisher key
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM, // correct rekor key
+        );
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Negative: the response supplies a WRONG `log_verifier.public_key_pem`
+    /// (a different valid P-256 PEM — the DSSE publisher key, NOT the Sigstore
+    /// rekor key). `authenticate_entry`'s `verify_log_id` fails (the entry's
+    /// `logID` == `sha256(Sigstore SPKI)`, not `sha256(wrong SPKI)`) →
+    /// `Ok(Bool(false))`. Mirrors cmaas-audit's `verifyRekorLogID` failure path.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_false_on_wrong_log_verifier() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // Wrong rekor PEM (the DSSE publisher key — a valid P-256 key whose
+        // SPKI hash != the entry's logID) → rekor logID verification fails.
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM, // correct publisher key
+            LOG_ENTRY_PUB_KEY_PEM, // wrong rekor key
+        );
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
     /// mock returns only one (the fixture sigstore entry). After the loop
     /// `remaining` still contains the uncovered openanolis service → reject
     /// → `Ok(Bool(false))`. Pins Finding 1's "all requested must be covered"
@@ -754,7 +987,13 @@ mod tests {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
-        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -792,7 +1031,13 @@ mod tests {
         RESOLVE_CACHE.invalidate_all();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
-        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))

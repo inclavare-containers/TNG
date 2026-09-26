@@ -3784,8 +3784,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
                 "type": "rekor-v1",
                 "url": entry_url,
                 "log_entry": log_entry,
-                "entry_verifier": {"type": "public_key", "content": "dummy"},
-                "log_verifier": {"public_key_pem": "dummy"}
+                "entry_verifier": {"type": "public_key", "content": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----"},
+                "log_verifier": {"public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----"}
             }]
         })
         .to_string();
@@ -3873,6 +3873,13 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         log_entry: &serde_json::Value,
         entry_url: &str,
     ) -> String {
+        // Real response verifiers (cmaas-audit response-key path): the impl
+        // now USES `entry_verifier.content` (DSSE publisher PEM) and
+        // `log_verifier.public_key_pem` (Sigstore rekor PEM) instead of
+        // ignoring them. Copied from cmaas's `LogEntryPubKeyPEM` and
+        // `SigstoreRekorV1PubKeyPEM` (`source/pkg/transparency/rekorv1.go`).
+        const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
+        const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
         serde_json::json!({
             "status": "resolved",
             "release_manifest": manifest,
@@ -3880,8 +3887,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
                 "type": "rekor-v1",
                 "url": entry_url,
                 "log_entry": log_entry,
-                "entry_verifier": {"type": "public_key", "content": "dummy"},
-                "log_verifier": {"public_key_pem": "dummy"}
+                "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
             }]
         })
         .to_string()
