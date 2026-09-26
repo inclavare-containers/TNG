@@ -7,9 +7,9 @@ version.workspace = true
 
 [dependencies]
 anyhow = {workspace = true}
+artifact-resolve-sdk = { git = "https://github.com/aliyun/artifact-server-rust-sdk.git", rev = "e5ce1955940fb7da29e58a89d3b7d635091500ea", default-features = false, optional = true }
 as-any = {workspace = true}
 async-trait = {workspace = true}
-artifact-resolve-sdk = { git = "https://github.com/aliyun/artifact-server-rust-sdk.git", rev = "e5ce1955940fb7da29e58a89d3b7d635091500ea", default-features = false, optional = true }
 attestation-service = {workspace = true, default-features = false, optional = true}
 base64 = {workspace = true}
 bitflags = {workspace = true}

@@ -180,6 +180,19 @@ mod key {
     const OPENANOLIS_REKOR_V1_SPKI_B64: &str =
         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXQ2ngaAbWq3XILAb3ZlIpZ/AIdUjkcjkZNjAeQmDGY9qqbNmT/eQZ1nBJw6vd6S0Rq5F9rb3oYLTNejEEhCd0A==";
 
+    /// Built-in Rekor v1 `(hostname, base64-SPKI)` pairs — the single source
+    /// of truth that `rekor_public_key` matches on below. Callers needing to
+    /// enumerate every built-in key (e.g. `resolve_rekor_key`'s logID fallback
+    /// in `artifact_server`) iterate THIS table instead of restating the
+    /// hostnames, so a third built-in added here is picked up automatically
+    /// rather than silently missed.
+    pub(crate) fn known_rekor_keys() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("rekor.sigstore.dev", SIGSTORE_REKOR_V1_SPKI_B64),
+            ("rekor.openanolis.cn", OPENANOLIS_REKOR_V1_SPKI_B64),
+        ]
+    }
+
     /// Resolve the Rekor public key: an explicit PEM if provided, else a built-in
     /// table keyed by `log_url` hostname, using base64 SPKI + `x509_cert` decode
     /// with the v1 keys.
@@ -455,7 +468,7 @@ mod key {
 
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) use key::{
-    parse_p256_public_key, public_key_id, rekor_public_key, verify_checkpoint,
+    known_rekor_keys, parse_p256_public_key, public_key_id, rekor_public_key, verify_checkpoint,
     verify_inclusion_proof, verify_log_id, verify_set, RekorKey,
 };
 

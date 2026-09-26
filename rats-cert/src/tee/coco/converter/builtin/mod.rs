@@ -1519,6 +1519,13 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
         ls_lit = ls_lit,
         fallback_lit = fallback_lit,
         fallback_rules = fallback_rules,
+        // `measurements_verified_lines` is interpolated on its own template line
+        // where the literal already supplies the trailing newline (the line break
+        // before `executables := 2 if {{ ... }}`), so its own trailing `\n` is
+        // trimmed to avoid a double blank line. `fallback_rules`/`fallback_lit`
+        // are interpolated mid-line (`}}{fallback_rules}`, `{ls_lit}{fallback_lit}`)
+        // where the template provides no separating newline, so they KEEP their
+        // trailing `\n` to terminate their last rule on its own line.
         measurements_verified_lines = measurements_verified_lines.trim_end(),
     );
     Ok(rego)
@@ -3609,6 +3616,10 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         assert!(p.validate_transparency_config().is_err());
     }
 
+    // Gate mirrors the `#[cfg(feature = "crypto-rustcrypto")]` on the
+    // `tng.verify_dsse_signature` registration this test asserts; `tng.sha256`
+    // (always registered) is still checked under the same gate when crypto is on.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn host_await_functions_use_tng_prefix() {
         let fns = builtin_as_host_await_functions();

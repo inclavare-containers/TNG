@@ -139,10 +139,11 @@ fn resolve_rekor_key(entry: &rekor_v1::RekorEntry, log_url: &str) -> Result<reko
         return Ok(key);
     }
     // Fallback: unknown hostname (artifact-server proxy / test mock). Try the
-    // built-in keys by logID match. The two built-in hostnames are the only
-    // entries in `rekor_public_key`'s table, so this enumerates the full set.
-    for known in ["https://rekor.sigstore.dev", "https://rekor.openanolis.cn"] {
-        if let Ok(key) = rekor_v1::rekor_public_key(known, None) {
+    // built-in keys by logID match. Iterate the single-source-of-truth table in
+    // `rekor_v1` so a third built-in added there is picked up automatically
+    // (rather than silently missed by a restated hostname list here).
+    for (host, _) in rekor_v1::known_rekor_keys() {
+        if let Ok(key) = rekor_v1::rekor_public_key(&format!("https://{host}"), None) {
             if rekor_v1::verify_log_id(entry, &key).is_ok() {
                 return Ok(key);
             }
@@ -221,8 +222,33 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                 let log_services_json = arr[2].as_string().ok()?.to_string();
 
                 let expected = canonical_manifest_sha256(&manifest_json).ok()?;
-                let expected_bytes: [u8; 32] =
-                    hex::decode(&expected).ok()?.as_slice().try_into().ok()?;
+
+                // Decode the hex sha256 to a 32-byte array for the cache key. A
+                // non-32-byte hash (e.g. a malformed manifest that produced a
+                // non-sha256 digest) is reported via tracing and maps to
+                // `None`→`Ok(Bool(false))` (clean-deny) — the `inner` closure
+                // returns `Option<bool>`, so the `return None` below keeps the
+                // `Ok(Bool(false))` contract intact (never `Err`).
+                let expected_bytes: [u8; 32] = match hex::decode(&expected) {
+                    Ok(b) => match b.as_slice().try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => {
+                            tracing::warn!(
+                                len = b.len(),
+                                "resolve_artifact_server: manifest sha256 must be 32 bytes, got {} bytes — denying",
+                                b.len()
+                            );
+                            return None;
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "resolve_artifact_server: manifest sha256 hex decode failed — denying"
+                        );
+                        return None;
+                    }
+                };
                 let ls_canon = canonicalize_log_services(&log_services_json).ok()?;
 
                 if RESOLVE_CACHE
