@@ -1061,4 +1061,294 @@ mod tests {
         let r2 = invoke_extension(&hv, arg).await;
         assert_eq!(r2, regorus::Value::Bool(true));
     }
+
+    // ---- coverage-guided tests for uncovered branches ----
+
+    /// Line 90: `fetch_rekor_on_demand` returns `Ok(Bool(false))` (clean-deny)
+    /// when the argument array has the wrong length (!= 3).
+    #[tokio::test]
+    async fn fetch_rekor_on_demand_false_on_wrong_arg_count() {
+        let hv = fetch_rekor_on_demand_host_await();
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from("http://example.com"),
+            regorus::Value::from(1i64), // only 2 args, not 3
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(false));
+    }
+
+    /// Line 253: `resolve_artifact_server` returns `Ok(Bool(false))`
+    /// (clean-deny) when the argument array has the wrong length (!= 3).
+    #[tokio::test]
+    async fn resolve_artifact_server_false_on_wrong_arg_count() {
+        let hv = resolve_artifact_server_host_await();
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from("http://example.com"),
+            regorus::Value::from("{}"), // only 2 args, not 3
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(false));
+    }
+
+    /// Lines 152-154: `resolve_rekor_key` bails when the entry's logID
+    /// matches no built-in key. Called directly (pure, no I/O) with an entry
+    /// whose log_id is a bogus value.
+    #[test]
+    fn resolve_rekor_key_bails_when_no_key_matches() {
+        let entry = rekor_v1::RekorEntry {
+            body: String::new(),
+            integrated_time: 0,
+            log_id: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            log_index: 0,
+            verification: rekor_v1::RekorVerification {
+                inclusion_proof: rekor_v1::InclusionProof {
+                    checkpoint: String::new(),
+                    hashes: vec![],
+                    log_index: 0,
+                    root_hash: String::new(),
+                    tree_size: 1,
+                },
+                signed_entry_timestamp: String::new(),
+            },
+        };
+        // A wiremock-style URL with no built-in hostname match.
+        let err = resolve_rekor_key(&entry, "http://127.0.0.1:99999").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("could not resolve Rekor public key"),
+            "got: {err}"
+        );
+    }
+
+    /// Lines 357-358: resolve status != "resolved" → `Ok(Bool(false))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_false_on_non_resolved_status() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // Valid response structure but with status != "resolved" so the SDK
+        // deserializes it, then the status check fires.
+        let body = serde_json::json!({
+            "status": "pending",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "public_key", "content": ""},
+                "log_verifier": {"public_key_pem": ""}
+            }]
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Line 363: resolve returns zero log entries → `Ok(Bool(false))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_false_on_empty_log_entries() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
+        let body = serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": []
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Line 371: log entry type != "rekor-v1" → `Ok(Bool(false))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_false_on_unsupported_entry_type() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
+        let body = serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v2",
+                "url": entry_url,
+                "log_entry": {},
+                "entry_verifier": {"type": "public_key", "content": ""},
+                "log_verifier": {"public_key_pem": ""}
+            }]
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+    }
+
+    /// Lines 139, 400: when `log_verifier.public_key_pem` is empty,
+    /// `resolve_rekor_key` is called (line 400) and its fast path succeeds
+    /// (line 139) because the entry URL is a built-in hostname. The full path
+    /// succeeds (DSSE verified with `entry_verifier`) → `Ok(Bool(true))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_true_with_empty_log_verifier_uses_builtin_key() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        // empty log_verifier.public_key_pem → forces resolve_rekor_key fallback
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            "", // empty → resolve_rekor_key fast path
+        );
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(true));
+    }
+
+    /// Line 426 (skip-DSSE branch): when `entry_verifier.type_ !=
+    /// "public_key"` (or content is empty), DSSE verification is SKIPPED (not
+    /// rejected). The entry still authenticates and payloadHash matches →
+    /// `Ok(Bool(true))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_true_when_dsse_verification_skipped() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        let body = serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "other", "content": ""},
+                "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
+            }]
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(true));
+    }
+
+    /// Lines 436-443 (baseline-compare + warn): the response supplies the
+    /// Sigstore rekor key, but the entry URL is `https://rekor.openanolis.cn`
+    /// (whose built-in key is the OpenAnolis key). The entry authenticates
+    /// with the Sigstore key (its logID matches), but the baseline compare
+    /// finds `sigstore.spki != openanolis.spki` → `tracing::warn!`. The path
+    /// still succeeds → `Ok(Bool(true))`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_warns_on_baseline_key_mismatch() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, log_entry, _entry_url) = cmaas_resolve_triple();
+        // Use the OpenAnolis URL so the built-in baseline key differs from
+        // the response-supplied Sigstore key.
+        let openanolis_url = "https://rekor.openanolis.cn";
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            openanolis_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{openanolis_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let r = invoke_extension(&hv, arg).await;
+        assert_eq!(r, regorus::Value::Bool(true));
+    }
 }

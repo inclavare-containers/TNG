@@ -4090,4 +4090,105 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             "PolicyConfig must round-trip (serialize → parse → Debug-equal)"
         );
     }
+
+    // ---- coverage-guided tests for transparency-log dispatch arms ----
+
+    /// Lines 714-716: when the primary service is `RekorV1` but `services`
+    /// contains MORE than one element (e.g. two RekorV1 services),
+    /// `load_policy_as_base64_url_safe_no_pad` rejects with "requires exactly
+    /// one rekor-v1 service". The error fires BEFORE any network fetch, so no
+    /// mock is needed. `validate_transparency_config` passes (each service is
+    /// individually valid), but the dispatch arm's structural check catches
+    /// the multi-service case.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn load_policy_rejects_multiple_rekor_v1_services() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["tdx.td-shim"],
+            "schemaVersion":"1.0.0",
+            "services":[
+                {"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":1},
+                {"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":2}
+            ]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        // Validation passes — each service is individually valid.
+        p.validate_transparency_config().unwrap();
+        // But the dispatch arm rejects the multi-service case (no network).
+        let err = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner
+                    .to_string()
+                    .contains("requires exactly one rekor-v1 service"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
+    }
+
+    /// Lines 1400-1402: `build_artifact_server_policy` rejects a
+    /// non-rekor-v1 entry in `fallback_services`. These are
+    /// `bail!` arms behind upstream `validate_transparency_config`, but the
+    /// function is callable directly (e.g. from future callers that bypass
+    /// validation), so the bounds check is intentional defense-in-depth.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn build_artifact_server_policy_rejects_non_rekor_v1_fallback() {
+        let bad_fallback = vec![TransparencyServiceConfig::ArtifactServer {
+            url: "https://x".to_string(),
+            log_services: vec![],
+        }];
+        let err = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "https://as.example.com",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.sigstore.dev".to_string(),
+            }],
+            Some(&["tdx.td-shim".to_string()]),
+            Some(&bad_fallback),
+        )
+        .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner
+                    .to_string()
+                    .contains("fallbackServices must contain only rekor-v1"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
+    }
+
+    /// Lines 1405-1407: `build_artifact_server_policy` rejects an empty
+    /// `fallback_services` slice (the `None` arm of `fs.first()`).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn build_artifact_server_policy_rejects_empty_fallback() {
+        let empty_fallback: Vec<TransparencyServiceConfig> = vec![];
+        let err = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "https://as.example.com",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.sigstore.dev".to_string(),
+            }],
+            Some(&["tdx.td-shim".to_string()]),
+            Some(&empty_fallback),
+        )
+        .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner.to_string().contains("fallbackServices is empty"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
+    }
 }

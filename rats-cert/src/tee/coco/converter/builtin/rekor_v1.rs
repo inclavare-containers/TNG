@@ -86,6 +86,7 @@ pub(crate) struct RekorSignature {
 /// in-band DSSE signature (`body.spec.signatures[0].signature`) extracted for
 /// downstream policy verification.
 #[cfg(feature = "crypto-rustcrypto")]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedRekorEntry {
     pub(crate) payload_hash: String,
     // Read in the non-test build via `resolve_dsse_signature` (builtin/mod.rs),
@@ -167,6 +168,7 @@ mod key {
 
     /// A resolved Rekor public key: the P-256 verifying key plus its PKIX-SPKI
     /// DER bytes (needed because `logID` = `sha256(SPKI DER)`).
+    #[derive(Debug)]
     pub(crate) struct RekorKey {
         pub(crate) verifying_key: VerifyingKey,
         pub(crate) spki_der: Vec<u8>,
@@ -682,5 +684,187 @@ mod tests {
             "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
         );
         assert!(!auth.dsse_signature.is_empty());
+    }
+
+    // ---- coverage-guided tests for error arms ----
+
+    /// Helper: load the fixture JSON, apply a mutation, deserialize into a
+    /// `RekorEntry`. Used to construct malformed entries for the error-path
+    /// tests below without needing a full wire fixture for each case.
+    fn mutated_fixture_entry(mutate: impl FnOnce(&mut serde_json::Value)) -> RekorEntry {
+        let raw = include_str!("tests/fixtures/rekor_v1_entry.json");
+        let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        mutate(&mut v);
+        serde_json::from_value(v).expect("mutated entry must still deserialize")
+    }
+
+    /// Helper: build a `RekorEntry` whose `body` base64-encodes the given JSON
+    /// value as the `spec` payload, with the given `kind`. The verification
+    /// fields (log_id, integrated_time, etc.) are inherited from the fixture so
+    /// `verify_log_id` passes; the tests bail before any verification that
+    /// depends on the body being the original.
+    fn entry_with_body(kind: &str, spec: serde_json::Value) -> RekorEntry {
+        let body_json = serde_json::json!({"apiVersion":"0.0.1","kind":kind,"spec":spec});
+        let body_b64 = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_vec(&body_json).unwrap());
+        let mut entry = fixture_entry();
+        entry.body = body_b64;
+        entry
+    }
+
+    /// Lines 146-147: `decode_rekor_body` rejects `kind != "dsse"`.
+    #[test]
+    fn decode_rekor_body_rejects_non_dsse_kind() {
+        let entry = entry_with_body("intoto", serde_json::json!({}));
+        let err = decode_rekor_body(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported Rekor body kind"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 299: `verify_inclusion_proof` rejects non-positive `treeSize`.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_non_positive_tree_size() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["treeSize"] = 0.into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("non-positive treeSize"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 302: `verify_inclusion_proof` rejects `logIndex >= treeSize`.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_log_index_out_of_range() {
+        let entry = mutated_fixture_entry(|v| {
+            let ts = v["verification"]["inclusionProof"]["treeSize"]
+                .as_i64()
+                .unwrap();
+            v["verification"]["inclusionProof"]["logIndex"] = ts.into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("logIndex out of range"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 352: `verify_inclusion_proof` rejects computed root != proof
+    /// rootHash. Keep the proof structure valid (same hashes, same treeSize)
+    /// but change the `rootHash` so the computed root won't match.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_wrong_root_hash() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["rootHash"] =
+                "0000000000000000000000000000000000000000000000000000000000000000".into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("computed root != proof rootHash"),
+            "got: {err}"
+        );
+    }
+
+    /// Lines 345-347: after the Merkle walk, if not all sibling hashes were
+    /// consumed (`pi != siblings.len()`), bail. Append one extra hash so the
+    /// walk consumes fewer than the total.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_extra_sibling_hashes() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["hashes"]
+                .as_array_mut()
+                .unwrap()
+                .push("0000000000000000000000000000000000000000000000000000000000000000".into());
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(err.to_string().contains("consumed"), "got: {err}");
+    }
+
+    /// Helper: construct an `InclusionProof` with a custom checkpoint. The
+    /// other fields are irrelevant for the pre-signature checkpoint format
+    /// checks — the error fires before they're read.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fn proof_with_checkpoint(checkpoint: &str) -> InclusionProof {
+        InclusionProof {
+            checkpoint: checkpoint.to_string(),
+            hashes: vec![],
+            log_index: 0,
+            root_hash: String::new(),
+            tree_size: 1,
+        }
+    }
+
+    /// Line 382: `verify_checkpoint` rejects a checkpoint missing the
+    /// `"\n\u{2014} "` note-signature separator.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_invalid_format() {
+        let proof = proof_with_checkpoint("no note signature separator here");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid Rekor checkpoint format"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 388: the signature line has no space separating origin from
+    /// base64-sig.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_invalid_signature_line() {
+        let proof = proof_with_checkpoint("line1\nline2\nline3\n\u{2014} nospacehere\n");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid Rekor checkpoint signature line"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 394: base64-decoded checkpoint signature is < 5 bytes.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_short_signature() {
+        // "AAAA" base64-decodes to 3 bytes (< 5).
+        let proof = proof_with_checkpoint("line1\nline2\nline3\n\u{2014} origin AAAA\n");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string().contains("checkpoint signature too short"),
+            "got: {err}"
+        );
+    }
+
+    /// Lines 548-549: `authenticate_entry` rejects a non-sha256 payloadHash
+    /// algorithm. The body is decoded (kind=dsse) but the payloadHash
+    /// algorithm is sha512, so the check at line 547-549 bails before any
+    /// checkpoint/inclusion/SET verification.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn authenticate_entry_rejects_non_sha256_payload_hash() {
+        let entry = entry_with_body(
+            "dsse",
+            serde_json::json!({
+                "payloadHash": {"algorithm":"sha512","value":"deadbeef"},
+                "signatures": [{"signature":"sig","verifier":"v"}]
+            }),
+        );
+        // log_id must match the key for verify_log_id (called first) to pass.
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = authenticate_entry(&entry, &key).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported payloadHash algorithm"),
+            "got: {err}"
+        );
     }
 }
