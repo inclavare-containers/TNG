@@ -192,7 +192,7 @@ fn resolve_rekor_key(entry: &rekor_v1::RekorEntry, log_url: &str) -> Result<reko
 ///
 /// Parses the manifest string as a `serde_json::Value` (so a caller-supplied
 /// manifest with unsorted / whitespace-padded keys is normalized) then
-/// re-serializes via the shared `rekor_v1::jcs_compact` (single source of
+/// re-serializes via the shared `rekor_v1::canonical_json` (single source of
 /// truth shared with the init-bake tests in `mod.rs`) and sha256s it.
 #[cfg(feature = "crypto-rustcrypto")]
 fn canonical_manifest_sha256(manifest_json: &str) -> Result<String> {
@@ -210,16 +210,15 @@ fn canonical_manifest_sha256(manifest_json: &str) -> Result<String> {
 #[cfg(feature = "crypto-rustcrypto")]
 fn canonical_manifest_bytes(manifest_json: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(manifest_json)?;
-    Ok(rekor_v1::jcs_compact(&v))
+    rekor_v1::canonical_json(&v)
 }
 
-/// DSSE Pre-Authentication Encoding (DSSEv1), mirroring cmaas's
-/// `utils.DSSEPAE`. Format: `DSSEv1 <len(type)> <type> <len(payload)> <payload>`
-/// where `<len>` is the ASCII decimal byte length. The DSSE publisher signature
-/// is verified over `sha256(PAE(canonical_manifest))`; see
-/// `verify_entry_dsse_signature`, matching cmaas's `verifyLogEntrySignature`
-/// (`pae := DSSEPAE(DSSEPayloadType, payload); h := sha256(pae);
-/// ecdsa.VerifyASN1(pub, h, sig)`).
+/// DSSE Pre-Authentication Encoding (DSSEv1). Format:
+/// `DSSEv1 <len(type)> <type> <len(payload)> <payload>` where `<len>` is the
+/// ASCII decimal byte length. The DSSE publisher signature is verified over
+/// `sha256(PAE(canonical_manifest))`; see `verify_entry_dsse_signature`
+/// (the verify step is `h := sha256(pae); ecdsa.verify(pub, h, sig)`, where
+/// `pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload)`).
 #[cfg(feature = "crypto-rustcrypto")]
 fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
     let prefix = format!(
@@ -685,12 +684,12 @@ fn resolve_publisher_key(
 
 /// Canonicalize a `log_services_json` string into a stable cache-key component:
 /// parse to a `serde_json::Value` (normalizing key order / whitespace) then
-/// re-serialize via the shared `rekor_v1::jcs_compact` (sorted compact). Two
+/// re-serialize via the shared `rekor_v1::canonical_json` (RFC 8785 JCS). Two
 /// semantically-equal log-services lists produce the same canonical string.
 #[cfg(feature = "crypto-rustcrypto")]
 fn canonicalize_log_services(log_services_json: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(log_services_json)?;
-    Ok(rekor_v1::jcs_compact(&v))
+    rekor_v1::canonical_json(&v)
 }
 
 /// Test-only helper: clear both process-global host-await caches so a test can

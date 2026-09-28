@@ -3328,13 +3328,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         );
     }
 
-    /// Serialize a `serde_json::Value` as compact JSON with object keys sorted
-    /// (RFC 8785 JCS ordering for this shape — no numbers, so JCS == sorted
-    /// compact). Needed because TNG's `serde_json` preserves insertion order.
-    /// Delegate to the single shared `rekor_v1::jcs_compact` so the init-bake
-    /// tests and the on-demand host-await path compute identical bytes.
+    /// Canonicalize a `serde_json::Value` via the shared `rekor_v1::canonical_json`
+    /// (RFC 8785 JCS) so the init-bake tests and the on-demand host-await path
+    /// compute identical bytes.
     fn jcs_compact(value: &serde_json::Value) -> String {
-        rekor_v1::jcs_compact(value)
+        rekor_v1::canonical_json(value).expect("canonical JSON serialize")
     }
 
     /// Prove the real fixture's DSSE signature verifies with its own
