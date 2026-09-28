@@ -24,7 +24,6 @@ hex = {workspace = true}
 http = {workspace = true}
 http-body = {workspace = true}
 http-body-util = {workspace = true}
-hyper = {workspace = true, features = ["client"]}
 js-sys = {workspace = true}
 serde = {workspace = true}
 serde-wasm-bindgen = {workspace = true}

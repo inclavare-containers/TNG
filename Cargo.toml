@@ -5,7 +5,6 @@ members = [
   "tng",
   "tng-testsuite",
   "tng-wasm",
-  "deps/hyper-util-shim",
   "rats-cert",
   "tng-hook/types",
   "tng-hook/cdylib",
@@ -188,13 +187,14 @@ git = "https://github.com/inclavare-containers/tokio-graceful.git"
 git = "https://github.com/inclavare-containers/hyper.git"
 rev = "6fde2c7c2e00b4fc1b9e31b827654230f488630f"
 
+[patch.crates-io.hyper-util]
+git = "https://github.com/inclavare-containers/hyper-util.git"
+rev = "4854ab5e5d67ff38a038ab22a1bd25087456bc84"
+
 [patch.crates-io.quinn-udp]
 # Forked quinn-udp with IP_ORIGDSTADDR + dst_addr in RecvMeta for TPROXY compatibility
 git = "https://github.com/inclavare-containers/quinn.git"
 rev = "2995f83efe00cdce9bb833b922e69d08649b271b"
-
-[patch.crates-io]
-hyper-util = {path = "./deps/hyper-util-shim"}
 
 [profile.release.package.tng-wasm]
 # Tell `rustc` to optimize for small code size.

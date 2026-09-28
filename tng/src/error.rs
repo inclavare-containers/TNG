@@ -48,6 +48,7 @@ pub enum TngError {
     InvalidHttpResponse,
 
     #[error("Http error during forwarding HTTP plain text to upstream")]
+    #[cfg(not(wasm))]
     HttpPlainTextForwardError(#[source] hyper::Error),
 
     #[error("Http error during forwarding HTTP cipher text to upstream")]
@@ -195,6 +196,7 @@ impl IntoResponse for TngError {
             TngError::ConnectUpstreamFailed => StatusCode::BAD_GATEWAY,
 
             // Timeouts / Network failures
+            #[cfg(not(wasm))]
             TngError::HttpPlainTextForwardError(..) => StatusCode::BAD_GATEWAY,
             TngError::HttpCipherTextForwardError(e) => {
                 #[cfg(not(wasm))]

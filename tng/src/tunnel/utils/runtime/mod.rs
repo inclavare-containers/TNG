@@ -11,6 +11,10 @@ use tracing::Instrument;
 use crate::tunnel::utils::runtime::future::TokioRuntimeSupportedFuture;
 
 pub mod future;
+// hyper::rt::Executor is only implemented here for the native tunnel runtime;
+// on wasm TokioRuntime is just a wrapper and never drives hyper, so the module
+// (and the hyper dep) is compiled away from wasm.
+#[cfg(not(wasm))]
 pub mod hyper;
 pub mod supervised_task;
 

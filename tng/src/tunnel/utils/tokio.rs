@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 //! Tokio IO integration for hyper
+#[cfg(not(wasm))]
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -44,6 +45,7 @@ impl<T> TokioIo<T> {
     }
 }
 
+#[cfg(not(wasm))]
 impl<T> hyper::rt::Read for TokioIo<T>
 where
     T: tokio::io::AsyncRead,
@@ -68,6 +70,7 @@ where
     }
 }
 
+#[cfg(not(wasm))]
 impl<T> hyper::rt::Write for TokioIo<T>
 where
     T: tokio::io::AsyncWrite,
@@ -104,6 +107,7 @@ where
     }
 }
 
+#[cfg(not(wasm))]
 impl<T> tokio::io::AsyncRead for TokioIo<T>
 where
     T: hyper::rt::Read,
@@ -136,6 +140,7 @@ where
     }
 }
 
+#[cfg(not(wasm))]
 impl<T> tokio::io::AsyncWrite for TokioIo<T>
 where
     T: hyper::rt::Write,

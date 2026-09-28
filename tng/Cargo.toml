@@ -36,8 +36,6 @@ http = {workspace = true}
 http-body = {workspace = true}
 http-body-util = {workspace = true}
 httparse = {workspace = true}
-hyper = {workspace = true}
-hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
 libc = "0.2"
@@ -116,6 +114,8 @@ x509-cert = {workspace = true}
 async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
 atty = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
+hyper = {workspace = true}
+hyper-util = {workspace = true}
 moka = {workspace = true}
 notify = {workspace = true}
 quinn = {workspace = true}
