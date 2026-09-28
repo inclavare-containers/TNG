@@ -3,6 +3,7 @@
 //! This module implements local evidence verification using the embedded attestation-service crate.
 //! It converts CocoEvidence to CocoAsToken by running attestation-service in-process.
 
+mod artifact_server;
 mod rekor_v1;
 
 use std::path::{Path, PathBuf};
@@ -666,57 +667,107 @@ impl BuiltinCocoConverter {
                 published_measurements,
                 schema_version,
                 services,
-                ..
+                fallback_published_measurements,
+                fallback_services,
             } => {
-                // Initial implementation: exactly one rekor-v1 service.
-                let svc = match services.as_slice() {
-                    [TransparencyServiceConfig::RekorV1 {
-                        log_url,
-                        log_index,
-                        rekor_public_key_pem,
-                        publisher_public_key_pem,
-                    }] => (
-                        log_url.as_str(),
-                        *log_index,
-                        rekor_public_key_pem.as_deref(),
-                        publisher_public_key_pem.as_deref(),
-                    ),
-                    _ => {
-                        return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
-                            "transparency_log policy requires exactly one rekor-v1 service"
-                        )))
-                    }
-                };
-                let (log_url, log_index, rekor_public_key_pem, publisher_public_key_pem) = svc;
-                tracing::info!(
-                    log_url,
-                    log_index,
-                    "Loading transparency_log policy: fetching Rekor v1 entry"
-                );
-                let auth =
-                    rekor_v1::fetch_trusted_payload_hash(log_url, log_index, rekor_public_key_pem)
+                // Validate the full §5.3 config shape BEFORE dispatching on the
+                // primary service type. This turns every operator-supplied config
+                // violation (empty/missing fields, artifact-server-not-sole-primary,
+                // fallback-requires-artifact-server-primary, non-rekor-v1 in
+                // fallbackServices, fallbackPublishedMeasurements-not-subset,
+                // duplicate logServices, etc.) into a clean `Err` at load time
+                // rather than a process panic (e.g. `unreachable!` / `fs[0]` in
+                // `build_artifact_server_policy`) downstream.
+                policy
+                    .validate_transparency_config()
+                    .map_err(Error::TransparencyLogFetchFailed)?;
+                // Dispatch on the primary service type. `RekorV1` keeps the
+                // existing init-bake path verbatim (fetch + bake payloadHash);
+                // `ArtifactServer` generates Branch-B Rego that resolves the
+                // manifest at appraisal time via `tng.resolve_artifact_server`
+                // (with an optional `tng.fetch_rekor_on_demand` fallback) and
+                // bakes NO payloadHash.
+                let primary = services.first().ok_or_else(|| {
+                    Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                        "transparency_log services must be non-empty"
+                    ))
+                })?;
+                match primary {
+                    TransparencyServiceConfig::RekorV1 { .. } => {
+                        // EXISTING init-bake path — unchanged (fetch the rekor-v1
+                        // entry by logIndex, authenticate it, bake the trusted
+                        // payloadHash into Rego). Branch-B (artifact-server) is a
+                        // separate arm below; this stays verbatim for rekor-v1.
+                        let svc = match services.as_slice() {
+                            [TransparencyServiceConfig::RekorV1 {
+                                log_url,
+                                log_index,
+                                rekor_public_key_pem,
+                                publisher_public_key_pem,
+                            }] => (
+                                log_url.as_str(),
+                                *log_index,
+                                rekor_public_key_pem.as_deref(),
+                                publisher_public_key_pem.as_deref(),
+                            ),
+                            _ => {
+                                return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                                    "transparency_log policy requires exactly one rekor-v1 service"
+                                )))
+                            }
+                        };
+                        let (log_url, log_index, rekor_public_key_pem, publisher_public_key_pem) =
+                            svc;
+                        tracing::info!(
+                            log_url,
+                            log_index,
+                            "Loading transparency_log policy: fetching Rekor v1 entry"
+                        );
+                        let auth = rekor_v1::fetch_trusted_payload_hash(
+                            log_url,
+                            log_index,
+                            rekor_public_key_pem,
+                        )
                         .await
                         .map_err(Error::TransparencyLogFetchFailed)?;
-                // Resolve the DSSE signature to bake into the policy. A real
-                // rekor v1 `dsse` entry always carries a signature, so an empty
-                // field means a malformed/non-dsse entry. If the operator
-                // configured a publisher key (opting into DSSE verify), that is
-                // a config/entry mismatch — fail closed rather than silently
-                // emitting a weaker payloadHash-only policy. With no publisher
-                // key configured there is no DSSE expectation, so
-                // payloadHash-only is the intended fallback.
-                let dsse_signature =
-                    resolve_dsse_signature(&auth.dsse_signature, publisher_public_key_pem)
-                        .map_err(Error::TransparencyLogFetchFailed)?;
-                let policy = build_transparency_log_policy(
-                    &auth.payload_hash,
-                    schema_version,
-                    published_measurements.as_deref(),
-                    dsse_signature,
-                    publisher_public_key_pem,
-                );
-                tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash into Rego");
-                Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
+                        // Resolve the DSSE signature to bake into the policy. A real
+                        // rekor v1 `dsse` entry always carries a signature, so an empty
+                        // field means a malformed/non-dsse entry. If the operator
+                        // configured a publisher key (opting into DSSE verify), that is
+                        // a config/entry mismatch — fail closed rather than silently
+                        // emitting a weaker payloadHash-only policy. With no publisher
+                        // key configured there is no DSSE expectation, so
+                        // payloadHash-only is the intended fallback.
+                        let dsse_signature =
+                            resolve_dsse_signature(&auth.dsse_signature, publisher_public_key_pem)
+                                .map_err(Error::TransparencyLogFetchFailed)?;
+                        let policy = build_transparency_log_policy(
+                            &auth.payload_hash,
+                            schema_version,
+                            published_measurements.as_deref(),
+                            dsse_signature,
+                            publisher_public_key_pem,
+                        );
+                        tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash into Rego");
+                        Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
+                    }
+                    TransparencyServiceConfig::ArtifactServer { url, log_services } => {
+                        tracing::info!(
+                            artifact_server_url = %url,
+                            "Loading transparency_log policy: generating Branch-B (artifact-server) Rego"
+                        );
+                        let policy = build_artifact_server_policy(
+                            schema_version,
+                            published_measurements.as_deref(),
+                            url,
+                            log_services,
+                            fallback_published_measurements.as_deref(),
+                            fallback_services.as_deref(),
+                        )?;
+                        tracing::info!(policy = %policy, "Transparency_log policy loaded: Branch-B (artifact-server primary, no baked payloadHash)");
+                        Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
+                    }
+                }
             }
             #[cfg(not(feature = "crypto-rustcrypto"))]
             PolicyConfig::TransparencyLog { .. } => {
@@ -1297,6 +1348,189 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
     }
 }
 
+/// Build the Branch-B Rego policy for a transparency_log config whose primary
+/// service is an `artifact-server`. Unlike the init-bake `build_transparency_log_policy`
+/// (which fetches a rekor-v1 entry at init and bakes the trusted `payloadHash`),
+/// Branch-B bakes NO payloadHash: at appraisal the Rego reconstructs the manifest
+/// from the actual TDX measurement values (`actual_measurement`), then calls
+/// `tng.resolve_artifact_server(url, json.marshal(full_manifest), json.marshal(log_services))`
+/// as the primary verification path. When a fallback is configured, it also
+/// defines `fallback_manifest` + `fallback_ok`; the `fallback_ok` rule body is
+/// `not primary_ok; tng.fetch_rekor_on_demand(...)`, so regorus's left-to-right
+/// body short-circuit must skip the fallback network call when `primary_ok` is
+/// true (verified by `branch_b_does_not_call_fallback_when_primary_ok`).
+///
+/// The header + `actual_measurement`/`image_repo_name` reconstruction + the
+/// hardware scoring block are copied verbatim from the existing rekor-v1
+/// template (same appraisal semantics).
+///
+/// Carry #1: `measurements_verified if { fallback_ok }` is emitted ONLY when
+/// fallback is configured (otherwise the undefined `fallback_ok` rule would be
+/// a Rego parse/eval error); with no fallback `measurements_verified` depends
+/// solely on `primary_ok`.
+#[cfg(feature = "crypto-rustcrypto")]
+fn build_artifact_server_policy(
+    schema_version: &str,
+    published_measurements: Option<&[String]>,
+    artifact_url: &str,
+    log_services: &[ArtifactLogService],
+    fallback_published_measurements: Option<&[String]>,
+    fallback_services: Option<&[TransparencyServiceConfig]>,
+) -> Result<String> {
+    let pm: Vec<String> = published_measurements.unwrap_or_default().to_vec();
+    let pm_lit = format!(
+        "[{}]",
+        pm.iter()
+            .map(|t| format!("{t:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let ls_lit = serde_json::to_string(log_services).map_err(Error::SerializeJsonFailed)?;
+    let url_lit = serde_json::to_string(artifact_url).map_err(Error::SerializeJsonFailed)?;
+
+    // Fallback block: only when fallback is configured.
+    let (fallback_lit, fallback_rules) = match (fallback_published_measurements, fallback_services)
+    {
+        (Some(fpm), Some(fs)) => {
+            let first = match fs.first() {
+                Some(TransparencyServiceConfig::RekorV1 {
+                    log_url, log_index, ..
+                }) => (log_url.clone(), *log_index),
+                Some(_) => {
+                    return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                        "fallbackServices must contain only rekor-v1 services"
+                    )))
+                }
+                None => {
+                    return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
+                        "fallbackServices is empty"
+                    )))
+                }
+            };
+            let fpm_lit = format!(
+                "[{}]",
+                fpm.iter()
+                    .map(|t| format!("{t:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            (
+                format!(
+                    "\nfallback_published_measurements := {fpm_lit}\nfallback_log_url := {:?}\nfallback_log_index := {}\n",
+                    first.0, first.1
+                ),
+                // `not primary_ok` short-circuits the body before the
+                // `tng.fetch_rekor_on_demand` call when primary_ok is true.
+                r#"
+fallback_manifest := {"measurements": [{"type": t, "value": actual_measurement(t)} | some t in fallback_published_measurements], "schemaVersion": schema_version}
+fallback_ok if {
+    not primary_ok
+    tng.fetch_rekor_on_demand([fallback_log_url, fallback_log_index, json.marshal(fallback_manifest)]) == true
+}
+"#,
+            )
+        }
+        _ => (String::new(), ""),
+    };
+
+    // Carry #1: emit the `measurements_verified if { fallback_ok }` line ONLY
+    // when fallback is configured. With no fallback, `fallback_ok` is undefined
+    // and referencing it would be a Rego error; `measurements_verified` then
+    // depends solely on `primary_ok`.
+    let measurements_verified_lines = if fallback_rules.is_empty() {
+        "measurements_verified if { primary_ok }\n".to_string()
+    } else {
+        "measurements_verified if { primary_ok }\nmeasurements_verified if { fallback_ok }\n"
+            .to_string()
+    };
+
+    let rego = format!(
+        r#"package policy
+import rego.v1
+
+default executables := 97
+default configuration := 2
+default file_system := 2
+default hardware := 127
+
+schema_version := {schema_version:?}
+published_measurements := {pm_lit}
+artifact_server_url := {url_lit}
+log_services := {ls_lit}{fallback_lit}
+
+actual_measurement("tdx.td-shim") := input.tdx.quote.body.mr_td
+
+actual_measurement(type) := digest if {{
+    startswith(type, "container.image.")
+    repo := replace(type, "container.image.", "")
+    some e in input.tdx.uefi_event_logs
+    e.details.unicode_name == "AAEL"
+    e.details.data.domain == "alibabacloud.com"
+    e.details.data.operation == "kangaroo/pull-image"
+    image_repo_name(e.details.data.content.reference) == repo
+    digest := e.details.data.content.digest
+}}
+
+image_repo_name(ref) := name if {{
+    segs := split(ref, "/")
+    last := segs[count(segs) - 1]
+    name := split(split(last, "@")[0], ":")[0]
+}}
+
+full_manifest := {{
+    "measurements": [{{"type": t, "value": actual_measurement(t)}} | some t in published_measurements],
+    "schemaVersion": schema_version,
+}}
+
+primary_ok if {{
+    tng.resolve_artifact_server([artifact_server_url, json.marshal(full_manifest), json.marshal(log_services)]) == true
+}}{fallback_rules}
+
+{measurements_verified_lines}
+executables := 2 if {{ measurements_verified }}
+
+hardware := 2 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    tdx_eventlog_present
+}}
+hardware := 126 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id != "939a7233f79c4ca9940a0db3957f0607"
+}}
+hardware := 125 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    not tdx_debug_disabled
+}}
+hardware := 33 if {{
+    input.tdx.quote.header.tee_type == "81000000"
+    input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+    tdx_debug_disabled
+    not tdx_eventlog_present
+}}
+tdx_debug_disabled if {{ regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes) }}
+tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
+"#,
+        schema_version = schema_version,
+        pm_lit = pm_lit,
+        url_lit = url_lit,
+        ls_lit = ls_lit,
+        fallback_lit = fallback_lit,
+        fallback_rules = fallback_rules,
+        // `measurements_verified_lines` is interpolated on its own template line
+        // where the literal already supplies the trailing newline (the line break
+        // before `executables := 2 if {{ ... }}`), so its own trailing `\n` is
+        // trimmed to avoid a double blank line. `fallback_rules`/`fallback_lit`
+        // are interpolated mid-line (`}}{fallback_rules}`, `{ls_lit}{fallback_lit}`)
+        // where the template provides no separating newline, so they KEEP their
+        // trailing `\n` to terminate their last rule on its own line.
+        measurements_verified_lines = measurements_verified_lines.trim_end(),
+    );
+    Ok(rego)
+}
+
 /// Host-await function that injects the `tng.sha256` builtin regorus 0.11
 /// omits by design. It sha256-hashes its single string argument and resumes
 /// the VM with the lowercase-hex digest as a `regorus::Value::String`,
@@ -1440,6 +1674,27 @@ fn builtin_as_host_await_functions() -> Vec<(
     fns.push((
         "tng.verify_dsse_signature".to_string(),
         verify_dsse_signature_host_await(),
+    ));
+    // On-demand rekor fallback (transparency_log artifact-server path).
+    // Fetch+authenticate a Rekor v1 entry by logIndex at appraisal time and
+    // compare its trusted payloadHash to sha256(canonical manifest). Caches
+    // successes only; failures re-try. Same feature gate as
+    // `verify_dsse_signature` — it needs the `rekor_v1` crypto path.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fns.push((
+        "tng.fetch_rekor_on_demand".to_string(),
+        artifact_server::fetch_rekor_on_demand_host_await(),
+    ));
+    // Primary artifact-server path: resolve the manifest via the Artifact
+    // Server `POST /api/v1/transparency/resolve`, authenticate each returned
+    // rekor-v1 entry locally, and verify payloadHash == sha256(canonical
+    // manifest). On any failure returns `false` (not cached) so Rego falls
+    // back to `tng.fetch_rekor_on_demand`. Same feature gate — it needs the
+    // `rekor_v1` crypto path.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fns.push((
+        "tng.resolve_artifact_server".to_string(),
+        artifact_server::resolve_artifact_server_host_await(),
     ));
     fns
 }
@@ -2946,29 +3201,10 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// Serialize a `serde_json::Value` as compact JSON with object keys sorted
     /// (RFC 8785 JCS ordering for this shape — no numbers, so JCS == sorted
     /// compact). Needed because TNG's `serde_json` preserves insertion order.
+    /// Delegate to the single shared `rekor_v1::jcs_compact` so the init-bake
+    /// tests and the on-demand host-await path compute identical bytes.
     fn jcs_compact(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                let mut s = String::from("{");
-                for (i, k) in keys.iter().enumerate() {
-                    if i > 0 {
-                        s.push(',');
-                    }
-                    s.push_str(&serde_json::to_string(k).unwrap());
-                    s.push(':');
-                    s.push_str(&jcs_compact(&map[*k]));
-                }
-                s.push('}');
-                s
-            }
-            serde_json::Value::Array(arr) => {
-                let items: Vec<String> = arr.iter().map(jcs_compact).collect();
-                format!("[{}]", items.join(","))
-            }
-            _ => serde_json::to_string(value).unwrap(),
-        }
+        rekor_v1::jcs_compact(value)
     }
 
     /// Prove the real fixture's DSSE signature verifies with its own
@@ -3380,6 +3616,10 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         assert!(p.validate_transparency_config().is_err());
     }
 
+    // Gate mirrors the `#[cfg(feature = "crypto-rustcrypto")]` on the
+    // `tng.verify_dsse_signature` registration this test asserts; `tng.sha256`
+    // (always registered) is still checked under the same gate when crypto is on.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn host_await_functions_use_tng_prefix() {
         let fns = builtin_as_host_await_functions();
@@ -3389,5 +3629,557 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         assert!(!names
             .iter()
             .any(|n| n == &"crypto.sha256" || n == &"verify_dsse_signature"));
+    }
+
+    // ---- Task 6: Branch-B (artifact-server primary) Rego generation ----
+
+    /// The generated Branch-B Rego must reference the two host-awaits, the
+    /// `primary_ok`/`fallback_ok` rules, the baked artifact-server URL, and must
+    /// NOT bake a `payload_hash :=` (the whole point of Branch-B: the manifest
+    /// is resolved at appraisal time, not baked at init).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn artifact_server_primary_generates_branch_b_rego() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["tdx.td-shim","container.image.cmaas-runtime"],
+            "schemaVersion":"1.0.0",
+            "services":[{"type":"artifact-server","url":"https://attest.example.com",
+                "logServices":[{"type":"rekor-v1","url":"https://rekor.sigstore.dev"}]}],
+            "fallbackPublishedMeasurements":["container.image.cmaas-runtime"],
+            "fallbackServices":[{"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":42}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        let encoded = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .unwrap()
+            .expect("artifact-server primary must produce a policy");
+        let rego = String::from_utf8(
+            URL_SAFE_NO_PAD
+                .decode(&encoded)
+                .expect("decode base64 policy"),
+        )
+        .expect("utf8");
+        assert!(
+            rego.contains("tng.resolve_artifact_server"),
+            "Branch-B rego must call the primary host-await\n{rego}"
+        );
+        assert!(
+            rego.contains("tng.fetch_rekor_on_demand"),
+            "Branch-B rego must call the fallback host-await (fallback configured)\n{rego}"
+        );
+        assert!(
+            rego.contains("\"https://attest.example.com\""),
+            "Branch-B rego must bake the artifact-server URL\n{rego}"
+        );
+        assert!(
+            rego.contains("primary_ok"),
+            "Branch-B rego must define primary_ok\n{rego}"
+        );
+        assert!(
+            rego.contains("fallback_ok"),
+            "Branch-B rego must define fallback_ok (fallback configured)\n{rego}"
+        );
+        assert!(
+            !rego.contains("payload_hash :="),
+            "Branch-B rego must NOT bake a payload_hash (artifact-server primary resolves at appraisal)\n{rego}"
+        );
+    }
+
+    /// With NO fallback configured, Branch-B Rego omits the `fallback_ok` rule
+    /// AND the `measurements_verified if { fallback_ok }` line (carry #1):
+    /// referencing an undefined `fallback_ok` would be a Rego eval error.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn artifact_server_primary_without_fallback_omits_fallback_rules() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["container.image.cmaas-runtime"],
+            "schemaVersion":"1.0.0",
+            "services":[{"type":"artifact-server","url":"https://attest.example.com",
+                "logServices":[{"type":"rekor-v1","url":"https://rekor.sigstore.dev"}]}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        let encoded = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .unwrap()
+            .expect("policy");
+        let rego = String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+        assert!(
+            !rego.contains("fallback_ok"),
+            "no-fallback rego must not reference fallback_ok\n{rego}"
+        );
+        assert!(
+            !rego.contains("fallback_manifest"),
+            "no-fallback rego must not reference fallback_manifest\n{rego}"
+        );
+        assert!(
+            rego.contains("measurements_verified if { primary_ok }"),
+            "no-fallback rego must still define measurements_verified via primary_ok\n{rego}"
+        );
+    }
+
+    /// §14.4 short-circuit verification: when the artifact-server primary
+    /// resolves successfully (`primary_ok` true), regorus must NOT evaluate the
+    /// `tng.fetch_rekor_on_demand` call in the `fallback_ok` body. Detect any
+    /// eager fallback network call with a raw TCP listener: if
+    /// `tng.fetch_rekor_on_demand` fires, it opens a TCP connection here and
+    /// `fallback_called` becomes true (the host-await's clean-deny then swallows
+    /// the connection-reset into `Ok(false)`, so `executables` stays 2 either
+    /// way — the listener is what makes the short-circuit observable).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn branch_b_does_not_call_fallback_when_primary_ok() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+
+        // Clear the process-global resolve cache so the artifact-server mock is
+        // actually exercised (proves the primary path works end-to-end through
+        // the real rego, not just a stale cache hit).
+        artifact_server::invalidate_host_await_caches_for_test();
+
+        // Detector listener: any TCP connection here means the fallback
+        // host-await was called despite primary_ok being true.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback_addr = listener.local_addr().unwrap();
+        let fallback_called = Arc::new(AtomicBool::new(false));
+        let called_clone = fallback_called.clone();
+        tokio::spawn(async move {
+            // Accept at most a few connections so a stray retry doesn't block
+            // forever; the first accept flips the flag.
+            for _ in 0..4 {
+                if listener.accept().await.is_ok() {
+                    called_clone.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+
+        // Artifact-server mock: resolve success using the cmaas fixture (the
+        // entry's authenticated payloadHash == sha256(JCS(release_manifest))).
+        let server = wiremock::MockServer::start().await;
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+        ))
+        .unwrap();
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let resolve_body = serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "public_key", "content": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----"},
+                "log_verifier": {"public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----"}
+            }]
+        })
+        .to_string();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .mount(&server)
+            .await;
+
+        // Build Branch-B policy via the real entry point. The fallback
+        // log_url points at the detector listener; log_index is arbitrary.
+        let cfg_json = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["container.image.cmaas-runtime"],
+            "schemaVersion":"1.0.0",
+            "services":[{"type":"artifact-server","url":server.uri(),
+                "logServices":[{"type":"rekor-v1","url":entry_url}]}],
+            "fallbackPublishedMeasurements":["container.image.cmaas-runtime"],
+            "fallbackServices":[{"type":"rekor-v1",
+                "logUrl":format!("http://{}",fallback_addr),"logIndex":42}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg_json).unwrap();
+        let encoded = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .unwrap()
+            .expect("policy");
+        let policy = String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+
+        // Rego input: valid non-debug TDX platform + AAEL kangaroo/pull-image
+        // event carrying the cmaas fixture's measurement digest (the same
+        // release_manifest the mock resolves, so the reconstructed
+        // `full_manifest` hashes to the entry's authenticated payloadHash).
+        let digest = manifest["measurements"][0]["value"]
+            .as_str()
+            .expect("fixture manifest measurement value");
+        let input = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EVENT_TAG","details":{{"unicode_name":"AAEL","data":{{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{{"reference":"registry.example.com/ns/cmaas-runtime:latest","digest":{digest:?}}}}}}}}}]}}}}"#
+        );
+
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(vec.0, 2, "primary_ok must affirm executables (got {vec:?})");
+
+        // Give the detector task a moment to observe a connection if regorus
+        // made one (the host-await's reqwest GET would open the TCP connection
+        // before the connection is reset).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !fallback_called.load(Ordering::SeqCst),
+            "tng.fetch_rekor_on_demand must NOT be called when primary_ok is true \
+             (regorus left-to-right body short-circuit), but a TCP connection to the \
+             fallback listener was observed — regorus eagerly evaluated the fallback \
+             host-await (carry #2): switch to a combined host-await"
+        );
+    }
+
+    // ---- Task 7: end-to-end Branch-B integration + config parity ------------
+
+    /// Load the cmaas evidence fixture and extract the matched
+    /// `(release_manifest, log_entry, entry_url, log_index)` tuple. The entry's
+    /// authenticated `payloadHash` == `sha256(JCS(release_manifest))` ==
+    /// `b40611d4...` (verified in `rekor_v1` fixture tests + the §14.4 e2e), so a
+    /// resolve/fetch response built from it exercises real inclusion/checkpoint/SET
+    /// crypto and the payloadHash comparison → `true`.
+    fn cmaas_transparency_tuple() -> (serde_json::Value, serde_json::Value, String, i64) {
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+        ))
+        .expect("parse cmaas fixture");
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
+            .as_str()
+            .expect("entry url")
+            .to_string();
+        let log_index = log_entry["logIndex"].as_i64().expect("logIndex");
+        (manifest, log_entry, entry_url, log_index)
+    }
+
+    /// Build a resolve-response JSON body from the cmaas fixture pair. The SDK's
+    /// `LogEntry` requires non-optional `entry_verifier`/`log_verifier` fields, so
+    /// dummy values are supplied; `authenticate_entry` ignores both (the rekor
+    /// key is resolved via the entry URL's hostname → built-in sigstore key).
+    fn resolve_response_body(
+        manifest: &serde_json::Value,
+        log_entry: &serde_json::Value,
+        entry_url: &str,
+    ) -> String {
+        // Real response verifiers (cmaas-audit response-key path): the impl
+        // now USES `entry_verifier.content` (DSSE publisher PEM) and
+        // `log_verifier.public_key_pem` (Sigstore rekor PEM) instead of
+        // ignoring them. Copied from cmaas's `LogEntryPubKeyPEM` and
+        // `SigstoreRekorV1PubKeyPEM` (`source/pkg/transparency/rekorv1.go`).
+        const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
+        const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
+        serde_json::json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
+            }]
+        })
+        .to_string()
+    }
+
+    /// Build a rekor-v1 `GET /api/v1/log/entries?logIndex=` response body
+    /// (`{uuid: entry}` wire format) from the fixture log_entry.
+    fn rekor_entries_body(log_entry: &serde_json::Value) -> String {
+        let uuid = "00000000-0000-0000-0000-000000000000";
+        serde_json::json!({ uuid: log_entry }).to_string()
+    }
+
+    /// Build the TDX rego `input` carrying the cmaas fixture's measurement digest
+    /// in an AAEL kangaroo/pull-image event, plus valid non-debug TDX platform
+    /// evidence. The `full_manifest` Rego reconstructs from this digest hashes to
+    /// the entry's authenticated `payloadHash`, so `primary_ok`/`fallback_ok`
+    /// can reach `true` when the mock serves the fixture entry.
+    fn cmaas_tdx_input(manifest: &serde_json::Value) -> String {
+        let digest = manifest["measurements"][0]["value"]
+            .as_str()
+            .expect("fixture manifest measurement value");
+        format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EVENT_TAG","details":{{"unicode_name":"AAEL","data":{{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{{"reference":"registry.example.com/ns/cmaas-runtime:latest","digest":{digest:?}}}}}}}}}]}}}}"#
+        )
+    }
+
+    /// Build a Branch-B policy from the cmaas fixture + per-scenario mock URLs.
+    /// `published_measurements` = the fixture's cmaas-runtime type; the fallback
+    /// rekor service points at the given `fallback_log_url`/`fallback_log_index`.
+    async fn build_branch_b_policy(
+        artifact_url: &str,
+        entry_url: &str,
+        fallback_log_url: &str,
+        fallback_log_index: i64,
+    ) -> String {
+        let cfg_json = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["container.image.cmaas-runtime"],
+            "schemaVersion":"1.0.0",
+            "services":[{"type":"artifact-server","url":artifact_url,
+                "logServices":[{"type":"rekor-v1","url":entry_url}]}],
+            "fallbackPublishedMeasurements":["container.image.cmaas-runtime"],
+            "fallbackServices":[{"type":"rekor-v1",
+                "logUrl":fallback_log_url,"logIndex":fallback_log_index}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg_json).expect("parse cfg");
+        p.validate_transparency_config().expect("validate cfg");
+        let encoded = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .expect("encode")
+            .expect("policy");
+        String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap()
+    }
+
+    /// §14.5 end-to-end Branch-B integration: drive the full policy through the
+    /// real regorus evaluator (`eval_policy_vector`, which injects
+    /// `builtin_as_host_await_functions()` — `tng.resolve_artifact_server` +
+    /// `tng.fetch_rekor_on_demand`) across the three appraisal outcomes:
+    ///
+    ///  (a) **Primary success** — the artifact-server mock returns a valid
+    ///      resolved entry for the evidence's reconstructed manifest →
+    ///      `primary_ok` true → `executables == 2` (fallback never fires).
+    ///  (b) **Fallback success** — the artifact-server mock returns 500 →
+    ///      `primary_ok` false; the fallback rekor mock returns the cmaas fixture
+    ///      entry by `logIndex` for the fallback manifest → `fallback_ok` true →
+    ///      `executables == 2`.
+    ///  (c) **Both fail** — artifact-server 500 and fallback rekor 500 →
+    ///      `primary_ok` false, `fallback_ok` false → `executables == 97` (deny).
+    ///
+    /// Each scenario clears the process-global host-await caches
+    /// (`invalidate_host_await_caches_for_test`) so a prior scenario's cached
+    /// success/failure cannot short-circuit the next (the resolve cache key is
+    /// `(manifest_hash, canonical_log_services)` — shared across (a) and (b)
+    /// despite different artifact-server URLs).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn branch_b_e2e_primary_success_then_fallback_then_deny() {
+        let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        // --- Scenario (a): primary success → executables == 2 --------------
+        // Fallback points at a dead port; if the primary failed and the
+        // short-circuit did not hold, the fallback would fail too → 97. So
+        // asserting 2 proves the primary path resolved + authenticated.
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(resolve_body.clone()),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let policy =
+                build_branch_b_policy(&server.uri(), &entry_url, "http://127.0.0.1:1", log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "primary success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // --- Scenario (b): fallback success → executables == 2 -------------
+        // Artifact-server returns 500; the fallback rekor mock serves the cmaas
+        // fixture entry at the fallback logIndex, authenticates, and its
+        // payloadHash matches the reconstructed fallback manifest.
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(rekor_body.clone()),
+                )
+                .expect(1)
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "fallback success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // --- Scenario (c): both fail → executables == 97 --------------------
+        // Artifact-server 500 and fallback rekor 500: primary_ok false,
+        // fallback_ok false → `measurements_verified` undefined → executables
+        // stays at its contraindicated default (97).
+        artifact_server::invalidate_host_await_caches_for_test();
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("rekor down"))
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(vec.0, 97, "both-fail must deny executables (got {vec:?})");
+        }
+    }
+
+    /// Config parity: the exact artifact-server + fallback example from the
+    /// secure-proxy README (wrapped in the §5.1 `PolicyConfig::TransparencyLog`
+    /// top-level shape) must parse into `PolicyConfig`, pass
+    /// `validate_transparency_config`, and round-trip (serialize → parse →
+    /// Debug-equal). Pins wire compatibility between the secure-proxy config
+    /// writer and the tng `PolicyConfig` schema (Tasks 1–6).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn secure_proxy_readme_json_round_trips() {
+        let json = std::fs::read_to_string(
+            "src/tee/coco/converter/builtin/tests/fixtures/secure_proxy_artifact_server_config.json",
+        )
+        .expect("read fixture");
+        let p: PolicyConfig = serde_json::from_str(&json).expect("parse into PolicyConfig");
+        p.validate_transparency_config()
+            .expect("validate_transparency_config succeeds");
+        let round = serde_json::to_string(&p).expect("serialize");
+        let p2: PolicyConfig = serde_json::from_str(&round).expect("re-parse");
+        assert_eq!(
+            format!("{p:?}"),
+            format!("{p2:?}"),
+            "PolicyConfig must round-trip (serialize → parse → Debug-equal)"
+        );
+    }
+
+    // ---- coverage-guided tests for transparency-log dispatch arms ----
+
+    /// Lines 714-716: when the primary service is `RekorV1` but `services`
+    /// contains MORE than one element (e.g. two RekorV1 services),
+    /// `load_policy_as_base64_url_safe_no_pad` rejects with "requires exactly
+    /// one rekor-v1 service". The error fires BEFORE any network fetch, so no
+    /// mock is needed. `validate_transparency_config` passes (each service is
+    /// individually valid), but the dispatch arm's structural check catches
+    /// the multi-service case.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn load_policy_rejects_multiple_rekor_v1_services() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["tdx.td-shim"],
+            "schemaVersion":"1.0.0",
+            "services":[
+                {"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":1},
+                {"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":2}
+            ]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        // Validation passes — each service is individually valid.
+        p.validate_transparency_config().unwrap();
+        // But the dispatch arm rejects the multi-service case (no network).
+        let err = BuiltinCocoConverter::load_policy_as_base64_url_safe_no_pad(&p)
+            .await
+            .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner
+                    .to_string()
+                    .contains("requires exactly one rekor-v1 service"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
+    }
+
+    /// Lines 1400-1402: `build_artifact_server_policy` rejects a
+    /// non-rekor-v1 entry in `fallback_services`. These are
+    /// `bail!` arms behind upstream `validate_transparency_config`, but the
+    /// function is callable directly (e.g. from future callers that bypass
+    /// validation), so the bounds check is intentional defense-in-depth.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn build_artifact_server_policy_rejects_non_rekor_v1_fallback() {
+        let bad_fallback = vec![TransparencyServiceConfig::ArtifactServer {
+            url: "https://x".to_string(),
+            log_services: vec![],
+        }];
+        let err = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "https://as.example.com",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.sigstore.dev".to_string(),
+            }],
+            Some(&["tdx.td-shim".to_string()]),
+            Some(&bad_fallback),
+        )
+        .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner
+                    .to_string()
+                    .contains("fallbackServices must contain only rekor-v1"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
+    }
+
+    /// Lines 1405-1407: `build_artifact_server_policy` rejects an empty
+    /// `fallback_services` slice (the `None` arm of `fs.first()`).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn build_artifact_server_policy_rejects_empty_fallback() {
+        let empty_fallback: Vec<TransparencyServiceConfig> = vec![];
+        let err = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "https://as.example.com",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.sigstore.dev".to_string(),
+            }],
+            Some(&["tdx.td-shim".to_string()]),
+            Some(&empty_fallback),
+        )
+        .unwrap_err();
+        match err {
+            Error::TransparencyLogFetchFailed(inner) => assert!(
+                inner.to_string().contains("fallbackServices is empty"),
+                "got: {inner}"
+            ),
+            _ => panic!("wrong error variant: {err:?}"),
+        }
     }
 }

@@ -6062,6 +6062,8 @@ dependencies = [
  "js-sys",
  "jsonwebtoken",
  "kbs-types",
+ "moka",
+ "once_cell",
  "p256",
  "pkcs8",
  "prost 0.14.3",
@@ -9210,7 +9212,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
