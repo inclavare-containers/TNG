@@ -1,0 +1,26 @@
+{
+  "type": "transparency_log",
+  "publishedMeasurements": [
+    "tdx.td-shim",
+    "tdx.kernel",
+    "container.image.cmaas-runtime"
+  ],
+  "schemaVersion": "1.0.0",
+  "services": [
+    {
+      "type": "artifact-server",
+      "url": "https://artifact-server.example.com",
+      "logServices": [
+        {"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}
+      ]
+    }
+  ],
+  "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
+  "fallbackServices": [
+    {
+      "type": "rekor-v1",
+      "logUrl": "https://rekor.sigstore.dev",
+      "logIndex": 123456
+    }
+  ]
+}

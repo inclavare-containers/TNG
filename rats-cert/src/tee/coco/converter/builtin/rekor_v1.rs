@@ -7,8 +7,7 @@
 //! This module only EXTRACTS the DSSE signature; the actual signature
 //! verification (DSSEPAE + SHA-256 + ECDSA P-256) and JCS canonicalization
 //! happen later, at appraisal time, in the generated Rego policy's
-//! `verify_dsse_signature` host-await layer (see the supplement spec
-//! `docs/superpowers/specs/2026-08-23-rekor-transparency-policy-dsse-supplement-design.md`).
+//! `tng.verify_dsse_signature` host-await layer.
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -32,6 +31,11 @@ pub(crate) struct RekorEntry {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RekorVerification {
     pub(crate) inclusion_proof: InclusionProof,
+    // An entry may legitimately carry no SET. With `#[serde(default)]` an absent
+    // `signedEntryTimestamp` deserializes to empty, and `authenticate_entry`
+    // skips SET verification in that case; without the default the whole entry
+    // parse would bail and reject a valid SET-less entry.
+    #[serde(default)]
     pub(crate) signed_entry_timestamp: String,
 }
 
@@ -86,11 +90,12 @@ pub(crate) struct RekorSignature {
 /// in-band DSSE signature (`body.spec.signatures[0].signature`) extracted for
 /// downstream policy verification.
 #[cfg(feature = "crypto-rustcrypto")]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedRekorEntry {
     pub(crate) payload_hash: String,
     // Read in the non-test build via `resolve_dsse_signature` (builtin/mod.rs),
     // which threads it into the generated Rego policy as the DSSE signature
-    // literal for `verify_dsse_signature`.
+    // literal for `tng.verify_dsse_signature`.
     pub(crate) dsse_signature: String,
 }
 
@@ -98,6 +103,41 @@ pub(crate) struct AuthenticatedRekorEntry {
 pub(crate) struct PayloadHash {
     pub(crate) algorithm: String,
     pub(crate) value: String,
+}
+
+/// Serialize a `serde_json::Value` as compact JSON with object keys sorted
+/// (RFC 8785 JCS ordering for this shape, no numbers, so JCS == sorted
+/// compact). Needed because `serde_json` preserves insertion order, whereas
+/// Rego's `json.marshal` of an object emits keys in sorted order, so the
+/// `payloadHash` baked at init must match what Rego recomputes at appraisal.
+///
+/// Shared by the init-bake `build_transparency_log_policy` tests (via
+/// `mod.rs`) and the on-demand `tng.fetch_rekor_on_demand` host-await
+/// (`artifact_server::canonical_manifest_sha256`) so both paths compute the
+/// identical canonical bytes for the same manifest, a single source of truth.
+pub(crate) fn jcs_compact(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut s = String::from("{");
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&serde_json::to_string(k).unwrap());
+                s.push(':');
+                s.push_str(&jcs_compact(&map[*k]));
+            }
+            s.push('}');
+            s
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(jcs_compact).collect();
+            format!("[{}]", items.join(","))
+        }
+        _ => serde_json::to_string(value).unwrap(),
+    }
 }
 
 /// Base64-decode `entry.body` and deserialize into [`RekorBody`]. Requires
@@ -132,6 +172,7 @@ mod key {
 
     /// A resolved Rekor public key: the P-256 verifying key plus its PKIX-SPKI
     /// DER bytes (needed because `logID` = `sha256(SPKI DER)`).
+    #[derive(Debug)]
     pub(crate) struct RekorKey {
         pub(crate) verifying_key: VerifyingKey,
         pub(crate) spki_der: Vec<u8>,
@@ -144,6 +185,19 @@ mod key {
     /// OpenAnolis Rekor v1 public key as base64 SPKI.
     const OPENANOLIS_REKOR_V1_SPKI_B64: &str =
         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXQ2ngaAbWq3XILAb3ZlIpZ/AIdUjkcjkZNjAeQmDGY9qqbNmT/eQZ1nBJw6vd6S0Rq5F9rb3oYLTNejEEhCd0A==";
+
+    /// Built-in Rekor v1 `(hostname, base64-SPKI)` pairs, the single source
+    /// of truth that `rekor_public_key` matches on below. Callers needing to
+    /// enumerate every built-in key (e.g. `resolve_rekor_key`'s logID fallback
+    /// in `artifact_server`) iterate THIS table instead of restating the
+    /// hostnames, so a third built-in added here is picked up automatically
+    /// rather than silently missed.
+    pub(crate) fn known_rekor_keys() -> &'static [(&'static str, &'static str)] {
+        &[
+            ("rekor.sigstore.dev", SIGSTORE_REKOR_V1_SPKI_B64),
+            ("rekor.openanolis.cn", OPENANOLIS_REKOR_V1_SPKI_B64),
+        ]
+    }
 
     /// Resolve the Rekor public key: an explicit PEM if provided, else a built-in
     /// table keyed by `log_url` hostname, using base64 SPKI + `x509_cert` decode
@@ -186,7 +240,7 @@ mod key {
     }
 
     /// Parse a PEM-encoded P-256 public key (`-----BEGIN PUBLIC KEY-----`) into
-    /// a `VerifyingKey`. Reused by the `verify_dsse_signature` host-await
+    /// a `VerifyingKey`. Reused by the `tng.verify_dsse_signature` host-await
     /// primitive to parse the transparency-log publisher key — the same SPKI
     /// decode path as `rekor_public_key`, minus the built-in hostname table.
     pub(crate) fn parse_p256_public_key(pem: &str) -> Result<VerifyingKey> {
@@ -313,10 +367,13 @@ mod key {
         hex::encode(h.finalize())
     }
 
-    /// Verify the Rekor log ID: entry.log_id == public_key_id(key).
+    /// Verify the Rekor log ID: entry.log_id == public_key_id(key), compared
+    /// case-insensitively. Rekor logIDs are lowercase hex sha256(SPKI), but a
+    /// response/fixture may carry an uppercase encoding; the identity check is
+    /// encoding-agnostic.
     pub(crate) fn verify_log_id(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
         let want = public_key_id(&key.spki_der);
-        if entry.log_id != want {
+        if !entry.log_id.eq_ignore_ascii_case(&want) {
             anyhow::bail!("Rekor logID mismatch: entry={} key={}", entry.log_id, want);
         }
         Ok(())
@@ -420,7 +477,7 @@ mod key {
 
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) use key::{
-    parse_p256_public_key, public_key_id, rekor_public_key, verify_checkpoint,
+    known_rekor_keys, parse_p256_public_key, public_key_id, rekor_public_key, verify_checkpoint,
     verify_inclusion_proof, verify_log_id, verify_set, RekorKey,
 };
 
@@ -504,9 +561,15 @@ pub(crate) fn authenticate_entry(
     }
     verify_checkpoint(&entry.verification.inclusion_proof, key)?;
     verify_inclusion_proof(entry)?;
-    verify_set(entry, key)?;
+    // SET is optional. A rekor entry may legitimately omit it (e.g. a freshly
+    // integrated entry whose SET has not propagated); requiring it would fail
+    // closed on valid entries. Skip the check when the field is empty rather
+    // than bailing on the empty base64.
+    if !entry.verification.signed_entry_timestamp.is_empty() {
+        verify_set(entry, key)?;
+    }
     // Extract the in-band DSSE signature (body.spec.signatures[0].signature);
-    // empty string when absent — S5 threads this into the generated policy.
+    // empty string when absent; the policy generator threads this into the generated Rego.
     let dsse_signature = body
         .spec
         .signatures
@@ -514,7 +577,7 @@ pub(crate) fn authenticate_entry(
         .and_then(|s| s.first())
         .map(|s| s.signature.clone())
         .unwrap_or_default();
-    tracing::info!(payload_hash = %payload_hash.value, dsse_signature_len = dsse_signature.len(), "Rekor entry authenticated: all checks passed");
+    tracing::debug!(payload_hash = %payload_hash.value, dsse_signature_len = dsse_signature.len(), "Rekor entry authenticated: all checks passed");
     Ok(AuthenticatedRekorEntry {
         payload_hash: payload_hash.value.clone(),
         dsse_signature,
@@ -576,6 +639,19 @@ mod tests {
         verify_log_id(&entry, &key).expect("logID must match Sigstore key");
     }
 
+    /// `verify_log_id` compares case-insensitively: an uppercase-hex logID that
+    /// decodes to the same bytes as the key's `sha256(SPKI)` must still match.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_log_id_is_case_insensitive() {
+        let mut entry = fixture_entry();
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).expect("resolve key");
+        // Uppercase the fixture's lowercase-hex logID; the SPKI hash is
+        // unchanged, so the case-insensitive compare must still match.
+        entry.log_id = entry.log_id.to_uppercase();
+        verify_log_id(&entry, &key).expect("uppercase logID must match (case-insensitive)");
+    }
+
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn fixture_checkpoint_verifies_against_sigstore_key() {
@@ -634,5 +710,228 @@ mod tests {
             "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
         );
         assert!(!auth.dsse_signature.is_empty());
+    }
+
+    /// Helper: load the fixture JSON, apply a mutation, deserialize into a
+    /// `RekorEntry`. Used to construct malformed entries for the error-path
+    /// tests below without needing a full wire fixture for each case.
+    fn mutated_fixture_entry(mutate: impl FnOnce(&mut serde_json::Value)) -> RekorEntry {
+        let raw = include_str!("tests/fixtures/rekor_v1_entry.json");
+        let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        mutate(&mut v);
+        serde_json::from_value(v).expect("mutated entry must still deserialize")
+    }
+
+    /// Helper: build a `RekorEntry` whose `body` base64-encodes the given JSON
+    /// value as the `spec` payload, with the given `kind`. The verification
+    /// fields (log_id, integrated_time, etc.) are inherited from the fixture so
+    /// `verify_log_id` passes; the tests bail before any verification that
+    /// depends on the body being the original.
+    fn entry_with_body(kind: &str, spec: serde_json::Value) -> RekorEntry {
+        let body_json = serde_json::json!({"apiVersion":"0.0.1","kind":kind,"spec":spec});
+        let body_b64 = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_vec(&body_json).unwrap());
+        let mut entry = fixture_entry();
+        entry.body = body_b64;
+        entry
+    }
+
+    /// Lines 146-147: `decode_rekor_body` rejects `kind != "dsse"`.
+    #[test]
+    fn decode_rekor_body_rejects_non_dsse_kind() {
+        let entry = entry_with_body("intoto", serde_json::json!({}));
+        let err = decode_rekor_body(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported Rekor body kind"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 299: `verify_inclusion_proof` rejects non-positive `treeSize`.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_non_positive_tree_size() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["treeSize"] = 0.into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("non-positive treeSize"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 302: `verify_inclusion_proof` rejects `logIndex >= treeSize`.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_log_index_out_of_range() {
+        let entry = mutated_fixture_entry(|v| {
+            let ts = v["verification"]["inclusionProof"]["treeSize"]
+                .as_i64()
+                .unwrap();
+            v["verification"]["inclusionProof"]["logIndex"] = ts.into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("logIndex out of range"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 352: `verify_inclusion_proof` rejects computed root != proof
+    /// rootHash. Keep the proof structure valid (same hashes, same treeSize)
+    /// but change the `rootHash` so the computed root won't match.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_wrong_root_hash() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["rootHash"] =
+                "0000000000000000000000000000000000000000000000000000000000000000".into();
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(
+            err.to_string().contains("computed root != proof rootHash"),
+            "got: {err}"
+        );
+    }
+
+    /// Lines 345-347: after the Merkle walk, if not all sibling hashes were
+    /// consumed (`pi != siblings.len()`), bail. Append one extra hash so the
+    /// walk consumes fewer than the total.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_inclusion_proof_rejects_extra_sibling_hashes() {
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]["inclusionProof"]["hashes"]
+                .as_array_mut()
+                .unwrap()
+                .push("0000000000000000000000000000000000000000000000000000000000000000".into());
+        });
+        let err = verify_inclusion_proof(&entry).unwrap_err();
+        assert!(err.to_string().contains("consumed"), "got: {err}");
+    }
+
+    /// Helper: construct an `InclusionProof` with a custom checkpoint. The
+    /// other fields are irrelevant for the pre-signature checkpoint format
+    /// checks; the error fires before they're read.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fn proof_with_checkpoint(checkpoint: &str) -> InclusionProof {
+        InclusionProof {
+            checkpoint: checkpoint.to_string(),
+            hashes: vec![],
+            log_index: 0,
+            root_hash: String::new(),
+            tree_size: 1,
+        }
+    }
+
+    /// Line 382: `verify_checkpoint` rejects a checkpoint missing the
+    /// `"\n\u{2014} "` note-signature separator.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_invalid_format() {
+        let proof = proof_with_checkpoint("no note signature separator here");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid Rekor checkpoint format"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 388: the signature line has no space separating origin from
+    /// base64-sig.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_invalid_signature_line() {
+        let proof = proof_with_checkpoint("line1\nline2\nline3\n\u{2014} nospacehere\n");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid Rekor checkpoint signature line"),
+            "got: {err}"
+        );
+    }
+
+    /// Line 394: base64-decoded checkpoint signature is < 5 bytes.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_checkpoint_rejects_short_signature() {
+        // "AAAA" base64-decodes to 3 bytes (< 5).
+        let proof = proof_with_checkpoint("line1\nline2\nline3\n\u{2014} origin AAAA\n");
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = verify_checkpoint(&proof, &key).unwrap_err();
+        assert!(
+            err.to_string().contains("checkpoint signature too short"),
+            "got: {err}"
+        );
+    }
+
+    /// Lines 548-549: `authenticate_entry` rejects a non-sha256 payloadHash
+    /// algorithm. The body is decoded (kind=dsse) but the payloadHash
+    /// algorithm is sha512, so the check at line 547-549 bails before any
+    /// checkpoint/inclusion/SET verification.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn authenticate_entry_rejects_non_sha256_payload_hash() {
+        let entry = entry_with_body(
+            "dsse",
+            serde_json::json!({
+                "payloadHash": {"algorithm":"sha512","value":"deadbeef"},
+                "signatures": [{"signature":"sig","verifier":"v"}]
+            }),
+        );
+        // log_id must match the key for verify_log_id (called first) to pass.
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let err = authenticate_entry(&entry, &key).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unsupported payloadHash algorithm"),
+            "got: {err}"
+        );
+    }
+
+    /// `authenticate_entry` skips SET verification when
+    /// `signedEntryTimestamp` is empty. The fixture carries a real SET; clear it
+    /// and assert authentication still succeeds (checkpoint + inclusion are the
+    /// gating checks for this path).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn authenticate_entry_skips_set_when_signed_entry_timestamp_empty() {
+        let mut entry = fixture_entry();
+        entry.verification.signed_entry_timestamp = String::new();
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let auth = authenticate_entry(&entry, &key)
+            .expect("auth must succeed with empty SET (skipped, not rejected)");
+        assert_eq!(
+            auth.payload_hash,
+            "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
+        );
+    }
+
+    /// An entry whose JSON omits `signedEntryTimestamp` entirely must
+    /// deserialize (defaulting to empty) and then skip SET — not bail on a
+    /// missing-field deserialize error. Absent → empty → skip SET.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn authenticate_entry_skips_set_when_signed_entry_timestamp_absent() {
+        // Remove the `signedEntryTimestamp` key from the fixture JSON entirely,
+        // then deserialize — must succeed because `#[serde(default)]` defaults it
+        // to an empty string.
+        let entry = mutated_fixture_entry(|v| {
+            v["verification"]
+                .as_object_mut()
+                .expect("verification object")
+                .remove("signedEntryTimestamp");
+        });
+        assert!(entry.verification.signed_entry_timestamp.is_empty());
+        let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
+        let auth = authenticate_entry(&entry, &key)
+            .expect("auth must succeed with absent SET (defaulted empty, skipped)");
+        assert_eq!(
+            auth.payload_hash,
+            "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
+        );
     }
 }

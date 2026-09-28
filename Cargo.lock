@@ -274,6 +274,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "artifact-resolve-sdk"
+version = "0.1.0"
+source = "git+https://github.com/aliyun/artifact-server-rust-sdk.git?rev=a9cde440d1f3d8130ab419b1041eb7ea49fb29d9#a9cde440d1f3d8130ab419b1041eb7ea49fb29d9"
+dependencies = [
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "as-any"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6201,6 +6212,7 @@ name = "rats-cert"
 version = "2.10.1"
 dependencies = [
  "anyhow",
+ "artifact-resolve-sdk",
  "as-any",
  "async-trait",
  "attestation-service",
@@ -6212,6 +6224,7 @@ dependencies = [
  "ciborium",
  "const-oid",
  "ctor",
+ "eventlog",
  "flatten-json-object",
  "futures",
  "hex",
@@ -6219,6 +6232,8 @@ dependencies = [
  "js-sys",
  "jsonwebtoken",
  "kbs-types",
+ "moka",
+ "once_cell",
  "p256",
  "pkcs8",
  "prost 0.14.4",
@@ -7810,7 +7825,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -9415,7 +9430,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
