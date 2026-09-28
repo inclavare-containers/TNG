@@ -178,6 +178,18 @@ pub enum PolicyConfig {
         #[serde(rename = "schemaVersion", default = "default_schema_version")]
         schema_version: String,
         services: Vec<TransparencyServiceConfig>,
+        /// Fallback measurement types used when the artifact-server primary
+        /// cannot resolve a measurement. Mirrors the cmaas secure-proxy
+        /// `fallbackPublishedMeasurements` field; must be a subset of
+        /// `publishedMeasurements`.
+        #[serde(rename = "fallbackPublishedMeasurements", default)]
+        fallback_published_measurements: Option<Vec<String>>,
+        /// Fallback transparency-log services (rekor-v1 only) used when the
+        /// artifact-server primary cannot resolve a measurement. Mirrors the
+        /// cmaas secure-proxy `fallbackServices` field; only supported when
+        /// the primary service is an `artifact-server`.
+        #[serde(rename = "fallbackServices", default)]
+        fallback_services: Option<Vec<TransparencyServiceConfig>>,
     },
     /// Base64 encoded policy content
     Inline { content: String },
@@ -191,8 +203,136 @@ fn default_schema_version() -> String {
     "1.0.0".to_string()
 }
 
+impl PolicyConfig {
+    /// Validate a `TransparencyLog` config against the artifact-server +
+    /// fallback transparency policy constraints (mirrors the cmaas secure-proxy
+    /// accepted shape). No-op for non-`TransparencyLog` variants.
+    pub fn validate_transparency_config(&self) -> anyhow::Result<()> {
+        let PolicyConfig::TransparencyLog {
+            published_measurements,
+            services,
+            fallback_published_measurements,
+            fallback_services,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+
+        let pm = published_measurements.as_deref().unwrap_or(&[]);
+        if pm.is_empty() {
+            anyhow::bail!("publishedMeasurements must be non-empty");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for t in pm {
+            if !matches!(
+                t.as_str(),
+                "tdx.td-shim" | "tdx.kernel" | "container.image.cmaas-runtime"
+            ) {
+                anyhow::bail!("unsupported publishedMeasurements type {t}");
+            }
+            if !seen.insert(t) {
+                anyhow::bail!("duplicate publishedMeasurements type {t}");
+            }
+        }
+
+        if services.is_empty() {
+            anyhow::bail!("services must be non-empty");
+        }
+        let mut artifact_server = false;
+        for (i, svc) in services.iter().enumerate() {
+            match svc {
+                TransparencyServiceConfig::ArtifactServer { url, log_services } => {
+                    artifact_server = true;
+                    if services.len() != 1 {
+                        anyhow::bail!("artifact-server must be the only primary service");
+                    }
+                    if url.is_empty() {
+                        anyhow::bail!("services[{i}] url is required");
+                    }
+                    if log_services.is_empty() {
+                        anyhow::bail!("services[{i}] logServices non-empty");
+                    }
+                    let mut ls = std::collections::HashSet::new();
+                    for (j, s) in log_services.iter().enumerate() {
+                        if s.type_ != "rekor-v1" {
+                            anyhow::bail!("services[{i}].logServices[{j}] type must be rekor-v1");
+                        }
+                        if s.url.is_empty() {
+                            anyhow::bail!("services[{i}].logServices[{j}] url required");
+                        }
+                        if !ls.insert((s.type_.clone(), s.url.trim_end_matches('/'))) {
+                            anyhow::bail!("services[{i}].logServices[{j}] duplicate");
+                        }
+                    }
+                }
+                TransparencyServiceConfig::RekorV1 {
+                    log_url, log_index, ..
+                } => {
+                    if log_url.is_empty() {
+                        anyhow::bail!("services[{i}] logUrl required");
+                    }
+                    if *log_index < 0 {
+                        anyhow::bail!("services[{i}] logIndex must be >= 0");
+                    }
+                }
+            }
+        }
+
+        match (
+            fallback_services.as_ref(),
+            fallback_published_measurements.as_ref(),
+        ) {
+            (None, Some(_)) => {
+                anyhow::bail!("fallbackPublishedMeasurements requires fallbackServices");
+            }
+            (None, None) => return Ok(()),
+            (Some(fs), _) => {
+                if !artifact_server {
+                    anyhow::bail!(
+                        "fallbackServices is only supported with an artifact-server primary"
+                    );
+                }
+                if fs.is_empty() {
+                    anyhow::bail!("fallbackServices must be non-empty");
+                }
+                for (i, svc) in fs.iter().enumerate() {
+                    match svc {
+                        TransparencyServiceConfig::RekorV1 {
+                            log_url, log_index, ..
+                        } => {
+                            if log_url.is_empty() {
+                                anyhow::bail!("fallbackServices[{i}] logUrl required");
+                            }
+                            if *log_index < 0 {
+                                anyhow::bail!("fallbackServices[{i}] logIndex >= 0");
+                            }
+                        }
+                        _ => anyhow::bail!("fallbackServices[{i}] must be rekor-v1"),
+                    }
+                }
+                if let Some(fpm) = fallback_published_measurements {
+                    if fpm.is_empty() {
+                        anyhow::bail!("fallbackPublishedMeasurements non-empty");
+                    }
+                    let primary: std::collections::HashSet<&String> = pm.iter().collect();
+                    for t in fpm {
+                        if !primary.contains(t) {
+                            anyhow::bail!(
+                                "fallbackPublishedMeasurements type {t} not in publishedMeasurements"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A transparency-log service whose entry authenticates the reference
-/// measurements. Currently only Rekor v1 (fetch by logIndex) is supported.
+/// measurements. `rekor-v1` fetches an entry by logIndex; `artifact-server`
+/// delegates to a log-services list (mirrors the cmaas secure-proxy schema).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TransparencyServiceConfig {
@@ -207,6 +347,24 @@ pub enum TransparencyServiceConfig {
         #[serde(rename = "publisherPublicKeyPem", default)]
         publisher_public_key_pem: Option<String>,
     },
+    #[serde(rename = "artifact-server")]
+    ArtifactServer {
+        #[serde(rename = "url")]
+        url: String,
+        #[serde(rename = "logServices")]
+        log_services: Vec<ArtifactLogService>,
+    },
+}
+
+/// A single log-service entry nested under an `artifact-server` transparency
+/// service. Mirrors the cmaas secure-proxy `logServices` array element:
+/// `{"type":"rekor-v1","url":"..."}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ArtifactLogService {
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(rename = "url")]
+    pub url: String,
 }
 
 /// Configuration for sample provenance payload loading
@@ -508,6 +666,7 @@ impl BuiltinCocoConverter {
                 published_measurements,
                 schema_version,
                 services,
+                ..
             } => {
                 // Initial implementation: exactly one rekor-v1 service.
                 let svc = match services.as_slice() {
@@ -2148,6 +2307,7 @@ default file_system := 2"#,
                 published_measurements,
                 schema_version,
                 services,
+                ..
             } => {
                 assert_eq!(
                     published_measurements,
@@ -2168,6 +2328,9 @@ default file_system := 2"#,
                         assert_eq!(log_url, "https://rekor.sigstore.dev");
                         assert_eq!(*log_index, 2279770888);
                         assert!(rekor_public_key_pem.is_none());
+                    }
+                    TransparencyServiceConfig::ArtifactServer { .. } => {
+                        panic!("expected RekorV1 service, got ArtifactServer")
                     }
                 }
             }
@@ -2195,6 +2358,9 @@ default file_system := 2"#,
                     ..
                 } => {
                     assert!(publisher_public_key_pem.is_some());
+                }
+                TransparencyServiceConfig::ArtifactServer { .. } => {
+                    panic!("expected RekorV1 service, got ArtifactServer")
                 }
             },
             _ => panic!(),
@@ -3110,5 +3276,109 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
                 .is_err(),
             "tampered cc_eventlog must fail"
         );
+    }
+
+    // === artifact-server + fallback transparency config schema tests ===
+
+    #[test]
+    fn parse_artifact_server_with_fallback_matches_secure_proxy_readme() {
+        let cfg = serde_json::json!({
+            "type": "transparency_log",
+            "publishedMeasurements": ["tdx.td-shim", "tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "https://attest.cn-beijing.aliyuncs.com",
+                "logServices": [
+                    {"type": "rekor-v1", "url": "https://rekor.sigstore.dev"},
+                    {"type": "rekor-v1", "url": "https://rekor.openanolis.cn"}
+                ]
+            }],
+            "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
+            "fallbackServices": [
+                {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944i64}
+            ]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        match &p {
+            PolicyConfig::TransparencyLog {
+                published_measurements,
+                fallback_published_measurements,
+                fallback_services,
+                services,
+                ..
+            } => {
+                assert_eq!(
+                    published_measurements.as_deref().unwrap(),
+                    &["tdx.td-shim", "tdx.kernel", "container.image.cmaas-runtime"]
+                );
+                assert_eq!(services.len(), 1);
+                assert!(matches!(
+                    services[0],
+                    TransparencyServiceConfig::ArtifactServer { .. }
+                ));
+                assert_eq!(
+                    fallback_published_measurements.as_ref().unwrap(),
+                    &["container.image.cmaas-runtime"]
+                );
+                assert_eq!(fallback_services.as_ref().unwrap().len(), 1);
+                assert!(matches!(
+                    fallback_services.as_ref().unwrap()[0],
+                    TransparencyServiceConfig::RekorV1 { .. }
+                ));
+            }
+            _ => panic!("wrong variant"),
+        }
+        p.validate_transparency_config().unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_artifact_server_not_sole_primary() {
+        let cfg = serde_json::json!({
+            "type": "transparency_log", "publishedMeasurements": ["tdx.td-shim"],
+            "services": [
+                {"type":"artifact-server","url":"https://x","logServices":[{"type":"rekor-v1","url":"https://r"}]},
+                {"type":"rekor-v1","logUrl":"https://r","logIndex":1}
+            ]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        assert!(p.validate_transparency_config().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_fallback_without_artifact_server_primary() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log","publishedMeasurements":["tdx.td-shim"],
+            "services":[{"type":"rekor-v1","logUrl":"https://r","logIndex":1}],
+            "fallbackServices":[{"type":"rekor-v1","logUrl":"https://r","logIndex":2}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        assert!(p.validate_transparency_config().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_fallback_measurements_not_subset() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log",
+            "publishedMeasurements":["tdx.td-shim","container.image.cmaas-runtime"],
+            "services":[{"type":"artifact-server","url":"https://x","logServices":[{"type":"rekor-v1","url":"https://r"}]}],
+            "fallbackPublishedMeasurements":["tdx.kernel"],
+            "fallbackServices":[{"type":"rekor-v1","logUrl":"https://r","logIndex":1}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        assert!(p.validate_transparency_config().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_logservice() {
+        let cfg = serde_json::json!({
+            "type":"transparency_log","publishedMeasurements":["tdx.td-shim"],
+            "services":[{"type":"artifact-server","url":"https://x","logServices":[
+                {"type":"rekor-v1","url":"https://r"},
+                {"type":"rekor-v1","url":"https://r"}
+            ]}]
+        });
+        let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
+        assert!(p.validate_transparency_config().is_err());
     }
 }
