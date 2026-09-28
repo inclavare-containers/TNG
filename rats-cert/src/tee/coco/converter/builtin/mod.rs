@@ -757,8 +757,8 @@ impl BuiltinCocoConverter {
                             &auth.payload_hash,
                             schema_version,
                             published_measurements.as_deref(),
-                            Some(dsse_signature),
-                            Some(publisher_key),
+                            dsse_signature,
+                            publisher_key,
                         );
                         tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash + DSSE into Rego");
                         Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
@@ -1103,16 +1103,16 @@ fn resolve_dsse_signature(dsse_signature: &str) -> anyhow::Result<&str> {
 
 /// Build the `transparency_log` Rego policy string. Bakes the trusted
 /// `payload_hash`, the manifest `schema_version`, the ordered
-/// `published_measurements`, and — when a publisher key is configured — the
-/// DSSE publisher signature + trusted publisher public key. At appraisal the
-/// Rego reconstructs the manifest from actual TDX measurement values, hashes
-/// it via `tng.sha256(json.marshal(...))`, and compares to `payload_hash`.
-/// When a publisher key is baked, it additionally calls
+/// `published_measurements`, and the DSSE publisher signature + trusted
+/// publisher public key. At appraisal the Rego reconstructs the manifest from
+/// actual TDX measurement values, hashes it via
+/// `tng.sha256(json.marshal(...))`, and compares to `payload_hash`. It
+/// additionally always calls
 /// `tng.verify_dsse_signature([json.marshal(reconstructed_manifest),
 /// dsse_signature, publisher_key])`, binding the entry to a trusted publisher
 /// (the DSSE check strictly subsumes the payloadHash content-binding and adds
-/// publisher-identity binding). Absent publisher key => payloadHash-only (the
-/// base design's weaker, logIndex-anchored model).
+/// publisher-identity binding). DSSE verification is mandatory — there is no
+/// payloadHash-only fallback, so the DSSE-verification Rego is always emitted.
 // Wired into `load_policy_as_base64_url_safe_no_pad` under the
 // `crypto-rustcrypto` feature; with that feature off the loader bails before
 // reaching here, so the function stays dead code in non-crypto builds.
@@ -1121,35 +1121,32 @@ fn build_transparency_log_policy(
     payload_hash: &str,
     schema_version: &str,
     published_measurements: Option<&[String]>,
-    dsse_signature: Option<&str>,
-    publisher_key: Option<&str>,
+    dsse_signature: &str,
+    publisher_key: &str,
 ) -> String {
-    // The DSSE publisher-signature check is added only when a publisher key is
-    // configured (some signature + some key). When `None`, fall back to the
-    // base-design payloadHash-only check: no `dsse_signature`/`publisher_key`
-    // literals, no `tng.verify_dsse_signature` call. The signature + publisher key
-    // are public data (a logged rekor entry's signature + the configured
-    // publisher key) — baking them as Rego literals leaks no secret.
-    let (dsse_literals, dsse_verify_line) = match (dsse_signature, publisher_key) {
-        (Some(sig), Some(key)) => (
-            format!(
-                "\n# baked: DSSE publisher signature + trusted publisher public key\n\
-                 dsse_signature := {sig:?}\n\
-                 publisher_key := {key:?}\n",
-            ),
-            "    tng.verify_dsse_signature([json.marshal(reconstructed_manifest), dsse_signature, publisher_key]) == true\n",
-        ),
-        _ => (String::new(), ""),
-    };
+    // The DSSE publisher-signature check is always emitted (DSSE verification is
+    // mandatory; no payloadHash-only fallback). The signature + publisher
+    // key are public data (a logged rekor entry's signature + the configured
+    // publisher key) — baking them as Rego literals leaks no secret. An empty
+    // `dsse_signature` means a malformed/non-dsse entry → fail closed (the
+    // loader's `resolve_dsse_signature` bails on empty before reaching here).
+    let dsse_literals = format!(
+        "\n# baked: DSSE publisher signature + trusted publisher public key\n\
+         dsse_signature := {dsse_signature:?}\n\
+         publisher_key := {publisher_key:?}\n",
+    );
+    let dsse_verify_line =
+        "    tng.verify_dsse_signature([json.marshal(reconstructed_manifest), dsse_signature, publisher_key]) == true\n";
 
     match published_measurements {
         // No `publishedMeasurements` configured (the JSON field is absent):
         // skip the measurement reconstruction + verification entirely.
         // `executables` stays at its affirming default (2) — only the TDX
         // platform hardware checks gate the appraisal. The trusted
-        // payloadHash, schemaVersion, and (when configured) the DSSE
-        // publisher signature/key are still baked for reference, but no
-        // manifest is reconstructed or compared.
+        // payloadHash, schemaVersion, and DSSE publisher signature/key are
+        // still baked for reference, but no manifest is reconstructed or
+        // compared (so `tng.verify_dsse_signature` is not invoked here —
+        // there is no reconstructed manifest to bind the signature to).
         None => format!(
             r#"package policy
 import rego.v1
@@ -1274,8 +1271,73 @@ schema_version := {schema_version:?}
 # measurements array (must be exact set + order)
 published_measurements := {pm}{dsse_literals}
 
-# extract the actual measurement value for a type from rego input
-actual_measurement("tdx.td-shim") := input.tdx.quote.body.mr_td
+# extract the actual measurement value for a type from rego input.
+# Each rule gates its digest on a canonical-format regex: td-shim/td-kernel
+# require 96 lowercase hex chars; container.image.* require sha256:+64 lowercase
+# hex. A value that fails the format check makes the rule undefined → the
+# measurement is dropped from the reconstructed manifest → its hash mismatches
+# payload_hash → measurements_verified fails → reject (fail-closed).
+actual_measurement("tdx.td-shim") := digest if {{
+    digest := input.tdx.quote.body.mr_td
+    regex.match("^[0-9a-f]{{96}}$", digest)
+}}
+
+actual_measurement("tdx.kernel") := digest if {{
+    some e in input.tdx.uefi_event_logs
+    e.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
+    # Exact descriptor match against "td_payload". The UEFI event-log parser
+    # exposes the description WITHOUT the trailing NUL (`data[1..length]`,
+    # length includes the NUL byte), so the parsed `e.details.string` is
+    # `"td_payload"` (10 chars). A `startswith` prefix would wrongly match
+    # unrelated `td_payload_*` descriptors.
+    e.details.string == "td_payload"
+    e.index == 2
+    some d in e.digests
+    d.alg == "SHA-384"
+    digest := d.digest
+    regex.match("^[0-9a-f]{{96}}$", digest)
+    # Guard (#2): fail-closed if ANY descriptor-matching td_payload event has
+    # register index != 2. A td_payload descriptor-matching event must extend
+    # RTMR1 (register index 2); any such event with a non-2 index is a
+    # violation. Without this guard the `e2.index == 2` filter inside the
+    # comprehensions below would silently exclude such an event from the
+    # conflict set rather than rejecting. The set is empty iff no
+    # descriptor-matching event has a non-2 index → count == 0 lets the rule
+    # proceed; any bad event → count 1 → rule undefined → drop → reject
+    # (fail-closed).
+    bad_index_events := {{1 | some eb in input.tdx.uefi_event_logs; eb.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; eb.details.string == "td_payload"; eb.index != 2}}
+    count(bad_index_events) == 0
+    # Guard (#3): fail-closed if ANY descriptor-matching td_payload event
+    # (extending RTMR1) lacks a SHA-384 digest. A td_payload event must carry a
+    # 48-byte SHA-384 digest; an event with no digests (or no SHA-384 digest)
+    # is a violation. Without this guard the
+    # `some d2 ... d2.alg == "SHA-384"` filter inside the comprehensions below
+    # would silently exclude such an event from the conflict set rather than
+    # rejecting. The 96-hex regex on the extracted value (#7) already enforces
+    # the 48-byte length on matching events; this guard rejects events that
+    # have NO SHA-384 digest at all. Compare the distinct set of
+    # descriptor-matching index-2 events (by `event` body) against the subset
+    # that carries a SHA-384 digest — equal counts iff every such event has a
+    # SHA-384 digest.
+    td_index2_events := {{ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; ev := e2.event}}
+    td_index2_with_sha384 := {{ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; ev := e2.event}}
+    count(td_index2_events) == count(td_index2_with_sha384)
+    # Conflicting-events check across ALL td_payload descriptor+RTMR1 events.
+    # A digest OR blobLength disagreement is a conflict ("conflicting
+    # td_payload events") — both the digest and the blobLength must agree
+    # across every matching event. Build distinct digest and blobLength sets
+    # WITHOUT the 32 MiB pre-filter so a non-32 MiB td_payload event is counted
+    # as a conflict rather than silently excluded. The distinct-digest set must
+    # have exactly one element (all digests agree); the distinct-length set must
+    # equal exactly {{33554432}} (all lengths agree AND the agreed length is
+    # 32 MiB = 32<<20). A 32 MiB + non-32 MiB td_payload pair → length set
+    # {{33554432, other}} → set != {{33554432}} → rule undefined → drop →
+    # reject (fail-closed).
+    matching_digests := {{dg | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; dg := d2.digest}}
+    count(matching_digests) == 1
+    matching_lengths := {{tng.td_payload_blob_length([e2.event]) | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"}}
+    matching_lengths == {{33554432}}
+}}
 
 actual_measurement(type) := digest if {{
     startswith(type, "container.image.")
@@ -1286,6 +1348,19 @@ actual_measurement(type) := digest if {{
     e.details.data.operation == "kangaroo/pull-image"
     image_repo_name(e.details.data.content.reference) == repo
     digest := e.details.data.content.digest
+    regex.match("^sha256:[0-9a-f]{{64}}$", digest)
+    # Explicit conflicting-events check: all AAEL kangaroo/pull-image events
+    # for this repo must agree on the digest. A conflict makes the
+    # distinct-digest set size > 1 → rule undefined → measurement dropped →
+    # manifest mismatch → reject (fail-closed).
+    matching_digests := {{dg | some e2 in input.tdx.uefi_event_logs; e2.details.unicode_name == "AAEL"; e2.details.data.domain == "alibabacloud.com"; e2.details.data.operation == "kangaroo/pull-image"; image_repo_name(e2.details.data.content.reference) == repo; dg := e2.details.data.content.digest}}
+    count(matching_digests) == 1
+    # NOTE: AAEL event-digest integrity (sha384(event) == digests[0]) is NOT
+    # re-verified here. It is verified by the attestation-service event-log
+    # replay (trustee CcEventLog
+    # replay_and_match, which replays events against RTMRs) before claims reach
+    # the policy — TNG's Rego layer trusts that replay. This is by-design
+    # delegated to the AS event-log replay, not silently skipped.
 }}
 
 # repo name = last '/' segment of image reference, before first ':' or '@'
@@ -1502,13 +1577,78 @@ published_measurements := {pm_lit}
 artifact_server_url := {url_lit}
 log_services := {ls_lit}
 # baked: configured publisher key PEM (empty string → host-await uses the
-# built-in LogEntryPubKeyPEM baseline). Threaded into both the primary
+# built-in publisher key baseline). Threaded into both the primary
 # (tng.resolve_artifact_server) and fallback (tng.fetch_rekor_on_demand)
 # host-awaits as the 4th arg so DSSE publisher-signature verification always
-# runs (cmaas-audit verifyLogEntrySignature, rekorv1.go:277,386-400).
+# runs.
 publisher_key := {publisher_key_lit}{fallback_lit}
 
-actual_measurement("tdx.td-shim") := input.tdx.quote.body.mr_td
+# Each rule gates its digest on a canonical-format regex: td-shim/td-kernel
+# require 96 lowercase hex chars; container.image.* require sha256:+64 lowercase
+# hex. A value that fails the format check makes the rule undefined → the
+# measurement is dropped from the reconstructed manifest → its hash mismatches
+# payload_hash → measurements_verified fails → reject (fail-closed).
+actual_measurement("tdx.td-shim") := digest if {{
+    digest := input.tdx.quote.body.mr_td
+    regex.match("^[0-9a-f]{{96}}$", digest)
+}}
+
+actual_measurement("tdx.kernel") := digest if {{
+    some e in input.tdx.uefi_event_logs
+    e.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
+    # Exact descriptor match against "td_payload". The UEFI event-log parser
+    # exposes the description WITHOUT the trailing NUL (`data[1..length]`,
+    # length includes the NUL byte), so the parsed `e.details.string` is
+    # `"td_payload"` (10 chars). A `startswith` prefix would wrongly match
+    # unrelated `td_payload_*` descriptors.
+    e.details.string == "td_payload"
+    e.index == 2
+    some d in e.digests
+    d.alg == "SHA-384"
+    digest := d.digest
+    regex.match("^[0-9a-f]{{96}}$", digest)
+    # Guard (#2): fail-closed if ANY descriptor-matching td_payload event has
+    # register index != 2. A td_payload descriptor-matching event must extend
+    # RTMR1 (register index 2); any such event with a non-2 index is a
+    # violation. Without this guard the `e2.index == 2` filter inside the
+    # comprehensions below would silently exclude such an event from the
+    # conflict set rather than rejecting. The set is empty iff no
+    # descriptor-matching event has a non-2 index → count == 0 lets the rule
+    # proceed; any bad event → count 1 → rule undefined → drop → reject
+    # (fail-closed).
+    bad_index_events := {{1 | some eb in input.tdx.uefi_event_logs; eb.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; eb.details.string == "td_payload"; eb.index != 2}}
+    count(bad_index_events) == 0
+    # Guard (#3): fail-closed if ANY descriptor-matching td_payload event
+    # (extending RTMR1) lacks a SHA-384 digest. A td_payload event must carry a
+    # 48-byte SHA-384 digest; an event with no digests (or no SHA-384 digest)
+    # is a violation. Without this guard the
+    # `some d2 ... d2.alg == "SHA-384"` filter inside the comprehensions below
+    # would silently exclude such an event from the conflict set rather than
+    # rejecting. The 96-hex regex on the extracted value (#7) already enforces
+    # the 48-byte length on matching events; this guard rejects events that
+    # have NO SHA-384 digest at all. Compare the distinct set of
+    # descriptor-matching index-2 events (by `event` body) against the subset
+    # that carries a SHA-384 digest — equal counts iff every such event has a
+    # SHA-384 digest.
+    td_index2_events := {{ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; ev := e2.event}}
+    td_index2_with_sha384 := {{ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; ev := e2.event}}
+    count(td_index2_events) == count(td_index2_with_sha384)
+    # Conflicting-events check across ALL td_payload descriptor+RTMR1 events.
+    # A digest OR blobLength disagreement is a conflict ("conflicting
+    # td_payload events") — both the digest and the blobLength must agree
+    # across every matching event. Build distinct digest and blobLength sets
+    # WITHOUT the 32 MiB pre-filter so a non-32 MiB td_payload event is counted
+    # as a conflict rather than silently excluded. The distinct-digest set must
+    # have exactly one element (all digests agree); the distinct-length set must
+    # equal exactly {{33554432}} (all lengths agree AND the agreed length is
+    # 32 MiB = 32<<20). A 32 MiB + non-32 MiB td_payload pair → length set
+    # {{33554432, other}} → set != {{33554432}} → rule undefined → drop →
+    # reject (fail-closed).
+    matching_digests := {{dg | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; dg := d2.digest}}
+    count(matching_digests) == 1
+    matching_lengths := {{tng.td_payload_blob_length([e2.event]) | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"}}
+    matching_lengths == {{33554432}}
+}}
 
 actual_measurement(type) := digest if {{
     startswith(type, "container.image.")
@@ -1519,6 +1659,19 @@ actual_measurement(type) := digest if {{
     e.details.data.operation == "kangaroo/pull-image"
     image_repo_name(e.details.data.content.reference) == repo
     digest := e.details.data.content.digest
+    regex.match("^sha256:[0-9a-f]{{64}}$", digest)
+    # Explicit conflicting-events check: all AAEL kangaroo/pull-image events
+    # for this repo must agree on the digest. A conflict makes the
+    # distinct-digest set size > 1 → rule undefined → measurement dropped →
+    # manifest mismatch → reject (fail-closed).
+    matching_digests := {{dg | some e2 in input.tdx.uefi_event_logs; e2.details.unicode_name == "AAEL"; e2.details.data.domain == "alibabacloud.com"; e2.details.data.operation == "kangaroo/pull-image"; image_repo_name(e2.details.data.content.reference) == repo; dg := e2.details.data.content.digest}}
+    count(matching_digests) == 1
+    # NOTE: AAEL event-digest integrity (sha384(event) == digests[0]) is NOT
+    # re-verified here. It is verified by the attestation-service event-log
+    # replay (trustee CcEventLog
+    # replay_and_match, which replays events against RTMRs) before claims reach
+    # the policy — TNG's Rego layer trusts that replay. This is by-design
+    # delegated to the AS event-log replay, not silently skipped.
 }}
 
 image_repo_name(ref) := name if {{
@@ -1614,6 +1767,69 @@ fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::Extens
             Ok(regorus::Value::String(
                 hex::encode(hasher.finalize()).into(),
             ))
+        })
+    })
+}
+
+/// `tng.td_payload_blob_length([event_b64]) -> number`. Parses the
+/// UEFI_PLATFORM_FIRMWARE_BLOB2 layout from a base64-encoded TD-payload event
+/// and returns the declared `BlobLength` (LE u64): byte 0 = descriptionSize,
+/// bytes [1..1+desc_size] = description, then 8-byte BlobBase, then 8-byte LE
+/// BlobLength at offset `1 + desc_size + 8`. The TD-payload kernel measurement
+/// rule collects the blobLength of every td_payload descriptor+RTMR1 event
+/// into a set and requires that set to equal exactly `{33554432}` (32 MiB =
+/// 32<<20) — so a 32 MiB + non-32 MiB td_payload pair is a conflict (set
+/// mismatch) → reject.
+///
+/// Fail-closed: any decode/parse/length error returns `Ok(Number(-1))` so the
+/// length set never equals `{33554432}` → the tdx.kernel measurement rule is
+/// undefined → the measurement is dropped → manifest mismatch → reject. An
+/// `Err` would abort the whole policy evaluation (verified via the in-tree
+/// `evaluate_with_regovm_propagates_async_builtin_error` test), breaking the
+/// fail-closed contract, so errors map to a sentinel that never equals the
+/// required 32 MiB.
+fn td_payload_blob_length_host_await() -> attestation_service::policy_engine::opa::ExtensionFunction
+{
+    use base64::Engine;
+    use regorus::Value;
+
+    std::sync::Arc::new(|argument: regorus::Value| {
+        Box::pin(async move {
+            // Fail-closed sentinel: -1 never equals 33554432 (32 MiB).
+            let bail = || Value::Number((-1.0f64).into());
+            let arr = match argument.as_array() {
+                Ok(a) if a.len() == 1 => a,
+                _ => return Ok(bail()),
+            };
+            let event_b64: &str = match arr[0].as_string() {
+                Ok(s) => s,
+                Err(_) => return Ok(bail()),
+            };
+            let event = match base64::engine::general_purpose::STANDARD.decode(event_b64) {
+                Ok(b) => b,
+                Err(_) => return Ok(bail()),
+            };
+            if event.is_empty() {
+                return Ok(bail());
+            }
+            let desc_size = event[0] as usize;
+            // Layout requires len == 1 + desc_size + 16 (BlobBase + BlobLength).
+            let expected_len = 1usize
+                .checked_add(desc_size)
+                .and_then(|n| n.checked_add(16));
+            let blob_length_offset = 1usize.checked_add(desc_size).and_then(|n| n.checked_add(8));
+            let (blob_length_offset, expected_len) = match (blob_length_offset, expected_len) {
+                (Some(o), Some(l)) => (o, l),
+                _ => return Ok(bail()),
+            };
+            if event.len() != expected_len {
+                return Ok(bail());
+            }
+            let blob_length_bytes = &event[blob_length_offset..blob_length_offset + 8];
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(blob_length_bytes);
+            let blob_length = u64::from_le_bytes(buf);
+            Ok(Value::Number((blob_length as f64).into()))
         })
     })
 }
@@ -1720,7 +1936,17 @@ fn builtin_as_host_await_functions() -> Vec<(
     String,
     attestation_service::policy_engine::opa::ExtensionFunction,
 )> {
-    let mut fns = vec![("tng.sha256".to_string(), crypto_sha256_host_await())];
+    let mut fns = vec![
+        ("tng.sha256".to_string(), crypto_sha256_host_await()),
+        // TD-payload firmware-blob2 BlobLength parser (no crypto deps; the rego
+        // that calls it is only generated under crypto-rustcrypto, but the
+        // primitive itself is pure parsing). Always registered so the
+        // eval_policy_vector test helper resolves it.
+        (
+            "tng.td_payload_blob_length".to_string(),
+            td_payload_blob_length_host_await(),
+        ),
+    ];
     #[cfg(feature = "crypto-rustcrypto")]
     fns.push((
         "tng.verify_dsse_signature".to_string(),
@@ -2740,10 +2966,13 @@ default file_system := 2"#,
     /// stays at its affirming default (2), so a valid TDX platform input
     /// affirms across all four trust dimensions without any manifest-hash
     /// comparison. Only the TDX hardware checks gate the appraisal.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_affirms_when_published_measurements_absent() {
         let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
-        let policy = build_transparency_log_policy(payload_hash, "1.0.0", None, None, None);
+        let (dsse_sig, publisher_key) = fixture_dsse();
+        let policy =
+            build_transparency_log_policy(payload_hash, "1.0.0", None, &dsse_sig, &publisher_key);
 
         // Valid TDX platform input (non-debug, canonical Intel vendor_id, event
         // log present). No AAEL image event is needed: with publishedMeasurements
@@ -2773,10 +3002,13 @@ default file_system := 2"#,
     /// `transparency_log_rego_affirms_on_matching_measurements`, where the same
     /// no-AAEL input under a `Some(["container.image.cmaas-runtime"])` policy
     /// yields `(97, 33, 2, 2)`.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_skips_measurements_when_absent() {
         let payload_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-        let policy = build_transparency_log_policy(payload_hash, "1.0.0", None, None, None);
+        let (dsse_sig, publisher_key) = fixture_dsse();
+        let policy =
+            build_transparency_log_policy(payload_hash, "1.0.0", None, &dsse_sig, &publisher_key);
 
         // No AAEL event at all — under a Some([...]) policy this would drop the
         // measurement and mismatch the (deliberately wrong) payloadHash → 97.
@@ -2789,6 +3021,7 @@ default file_system := 2"#,
         );
     }
 
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_affirms_on_matching_measurements() {
         // Real fixture manifest: {schemaVersion:1.0.0, measurements:[{type:
@@ -2796,12 +3029,13 @@ default file_system := 2"#,
         // sha256(json.marshal) == the real rekor payloadHash.
         let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
         let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let (dsse_sig, publisher_key) = fixture_dsse();
         let policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
 
         // Matching input: AAEL kangaroo/pull-image event for cmaas-runtime with the exact digest.
@@ -2849,6 +3083,27 @@ default file_system := 2"#,
         )
     }
 
+    /// Build a single AAEL `kangaroo/pull-image` event for `cmaas-runtime`
+    /// carrying the given digest, as a `serde_json::Value`. Used by the
+    /// conflicting-events test to assemble multi-event inputs without fighting
+    /// `format!` brace-escaping.
+    fn aael_event(digest: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type_name": "EV_EVENT_TAG",
+            "details": {
+                "unicode_name": "AAEL",
+                "data": {
+                    "domain": "alibabacloud.com",
+                    "operation": "kangaroo/pull-image",
+                    "content": {
+                        "reference": "registry.example.com/ns/cmaas-runtime:latest",
+                        "digest": digest,
+                    }
+                }
+            }
+        })
+    }
+
     /// Tampering `publishedMeasurements` (a wrong measurement type name) must
     /// reject: the rego `actual_measurement("container.image.cmaas-WRONG")` rule
     /// finds no matching AAEL event (the input's repo is `cmaas-runtime`) →
@@ -2856,19 +3111,21 @@ default file_system := 2"#,
     /// reconstructed manifest → its hash ≠ `payload_hash` → `measurements_verified`
     /// false → hardware stays non-affirming (97). The correct type name affirms,
     /// so this is not a tautology.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_rejects_wrong_measurement_type() {
         let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
         let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
         let ok = matching_cmaas_input(digest);
+        let (dsse_sig, publisher_key) = fixture_dsse();
 
         // Correct measurement type name → affirm (not a tautology).
         let correct_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -2881,8 +3138,8 @@ default file_system := 2"#,
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-WRONG".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -2895,19 +3152,21 @@ default file_system := 2"#,
     /// the baked `schema_version`, so a wrong value (e.g. "9.9.9") changes the
     /// `json.marshal` output → `tng.sha256(manifest) != payload_hash` → reject.
     /// The correct "1.0.0" affirms, so this is not a tautology.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_rejects_wrong_schema_version() {
         let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
         let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
         let ok = matching_cmaas_input(digest);
+        let (dsse_sig, publisher_key) = fixture_dsse();
 
         // Correct schema version "1.0.0" → affirm.
         let correct_policy = build_transparency_log_policy(
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -2921,8 +3180,8 @@ default file_system := 2"#,
             payload_hash,
             "9.9.9",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -2935,10 +3194,12 @@ default file_system := 2"#,
     /// `tng.sha256(json.marshal(manifest))` from the actual evidence and
     /// compares to the baked value, so a wrong baked hash never matches → reject.
     /// The real payload hash affirms, so this is not a tautology.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_rejects_wrong_payload_hash() {
         let real_digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
         let ok = matching_cmaas_input(real_digest);
+        let (dsse_sig, publisher_key) = fixture_dsse();
 
         // Correct payload hash → affirm.
         let correct_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
@@ -2946,8 +3207,8 @@ default file_system := 2"#,
             correct_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -2961,8 +3222,8 @@ default file_system := 2"#,
             wrong_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -2972,16 +3233,15 @@ default file_system := 2"#,
     }
 
     /// `publishedMeasurements` config ORDER must not matter: the policy
-    /// generator sorts measurement types before baking the Rego literal,
-    /// mirroring cmaas-audit's `NormalizeReleaseManifest` (transparency.go:
-    /// 134-142) which sorts measurements by Type before canonicalization +
-    /// sha256. The publisher's `payloadHash` is computed over the type-sorted
-    /// manifest, so the Rego reconstruction must iterate in the same sorted
-    /// order regardless of the operator-supplied config order. Both a sorted
-    /// and a reversed config order produce the same sorted Rego literal and
-    /// affirm against a payload_hash computed from the sorted manifest. A
-    /// deliberately wrong payload_hash still rejects, so the affirm is not
-    /// tautological.
+    /// generator sorts measurement types before baking the Rego literal (sorted
+    /// by measurement `Type` before canonicalization + sha256). The publisher's
+    /// `payloadHash` is computed over the type-sorted manifest, so the Rego
+    /// reconstruction must iterate in the same sorted order regardless of the
+    /// operator-supplied config order. Both a sorted and a reversed config order
+    /// produce the same sorted Rego literal and affirm against a payload_hash
+    /// computed from the sorted manifest. A deliberately wrong payload_hash
+    /// still rejects, so the affirm is not tautological.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_sorts_published_measurements_by_type() {
         let cmaas_digest =
@@ -3002,14 +3262,15 @@ default file_system := 2"#,
         let mut hasher = sha2::Sha256::new();
         sha2::Digest::update(&mut hasher, jcs_compact(&sorted).as_bytes());
         let payload_hash = hex::encode(sha2::Digest::finalize(hasher));
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&sorted);
 
-        // Input carries BOTH the AAEL cmaas event (→ cmaas_digest) AND `mr_td`
+        // Input carries BOTH the AAEL runtime event (→ cmaas_digest) AND `mr_td`
         // in the quote body (→ td-shim value), so both measurement types resolve.
         let ok = format!(
             r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EVENT_TAG","details":{{"unicode_name":"AAEL","data":{{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{{"reference":"registry.example.com/ns/cmaas-runtime:latest","digest":{cmaas_digest:?}}}}}}}}}]}}}}"#
         );
 
-        // Already-sorted config order [cmaas, td-shim] → affirm.
+        // Already-sorted config order [runtime, td-shim] → affirm.
         let sorted_policy = build_transparency_log_policy(
             &payload_hash,
             "1.0.0",
@@ -3017,8 +3278,8 @@ default file_system := 2"#,
                 "container.image.cmaas-runtime".to_string(),
                 "tdx.td-shim".to_string(),
             ]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&sorted_policy, &ok).await,
@@ -3035,8 +3296,8 @@ default file_system := 2"#,
                 "tdx.td-shim".to_string(),
                 "container.image.cmaas-runtime".to_string(),
             ]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&reversed_policy, &ok).await,
@@ -3054,8 +3315,8 @@ default file_system := 2"#,
                 "container.image.cmaas-runtime".to_string(),
                 "tdx.td-shim".to_string(),
             ]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3071,6 +3332,7 @@ default file_system := 2"#,
     /// ship undetected without this test. The expected `payloadHash` is computed
     /// self-contained (JCS-canonicalize + sha256) so the test stays correct if the
     /// fixture value changes.
+    #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_affirms_on_matching_td_shim_measurement() {
         // 96-hex MRTD value (real value from the evidence fixture).
@@ -3089,13 +3351,14 @@ default file_system := 2"#,
         let mut hasher = sha2::Sha256::new();
         sha2::Digest::update(&mut hasher, canonical.as_bytes());
         let payload_hash = hex::encode(sha2::Digest::finalize(hasher));
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
 
         let policy = build_transparency_log_policy(
             &payload_hash,
             "1.0.0",
             Some(&["tdx.td-shim".to_string()]),
-            None,
-            None,
+            &dsse_sig,
+            &publisher_key,
         );
 
         // Matching input: mr_td in the quote body matches the logged manifest.
@@ -3120,6 +3383,850 @@ default file_system := 2"#,
             eval_policy_vector(&policy, &bad).await,
             (97, 2, 2, 2),
             "tampered td-shim mr_td must reject on hardware"
+        );
+    }
+
+    /// `actual_measurement("tdx.kernel")` extracts the SHA-384 of the
+    /// `td_payload` firmware-blob2 event (EV_EFI_PLATFORM_FIRMWARE_BLOB2 whose
+    /// description starts with "td_payload", extending RTMR1 / index 2) from
+    /// the parsed event log. This exercises that rule: a matching kernel digest affirms, a tampered
+    /// digest rejects.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_affirms_on_matching_td_kernel_measurement() {
+        // 96-hex SHA-384 value (the td_payload event's recorded digest).
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        // Raw td_payload event (base64) carrying BlobLength = 32 MiB
+        // (33554432): desc_size=11, desc="td_payload\0", BlobBase=0,
+        // BlobLength=33554432 (LE). The rego rule gates on
+        // `tng.td_payload_blob_length([e.event]) == 33554432`.
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{
+                "type": "tdx.kernel",
+                "value": kernel,
+            }]
+        });
+        let canonical = jcs_compact(&manifest);
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, canonical.as_bytes());
+        let payload_hash = hex::encode(sha2::Digest::finalize(hasher));
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Matching input: the td_payload firmware-blob2 event carries the
+        // kernel digest AND the 32 MiB BlobLength; the reconstructed manifest
+        // matches the logged one.
+        let ok = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "matching td-payload kernel digest + 32 MiB blob length must affirm"
+        );
+
+        // Tampered kernel digest -> reconstructed manifest hash mismatches
+        // payload_hash -> reject.
+        let tampered = "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let bad = ok.replace(kernel, tampered);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "tampered td-payload kernel digest must reject on hardware"
+        );
+    }
+
+    /// `actual_measurement("tdx.kernel")` requires an EXACT descriptor match
+    /// (`e.details.string == "td_payload"`). A `startswith` prefix would wrongly
+    /// match `td_payload_extra`; the exact rule must drop it →
+    /// `actual_measurement("tdx.kernel")` is undefined → the reconstructed
+    /// manifest is missing the measurement → its hash
+    // mismatches `payload_hash` → reject.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_descriptor_must_be_exact_match() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Exact descriptor "td_payload" + 32 MiB blob → match → affirm.
+        let ok = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "exact td_payload descriptor + 32 MiB blob must affirm"
+        );
+
+        // Prefix-only descriptor "td_payload_extra" must NOT match → reject.
+        let prefixed = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload_extra"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &prefixed).await,
+            (97, 2, 2, 2),
+            "prefix-only td_payload_* descriptor must reject (exact match required)"
+        );
+    }
+
+    /// `actual_measurement("tdx.kernel")` enforces the TD-payload blob length
+    /// be exactly 32 MiB (33554432 = `32<<20`). The rego rule calls the
+    /// host-await `tng.td_payload_blob_length([e.event])`, which parses
+    /// UEFI_PLATFORM_FIRMWARE_BLOB2 from the base64 `e.event` and returns the
+    /// declared BlobLength. A blob of the wrong size (e.g. 16 MiB) must drop
+    /// the measurement → manifest mismatch → reject (fail-closed). A
+    /// malformed/short event likewise drops → reject.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_blob_length_must_be_32mib() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        // 32 MiB (33554432) — affirms.
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        // 16 MiB (16777216) — wrong size, must reject.
+        let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // 32 MiB → affirm.
+        let ok = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "td_payload blob length == 32 MiB must affirm"
+        );
+
+        // 16 MiB → reject (blob length mismatch drops the measurement).
+        let wrong_blob = ok.replace(event_32mib, event_16mib);
+        assert_eq!(
+            eval_policy_vector(&policy, &wrong_blob).await,
+            (97, 2, 2, 2),
+            "td_payload blob length != 32 MiB must reject"
+        );
+
+        // Malformed (truncated) event → host-await returns -1 → never equals
+        // 33554432 → reject.
+        let malformed = ok.replace(event_32mib, "AAAA");
+        assert_eq!(
+            eval_policy_vector(&policy, &malformed).await,
+            (97, 2, 2, 2),
+            "malformed td_payload event must reject (fail-closed)"
+        );
+    }
+
+    /// A 32 MiB + non-32 MiB td_payload event pair with the SAME digest is a
+    /// conflict: a blobLength disagreement is "conflicting td_payload events"
+    /// even when the digest is identical. Before R1, the rego `matching_digests`
+    /// set filtered by `tng.td_payload_blob_length([e2.event]) == 33554432`, so a
+    /// non-32 MiB td_payload event was silently excluded from the set → a 32 MiB
+    /// + 16 MiB pair (same digest) yielded `count == 1` → affirm (bug: the 16
+    /// MiB event was silently ignored instead of conflicting). After R1 the
+    /// distinct-length set is `{33554432, 16777216}` != `{33554432}` → rule
+    /// undefined → drop → reject (fail-closed). A duplicate pair (both 32 MiB,
+    /// same digest) still affirms (same-digest+same-length duplicates are
+    /// consistent).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_conflicting_blob_length_rejects() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        // 32 MiB (33554432) and 16 MiB (16777216) td_payload events.
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Helper: a td_payload firmware-blob2 event with the given base64 event
+        // body and kernel digest, at RTMR1 (index 2).
+        let td_payload_event = |event_b64: &str| {
+            serde_json::json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": {"string": "td_payload"},
+                "event": event_b64,
+                "digests": [{"alg": "SHA-384", "digest": kernel}],
+                "index": 2
+            })
+        };
+        let quote_header = serde_json::json!({
+            "tee_type": "81000000",
+            "vendor_id": "939a7233f79c4ca9940a0db3957f0607"
+        });
+        let quote_body = serde_json::json!({
+            "mr_td": mr_td,
+            "td_attributes": "0000001000000000"
+        });
+
+        // Single 32 MiB td_payload event → affirm.
+        let single = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [td_payload_event(event_32mib)]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &single).await,
+            (2, 2, 2, 2),
+            "single 32 MiB td_payload event must affirm"
+        );
+
+        // Duplicate pair (both 32 MiB, same digest) → benign duplicate → affirm
+        // (same-digest + same-length duplicates are consistent).
+        let dup_same = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [td_payload_event(event_32mib), td_payload_event(event_32mib)]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &dup_same).await,
+            (2, 2, 2, 2),
+            "duplicate 32 MiB td_payload events (same digest) must still affirm"
+        );
+
+        // 32 MiB + 16 MiB pair (same digest) → blobLength conflict → reject
+        // (fail-closed). Before R1 this affirmed because the 16 MiB event was
+        // silently excluded by the `== 33554432` filter inside the digest set.
+        let conflict = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [td_payload_event(event_32mib), td_payload_event(event_16mib)]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &conflict).await,
+            (97, 2, 2, 2),
+            "32 MiB + 16 MiB td_payload pair (same digest) must reject (blobLength conflict)"
+        );
+    }
+
+    /// Fix #2: a descriptor-matching td_payload event at register index != 2
+    /// must REJECT (not be silently excluded from the conflict set). A
+    /// td_payload descriptor-matching event must extend RTMR1 (register index
+    /// 2); any such event with a non-2 index is a violation. Before fix #2 the
+    /// `e2.index == 2` filter inside the `matching_digests`/`matching_lengths`
+    /// comprehensions silently excluded a non-2-index td_payload event, so a
+    /// pair of (32 MiB index-2 event) + (same-digest index-1 event) affirmed
+    /// instead of rejecting. After fix #2 the `bad_index_events` guard makes
+    /// the rule undefined → drop → reject (fail-closed).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_rejects_non_rtmr1_index() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // td_payload firmware-blob2 event with a given RTMR register index.
+        let td_payload_event = |index: u32| {
+            serde_json::json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": {"string": "td_payload"},
+                "event": event_32mib,
+                "digests": [{"alg": "SHA-384", "digest": kernel}],
+                "index": index
+            })
+        };
+        let quote_header = serde_json::json!({
+            "tee_type": "81000000",
+            "vendor_id": "939a7233f79c4ca9940a0db3957f0607"
+        });
+        let quote_body = serde_json::json!({
+            "mr_td": mr_td,
+            "td_attributes": "0000001000000000"
+        });
+
+        // Single 32 MiB td_payload event at index 2 → affirm (baseline).
+        let single = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [td_payload_event(2)]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &single).await,
+            (2, 2, 2, 2),
+            "single index-2 td_payload event must affirm"
+        );
+
+        // Pair: index-2 (32 MiB) + index-1 (same digest, 32 MiB). The index-1
+        // event is descriptor-matching but extends RTMR0, not RTMR1 → a
+        // violation → must reject (fail-closed). Before fix #2 the index-1
+        // event was silently excluded by the `e2.index == 2` filter → affirm
+        // (bug).
+        let bad = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [td_payload_event(2), td_payload_event(1)]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "descriptor-matching td_payload event at index != 2 must reject (fail-closed)"
+        );
+    }
+
+    /// Fix #3: a descriptor-matching td_payload event (extending RTMR1) that
+    /// has NO SHA-384 digest must REJECT (not be silently excluded). A
+    /// td_payload event must carry a 48-byte SHA-384 digest; an event with no
+    /// digests or a non-SHA-384 digest is a violation. Before fix #3 the
+    /// `some d2 ... d2.alg == "SHA-384"` filter inside the
+    /// `matching_digests`/`matching_lengths` comprehensions silently excluded
+    /// such an event, so a pair of (32 MiB index-2 event with SHA-384) + (32
+    /// MiB index-2 event with only a SHA-256 digest) affirmed instead of
+    /// rejecting. After fix #3 the `td_index2_events` vs
+    /// `td_index2_with_sha384` count guard makes the rule undefined → drop →
+    /// reject (fail-closed).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_rejects_missing_sha384_digest() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        let quote_header = serde_json::json!({
+            "tee_type": "81000000",
+            "vendor_id": "939a7233f79c4ca9940a0db3957f0607"
+        });
+        let quote_body = serde_json::json!({
+            "mr_td": mr_td,
+            "td_attributes": "0000001000000000"
+        });
+
+        // td_payload event carrying a SHA-384 digest → affirm (baseline).
+        let with_sha384 = serde_json::json!({
+            "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+            "details": {"string": "td_payload"},
+            "event": event_32mib,
+            "digests": [{"alg": "SHA-384", "digest": kernel}],
+            "index": 2
+        });
+        let ok = serde_json::json!({
+            "tdx": {"quote": {"header": quote_header, "body": quote_body},
+                    "uefi_event_logs": [with_sha384]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "single index-2 td_payload event with SHA-384 digest must affirm"
+        );
+
+        // Same event but with only a SHA-256 digest (no SHA-384) → must reject:
+        // a td_payload event must carry a SHA-384 digest. Before fix #3
+        // the event was silently excluded by the `d2.alg == "SHA-384"` filter.
+        let no_sha384 = serde_json::json!({
+            "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+            "details": {"string": "td_payload"},
+            "event": event_32mib,
+            "digests": [{"alg": "SHA-256", "digest": "0000000000000000000000000000000000000000000000000000000000000000"}],
+            "index": 2
+        });
+        let bad = serde_json::json!({
+            "tdx": {"quote": {"header": {"tee_type": "81000000", "vendor_id": "939a7233f79c4ca9940a0db3957f0607"}, "body": quote_body},
+                    "uefi_event_logs": [no_sha384]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "td_payload event with no SHA-384 digest must reject (fail-closed)"
+        );
+
+        // Empty digests array → also reject (no digest path).
+        let empty_digests = serde_json::json!({
+            "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+            "details": {"string": "td_payload"},
+            "event": event_32mib,
+            "digests": [],
+            "index": 2
+        });
+        let bad2 = serde_json::json!({
+            "tdx": {"quote": {"header": {"tee_type": "81000000", "vendor_id": "939a7233f79c4ca9940a0db3957f0607"}, "body": quote_body},
+                    "uefi_event_logs": [empty_digests]}
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &bad2).await,
+            (97, 2, 2, 2),
+            "td_payload event with empty digests array must reject (fail-closed)"
+        );
+    }
+
+    /// Real-evidence port of cmaas's `TestExtractKernelMeasurementFromPAIEventLog`
+    /// / `TestVerifyTEEMeasurementsAcceptsKernel` /
+    /// `RejectsKernelMismatch`. Parses the real 5892-byte PAI TD CC event log
+    /// (`tdx_CCEL_data_pai`) through the SAME `eventlog` crate the
+    /// attestation-service TDX verifier uses to build `input.tdx.uefi_event_logs`,
+    /// then runs the Rego `actual_measurement("tdx.kernel")` rule over the
+    /// structured events and asserts the real SHA-384 TD-payload digest
+    /// `85619a91…` (a real kernel measurement, not a synthetic `a1b2c3d4…`).
+    ///
+    /// The affirm arm publishes a manifest carrying the real kernel value;
+    /// the reject arm tampers it. This is a non-`#[ignore]` test (init-bake
+    /// path, no live rekor). The DSSE signature is produced by the test's own
+    /// `sign_dsse_for_manifest` over the canonical manifest, mirroring the
+    /// synthetic tdx.kernel tests (the real fixture's DSSE sig is for a
+    /// different runtime-image manifest, not this kernel manifest).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_tdx_kernel_extracts_real_pai_event_log_measurement() {
+        // The real PAI TD kernel measurement (SHA-384) carried by the
+        // `td_payload` firmware-blob2 event at RTMR1 (index 2) in
+        // `tdx_CCEL_data_pai`. Pinned from cmaas's
+        // `TestExtractKernelMeasurementFromPAIEventLog`.
+        let kernel = "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+
+        // Parse the real CC event log through the production `eventlog` crate
+        // (the same crate attestation-service's TDX verifier uses to build
+        // `input.tdx.uefi_event_logs`). `CcEventLog` serializes with the
+        // `uefi_event_logs` field name, so its JSON IS the Rego input's
+        // `tdx.uefi_event_logs` array — no hand-rolled event shaping.
+        let ccel_bytes =
+            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
+                .expect("read real PAI event-log fixture");
+        let ccel: eventlog::CcEventLog =
+            ccel_bytes.try_into().expect("parse real PAI CC event log");
+        let parsed = serde_json::to_value(&ccel)
+            .expect("serialize parsed CC event log")
+            .as_object()
+            .expect("parsed event log is an object")
+            .clone();
+
+        // Mirror the synthetic tdx.kernel tests' quote shape: a non-debug
+        // `td_attributes` + canonical TDX vendor_id so the `hardware` rule
+        // affirms; `mr_td` is a dummy (the policy publishes only tdx.kernel,
+        // not tdx.td-shim, so `mr_td` is never read).
+        let quote_header = serde_json::json!({
+            "tee_type": "81000000",
+            "vendor_id": "939a7233f79c4ca9940a0db3957f0607"
+        });
+        let quote_body = serde_json::json!({
+            "mr_td": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "td_attributes": "0000001000000000"
+        });
+
+        let mut tdx = serde_json::Map::new();
+        tdx.insert(
+            "quote".to_string(),
+            serde_json::json!({"header": quote_header, "body": quote_body}),
+        );
+        // Splice the parsed `uefi_event_logs` array straight in under `tdx`
+        // (the Rego rules read `input.tdx.uefi_event_logs`).
+        tdx.insert(
+            "uefi_event_logs".to_string(),
+            parsed["uefi_event_logs"].clone(),
+        );
+        let ok_input = serde_json::json!({"tdx": tdx}).to_string();
+
+        // Publish a manifest carrying the REAL kernel. The init-bake path
+        // binds the reconstructed manifest (rebuilt from the actual
+        // measurement) to this signed payload hash.
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Real PAI log → Rego extracts the real kernel → manifest matches → affirm.
+        assert_eq!(
+            eval_policy_vector(&policy, &ok_input).await,
+            (2, 2, 2, 2),
+            "real PAI event log must extract the real kernel measurement and affirm"
+        );
+
+        // Tamper the published kernel → reconstructed manifest (still the real
+        // kernel from the event log) mismatches payload_hash → reject on
+        // hardware (cmaas `RejectsKernelMismatch`).
+        let tampered = "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc80";
+        let bad_manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": tampered}]
+        });
+        let bad_payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&bad_manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (bad_dsse_sig, bad_publisher_key) = sign_dsse_for_manifest(&bad_manifest);
+        let bad_policy = build_transparency_log_policy(
+            &bad_payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &bad_dsse_sig,
+            &bad_publisher_key,
+        );
+        assert_eq!(
+            eval_policy_vector(&bad_policy, &ok_input).await,
+            (97, 2, 2, 2),
+            "a published kernel that differs from the real PAI event-log kernel must reject"
+        );
+    }
+
+    /// Real-evidence port of cmaas's `TestExtractAAELContainerEvents`. Parses
+    /// the real 5892-byte PAI TD CC event log (`tdx_CCEL_data_pai`) through the
+    /// SAME `eventlog` crate the attestation-service TDX verifier uses to build
+    /// `input.tdx.uefi_event_logs`, then runs the Rego
+    /// `actual_measurement("container.image.<repo>")` rule over the structured
+    /// events and asserts the real AAEL `kangaroo/pull-image` event resolves to
+    /// repo `busybox` (last `/` segment of the real reference
+    /// `pai-registry.cn-wulanchabu-acdr-1.cr.aliyuncs.com/default/busybox:2025052701`)
+    /// with digest `sha256:16ece118…` — a real container image measurement, not
+    /// the synthetic `cmaas-runtime`/`d42f6e1b…` fixture.
+    ///
+    /// The affirm arm publishes a manifest carrying the real `busybox` digest;
+    /// the reject arm tampers it. Non-`#[ignore]` (init-bake path, no live
+    /// rekor). DSSE signature produced by `sign_dsse_for_manifest` over the
+    /// canonical manifest, mirroring the synthetic container.image tests.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_container_image_extracts_real_pai_event_log_measurement() {
+        // The real PAI AAEL kangaroo/pull-image event resolves to repo `busybox`
+        // (image_repo_name of the real reference) carrying this digest. Pinned
+        // from cmaas's `TestExtractAAELContainerEvents`.
+        let image_digest =
+            "sha256:16ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+        let measurement_type = "container.image.busybox";
+
+        // Parse the real CC event log through the production `eventlog` crate.
+        // `CcEventLog` serializes with the `uefi_event_logs` field name, so its
+        // JSON IS the Rego input's `tdx.uefi_event_logs` array.
+        let ccel_bytes =
+            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
+                .expect("read real PAI event-log fixture");
+        let ccel: eventlog::CcEventLog =
+            ccel_bytes.try_into().expect("parse real PAI CC event log");
+        let parsed = serde_json::to_value(&ccel)
+            .expect("serialize parsed CC event log")
+            .as_object()
+            .expect("parsed event log is an object")
+            .clone();
+
+        // Mirror the synthetic container.image tests' quote shape: non-debug
+        // `td_attributes` + canonical TDX vendor_id so `hardware` affirms. No
+        // `mr_td` is needed (the policy publishes only container.image.busybox).
+        let quote_header = serde_json::json!({
+            "tee_type": "81000000",
+            "vendor_id": "939a7233f79c4ca9940a0db3957f0607"
+        });
+        let quote_body = serde_json::json!({
+            "td_attributes": "0000001000000000"
+        });
+
+        let mut tdx = serde_json::Map::new();
+        tdx.insert(
+            "quote".to_string(),
+            serde_json::json!({"header": quote_header, "body": quote_body}),
+        );
+        // Splice the parsed `uefi_event_logs` array straight in under `tdx`.
+        tdx.insert(
+            "uefi_event_logs".to_string(),
+            parsed["uefi_event_logs"].clone(),
+        );
+        let ok_input = serde_json::json!({"tdx": tdx}).to_string();
+
+        // Publish a manifest carrying the REAL busybox digest.
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": measurement_type, "value": image_digest}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&[measurement_type.to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Real PAI log → Rego resolves repo `busybox` + real digest → manifest
+        // matches → affirm.
+        assert_eq!(
+            eval_policy_vector(&policy, &ok_input).await,
+            (2, 2, 2, 2),
+            "real PAI event log must extract the real busybox container image measurement and affirm"
+        );
+
+        // Tamper the published digest → reconstructed manifest (still the real
+        // digest from the AAEL event) mismatches payload_hash → reject on
+        // hardware (cmaas tampering-equivalent).
+        let tampered_digest =
+            "sha256:26ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+        let bad_manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": measurement_type, "value": tampered_digest}]
+        });
+        let bad_payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&bad_manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (bad_dsse_sig, bad_publisher_key) = sign_dsse_for_manifest(&bad_manifest);
+        let bad_policy = build_transparency_log_policy(
+            &bad_payload_hash,
+            "1.0.0",
+            Some(&[measurement_type.to_string()]),
+            &bad_dsse_sig,
+            &bad_publisher_key,
+        );
+        assert_eq!(
+            eval_policy_vector(&bad_policy, &ok_input).await,
+            (97, 2, 2, 2),
+            "a published container image digest that differs from the real PAI AAEL event must reject"
+        );
+    }
+
+    /// `actual_measurement` rules explicitly detect conflicting events (two
+    /// matching events with different digests) and drop the measurement →
+    /// manifest mismatch → reject (fail-closed), the `conflicting <type>
+    /// measurements` check. Without this guard a conflict would surface as a
+    /// Rego function-value runtime error aborting the whole eval; the explicit
+    /// distinct-digest set size check turns it into a clean reject. Covers the
+    /// container.image rule (the runtime repo gets two AAEL events with
+    /// different digests → reject).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_rejects_conflicting_container_image_events() {
+        let digest_a = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let digest_b = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // The affirm case uses digest_a; the policy's payloadHash is computed
+        // from the manifest carrying digest_a.
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{
+                "type": "container.image.cmaas-runtime",
+                "value": digest_a,
+            }]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["container.image.cmaas-runtime".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+
+        // Single matching AAEL event → affirm.
+        let single = matching_cmaas_input(digest_a);
+        assert_eq!(
+            eval_policy_vector(&policy, &single).await,
+            (2, 2, 2, 2),
+            "single matching AAEL event must affirm"
+        );
+
+        // Two matching AAEL events with the SAME digest → still affirms
+        // (distinct-digest set size == 1). This is a benign duplicate, not a
+        // conflict — same-digest duplicates are consistent.
+        let dup_same = serde_json::json!({
+            "tdx": {
+                "quote": {"header": {"tee_type": "81000000", "vendor_id": "939a7233f79c4ca9940a0db3957f0607"}, "body": {"td_attributes": "0000001000000000"}},
+                "uefi_event_logs": [aael_event(digest_a), aael_event(digest_a)]
+            }
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &dup_same).await,
+            (2, 2, 2, 2),
+            "duplicate AAEL events with the SAME digest must still affirm"
+        );
+
+        // Two matching AAEL events with DIFFERENT digests → conflict → drop →
+        // manifest mismatch → reject (fail-closed, not a silent pick).
+        let conflict = serde_json::json!({
+            "tdx": {
+                "quote": {"header": {"tee_type": "81000000", "vendor_id": "939a7233f79c4ca9940a0db3957f0607"}, "body": {"td_attributes": "0000001000000000"}},
+                "uefi_event_logs": [aael_event(digest_a), aael_event(digest_b)]
+            }
+        })
+        .to_string();
+        assert_eq!(
+            eval_policy_vector(&policy, &conflict).await,
+            (97, 2, 2, 2),
+            "conflicting AAEL digests must reject (explicit conflict detection)"
+        );
+    }
+
+    /// `actual_measurement` rules gate digests on canonical-format regexes:
+    /// td-shim/td-kernel require 96 lowercase hex; container.image.* require
+    /// `sha256:` + 64 lowercase hex. A malformed digest makes the rule
+    /// undefined → the measurement is dropped from the reconstructed manifest
+    /// → its hash mismatches `payload_hash` → reject (fail-closed). A
+    /// well-formed matching digest still affirms (not a tautology).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rego_rejects_malformed_measurement_value_format() {
+        // Well-formed cmaas-runtime digest affirms.
+        let good_digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{
+                "type": "container.image.cmaas-runtime",
+                "value": good_digest,
+            }]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["container.image.cmaas-runtime".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+        let ok = matching_cmaas_input(good_digest);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "well-formed sha256:+64hex digest must affirm"
+        );
+
+        // Malformed: uppercase hex → fails lowercase regex → measurement
+        // dropped → manifest mismatch → reject.
+        let uppercase = "sha256:D42F6E1B2AAFB59383D0892824AEBF5E0A2E27DAD989A3FB26552A6E77E4BE46";
+        let bad_upper = matching_cmaas_input(uppercase);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad_upper).await,
+            (97, 2, 2, 2),
+            "uppercase-hex digest must reject (lowercase required)"
+        );
+
+        // Malformed: wrong length (only 32 hex after prefix) → reject.
+        let too_short = "sha256:abc123";
+        let bad_short = matching_cmaas_input(too_short);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad_short).await,
+            (97, 2, 2, 2),
+            "too-short digest must reject (length-format check)"
+        );
+
+        // Malformed: missing `sha256:` prefix → reject.
+        let no_prefix = "d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let bad_noprefix = matching_cmaas_input(no_prefix);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad_noprefix).await,
+            (97, 2, 2, 2),
+            "missing sha256: prefix must reject"
         );
     }
 
@@ -3162,8 +4269,8 @@ default file_system := 2"#,
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            Some(&dsse_signature),
-            Some(&publisher_key),
+            &dsse_signature,
+            &publisher_key,
         );
 
         // Matching input: AAEL kangaroo/pull-image event for cmaas-runtime with
@@ -3202,8 +4309,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            Some(&dsse_signature),
-            Some(bogus_pem),
+            &dsse_signature,
+            bogus_pem,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3256,8 +4363,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            Some(&dsse_signature),
-            Some(builtin_key),
+            &dsse_signature,
+            builtin_key,
         );
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
@@ -3273,8 +4380,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             payload_hash,
             "1.0.0",
             Some(&["container.image.cmaas-runtime".to_string()]),
-            Some(&bogus_sig),
-            Some(builtin_key),
+            &bogus_sig,
+            builtin_key,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3328,11 +4435,125 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         );
     }
 
+    /// Fix #4: the legacy rekor-v1 init-bake path (`build_transparency_log_policy`)
+    /// must ALWAYS emit the `tng.verify_dsse_signature` call for the
+    /// measurement-verification branch — DSSE verification is mandatory; there
+    /// is no payloadHash-only fallback. The dead `_ => (String::new(), "")` arm
+    /// that previously let callers opt out of DSSE is removed:
+    /// `dsse_signature`/`publisher_key` are now non-`Option`. The
+    /// `publishedMeasurements: None` branch bakes the DSSE literals for
+    /// reference but does not invoke verification (no manifest to bind the
+    /// signature to).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn transparency_log_rego_legacy_path_always_emits_dsse_verify() {
+        let (dsse_sig, publisher_key) = fixture_dsse();
+        // Some(publishedMeasurements) → the verify call is always present.
+        let policy = build_transparency_log_policy(
+            "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8",
+            "1.0.0",
+            Some(&["container.image.cmaas-runtime".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+        );
+        assert!(
+            policy.contains("tng.verify_dsse_signature("),
+            "legacy rekor-v1 policy must always emit tng.verify_dsse_signature (no payloadHash-only fallback)"
+        );
+        assert!(
+            policy.contains("dsse_signature := "),
+            "dsse_signature literal must be baked"
+        );
+        assert!(
+            policy.contains("publisher_key := "),
+            "publisher_key literal must be baked"
+        );
+
+        // publishedMeasurements: None → DSSE literals baked for reference, but
+        // no `measurements_verified` rule → no verify call (no manifest to bind).
+        let none_policy = build_transparency_log_policy(
+            "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8",
+            "1.0.0",
+            None,
+            &dsse_sig,
+            &publisher_key,
+        );
+        assert!(
+            none_policy.contains("dsse_signature := "),
+            "None branch still bakes the dsse_signature literal"
+        );
+        assert!(
+            !none_policy.contains("tng.verify_dsse_signature("),
+            "None branch must not invoke DSSE verify (no reconstructed manifest)"
+        );
+    }
+
     /// Canonicalize a `serde_json::Value` via the shared `rekor_v1::canonical_json`
     /// (RFC 8785 JCS) so the init-bake tests and the on-demand host-await path
     /// compute identical bytes.
     fn jcs_compact(value: &serde_json::Value) -> String {
         rekor_v1::canonical_json(value).expect("canonical JSON serialize")
+    }
+
+    /// Sign a ReleaseManifest with a fixed test P-256 key and return
+    /// `(dsse_signature_b64, publisher_key_pem)` so a policy baked with these
+    /// DSSE-verifies against the reconstructed manifest at appraisal. Used by
+    /// the legacy rekor-v1 init-bake tests whose synthetic manifests (td-shim,
+    /// td-kernel, multi-measurement) have no real rekor fixture signature.
+    /// Mirrors the `tng.verify_dsse_signature` host-await verify path exactly:
+    /// `dsse_pae(DSSE_PAYLOAD_TYPE, jcs_compact(manifest))` signed with ECDSA
+    /// P-256 (the p256 `Signer` hashes the PAE with SHA-256 internally, matching
+    /// `VerifyingKey::verify`). The publisher key is hand-wrapped as a P-256
+    /// SPKI PEM so `rekor_v1::parse_p256_public_key` accepts it.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fn sign_dsse_for_manifest(manifest: &serde_json::Value) -> (String, String) {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use p256::ecdsa::signature::Signer;
+
+        // Fixed deterministic test signing key (RFC 6979 nonce). NOT the
+        // built-in publisher key, so tests prove the signature is bound to the
+        // baked key.
+        let secret_bytes: [u8; 32] = [0x42; 32];
+        let signing_key = p256::ecdsa::SigningKey::from_bytes((&secret_bytes).into())
+            .expect("fixed test key valid");
+        let payload = jcs_compact(manifest);
+        let pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload.as_bytes());
+        let sig: p256::ecdsa::Signature = signing_key.sign(&pae);
+        let sig_b64 = STANDARD.encode(sig.to_der());
+        let verifying_key = p256::ecdsa::VerifyingKey::from(&signing_key);
+        let sec1 = verifying_key.to_sec1_bytes();
+        // P-256 SPKI DER: SEQUENCE { AlgId(ecPublicKey, prime256v1),
+        // BIT STRING(0x00 || SEC1 point) }.
+        let prefix: [u8; 26] = [
+            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
+            0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+        ];
+        let mut spki = Vec::with_capacity(prefix.len() + sec1.len());
+        spki.extend_from_slice(&prefix);
+        spki.extend_from_slice(&sec1);
+        let b64 = STANDARD.encode(&spki);
+        let pem = format!("-----BEGIN PUBLIC KEY-----\n{b64}\n-----END PUBLIC KEY-----\n");
+        (sig_b64, pem)
+    }
+
+    /// Convenience: a `(dsse_signature, publisher_key)` pair that DSSE-verifies
+    /// against the real fixture ReleaseManifest (`container.image.cmaas-runtime`
+    /// with the `d42f6e1b...` digest, payloadHash `1011b70c...`). Used by the
+    /// legacy init-bake tests that bake a hardcoded fixture `payload_hash` and
+    /// need the reconstructed manifest to DSSE-verify on the affirm arm. For the
+    /// `publishedMeasurements: None` tests the DSSE line is not emitted, so the
+    /// values are merely baked-but-unused; the fixture pair still serves fine.
+    #[cfg(feature = "crypto-rustcrypto")]
+    fn fixture_dsse() -> (String, String) {
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{
+                "type": "container.image.cmaas-runtime",
+                "value": "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46"
+            }]
+        });
+        sign_dsse_for_manifest(&manifest)
     }
 
     /// Prove the real fixture's DSSE signature verifies with its own
