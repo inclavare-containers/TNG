@@ -22,50 +22,50 @@ impl TlsConfigGenerator {
     ) -> Result<LazyOnetimeTlsServerConfig> {
         // The client-cert verifier is a shared Arc from the generator (built
         // once, not per handshake) so the verdict cache is shared across
-        // connections. The server cert resolver (RustlsDummyCert /
-        // DynamicCertResolver) does not gate resumption and stays per-handshake.
+        // connections and rustls's resumption ptr-eq holds. Each arm builds a
+        // fresh ServerConfig shell per handshake; the brotli cert-compression
+        // LRU is carried by the generator-shared cache injected below, not by
+        // the shell, so a rebuild does not re-recompress the cert.
         let mut config = match &self.mode {
             TlsConfigGeneratorMode::NoRa => {
-                let tls_server_config =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(self.server_client_cert_verifier.clone())
-                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
-                LazyOnetimeTlsServerConfig(tls_server_config, None)
-            }
-            TlsConfigGeneratorMode::Verify(..) => {
-                let tls_server_config: ServerConfig =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(self.server_client_cert_verifier.clone())
-                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
+                let cert =
+                    RustlsDummyCert::new_rustls_cert().context("build NoRa dummy cert resolver")?;
                 LazyOnetimeTlsServerConfig(
-                    tls_server_config,
-                    self.server_lazy_client_verifier.clone(),
+                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                        .with_client_cert_verifier(self.server_client_cert_verifier.clone())
+                        .with_cert_resolver(cert),
+                    None,
                 )
             }
+            TlsConfigGeneratorMode::Verify(..) => LazyOnetimeTlsServerConfig(
+                ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                    .with_client_cert_verifier(self.server_client_cert_verifier.clone())
+                    .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?),
+                self.server_lazy_client_verifier.clone(),
+            ),
             #[cfg(unix)]
-            TlsConfigGeneratorMode::Attest(cert_manager) => {
-                let tls_server_config: ServerConfig =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(self.server_client_cert_verifier.clone())
-                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
-                            cert_manager.clone(),
-                        )));
-                LazyOnetimeTlsServerConfig(tls_server_config, None)
-            }
+            TlsConfigGeneratorMode::Attest(cert_manager) => LazyOnetimeTlsServerConfig(
+                ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                    .with_client_cert_verifier(self.server_client_cert_verifier.clone())
+                    .with_cert_resolver(Arc::new(DynamicCertResolver::new(cert_manager.clone()))),
+                None,
+            ),
             #[cfg(unix)]
             TlsConfigGeneratorMode::AttestAndVerify(cert_manager, ..) => {
-                let tls_server_config: ServerConfig =
+                LazyOnetimeTlsServerConfig(
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(self.server_client_cert_verifier.clone())
                         .with_cert_resolver(Arc::new(DynamicCertResolver::new(
                             cert_manager.clone(),
-                        )));
-                LazyOnetimeTlsServerConfig(
-                    tls_server_config,
+                        ))),
                     self.server_lazy_client_verifier.clone(),
                 )
             }
         };
+        // Carry the brotli LRU across handshakes: the builder assigns a fresh
+        // empty cache per config, so overwrite it with the generator-shared
+        // one. Cert rotation auto-misses on the new encoding.
+        config.0.cert_compression_cache = self.server_cert_compression_cache.clone();
         config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
 
         // Enable TLS 1.3 0-RTT early data. rustls only accepts early data with
@@ -190,6 +190,9 @@ impl TlsConfigGenerator {
                 BlockingOnetimeTlsServerConfig(tls_server_config)
             }
         };
+        // Same brotli-LRU rationale as the lazy path; the blocking builder
+        // also assigns a fresh empty cache per config.
+        config.0.cert_compression_cache = self.server_cert_compression_cache.clone();
         config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
 
         Ok(config)

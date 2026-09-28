@@ -71,6 +71,22 @@ pub struct TlsConfigGenerator {
     #[cfg(not(wasm))]
     pub server_lazy_client_verifier:
         Option<Arc<crate::tunnel::utils::rustls::ra::client_cert_verifier::LazyClientCertVerifier>>,
+    /// Shared RFC 8879 cert-compression cache for server configs built from
+    /// this generator. One per generator so the brotli LRU survives across
+    /// handshakes; a per-handshake rebuild gave each config a fresh empty
+    /// cache and forced a quality-11 brotli recompression of the server cert
+    /// each time. The cache key is (algorithm, cert-chain encoding), so cert
+    /// rotation auto-misses (new encoding) without snapshotting the cert.
+    /// The lazy client-cert verifiers are stateless (only shared
+    /// `VerifyContext` + `CertVerifyCache` Arcs), so one shared compression
+    /// Arc is safe across concurrent handshakes.
+    #[cfg(not(wasm))]
+    pub server_cert_compression_cache: Arc<rustls::compress::CompressionCache>,
+    /// Shared RFC 8879 cert-compression cache for client configs built from
+    /// this generator. Same rationale as `server_cert_compression_cache`;
+    /// matters for Attest/AttestAndVerify where the client presents a cert.
+    #[cfg(not(wasm))]
+    pub client_cert_compression_cache: Arc<rustls::compress::CompressionCache>,
 }
 
 impl TlsConfigGenerator {
@@ -123,6 +139,10 @@ impl TlsConfigGenerator {
             server_client_cert_verifier,
             #[cfg(not(wasm))]
             server_lazy_client_verifier,
+            #[cfg(not(wasm))]
+            server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+            #[cfg(not(wasm))]
+            client_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
         })
     }
 
@@ -291,6 +311,8 @@ mod resumption_tests {
             client_lazy_server_verifier: None,
             server_client_cert_verifier,
             server_lazy_client_verifier: None,
+            server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+            client_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
         };
 
         let server_cfg: Arc<rustls::ServerConfig> = Arc::new(
@@ -458,6 +480,8 @@ mod resumption_tests {
             client_lazy_server_verifier: Some(lazy_server),
             server_client_cert_verifier,
             server_lazy_client_verifier: Some(lazy_client),
+            server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+            client_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
         };
 
         let server_cfg: Arc<rustls::ServerConfig> = Arc::new(
@@ -521,6 +545,117 @@ mod resumption_tests {
         assert!(
             resumed[1],
             "connection 2 must resume from the connection-1 ticket"
+        );
+    }
+
+    /// The brotli cert-compression cache must be shared across handshakes for
+    /// the previously-uncached arms (Verify server, Verify client) so rustls's
+    /// RFC 8879 LRU survives and a cert is not recompressed every handshake.
+    /// Asserts `Arc::ptr_eq` of `cert_compression_cache` across two configs
+    /// built from one generator. Uses the Verify-mode generator (the arm the
+    /// partial fix left uncached) and its client config.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rats_tls_compression_cache_shared_across_handshakes() {
+        use crate::config::ra::{
+            CocoConverterArgs, CocoVerifierArgs, ConverterArgs, VerifierArgs, VerifyArgs,
+        };
+        use crate::tunnel::ra_context::VerifyContext;
+        use crate::tunnel::utils::rustls::ra::client_cert_verifier::LazyClientCertVerifier;
+        use crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier;
+        use crate::tunnel::utils::rustls::{
+            config::alpn::Alpn, dummy::verifier::NoClientCertResolver,
+        };
+        use std::collections::HashMap;
+
+        // Hermetic VerifyContext: skip_as_token_cert_verify = true means no
+        // AS contact, no cert loading (see the resumption RA test above).
+        let verify_args = VerifyArgs::BackgroundCheck {
+            converter: ConverterArgs::Coco(CocoConverterArgs::Restful {
+                as_addr: "http://localhost:1/".to_string(),
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+            }),
+            verifier: VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                as_addr: None,
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+                trusted_certs_paths: None,
+                verify_signer_transparency: false,
+                skip_as_token_cert_verify: true,
+            }),
+        };
+        let verify_ctx = Arc::new(VerifyContext::from_verify_args(&verify_args).await.unwrap());
+        let cache = Arc::new(
+            crate::tunnel::utils::rustls::ra::cert_cache::CertVerifyCache::default_sized(),
+        );
+
+        let lazy_server =
+            Arc::new(LazyServerCertVerifier::new(verify_ctx.clone(), cache.clone()).unwrap());
+        let client_server_cert_verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+            lazy_server.clone();
+        let lazy_client =
+            Arc::new(LazyClientCertVerifier::new(verify_ctx.clone(), cache.clone()).unwrap());
+        let server_client_cert_verifier: Arc<dyn rustls::server::danger::ClientCertVerifier> =
+            lazy_client.clone();
+
+        let generator = TlsConfigGenerator {
+            mode: TlsConfigGeneratorMode::Verify(verify_ctx.clone(), cache.clone()),
+            client_session_store: Arc::new(rustls::client::ClientSessionMemoryCache::new(256)),
+            server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
+            client_server_cert_verifier,
+            client_cert_resolver: Arc::new(NoClientCertResolver),
+            client_lazy_server_verifier: Some(lazy_server),
+            server_client_cert_verifier,
+            server_lazy_client_verifier: Some(lazy_client),
+            server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+            client_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+        };
+
+        // Two server configs from the same generator share one cache Arc.
+        let server_cfg_1 = generator
+            .get_lazy_one_time_rustls_server_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        let server_cfg_2 = generator
+            .get_lazy_one_time_rustls_server_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        assert!(
+            Arc::ptr_eq(
+                &server_cfg_1.cert_compression_cache,
+                &server_cfg_2.cert_compression_cache,
+            ),
+            "server compression cache must be shared across handshakes"
+        );
+
+        // Two client configs from the same generator share one cache Arc.
+        let client_cfg_1 = generator
+            .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        let client_cfg_2 = generator
+            .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        assert!(
+            Arc::ptr_eq(
+                &client_cfg_1.cert_compression_cache,
+                &client_cfg_2.cert_compression_cache,
+            ),
+            "client compression cache must be shared across handshakes"
+        );
+
+        // Server and client use separate caches (different cert chains).
+        assert!(
+            !Arc::ptr_eq(
+                &server_cfg_1.cert_compression_cache,
+                &client_cfg_1.cert_compression_cache,
+            ),
+            "server and client compression caches must be distinct"
         );
     }
 }

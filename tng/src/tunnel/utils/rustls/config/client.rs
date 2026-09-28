@@ -30,6 +30,11 @@ impl TlsConfigGenerator {
             .dangerous()
             .set_certificate_verifier(self.client_server_cert_verifier.clone());
 
+        // Carry the brotli LRU across handshakes for the client-presented
+        // cert (Attest/AttestAndVerify). The builder assigns a fresh empty
+        // cache per config, so overwrite with the generator-shared one.
+        tls_client_config.cert_compression_cache = self.client_cert_compression_cache.clone();
+
         let mut config =
             LazyOnetimeTlsClientConfig(tls_client_config, self.client_lazy_server_verifier.clone());
 
@@ -241,7 +246,8 @@ impl TlsConfigGenerator {
                 BlockingOnetimeTlsClientConfig(tls_client_config)
             }
         };
-
+        // Same brotli-LRU rationale as the lazy client path.
+        config.0.cert_compression_cache = self.client_cert_compression_cache.clone();
         config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
 
         Ok(config)
