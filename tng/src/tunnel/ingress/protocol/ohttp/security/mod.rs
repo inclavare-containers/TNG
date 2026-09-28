@@ -540,7 +540,7 @@ mod tests {
 
     #[cfg(not(wasm))]
     #[test]
-    fn build_client_no_ca_uses_webpki_roots() -> Result<()> {
+    fn build_client_no_ca_builds_without_file_reads() -> Result<()> {
         // No tls_ca_certs → must not attempt any file reads; builds fine.
         let ohttp_args = OHttpArgs::default();
         let _client = super::build_ohttp_http_client(

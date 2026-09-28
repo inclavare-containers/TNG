@@ -453,7 +453,9 @@ pub struct OHttpArgs {
     /// PEM file paths of trusted CA certificates used to verify the upstream
     /// TLS certificate when `tls` is `Some(true)`. Each file may contain a
     /// single certificate or a PEM bundle (multiple concatenated certs). Empty
-    /// (the default) → rely on the built-in webpki roots.
+    /// (the default) → rely on the platform's native certificate store (via
+    /// rustls-platform-verifier, which uses the OS cert store on
+    /// Linux/macOS/Windows).
     ///
     /// Non-wasm only: a browser/wasm runtime has no filesystem, so the field
     /// does not exist there. Providing `tls_ca_certs` in a wasm config is a

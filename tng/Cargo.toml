@@ -49,11 +49,11 @@ opentelemetry-otlp = {workspace = true, features = [
   "metrics",
   "grpc-tonic",
   "gzip-tonic",
-  "tls-webpki-roots",
+  "tls-roots",
   "reqwest-client",
   "http-proto",
   "http-json",
-  "reqwest-rustls-webpki-roots",
+  "reqwest-rustls",
 ], optional = true}
 opentelemetry-stdout = {workspace = true, optional = true}
 opentelemetry_sdk = {workspace = true, features = [
