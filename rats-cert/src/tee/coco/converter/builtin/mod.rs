@@ -465,13 +465,13 @@ impl BuiltinCocoConverter {
                             attestation_service::config::DEFAULT_ARTIFACT_SERVER_ADDRESS,
                         )
                         .map_err(Error::AttestationServicePolicyEngineCreateFailed)?
-                        // Inject the `crypto.sha256` host-await function so
-                        // rego policies that call `crypto.sha256(...)` (e.g.
+                        // Inject the `tng.sha256` host-await function so
+                        // rego policies that call `tng.sha256(...)` (e.g.
                         // the transparency-log policy's
-                        // `crypto.sha256(json.marshal(manifest))`) resolve
+                        // `tng.sha256(json.marshal(manifest))`) resolve
                         // against a real sha256 implementation. regorus 0.11
                         // ships no crypto builtins by design. Under
-                        // `crypto-rustcrypto`, `verify_dsse_signature`
+                        // `crypto-rustcrypto`, `tng.verify_dsse_signature`
                         // (DSSEPAE + ECDSA P-256) is injected too — see
                         // `builtin_as_host_await_functions`.
                         .with_extra_extension_functions(builtin_as_host_await_functions()),
@@ -1046,9 +1046,9 @@ fn resolve_dsse_signature<'a>(
 /// `published_measurements`, and — when a publisher key is configured — the
 /// DSSE publisher signature + trusted publisher public key. At appraisal the
 /// Rego reconstructs the manifest from actual TDX measurement values, hashes
-/// it via `crypto.sha256(json.marshal(...))`, and compares to `payload_hash`.
+/// it via `tng.sha256(json.marshal(...))`, and compares to `payload_hash`.
 /// When a publisher key is baked, it additionally calls
-/// `verify_dsse_signature([json.marshal(reconstructed_manifest),
+/// `tng.verify_dsse_signature([json.marshal(reconstructed_manifest),
 /// dsse_signature, publisher_key])`, binding the entry to a trusted publisher
 /// (the DSSE check strictly subsumes the payloadHash content-binding and adds
 /// publisher-identity binding). Absent publisher key => payloadHash-only (the
@@ -1067,7 +1067,7 @@ fn build_transparency_log_policy(
     // The DSSE publisher-signature check is added only when a publisher key is
     // configured (some signature + some key). When `None`, fall back to the
     // base-design payloadHash-only check: no `dsse_signature`/`publisher_key`
-    // literals, no `verify_dsse_signature` call. The signature + publisher key
+    // literals, no `tng.verify_dsse_signature` call. The signature + publisher key
     // are public data (a logged rekor entry's signature + the configured
     // publisher key) — baking them as Rego literals leaks no secret.
     let (dsse_literals, dsse_verify_line) = match (dsse_signature, publisher_key) {
@@ -1077,7 +1077,7 @@ fn build_transparency_log_policy(
                  dsse_signature := {sig:?}\n\
                  publisher_key := {key:?}\n",
             ),
-            "    verify_dsse_signature([json.marshal(reconstructed_manifest), dsse_signature, publisher_key]) == true\n",
+            "    tng.verify_dsse_signature([json.marshal(reconstructed_manifest), dsse_signature, publisher_key]) == true\n",
         ),
         _ => (String::new(), ""),
     };
@@ -1164,7 +1164,7 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
         // `publishedMeasurements` present (possibly empty `[]`): run the
         // full measurement verification. Bake the ordered array, reconstruct
         // the manifest from actual TDX measurement values at appraisal, hash
-        // it via `crypto.sha256(json.marshal(...))`, and compare to the baked
+        // it via `tng.sha256(json.marshal(...))`, and compare to the baked
         // `payload_hash`. An empty array yields an empty manifest whose hash
         // never matches a real payloadHash → `measurements_verified` is
         // false → `executables` stays at its contraindicated default (97).
@@ -1232,11 +1232,11 @@ reconstructed_manifest := {{
     "schemaVersion": schema_version,
 }}
 
-# crypto.sha256 returns lowercase hex (== payloadHash format). When a publisher
-# key is baked, verify_dsse_signature additionally binds the entry to the
+# tng.sha256 returns lowercase hex (== payloadHash format). When a publisher
+# key is baked, tng.verify_dsse_signature additionally binds the entry to the
 # trusted publisher (fails closed → false → executables 97 → reject).
 measurements_verified if {{
-    crypto.sha256(json.marshal(reconstructed_manifest)) == payload_hash
+    tng.sha256(json.marshal(reconstructed_manifest)) == payload_hash
 {dsse_verify_line}}}
 
 # executables: 2 only if measurements verified
@@ -1297,13 +1297,13 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
     }
 }
 
-/// Host-await function that injects the `crypto.sha256` builtin regorus 0.11
+/// Host-await function that injects the `tng.sha256` builtin regorus 0.11
 /// omits by design. It sha256-hashes its single string argument and resumes
 /// the VM with the lowercase-hex digest as a `regorus::Value::String`,
 /// matching the format Rekor's `payloadHash` is published in (so the rego
-/// `crypto.sha256(json.marshal(manifest)) == payload_hash` comparison works).
+/// `tng.sha256(json.marshal(manifest)) == payload_hash` comparison works).
 ///
-/// Registered under the dotted name `crypto.sha256` (regorus's function-rule
+/// Registered under the dotted name `tng.sha256` (regorus's function-rule
 /// syntax accepts dotted keys) via `OPAInMemory::with_extra_extension_functions`
 /// so the existing, already-written rego policy is unchanged and stays
 /// forward-compatible with a future regorus that ships the builtin natively.
@@ -1321,9 +1321,7 @@ fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::Extens
     std::sync::Arc::new(|argument: regorus::Value| {
         Box::pin(async move {
             let s = argument.as_string().map_err(|e| {
-                PolicyError::EvalPolicyFailed(anyhow::anyhow!(
-                    "crypto.sha256 arg not a string: {e}"
-                ))
+                PolicyError::EvalPolicyFailed(anyhow::anyhow!("tng.sha256 arg not a string: {e}"))
             })?;
             use sha2::Digest;
             let mut hasher = sha2::Sha256::new();
@@ -1359,7 +1357,7 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 /// Host-await function that verifies a DSSE publisher signature over a
 /// reconstructed ReleaseManifest. regorus 0.11 ships no ECDSA builtin, so the
 /// DSSEPAE + sha256 + ECDSA P-256 `VerifyASN1` primitive is injected here via
-/// `OPAInMemory::with_extra_extension_functions`, alongside `crypto.sha256`.
+/// `OPAInMemory::with_extra_extension_functions`, alongside `tng.sha256`.
 ///
 /// Takes a packed 3-element array `[payload_str, signature_b64, publisher_key_pem]`
 /// (single-arg, since the host-await wrapper is single-arg). Computes
@@ -1369,7 +1367,7 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 /// `VerifyASN1(sha256(pae), sig)`.
 ///
 /// Fail-closed: any failure (mismatch, bad sig format, bad key) returns
-/// `Ok(Bool(false))` so the rego `verify_dsse_signature(...) == true` check
+/// `Ok(Bool(false))` so the rego `tng.verify_dsse_signature(...) == true` check
 /// cleanly sees `false` rather than aborting evaluation.
 ///
 /// Only the ECDSA+PAE primitive is in Rust; manifest reconstruction
@@ -1388,7 +1386,7 @@ fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa
             // argument = [payload_str, signature_b64, publisher_key_pem]
             let arr = argument.as_array().map_err(|e| {
                 PolicyError::EvalPolicyFailed(anyhow::anyhow!(
-                    "verify_dsse_signature arg not array: {e}"
+                    "tng.verify_dsse_signature arg not array: {e}"
                 ))
             })?;
             let payload = arr
@@ -1396,17 +1394,17 @@ fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa
                 .and_then(|v| v.as_string().ok())
                 .ok_or_else(|| {
                     PolicyError::EvalPolicyFailed(anyhow::anyhow!(
-                        "verify_dsse_signature: missing payload"
+                        "tng.verify_dsse_signature: missing payload"
                     ))
                 })?;
             let sig_b64 = arr.get(1).and_then(|v| v.as_string().ok()).ok_or_else(|| {
                 PolicyError::EvalPolicyFailed(anyhow::anyhow!(
-                    "verify_dsse_signature: missing signature"
+                    "tng.verify_dsse_signature: missing signature"
                 ))
             })?;
             let key_pem = arr.get(2).and_then(|v| v.as_string().ok()).ok_or_else(|| {
                 PolicyError::EvalPolicyFailed(anyhow::anyhow!(
-                    "verify_dsse_signature: missing publisher key"
+                    "tng.verify_dsse_signature: missing publisher key"
                 ))
             })?;
             let verified = (|| -> anyhow::Result<bool> {
@@ -1427,7 +1425,7 @@ fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa
 }
 
 /// Build the host-await function injection vec for the builtin-AS OPA engine:
-/// always `crypto.sha256`, plus `verify_dsse_signature` (DSSEPAE + sha256 +
+/// always `tng.sha256`, plus `tng.verify_dsse_signature` (DSSEPAE + sha256 +
 /// ECDSA P-256) under `crypto-rustcrypto` — it needs p256/x509-cert, and the
 /// transparency-log rego that calls it is itself only generated under that
 /// feature. Both `OPAInMemory` construction sites (the prod converter and the
@@ -1437,10 +1435,10 @@ fn builtin_as_host_await_functions() -> Vec<(
     String,
     attestation_service::policy_engine::opa::ExtensionFunction,
 )> {
-    let mut fns = vec![("crypto.sha256".to_string(), crypto_sha256_host_await())];
+    let mut fns = vec![("tng.sha256".to_string(), crypto_sha256_host_await())];
     #[cfg(feature = "crypto-rustcrypto")]
     fns.push((
-        "verify_dsse_signature".to_string(),
+        "tng.verify_dsse_signature".to_string(),
         verify_dsse_signature_host_await(),
     ));
     fns
@@ -2158,10 +2156,10 @@ default file_system := 2"#,
             attestation_service::config::DEFAULT_ARTIFACT_SERVER_ADDRESS,
         )
         .expect("create OPA in-memory engine")
-        // Inject `crypto.sha256` so the transparency-log rego policy's
-        // `crypto.sha256(json.marshal(manifest))` call resolves to a real
+        // Inject `tng.sha256` so the transparency-log rego policy's
+        // `tng.sha256(json.marshal(manifest))` call resolves to a real
         // sha256 during the behavior test below. Under `crypto-rustcrypto`,
-        // `verify_dsse_signature` is injected too — see
+        // `tng.verify_dsse_signature` is injected too — see
         // `builtin_as_host_await_functions`.
         .with_extra_extension_functions(builtin_as_host_await_functions());
         // The four rules our templates define. The real AS also queries four more
@@ -2589,7 +2587,7 @@ default file_system := 2"#,
 
     /// Tampering `schemaVersion` must reject: the reconstructed manifest carries
     /// the baked `schema_version`, so a wrong value (e.g. "9.9.9") changes the
-    /// `json.marshal` output → `crypto.sha256(manifest) != payload_hash` → reject.
+    /// `json.marshal` output → `tng.sha256(manifest) != payload_hash` → reject.
     /// The correct "1.0.0" affirms, so this is not a tautology.
     #[tokio::test]
     async fn transparency_log_rego_rejects_wrong_schema_version() {
@@ -2628,7 +2626,7 @@ default file_system := 2"#,
     }
 
     /// Tampering the baked `payload_hash` must reject: the rego recomputes
-    /// `crypto.sha256(json.marshal(manifest))` from the actual evidence and
+    /// `tng.sha256(json.marshal(manifest))` from the actual evidence and
     /// compares to the baked value, so a wrong baked hash never matches → reject.
     /// The real payload hash affirms, so this is not a tautology.
     #[tokio::test]
@@ -2805,7 +2803,7 @@ default file_system := 2"#,
     /// both fail), (3) a wrong publisher key baked rejects even when the
     /// payloadHash still matches (DSSE gates — publisher-identity binding). The
     /// signature + key are extracted from the real rekor fixture the same way
-    /// the `verify_dsse_signature` primitive's S3 unit test does.
+    /// the `tng.verify_dsse_signature` primitive's S3 unit test does.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rego_affirms_with_dsse_publisher_signature() {
@@ -2890,7 +2888,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// Prove the canonical (JCS — sorted, compact) form of the manifest hashes
     /// to the REAL rekor payloadHash. This is the form regorus's `json.marshal`
     /// produces (it serializes object keys in sorted order), so the rego
-    /// `crypto.sha256(json.marshal(manifest)) == payload_hash` comparison is
+    /// `tng.sha256(json.marshal(manifest)) == payload_hash` comparison is
     /// valid. TNG's `serde_json` is built with `preserve_order` (insertion order,
     /// NOT sorted), so raw `serde_json::to_string` does not yield JCS — the keys
     /// must be sorted first.
@@ -2975,7 +2973,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
     /// Prove the real fixture's DSSE signature verifies with its own
     /// in-band publisher key over the real ReleaseManifest, via the same
-    /// DSSEPAE + sha256 + ECDSA P-256 path the `verify_dsse_signature`
+    /// DSSEPAE + sha256 + ECDSA P-256 path the `tng.verify_dsse_signature`
     /// host-await primitive uses. Tampering the manifest digest, or
     /// substituting a different publisher key, must fail verification
     /// (fail-closed → false). This is the RED→GREEN test for the primitive:
@@ -3380,5 +3378,16 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         });
         let p: PolicyConfig = serde_json::from_value(cfg).unwrap();
         assert!(p.validate_transparency_config().is_err());
+    }
+
+    #[test]
+    fn host_await_functions_use_tng_prefix() {
+        let fns = builtin_as_host_await_functions();
+        let names: Vec<&str> = fns.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"tng.sha256"));
+        assert!(names.contains(&"tng.verify_dsse_signature"));
+        assert!(!names
+            .iter()
+            .any(|n| n == &"crypto.sha256" || n == &"verify_dsse_signature"));
     }
 }
