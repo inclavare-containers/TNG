@@ -6,3 +6,9 @@ docs/superpowers/
 docs/*-plan.md
 docs/*-design.md
 docs/*-spec.md
+
+# All bench run outputs (per-run dirs, raw logs, generated reports, env json)
+# land under bench/artifacts/ (see make_outdir in bench/lib/common.sh).
+bench/artifacts/
+# The perf-iterate loop's iteration state + findings (local-only).
+bench/.perf-iteration-state.md

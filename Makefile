@@ -586,7 +586,7 @@ test-dep-as:
 	RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json
 
 
-# Benchmark: raw TCP vs stunnel vs TNG in isolated ip netns
+# Benchmark (dev, netns-isolated): raw TCP vs stunnel vs TNG
 # Usage: make bench [TNG_BIN=./target/release/tng]
 #        make bench-multiplex [TNG_BIN=./target/release/tng]  # tests multiplex=true mode
 TNG_BIN ?= ./target/release/tng
@@ -597,14 +597,33 @@ bench:
 		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
 		$(MAKE) bin-build; \
 	fi
-	bash ./scripts/bench.sh
+	bash ./scripts/bench-netns.sh
 
 bench-multiplex:
 	@if [ ! -f "$(TNG_BIN)" ]; then \
 		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
 		$(MAKE) bin-build; \
 	fi
-	TNG_MULTIPLEX=true bash ./scripts/bench.sh
+	TNG_MULTIPLEX=true bash ./scripts/bench-netns.sh
+
+# Real two-host benchmark (mapping mode, no_ra). Run server on P, client on D.
+# Usage: make bench-host-server
+#        make bench-host-client SERVER_IP=<P_IP>
+.PHONY: bench-host-server bench-host-client
+bench-host-server:
+	@if [ ! -f "$(TNG_BIN)" ]; then \
+		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
+		$(MAKE) bin-build; \
+	fi
+	bash ./bench/server.sh
+
+bench-host-client:
+	@if [ ! -f "$(TNG_BIN)" ]; then \
+		echo ">> TNG binary not found at $(TNG_BIN), building release..."; \
+		$(MAKE) bin-build; \
+	fi
+	@test -n "$(SERVER_IP)" || (echo "usage: make bench-host-client SERVER_IP=<P_IP>" && false)
+	bash ./bench/client.sh $(SERVER_IP)
 
 # Python wheel build for current platform
 # Requires: Rust toolchain and hatch (installed automatically if missing)
