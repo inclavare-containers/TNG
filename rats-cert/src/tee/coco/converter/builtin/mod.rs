@@ -4684,8 +4684,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     // One comprehensive test: shared helper (converter.new → convert →
     // verify_evidence) + systematic tampering of EVERY config field + evidence
     // field. Each tampering must cause the flow to fail (new() Err, convert()
-    // Err, or verify_evidence Err). #[ignore]d — needs live rekor network +
-    // the real TDX attestation-materials fixture.
+    // Err, or verify_evidence Err). This test exercises the full convert→verify
+    // flow against the real evidence fixture; in CI it early-returns Ok when
+    // the tdx-verifier backend is not enabled (the default tdx-dcap-rust
+    // backend), so it no-ops unless the tdx-verifier feature + live rekor are
+    // available.
 
     /// The shared main flow: parse config → converter.new (live rekor fetch +
     /// authenticate + bake payloadHash) → build CocoEvidence from quote +
