@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name: trusted-network-gateway
-Version: 2.10.1
+Version: 2.11.0
 Release: 1%{?dist}
 Summary: Trusted Network Gateway
 Group: Applications/System
@@ -85,6 +85,24 @@ install -p -m 755 %{_builddir}/%{name}-%{version}/src/target/release/libtng_hook
 
 
 %changelog
+* Wed Sep 30 2026 Kun Lai <laikun@linux.alibaba.com> - 2.11.0-1
+- style(rats-cert): correct stale ignore-comment on transparency-log e2e
+- docs(claude): ban cross-repo mirroring references in comments
+- feat(rats-cert): extract tdx.kernel measurement from the TD payload event
+- refactor(rats-cert): use canon-json for manifest JCS canonicalization
+- feat(rats-cert): artifact-server transparency-log service path
+- docs(claude): add comment-discipline rules
+- deps: bump reqwest to v0.13.5, hyper to v1.11.1, unify trustee + opentelemetry, drop webpki-roots
+- refactor: cfg-gate hyper off wasm, drop hyper-util-wasm dependency
+- tunnel/rustls: share cert-compression cache across all rats-tls config arms
+- bench: add perf-iterate skill + optimization guide
+- bench: two-host TNG benchmark with operator-facing README
+- skill(coverage-guided-tests): optimize per writing-skills best-practices
+- skill: coverage-guided-tests for CI-coverage-driven test gaps
+- fix(test): drop TDX-only quote/eventlog assertions in bc bundle test
+- test(ohttp): cover attested bundle + decode; upload codecov.json artifact
+- tools(ohttp): bundle dump artifacts, add decode, rename --out/--keyconfig to --raw
+
 * Thu Sep 24 2026 Kun Lai <laikun@linux.alibaba.com> - 2.10.1-1
 - claude: ban internal incident details from persistent text
 - forward: abort bidirectional transfer on fatal read/write errors
