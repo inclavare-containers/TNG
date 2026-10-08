@@ -68,12 +68,13 @@
 //! `transfer_one_direction`) so it is not re-driven on the next poll, which
 //! would otherwise stall the forward when the other direction is still active.
 
-use std::future::poll_fn;
+use bytes::BytesMut;
+use std::future::{poll_fn, Future};
 use std::io;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::task::{Context as TaskContext, Poll};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 /// Error that captures the direction and read/write side of a forward failure,
 /// while preserving the original `io::Error` as the source.
@@ -95,13 +96,16 @@ pub enum ForwardError {
 const FORWARD_BUF_SIZE: usize = 512 * 1024;
 
 /// Buffer used for copying data between streams.
+///
+/// The filled region is `buf[..buf.len()]`; `pos` is the read cursor into it
+/// for the current write. The capacity stays exactly `buf_size` so reads
+/// never chunk larger than the historical 512 KB window.
 struct CopyBuffer {
     read_done: bool,
     need_flush: bool,
     pos: usize,
-    cap: usize,
     amt: u64,
-    buf: Box<[u8]>,
+    buf: BytesMut,
 }
 
 impl CopyBuffer {
@@ -110,9 +114,12 @@ impl CopyBuffer {
             read_done: false,
             need_flush: false,
             pos: 0,
-            cap: 0,
             amt: 0,
-            buf: vec![0; buf_size].into_boxed_slice(),
+            // A zero-filled `Box<[u8]>` here costs a full memset and faults in
+            // every page per connection even when only a fraction is touched;
+            // BytesMut's spare capacity is uninitialized and only the bytes a
+            // read returns become initialized, so neither happens.
+            buf: BytesMut::with_capacity(buf_size),
         }
     }
 
@@ -125,18 +132,18 @@ impl CopyBuffer {
         write_err: WE,
     ) -> Poll<Result<u64, ForwardError>>
     where
-        R: AsyncRead + ?Sized,
+        R: AsyncRead + Unpin + ?Sized,
         W: AsyncWrite + ?Sized,
         RE: Fn(io::Error) -> ForwardError,
         WE: Fn(io::Error) -> ForwardError,
     {
         loop {
-            if self.cap < self.buf.len() && !self.read_done {
+            if self.buf.capacity() > self.buf.len() && !self.read_done {
                 match self.poll_fill_buf(cx, reader.as_mut()) {
                     Poll::Ready(Ok(())) => {}
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(read_err(err))),
                     Poll::Pending => {
-                        if self.pos == self.cap {
+                        if self.pos == self.buf.len() {
                             if self.need_flush {
                                 match writer.as_mut().poll_flush(cx) {
                                     Poll::Ready(Ok(())) => {
@@ -154,7 +161,7 @@ impl CopyBuffer {
                 }
             }
 
-            while self.pos < self.cap {
+            while self.pos < self.buf.len() {
                 match self.poll_write_buf(cx, reader.as_mut(), writer.as_mut()) {
                     Poll::Ready(Ok(i)) => {
                         if i == 0 {
@@ -167,7 +174,7 @@ impl CopyBuffer {
                     }
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(write_err(err))),
                     Poll::Pending => {
-                        if !self.read_done && self.cap < self.buf.len() {
+                        if !self.read_done && self.buf.capacity() > self.buf.len() {
                             match self.poll_fill_buf(cx, reader.as_mut()) {
                                 Poll::Ready(Ok(())) => {}
                                 Poll::Ready(Err(err)) => return Poll::Ready(Err(read_err(err))),
@@ -181,7 +188,7 @@ impl CopyBuffer {
             }
 
             self.pos = 0;
-            self.cap = 0;
+            self.buf.clear();
 
             if self.read_done {
                 match writer.as_mut().poll_shutdown(cx) {
@@ -201,18 +208,20 @@ impl CopyBuffer {
         reader: Pin<&mut R>,
     ) -> Poll<io::Result<()>>
     where
-        R: AsyncRead + ?Sized,
+        R: AsyncRead + Unpin + ?Sized,
     {
         let me = &mut *self;
-        let mut buf = ReadBuf::new(&mut me.buf);
-        buf.set_filled(me.cap);
-        let res = reader.poll_read(cx, &mut buf);
-        if let Poll::Ready(Ok(())) = res {
-            let filled_len = buf.filled().len();
-            me.read_done = me.cap == filled_len;
-            me.cap = filled_len;
+        let mut read = pin!(reader.get_mut().read_buf(&mut me.buf));
+        match read.as_mut().poll(cx) {
+            Poll::Ready(Ok(n)) => {
+                // `read_buf` reports 0 only at EOF; the received bytes are
+                // already appended to `me.buf`.
+                me.read_done = n == 0;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
         }
-        res
     }
 
     fn poll_write_buf<R, W>(
@@ -222,13 +231,13 @@ impl CopyBuffer {
         mut writer: Pin<&mut W>,
     ) -> Poll<io::Result<usize>>
     where
-        R: AsyncRead + ?Sized,
+        R: AsyncRead + Unpin + ?Sized,
         W: AsyncWrite + ?Sized,
     {
         let me = &mut *self;
-        match writer.as_mut().poll_write(cx, &me.buf[me.pos..me.cap]) {
+        match writer.as_mut().poll_write(cx, &me.buf[me.pos..]) {
             Poll::Pending => {
-                if !me.read_done && me.cap < me.buf.len() {
+                if !me.read_done && me.buf.capacity() > me.buf.len() {
                     match me.poll_fill_buf(cx, reader.as_mut()) {
                         Poll::Ready(Ok(())) => {}
                         other => return other.map(|_| Ok(0)),
@@ -275,7 +284,7 @@ where
                     }
                     Poll::Ready(Err(e)) => {
                         let sent = buf.amt;
-                        let remain = (buf.cap.saturating_sub(buf.pos)) as u64;
+                        let remain = (buf.buf.len().saturating_sub(buf.pos)) as u64;
                         // Make the error sticky: a direction that failed (TLS
                         // corruption, RST, EPIPE) cannot reliably make more
                         // progress, so park it as Done(sent) instead of
@@ -362,7 +371,7 @@ fn classify_error(error: &ForwardError) -> AbortKind {
 fn state_amt_remain(state: &TransferState) -> (u64, u64) {
     match state {
         TransferState::Running(buf) => {
-            let remain = (buf.cap.saturating_sub(buf.pos)) as u64;
+            let remain = (buf.buf.len().saturating_sub(buf.pos)) as u64;
             (buf.amt, remain)
         }
         TransferState::ShuttingDown(n) | TransferState::Done(n) => (*n, 0),
@@ -546,6 +555,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tokio::io::ReadBuf;
 
     // =====================================================================
     // MockStream: a single, independent stream endpoint
