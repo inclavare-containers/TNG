@@ -658,4 +658,131 @@ mod resumption_tests {
             "server and client compression caches must be distinct"
         );
     }
+
+    /// The blocking (QUIC/UDP) builders inject the generator-shared brotli
+    /// cache in code separate from the lazy TCP builders, so
+    /// `rats_tls_compression_cache_shared_across_handshakes` does not cover
+    /// them. Pin `Arc::ptr_eq` on two configs from each blocking builder and
+    /// against the generator's own cache fields: a blocking-only refactor that
+    /// drops the injection would otherwise silently reintroduce per-handshake
+    /// brotli recompression with no test failing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rats_tls_compression_cache_shared_across_handshakes_blocking() {
+        use crate::config::ra::{
+            CocoConverterArgs, CocoVerifierArgs, ConverterArgs, VerifierArgs, VerifyArgs,
+        };
+        use crate::tunnel::ra_context::VerifyContext;
+        use crate::tunnel::utils::rustls::dummy::verifier::NoClientCertResolver;
+        use crate::tunnel::utils::rustls::ra::client_cert_verifier::LazyClientCertVerifier;
+        use crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier;
+        use std::collections::HashMap;
+
+        // Hermetic VerifyContext: skip_as_token_cert_verify = true means no
+        // AS contact and no cert loading. The blocking builders only store
+        // this context in their verifiers; no handshake is driven here.
+        let verify_args = VerifyArgs::BackgroundCheck {
+            converter: ConverterArgs::Coco(CocoConverterArgs::Restful {
+                as_addr: "http://localhost:1/".to_string(),
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+            }),
+            verifier: VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                as_addr: None,
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+                trusted_certs_paths: None,
+                verify_signer_transparency: false,
+                skip_as_token_cert_verify: true,
+            }),
+        };
+        let verify_ctx = Arc::new(VerifyContext::from_verify_args(&verify_args).await.unwrap());
+        let cache = Arc::new(
+            crate::tunnel::utils::rustls::ra::cert_cache::CertVerifyCache::default_sized(),
+        );
+
+        let lazy_server =
+            Arc::new(LazyServerCertVerifier::new(verify_ctx.clone(), cache.clone()).unwrap());
+        let client_server_cert_verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+            lazy_server.clone();
+        let lazy_client =
+            Arc::new(LazyClientCertVerifier::new(verify_ctx.clone(), cache.clone()).unwrap());
+        let server_client_cert_verifier: Arc<dyn rustls::server::danger::ClientCertVerifier> =
+            lazy_client.clone();
+
+        let generator = TlsConfigGenerator {
+            mode: TlsConfigGeneratorMode::Verify(verify_ctx.clone(), cache.clone()),
+            client_session_store: Arc::new(rustls::client::ClientSessionMemoryCache::new(256)),
+            server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
+            client_server_cert_verifier,
+            client_cert_resolver: Arc::new(NoClientCertResolver),
+            client_lazy_server_verifier: Some(lazy_server),
+            server_client_cert_verifier,
+            server_lazy_client_verifier: Some(lazy_client),
+            server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+            client_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
+        };
+
+        // Two blocking server configs from the same generator share one cache
+        // Arc, and it is the generator's own server cache (the same Arc the
+        // lazy path injects, since ptr-eq is transitive).
+        let server_cfg_1 = generator
+            .get_blocking_one_time_rustls_server_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        let server_cfg_2 = generator
+            .get_blocking_one_time_rustls_server_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        assert!(
+            Arc::ptr_eq(
+                &server_cfg_1.cert_compression_cache,
+                &server_cfg_2.cert_compression_cache,
+            ),
+            "blocking server configs must share one compression cache across handshakes"
+        );
+        assert!(
+            Arc::ptr_eq(
+                &server_cfg_1.cert_compression_cache,
+                &generator.server_cert_compression_cache,
+            ),
+            "blocking server config must carry the generator's server cache"
+        );
+
+        // Same for the blocking client builder.
+        let client_cfg_1 = generator
+            .get_blocking_one_time_rustls_client_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        let client_cfg_2 = generator
+            .get_blocking_one_time_rustls_client_config(Alpn::RatsTls)
+            .await
+            .unwrap()
+            .0;
+        assert!(
+            Arc::ptr_eq(
+                &client_cfg_1.cert_compression_cache,
+                &client_cfg_2.cert_compression_cache,
+            ),
+            "blocking client configs must share one compression cache across handshakes"
+        );
+        assert!(
+            Arc::ptr_eq(
+                &client_cfg_1.cert_compression_cache,
+                &generator.client_cert_compression_cache,
+            ),
+            "blocking client config must carry the generator's client cache"
+        );
+
+        // Server and client keep separate caches on the blocking path too.
+        assert!(
+            !Arc::ptr_eq(
+                &server_cfg_1.cert_compression_cache,
+                &client_cfg_1.cert_compression_cache,
+            ),
+            "server and client blocking compression caches must be distinct"
+        );
+    }
 }
