@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use rustls::ServerConfig;
 
 #[cfg(unix)]
-use crate::tunnel::utils::cert_manager::DynamicCertResolver;
+use crate::tunnel::utils::rustls::config::resolver::SnapshotCertResolver;
 use crate::tunnel::utils::rustls::{
     config::{alpn::Alpn, TlsConfigGenerator, TlsConfigGeneratorMode},
     dummy::RustlsDummyCert,
@@ -44,20 +44,30 @@ impl TlsConfigGenerator {
                 self.server_lazy_client_verifier.clone(),
             ),
             #[cfg(unix)]
-            TlsConfigGeneratorMode::Attest(cert_manager) => LazyOnetimeTlsServerConfig(
-                ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .with_client_cert_verifier(self.server_client_cert_verifier.clone())
-                    .with_cert_resolver(Arc::new(DynamicCertResolver::new(cert_manager.clone()))),
-                None,
-            ),
-            #[cfg(unix)]
-            TlsConfigGeneratorMode::AttestAndVerify(cert_manager, ..) => {
+            TlsConfigGeneratorMode::Attest(cert_manager) => {
+                // Await the freshest attest cert here, before the handshake:
+                // under `RefreshStrategy::Always` this is a real attestation
+                // round trip, and it must stay a genuine `await` — the lazy
+                // TCP path never resolves the cert synchronously (that would
+                // need `block_in_place`, which is QUIC-only; see
+                // `super::blocking`). Server resumption keys on the shared
+                // session store, not on resolver identity, so a fresh
+                // snapshot resolver per handshake is safe.
+                let cert = cert_manager.get_latest_cert().await?;
                 LazyOnetimeTlsServerConfig(
                     ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                         .with_client_cert_verifier(self.server_client_cert_verifier.clone())
-                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
-                            cert_manager.clone(),
-                        ))),
+                        .with_cert_resolver(Arc::new(SnapshotCertResolver::new(cert))),
+                    None,
+                )
+            }
+            #[cfg(unix)]
+            TlsConfigGeneratorMode::AttestAndVerify(cert_manager, ..) => {
+                let cert = cert_manager.get_latest_cert().await?;
+                LazyOnetimeTlsServerConfig(
+                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                        .with_client_cert_verifier(self.server_client_cert_verifier.clone())
+                        .with_cert_resolver(Arc::new(SnapshotCertResolver::new(cert))),
                     self.server_lazy_client_verifier.clone(),
                 )
             }
@@ -137,67 +147,3 @@ impl LazyOnetimeTlsServerConfig {
         ))
     }
 }
-
-#[cfg(not(wasm))]
-impl TlsConfigGenerator {
-    pub async fn get_blocking_one_time_rustls_server_config(
-        &self,
-        alpn: Alpn,
-    ) -> Result<BlockingOnetimeTlsServerConfig> {
-        use crate::tunnel::utils::rustls::ra::client_cert_verifier::BlockingClientCertVerifier;
-
-        let mut config = match &self.mode {
-            TlsConfigGeneratorMode::NoRa => {
-                let tls_server_config =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_no_client_auth()
-                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
-                BlockingOnetimeTlsServerConfig(tls_server_config)
-            }
-            TlsConfigGeneratorMode::Verify(verify_ctx, cache) => {
-                let verifier = Arc::new(BlockingClientCertVerifier::new(
-                    verify_ctx.clone(),
-                    cache.clone(),
-                )?);
-                let tls_server_config: ServerConfig =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(verifier)
-                        .with_cert_resolver(RustlsDummyCert::new_rustls_cert()?);
-                BlockingOnetimeTlsServerConfig(tls_server_config)
-            }
-            #[cfg(unix)]
-            TlsConfigGeneratorMode::Attest(cert_manager) => {
-                let tls_server_config: ServerConfig =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_no_client_auth()
-                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
-                            cert_manager.clone(),
-                        )));
-                BlockingOnetimeTlsServerConfig(tls_server_config)
-            }
-            #[cfg(unix)]
-            TlsConfigGeneratorMode::AttestAndVerify(cert_manager, verify_ctx, cache) => {
-                let verifier = Arc::new(BlockingClientCertVerifier::new(
-                    verify_ctx.clone(),
-                    cache.clone(),
-                )?);
-                let tls_server_config: ServerConfig =
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(verifier)
-                        .with_cert_resolver(Arc::new(DynamicCertResolver::new(
-                            cert_manager.clone(),
-                        )));
-                BlockingOnetimeTlsServerConfig(tls_server_config)
-            }
-        };
-        // Same brotli-LRU rationale as the lazy path; the blocking builder
-        // also assigns a fresh empty cache per config.
-        config.0.cert_compression_cache = self.server_cert_compression_cache.clone();
-        config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
-
-        Ok(config)
-    }
-}
-
-#[cfg(not(wasm))]
-pub struct BlockingOnetimeTlsServerConfig(pub rustls::ServerConfig);

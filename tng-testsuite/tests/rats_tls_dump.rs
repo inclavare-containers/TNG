@@ -47,8 +47,9 @@ async fn rats_tls_dump_captures_no_ra_server_cert() -> Result<()> {
 /// `rats-tls dump --attest` completes the handshake against a mutual-RA
 /// rats-tls server (an egress `rats_tls` instance that both presents its own
 /// attest cert and requires a client cert via `verify`) and captures the
-/// server's end-entity cert as PEM. The `--attest` JSON drives the client cert
-/// through CertManager/DynamicCertResolver, mirroring the live ingress client.
+/// server's end-entity cert as PEM. The `--attest` JSON builds a client cert
+/// through CertManager's awaited fetch, presented via a one-shot snapshot
+/// resolver (the live ingress client awaits the same fetch).
 /// The server's `LazyClientCertVerifier` accepts any presented client cert
 /// during the handshake (RA verification runs lazily afterwards), so the
 /// handshake completes once the client presents a cert and the server cert is

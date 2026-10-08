@@ -200,8 +200,9 @@ fn pem_or_der_to_der(raw: &[u8]) -> Result<Vec<u8>> {
 async fn dump(endpoint: &str, attest_json: Option<&str>, cert_out: Option<PathBuf>) -> Result<()> {
     let capture = Arc::new(capture::CapturingServerCertVerifier::new()?);
 
-    // `--attest` drives a client cert via CertManager/DynamicCertResolver
-    // (mirror of the Attest arm in get_lazy_one_time_rustls_client_config).
+    // `--attest` drives a client cert: fetch one through CertManager and
+    // present it via a snapshot resolver (the lazy TCP client awaits the same
+    // fetch and publishes it; dump is one-shot, so a snapshot is enough).
     // CertManager is unix-only (it needs the AA attester), so on a non-unix
     // target (e.g. windows) an explicit --attest is rejected here
     // rather than silently dropping into no-client-auth.
@@ -213,8 +214,9 @@ async fn dump(endpoint: &str, attest_json: Option<&str>, cert_out: Option<PathBu
     let mut tls_client_config = match attest_json {
         #[cfg(unix)]
         Some(json) => {
-            use crate::tunnel::utils::cert_manager::{CertManager, DynamicCertResolver};
+            use crate::tunnel::utils::cert_manager::CertManager;
             use crate::tunnel::utils::runtime::TokioRuntime;
+            use crate::tunnel::utils::rustls::config::resolver::SnapshotCertResolver;
 
             let attest_args: AttestArgs =
                 serde_json::from_str(json).context("parse --attest as AttestArgs JSON")?;
@@ -226,15 +228,19 @@ async fn dump(endpoint: &str, attest_json: Option<&str>, cert_out: Option<PathBu
             let shutdown = tokio_graceful::Shutdown::new(async {});
             let runtime = TokioRuntime::current(shutdown.guard())
                 .context("acquire tokio runtime for cert manager")?;
-            let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime)
+            let cert_manager = Arc::new(
+                CertManager::new(Arc::new(attest_ctx), runtime)
+                    .await
+                    .context("build cert manager from --attest")?,
+            );
+            let cert = cert_manager
+                .get_latest_cert()
                 .await
-                .context("build cert manager from --attest")?;
+                .context("fetch client cert for --attest")?;
 
             rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(rustls::RootCertStore::empty())
-                .with_client_cert_resolver(Arc::new(DynamicCertResolver::new(Arc::new(
-                    cert_manager,
-                ))))
+                .with_client_cert_resolver(Arc::new(SnapshotCertResolver::new(cert)))
         }
         _ => rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(rustls::RootCertStore::empty())

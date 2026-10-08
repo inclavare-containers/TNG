@@ -25,56 +25,6 @@ impl std::fmt::Debug for CertManager {
     }
 }
 
-/// A dynamic certificate resolver that always returns the latest certificate
-/// from the [`CertManager`]. Unlike `SingleCertAndKey` which captures a snapshot
-/// at creation time, this resolver queries the `CertManager` on every handshake,
-/// ensuring attestation freshness.
-#[derive(Debug)]
-pub struct DynamicCertResolver {
-    cert_manager: Arc<CertManager>,
-}
-
-impl DynamicCertResolver {
-    pub fn new(cert_manager: Arc<CertManager>) -> Self {
-        Self { cert_manager }
-    }
-}
-
-impl rustls::server::ResolvesServerCert for DynamicCertResolver {
-    fn resolve(
-        &self,
-        _client_hello: rustls::server::ClientHello<'_>,
-    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
-        match self.cert_manager.get_latest_cert_blocking() {
-            Ok(v) => Some(v),
-            Err(error) => {
-                tracing::error!(?error, "DynamicCertResolver: failed to get server cert");
-                None
-            }
-        }
-    }
-}
-
-impl rustls::client::ResolvesClientCert for DynamicCertResolver {
-    fn resolve(
-        &self,
-        _root_hint_subjects: &[&[u8]],
-        _sigschemes: &[rustls::SignatureScheme],
-    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
-        match self.cert_manager.get_latest_cert_blocking() {
-            Ok(v) => Some(v),
-            Err(error) => {
-                tracing::error!(?error, "DynamicCertResolver: failed to get client cert");
-                None
-            }
-        }
-    }
-
-    fn has_certs(&self) -> bool {
-        true
-    }
-}
-
 impl CertManager {
     pub async fn new(attest_ctx: Arc<AttestContext>, runtime: TokioRuntime) -> Result<Self> {
         let refresh_strategy = attest_ctx.refresh_strategy();
@@ -173,34 +123,25 @@ impl CertManager {
         Ok((certified_key, expired))
     }
 
-    #[cfg(test)]
-    pub async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    /// The freshest certificate, awaited. For `UpdatePeriodically` this is a
+    /// cheap `watch::Receiver::borrow().clone()` of the resident cert; for
+    /// `Always` (`refresh_interval: 0`) it is a fresh attestation round trip.
+    ///
+    /// This is the entry point the lazy TCP rats-tls path uses: the handshake
+    /// awaits it before the TLS accept/connect, so rustls's synchronous cert
+    /// resolver can hand out a snapshot without ever blocking the task.
+    pub(crate) async fn get_latest_cert(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
         self.cert.get_latest().await
     }
 
-    /// Blocking call to get the latest certificate.
-    ///
-    /// For `UpdatePeriodically` strategy, this is a cheap `watch::Receiver::borrow().clone()`
-    /// that returns the most recently refreshed certificate without blocking.
-    ///
-    /// For `NoCache` strategy, other code running concurrently **in the same task** will be suspended
-    ///
-    /// # Note
-    /// This method is called from within rustls's `ResolvesServerCert` / `ResolvesClientCert`
-    /// trait implementations, which are synchronous and invoked during the TLS handshake.
-    /// Only the `NeedsBlocking` fallback parks the caller with `block_in_place`, which tells the
-    /// tokio runtime to move other tasks off the current worker thread before blocking, preventing
-    /// the thread from being starved. The `Ready` fast path must not go through `block_in_place`:
-    /// it detaches the worker core and makes tokio spawn a replacement thread per call, churning
-    /// threads (and the glibc arenas they touch) once per full handshake under short-connection
-    /// load, even though the value is already resident.
-    pub fn get_latest_cert_blocking(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
-        match self.cert.try_get_latest() {
-            SyncGet::Ready(cert) => Ok(cert),
-            SyncGet::NeedsBlocking => tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.cert.get_latest())
-            }),
-        }
+    /// Non-blocking snapshot of the resident cert. `SyncGet::NeedsBlocking`
+    /// means the strategy (`Always`) can only produce a value by running the
+    /// update future; the lazy TCP path must then `await`
+    /// [`Self::get_latest_cert`]. The only sanctioned blocking fallback lives
+    /// in the QUIC-only `SyncCertFetcher` (see
+    /// `tunnel::utils::rustls::config::blocking`).
+    pub(crate) fn try_get_latest_cert(&self) -> SyncGet<rustls::sign::CertifiedKey> {
+        self.cert.try_get_latest()
     }
 }
 
@@ -262,38 +203,6 @@ mod tests {
                     bail!("wrong strategy")
                 }
             }
-
-            Ok(())
-        })
-        .await
-    }
-
-    /// Regression test for the per-handshake thread churn: on the periodic
-    /// strategy the blocking getter must serve the watch snapshot without
-    /// touching tokio's blocking machinery. `flavor = "current_thread"` is
-    /// load-bearing — `block_in_place` panics on that runtime, so this test
-    /// passing *is* proof the fast path does not go through it. A long
-    /// refresh interval keeps the background refresh from racing the ptr_eq
-    /// comparison.
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_get_latest_cert_blocking_periodic_no_block_in_place() -> Result<()> {
-        run_test_with_tokio_runtime(|runtime| async move {
-            let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
-                attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
-                    aa_addr:
-                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
-                            .to_owned(),
-                }),
-                refresh_interval: Some(600),
-            }).await?;
-            let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
-
-            let blocking_cert = cert_manager.get_latest_cert_blocking()?;
-            let async_cert = cert_manager.get_latest_cert().await?;
-            assert!(
-                Arc::ptr_eq(&blocking_cert, &async_cert),
-                "the sync fast path must return the same watch value as the async getter"
-            );
 
             Ok(())
         })

@@ -16,7 +16,7 @@ use bytes::Bytes;
 use quinn::crypto::rustls::QuicClientConfig;
 
 use crate::config::Endpoint;
-use crate::tunnel::utils::rustls::config::{alpn::Alpn, client::BlockingOnetimeTlsClientConfig};
+use crate::tunnel::utils::rustls::config::{alpn::Alpn, blocking::BlockingOnetimeTlsClientConfig};
 
 /// QUIC Datagram tunnel client (ingress side).
 ///

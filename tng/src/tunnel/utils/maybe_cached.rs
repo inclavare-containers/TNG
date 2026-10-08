@@ -105,6 +105,11 @@ type MaybeCachedUpdateFunc<T, E> = Arc<
 /// synchronously is the strategy itself: `NoCache` must run the update future
 /// first. The variants name those reasons so call sites match on them
 /// explicitly.
+///
+/// `#[cfg(unix)]`: the only consumers are the attestation cert managers'
+/// synchronous resolvers (the QUIC `SyncCertFetcher` fast path), and
+/// attestation itself is unix-only.
+#[cfg(unix)]
 #[derive(Debug)]
 pub enum SyncGet<T> {
     /// The value is resident and synchronously available.
@@ -262,6 +267,7 @@ impl<
     /// `borrow().clone()` yields exactly what `get_latest` would; the borrow
     /// itself cannot fail or block. `NoCache` reports `NeedsBlocking` and the
     /// caller must await `get_latest`, blocking if it has to.
+    #[cfg(unix)]
     pub fn try_get_latest(&self) -> SyncGet<T> {
         match self {
             MaybeCached::UpdatePeriodically { latest, .. } => {
@@ -318,6 +324,7 @@ mod tests {
 
     use super::*;
     use crate::tests::run_test_with_tokio_runtime;
+    #[cfg(unix)]
     use anyhow::bail;
     use web_time_compat::{Instant, InstantExt};
 
@@ -701,6 +708,7 @@ mod tests {
 
     /// The synchronous snapshot must track the periodic refresh and always
     /// agree with what `get_latest` would return.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_try_get_latest_periodically_is_ready() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {
@@ -751,6 +759,7 @@ mod tests {
 
     /// The `Always` strategy has no resident value: the sync getter must
     /// report `NeedsBlocking` rather than pretend a snapshot exists.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_try_get_latest_always_needs_blocking() -> Result<()> {
         run_test_with_tokio_runtime(|runtime| async move {

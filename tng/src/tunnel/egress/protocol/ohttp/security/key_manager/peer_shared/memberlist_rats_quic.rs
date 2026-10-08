@@ -7,8 +7,9 @@ use smol_str::SmolStr;
 
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::rustls::config::alpn::Alpn;
-use crate::tunnel::utils::rustls::config::client::BlockingOnetimeTlsClientConfig;
-use crate::tunnel::utils::rustls::config::server::BlockingOnetimeTlsServerConfig;
+use crate::tunnel::utils::rustls::config::blocking::{
+    BlockingOnetimeTlsClientConfig, BlockingOnetimeTlsServerConfig,
+};
 use crate::tunnel::utils::rustls::config::TlsConfigGenerator;
 use crate::RaContext;
 

@@ -1,5 +1,9 @@
 pub mod alpn;
+#[cfg(not(wasm))]
+pub mod blocking;
 pub mod client;
+#[cfg(not(wasm))]
+pub mod resolver;
 #[cfg(not(wasm))]
 pub mod server;
 
@@ -49,11 +53,18 @@ pub struct TlsConfigGenerator {
     pub client_server_cert_verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
     /// Shared client cert resolver (set via `with_client_cert_resolver`). Built
     /// once per generator for the same ptr-stability reason as the verifier.
-    /// `NoClientCertResolver` for NoRa/Verify, `DynamicCertResolver` for
-    /// Attest/AttestAndVerify. Using `with_no_client_auth()` instead would build
-    /// a fresh `FailResolveClientCert` per handshake and block resumption.
+    /// `NoClientCertResolver` for NoRa/Verify, `SwappableClientCertResolver`
+    /// for Attest/AttestAndVerify. Using `with_no_client_auth()` instead would
+    /// build a fresh `FailResolveClientCert` per handshake and block
+    /// resumption.
     #[cfg(not(wasm))]
     pub client_cert_resolver: Arc<dyn rustls::client::ResolvesClientCert>,
+    /// Concrete handle to the `client_cert_resolver` allocation in
+    /// Attest/AttestAndVerify modes (the same `Arc`), used by the lazy client
+    /// builder to publish the awaited cert before each handshake. `None` for
+    /// NoRa/Verify, which never present a cert.
+    #[cfg(unix)]
+    pub client_cert_cell: Option<Arc<resolver::SwappableClientCertResolver>>,
     /// Handle to the stateless lazy server verifier, for post-handshake verify
     /// (client path). `Some` only in Verify/AttestAndVerify; the same allocation
     /// as `client_server_cert_verifier` so the verdict cache is shared.
@@ -115,13 +126,7 @@ impl TlsConfigGenerator {
         // Build the shared verifier/resolver Arcs once (not per handshake) so
         // rustls's resumption ptr-eq check passes across handshakes.
         #[cfg(not(wasm))]
-        let (
-            client_server_cert_verifier,
-            client_cert_resolver,
-            client_lazy_server_verifier,
-            server_client_cert_verifier,
-            server_lazy_client_verifier,
-        ) = Self::build_shared_verifiers(&mode).await?;
+        let shared = Self::build_shared_verifiers(&mode).await?;
 
         Ok(Self {
             mode,
@@ -130,15 +135,17 @@ impl TlsConfigGenerator {
             #[cfg(not(wasm))]
             server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
             #[cfg(not(wasm))]
-            client_server_cert_verifier,
+            client_server_cert_verifier: shared.0,
             #[cfg(not(wasm))]
-            client_cert_resolver,
+            client_cert_resolver: shared.1,
+            #[cfg(unix)]
+            client_cert_cell: shared.2,
             #[cfg(not(wasm))]
-            client_lazy_server_verifier,
+            client_lazy_server_verifier: shared.3,
             #[cfg(not(wasm))]
-            server_client_cert_verifier,
+            server_client_cert_verifier: shared.4,
             #[cfg(not(wasm))]
-            server_lazy_client_verifier,
+            server_lazy_client_verifier: shared.5,
             #[cfg(not(wasm))]
             server_cert_compression_cache: Arc::new(rustls::compress::CompressionCache::default()),
             #[cfg(not(wasm))]
@@ -155,12 +162,13 @@ impl TlsConfigGenerator {
     ) -> Result<(
         Arc<dyn rustls::client::danger::ServerCertVerifier>,
         Arc<dyn rustls::client::ResolvesClientCert>,
+        Option<Arc<resolver::SwappableClientCertResolver>>,
         Option<Arc<crate::tunnel::utils::rustls::ra::server_cert_verifier::LazyServerCertVerifier>>,
         Arc<dyn rustls::server::danger::ClientCertVerifier>,
         Option<Arc<crate::tunnel::utils::rustls::ra::client_cert_verifier::LazyClientCertVerifier>>,
     )> {
         #[cfg(unix)]
-        use crate::tunnel::utils::cert_manager::DynamicCertResolver;
+        use crate::tunnel::utils::rustls::config::resolver::SwappableClientCertResolver;
         use crate::tunnel::utils::rustls::{
             dummy::verifier::{DummyServerCertVerifier, NoClientCertResolver},
             ra::client_cert_verifier::LazyClientCertVerifier,
@@ -180,6 +188,7 @@ impl TlsConfigGenerator {
                 Ok((
                     client_server_cert_verifier,
                     client_cert_resolver,
+                    None,
                     None,
                     server_client_cert_verifier,
                     None,
@@ -207,31 +216,38 @@ impl TlsConfigGenerator {
                 Ok((
                     client_server_cert_verifier,
                     client_cert_resolver,
+                    None,
                     client_lazy_server_verifier,
                     server_client_cert_verifier,
                     server_lazy_client_verifier,
                 ))
             }
             #[cfg(unix)]
-            TlsConfigGeneratorMode::Attest(cert_manager) => {
+            TlsConfigGeneratorMode::Attest(_) => {
                 let client_server_cert_verifier: Arc<
                     dyn rustls::client::danger::ServerCertVerifier,
                 > = Arc::new(DummyServerCertVerifier::new()?);
+                // The shared lazy-path resolver: one `Arc` for the generator's
+                // lifetime (rustls ptr-checks it for client resumption), value
+                // swapped per handshake by the lazy client builder. It must be
+                // the same allocation as `client_cert_resolver` below.
+                let cell = Arc::new(SwappableClientCertResolver::default());
                 let client_cert_resolver: Arc<dyn rustls::client::ResolvesClientCert> =
-                    Arc::new(DynamicCertResolver::new(cert_manager.clone()));
+                    cell.clone();
                 let server_client_cert_verifier: Arc<
                     dyn rustls::server::danger::ClientCertVerifier,
                 > = Arc::new(rustls::server::NoClientAuth);
                 Ok((
                     client_server_cert_verifier,
                     client_cert_resolver,
+                    Some(cell),
                     None,
                     server_client_cert_verifier,
                     None,
                 ))
             }
             #[cfg(unix)]
-            TlsConfigGeneratorMode::AttestAndVerify(cert_manager, verify_ctx, cache) => {
+            TlsConfigGeneratorMode::AttestAndVerify(_, verify_ctx, cache) => {
                 let lazy_server = Arc::new(LazyServerCertVerifier::new(
                     verify_ctx.clone(),
                     cache.clone(),
@@ -240,8 +256,9 @@ impl TlsConfigGenerator {
                     dyn rustls::client::danger::ServerCertVerifier,
                 > = lazy_server.clone();
                 let client_lazy_server_verifier = Some(lazy_server);
+                let cell = Arc::new(SwappableClientCertResolver::default());
                 let client_cert_resolver: Arc<dyn rustls::client::ResolvesClientCert> =
-                    Arc::new(DynamicCertResolver::new(cert_manager.clone()));
+                    cell.clone();
                 let lazy_client = Arc::new(LazyClientCertVerifier::new(
                     verify_ctx.clone(),
                     cache.clone(),
@@ -253,6 +270,7 @@ impl TlsConfigGenerator {
                 Ok((
                     client_server_cert_verifier,
                     client_cert_resolver,
+                    Some(cell),
                     client_lazy_server_verifier,
                     server_client_cert_verifier,
                     server_lazy_client_verifier,
@@ -308,6 +326,8 @@ mod resumption_tests {
             server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
             client_server_cert_verifier,
             client_cert_resolver,
+            #[cfg(unix)]
+            client_cert_cell: None,
             client_lazy_server_verifier: None,
             server_client_cert_verifier,
             server_lazy_client_verifier: None,
@@ -477,6 +497,8 @@ mod resumption_tests {
             server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
             client_server_cert_verifier,
             client_cert_resolver,
+            #[cfg(unix)]
+            client_cert_cell: None,
             client_lazy_server_verifier: Some(lazy_server),
             server_client_cert_verifier,
             server_lazy_client_verifier: Some(lazy_client),
@@ -604,6 +626,8 @@ mod resumption_tests {
             server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
             client_server_cert_verifier,
             client_cert_resolver: Arc::new(NoClientCertResolver),
+            #[cfg(unix)]
+            client_cert_cell: None,
             client_lazy_server_verifier: Some(lazy_server),
             server_client_cert_verifier,
             server_lazy_client_verifier: Some(lazy_client),
@@ -715,6 +739,8 @@ mod resumption_tests {
             server_session_store: rustls::server::ServerSessionMemoryCache::new(256),
             client_server_cert_verifier,
             client_cert_resolver: Arc::new(NoClientCertResolver),
+            #[cfg(unix)]
+            client_cert_cell: None,
             client_lazy_server_verifier: Some(lazy_server),
             server_client_cert_verifier,
             server_lazy_client_verifier: Some(lazy_client),
@@ -784,5 +810,159 @@ mod resumption_tests {
             ),
             "server and client blocking compression caches must be distinct"
         );
+    }
+}
+
+/// The lazy TCP rats-tls handshake must never touch tokio's blocking
+/// machinery under **any** `RefreshStrategy` — including `Always`
+/// (`refresh_interval: 0`), where each handshake performs a real attestation
+/// round trip. These tests run on a `current_thread` runtime, where
+/// `block_in_place` panics: a green handshake is direct proof the lazy path
+/// only awaits. Requires AA (the Always cert fetches go through it); AS is
+/// not contacted (raw handshake, no post-handshake `verify_cert`).
+#[cfg(all(test, unix))]
+mod lazy_always_tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use anyhow::{Context as _, Result};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::alpn::Alpn;
+    use super::TlsConfigGenerator;
+    use crate::config::ra::{
+        AttestArgs, AttesterArgs, CocoAttesterArgs, CocoConverterArgs, CocoVerifierArgs,
+        ConverterArgs, VerifierArgs, VerifyArgs,
+    };
+    use crate::tests::run_test_with_tokio_runtime;
+    use crate::tunnel::ra_context::{AttestContext, RaContext, VerifyContext};
+
+    const AA_UDS: &str =
+        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock";
+
+    fn attest_always() -> AttestArgs {
+        AttestArgs::BackgroundCheck {
+            attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
+                aa_addr: AA_UDS.to_owned(),
+            }),
+            refresh_interval: Some(0),
+        }
+    }
+
+    /// Hermetic `VerifyArgs`: `skip_as_token_cert_verify` makes the token
+    /// verifier load nothing and call no AS (see the resumption RA tests).
+    fn verify_hermetic() -> VerifyArgs {
+        VerifyArgs::BackgroundCheck {
+            converter: ConverterArgs::Coco(CocoConverterArgs::Restful {
+                as_addr: "http://localhost:1/".to_string(),
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+            }),
+            verifier: VerifierArgs::Coco(CocoVerifierArgs::Restful {
+                as_addr: None,
+                policy_ids: vec!["default".to_string()],
+                as_headers: HashMap::new(),
+                trusted_certs_paths: None,
+                verify_signer_transparency: false,
+                skip_as_token_cert_verify: true,
+            }),
+        }
+    }
+
+    /// One full lazy handshake between an AttestAndVerify server (snapshot
+    /// server cert + mandatory client auth) and an AttestOnly client (swapped
+    /// client cert via the shared resolver cell), both generators on `Always`
+    /// refresh. Exercises the awaited fetches in `get_lazy_one_time_rustls_*`
+    /// and both `resolve()` implementations, then checks each side actually
+    /// saw the peer's cert — if a resolver returned None the handshake would
+    /// not complete.
+    #[tokio::test(flavor = "current_thread")]
+    async fn lazy_always_refresh_handshake_without_block_in_place() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let attest_ctx = Arc::new(AttestContext::from_attest_args(&attest_always()).await?);
+            let verify_ctx = Arc::new(VerifyContext::from_verify_args(&verify_hermetic()).await?);
+
+            let server_gen = Arc::new(
+                TlsConfigGenerator::new(
+                    Arc::new(RaContext::AttestAndVerify {
+                        attest: attest_ctx.clone(),
+                        verify: verify_ctx.clone(),
+                    }),
+                    runtime.clone(),
+                )
+                .await
+                .context("build AttestAndVerify generator")?,
+            );
+            let client_gen = Arc::new(
+                TlsConfigGenerator::new(
+                    Arc::new(RaContext::AttestOnly(attest_ctx.clone())),
+                    runtime.clone(),
+                )
+                .await
+                .context("build AttestOnly generator")?,
+            );
+
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let addr = listener.local_addr()?;
+            let name = rustls::pki_types::ServerName::from(std::net::Ipv4Addr::new(127, 0, 0, 1));
+
+            // Two sequential handshakes: under `Always` each side's config
+            // build runs its own attestation round trip, both as genuine
+            // awaits. Any `block_in_place` in the chain panics this runtime.
+            for round in 0..2u32 {
+                let server_gen = server_gen.clone();
+                let listener = &listener;
+                let server = async move {
+                    let (tcp, _) = listener.accept().await.context("server accept")?;
+                    let cfg = server_gen
+                        .get_lazy_one_time_rustls_server_config(Alpn::RatsTls)
+                        .await
+                        .with_context(|| format!("server lazy config (round {round})"))?;
+                    let mut tls = tokio_rustls::TlsAcceptor::from(Arc::new(cfg.0))
+                        .accept(tcp)
+                        .await
+                        .with_context(|| format!("server TLS accept (round {round})"))?;
+                    if round == 0 {
+                        // Full handshake: the client presented its attest cert
+                        // (served by the swappable resolver during the
+                        // handshake). On a resumed handshake rustls presents
+                        // no peer cert, so only round 0 asserts this.
+                        let peer = tls.get_mut().1.peer_certificates().with_context(|| {
+                            format!("server saw no client cert (round {round})")
+                        })?;
+                        assert!(!peer.is_empty(), "client cert chain must be non-empty");
+                    }
+                    tls.write_all(b"ok").await?;
+                    tls.flush().await?;
+                    Ok::<(), anyhow::Error>(())
+                };
+                let client = async {
+                    let tcp = tokio::net::TcpStream::connect(addr).await?;
+                    let cfg = client_gen
+                        .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
+                        .await
+                        .with_context(|| format!("client lazy config (round {round})"))?;
+                    let mut tls = tokio_rustls::TlsConnector::from(Arc::new(cfg.0))
+                        .connect(name.clone(), tcp)
+                        .await
+                        .with_context(|| format!("client TLS connect (round {round})"))?;
+                    if round == 0 {
+                        let peer = tls.get_ref().1.peer_certificates().with_context(|| {
+                            format!("client saw no server cert (round {round})")
+                        })?;
+                        assert!(!peer.is_empty(), "server cert chain must be non-empty");
+                    }
+                    let mut buf = [0u8; 2];
+                    tls.read_exact(&mut buf).await?;
+                    assert_eq!(&buf, b"ok");
+                    Ok::<(), anyhow::Error>(())
+                };
+                tokio::try_join!(server, client)
+                    .with_context(|| format!("lazy Always handshake failed (round {round})"))?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
