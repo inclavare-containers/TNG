@@ -10,7 +10,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use crate::{
     tunnel::ra_context::AttestContext,
     tunnel::utils::{
-        maybe_cached::{Expire, MaybeCached},
+        maybe_cached::{Expire, MaybeCached, SyncGet},
         runtime::TokioRuntime,
     },
 };
@@ -178,11 +178,7 @@ impl CertManager {
         self.cert.get_latest().await
     }
 
-    /// Blocking call to get the latest cached certificate.
-    ///
-    /// Note this will spawn a temporary async task to fetch a fresh
-    /// certificate on-demand. The calling thread is blocked via `block_in_place` until
-    /// the certificate is obtained.
+    /// Blocking call to get the latest certificate.
     ///
     /// For `UpdatePeriodically` strategy, this is a cheap `watch::Receiver::borrow().clone()`
     /// that returns the most recently refreshed certificate without blocking.
@@ -192,12 +188,19 @@ impl CertManager {
     /// # Note
     /// This method is called from within rustls's `ResolvesServerCert` / `ResolvesClientCert`
     /// trait implementations, which are synchronous and invoked during the TLS handshake.
-    /// `block_in_place` tells the tokio runtime to move other tasks off the current worker
-    /// thread before blocking, preventing the thread from being starved.
+    /// Only the `NeedsBlocking` fallback parks the caller with `block_in_place`, which tells the
+    /// tokio runtime to move other tasks off the current worker thread before blocking, preventing
+    /// the thread from being starved. The `Ready` fast path must not go through `block_in_place`:
+    /// it detaches the worker core and makes tokio spawn a replacement thread per call, churning
+    /// threads (and the glibc arenas they touch) once per full handshake under short-connection
+    /// load, even though the value is already resident.
     pub fn get_latest_cert_blocking(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.cert.get_latest())
-        })
+        match self.cert.try_get_latest() {
+            SyncGet::Ready(cert) => Ok(cert),
+            SyncGet::NeedsBlocking => tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.cert.get_latest())
+            }),
+        }
     }
 }
 
@@ -259,6 +262,38 @@ mod tests {
                     bail!("wrong strategy")
                 }
             }
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Regression test for the per-handshake thread churn: on the periodic
+    /// strategy the blocking getter must serve the watch snapshot without
+    /// touching tokio's blocking machinery. `flavor = "current_thread"` is
+    /// load-bearing — `block_in_place` panics on that runtime, so this test
+    /// passing *is* proof the fast path does not go through it. A long
+    /// refresh interval keeps the background refresh from racing the ptr_eq
+    /// comparison.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_get_latest_cert_blocking_periodic_no_block_in_place() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let attest_ctx = AttestContext::from_attest_args(&AttestArgs::BackgroundCheck {
+                attester: AttesterArgs::Coco(CocoAttesterArgs::Uds {
+                    aa_addr:
+                        "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
+                            .to_owned(),
+                }),
+                refresh_interval: Some(600),
+            }).await?;
+            let cert_manager = CertManager::new(Arc::new(attest_ctx), runtime).await?;
+
+            let blocking_cert = cert_manager.get_latest_cert_blocking()?;
+            let async_cert = cert_manager.get_latest_cert().await?;
+            assert!(
+                Arc::ptr_eq(&blocking_cert, &async_cert),
+                "the sync fast path must return the same watch value as the async getter"
+            );
 
             Ok(())
         })

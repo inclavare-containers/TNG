@@ -96,6 +96,25 @@ type MaybeCachedUpdateFunc<T, E> = Arc<
         + 'static,
 >;
 
+/// Outcome of a non-blocking value request on a [`MaybeCached`].
+///
+/// An `Option` would be ambiguous about why the value was absent: it could
+/// mean "fall back to the blocking path" or "the value no longer exists".
+/// Neither happens here — the watch receiver always holds a value (even after
+/// the sender is dropped), so the only reason a value cannot be served
+/// synchronously is the strategy itself: `NoCache` must run the update future
+/// first. The variants name those reasons so call sites match on them
+/// explicitly.
+#[derive(Debug)]
+pub enum SyncGet<T> {
+    /// The value is resident and synchronously available.
+    Ready(Arc<T>),
+    /// The strategy can only produce a value by running the update future
+    /// (e.g. `refresh_interval: 0`, a fresh attestation round trip per fetch);
+    /// the caller must take its blocking fallback.
+    NeedsBlocking,
+}
+
 pub enum MaybeCached<
     T: std::marker::Send + std::marker::Sync + 'static,
     E: Into<anyhow::Error> + std::marker::Send + std::marker::Sync + 'static,
@@ -236,6 +255,22 @@ impl<
         }
     }
 
+    /// Non-blocking snapshot for callers that cannot `await` the update future
+    /// (rustls's synchronous cert resolvers run during the TLS handshake).
+    ///
+    /// `UpdatePeriodically` keeps the value in a watch channel, so
+    /// `borrow().clone()` yields exactly what `get_latest` would; the borrow
+    /// itself cannot fail or block. `NoCache` reports `NeedsBlocking` and the
+    /// caller must await `get_latest`, blocking if it has to.
+    pub fn try_get_latest(&self) -> SyncGet<T> {
+        match self {
+            MaybeCached::UpdatePeriodically { latest, .. } => {
+                SyncGet::Ready(latest.1.borrow().clone())
+            }
+            MaybeCached::NoCache { .. } => SyncGet::NeedsBlocking,
+        }
+    }
+
     pub fn invalidate(&self) {
         match self {
             MaybeCached::UpdatePeriodically { invalidator_tx, .. } => {
@@ -283,6 +318,7 @@ mod tests {
 
     use super::*;
     use crate::tests::run_test_with_tokio_runtime;
+    use anyhow::bail;
     use web_time_compat::{Instant, InstantExt};
 
     #[test]
@@ -656,6 +692,78 @@ mod tests {
                 call_count >= 2,
                 "expected at least 2 calls (initial + 1 refresh), got {}",
                 call_count
+            );
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// The synchronous snapshot must track the periodic refresh and always
+    /// agree with what `get_latest` would return.
+    #[tokio::test]
+    async fn test_try_get_latest_periodically_is_ready() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let call_count_clone = call_count.clone();
+
+            let maybe_cached: MaybeCached<String, anyhow::Error> = MaybeCached::new(
+                runtime,
+                RefreshStrategy::Periodically {
+                    interval: 1,
+                    min_fallback_interval: 1,
+                },
+                move || {
+                    let call_count_clone = call_count_clone.clone();
+                    Box::pin(async move {
+                        let count =
+                            call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        Ok((format!("value{count}"), Expire::NoExpire))
+                    })
+                },
+            )
+            .await
+            .expect("Failed to create MaybeCached");
+
+            // Ready from the moment the initial fetch seeded the watch channel.
+            let value1 = match maybe_cached.try_get_latest() {
+                SyncGet::Ready(v) => v,
+                SyncGet::NeedsBlocking => bail!("periodic strategy must not need blocking"),
+            };
+            assert_eq!(*value1, "value1");
+
+            // Same value the async getter returns, same allocation.
+            let async_value = maybe_cached.get_latest().await.expect("async get");
+            assert!(Arc::ptr_eq(&value1, &async_value));
+
+            // After a background refresh the snapshot shows the new value.
+            tokio_time::sleep(tokio_time::Duration::from_millis(1500)).await;
+            let value2 = match maybe_cached.try_get_latest() {
+                SyncGet::Ready(v) => v,
+                SyncGet::NeedsBlocking => bail!("periodic strategy must not need blocking"),
+            };
+            assert_eq!(*value2, "value2");
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// The `Always` strategy has no resident value: the sync getter must
+    /// report `NeedsBlocking` rather than pretend a snapshot exists.
+    #[tokio::test]
+    async fn test_try_get_latest_always_needs_blocking() -> Result<()> {
+        run_test_with_tokio_runtime(|runtime| async move {
+            let maybe_cached: MaybeCached<String, anyhow::Error> =
+                MaybeCached::new(runtime, RefreshStrategy::Always, || {
+                    Box::pin(async move { Ok(("value".to_string(), Expire::NoExpire)) })
+                })
+                .await
+                .expect("Failed to create MaybeCached");
+
+            assert!(
+                matches!(maybe_cached.try_get_latest(), SyncGet::NeedsBlocking),
+                "Always strategy must report NeedsBlocking"
             );
 
             Ok(())
