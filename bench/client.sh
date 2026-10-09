@@ -14,6 +14,11 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SERVER_IP" ] || die "usage: bench/client.sh <SERVER_IP> [--output-dir DIR] (or set SERVER_IP)"
 export SERVER_IP   # so collect_metadata records it in env.json
+# WRK_SHORT_CONN was the old single-mode pin; every run now measures both HTTP
+# scenarios (keep-alive + no keep-alive) in one pass. Honor nothing, warn loudly.
+if [ -n "${WRK_SHORT_CONN:-}" ]; then
+    fail "WRK_SHORT_CONN=$WRK_SHORT_CONN ignored: there is no single-mode pin anymore, each run measures keep-alive and no keep-alive"
+fi
 
 OUTDIR="$(make_outdir "$OUTPUT_DIR_ARG")"
 TNG_BIN="${TNG_BIN:-./target/release/tng}"
@@ -188,20 +193,28 @@ run_all() {
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+haproxy" "$s" "$out")
     done
 
+    # The HTTP matrix runs once per scenario: keep-alive (report Scenario B, keys
+    # "http+<wl>") and no keep-alive (Scenario C, keys "http-shortconn+<wl>"). The
+    # results JSON is flat; the key prefix carries the scenario so both coexist and
+    # keep-alive data stays readable by the old single-scenario report shape.
     local _http_json='{}'
-    for c in ${conns_list//,/ }; do
-        out=$(run_wrk_median "http://127.0.0.1:50003/file.bin" "$c" "http+rats-tls" "$SRV_TNG")
-        _http_json=$(json_add_http "$_http_json" "http+rats-tls" "$c" "$out")
-        out=$(run_wrk_median "http://127.0.0.1:50004/file.bin" "$c" "http+rats-tls+mux" "$SRV_TNG_MUX")
-        _http_json=$(json_add_http "$_http_json" "http+rats-tls+mux" "$c" "$out")
-        out=$(run_wrk_median "http://127.0.0.1:50005/file.bin" "$c" "http+ohttp" "$SRV_OHTTP")
-        _http_json=$(json_add_http "$_http_json" "http+ohttp" "$c" "$out")
-        out=$(run_wrk_median "http://${SERVER_IP}:${NGINX_PORT}/file.bin" "$c" "http+raw" "$RAW_T")
-        _http_json=$(json_add_http "$_http_json" "http+raw" "$c" "$out")
-        out=$(run_wrk_median "http://127.0.0.1:5221/file.bin" "$c" "http+stunnel" "$SRV_ST")
-        _http_json=$(json_add_http "$_http_json" "http+stunnel" "$c" "$out")
-        out=$(run_wrk_median "http://127.0.0.1:5222/file.bin" "$c" "http+haproxy" "$SRV_HP")
-        _http_json=$(json_add_http "$_http_json" "http+haproxy" "$c" "$out")
+    local prefix mode c
+    for prefix_mode in "http+:keepalive" "http-shortconn+:shortconn"; do
+        prefix="${prefix_mode%%:*}"; mode="${prefix_mode##*:}"
+        for c in ${conns_list//,/ }; do
+            out=$(run_wrk_median "http://127.0.0.1:50003/file.bin" "$c" "${prefix}rats-tls" "$SRV_TNG" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}rats-tls" "$c" "$out")
+            out=$(run_wrk_median "http://127.0.0.1:50004/file.bin" "$c" "${prefix}rats-tls+mux" "$SRV_TNG_MUX" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}rats-tls+mux" "$c" "$out")
+            out=$(run_wrk_median "http://127.0.0.1:50005/file.bin" "$c" "${prefix}ohttp" "$SRV_OHTTP" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}ohttp" "$c" "$out")
+            out=$(run_wrk_median "http://${SERVER_IP}:${NGINX_PORT}/file.bin" "$c" "${prefix}raw" "$RAW_T" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}raw" "$c" "$out")
+            out=$(run_wrk_median "http://127.0.0.1:5221/file.bin" "$c" "${prefix}stunnel" "$SRV_ST" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}stunnel" "$c" "$out")
+            out=$(run_wrk_median "http://127.0.0.1:5222/file.bin" "$c" "${prefix}haproxy" "$SRV_HP" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}haproxy" "$c" "$out")
+        done
     done
 
     python3 -c "import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); a.update(b); print(json.dumps(a))" "$_iperf_json" "$_http_json" > "$OUTDIR/bench-results.json"

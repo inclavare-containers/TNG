@@ -230,8 +230,10 @@ print("%.2f" % (v[n//2] if n%2 else (v[n//2-1]+v[n//2])/2))
 }
 
 # Run one wrk round in a container; echo "gbps<TAB>rps<TAB>p50_us<TAB>p99_us".
+# mode: keepalive (default, HTTP/1.1 persistent connections) | shortconn (send
+# "Connection: close" so every request pays a fresh TCP+TLS handshake).
 run_wrk_one() {
-    local url="$1" conns="${2:-1}" rawfile="${3:-}"
+    local url="$1" conns="${2:-1}" rawfile="${3:-}" mode="${4:-keepalive}"
     local threads="${WRK_THREADS:-$(nproc)}"
     # Default cap at 8 (spec section 7: min(cpu,8)); an explicit WRK_THREADS is used as-is.
     if [ -z "${WRK_THREADS:-}" ] && [ "$threads" -gt 8 ]; then threads=8; fi
@@ -239,7 +241,7 @@ run_wrk_one() {
     [ "$threads" -gt "$conns" ] && threads="$conns"
     local out
     local -a wrk_args=(--latency -d "${WRK_DURATION:-15}s" -t "$threads" -c "$conns")
-    if [ "${WRK_SHORT_CONN:-0}" = "1" ]; then
+    if [ "$mode" = "shortconn" ]; then
         wrk_args+=(-H "Connection: close")
     fi
     wrk_args+=("$url")
@@ -306,8 +308,10 @@ print("%.2f\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f" % (bps / 1e9, rps, mean, p50, p90, p9
 }
 
 # Run N rounds, echo median of each metric, tab-separated.
+# mode: keepalive (default) | shortconn; applied to the warmup and the measured
+# rounds alike, so each scenario primes TLS session tickets in its own mode.
 run_wrk_median() {
-    local url="$1" conns="${2:-1}" label="$3" srv="${4:-raw:}"
+    local url="$1" conns="${2:-1}" label="$3" srv="${4:-raw:}" mode="${5:-keepalive}"
     local rounds="${WRK_ROUNDS:-3}"
     local rawdir="${OUTDIR:-.}/logs/raw"
     mkdir -p "$rawdir"
@@ -316,7 +320,7 @@ run_wrk_median() {
     # egress can then resume (0-RTT + skip RA verification on the tls-0rtt build).
     if [ "${WRK_WARMUP:-1}" = "1" ]; then
         local -a warmup_args=(--latency -d 1s -t 1 -c 1)
-        if [ "${WRK_SHORT_CONN:-0}" = "1" ]; then
+        if [ "$mode" = "shortconn" ]; then
             warmup_args+=(-H "Connection: close")
         fi
         warmup_args+=("$url")
@@ -337,7 +341,7 @@ run_wrk_median() {
             sample_server "$shost" "$skind" "$sid" "${WRK_DURATION:-15}" "$rsfile" &
             rspid=$!
         fi
-        if line=$(run_wrk_one "$url" "$conns" "$rawdir/${label}-c${conns}-r${i}.txt"); then
+        if line=$(run_wrk_one "$url" "$conns" "$rawdir/${label}-c${conns}-r${i}.txt" "$mode"); then
             echo "$line" >> "$tmp"
             ok "$label round $i: $line" >&2
         else
@@ -373,7 +377,10 @@ collect_info() {
     local tng_ver
     tng_ver="$("${TNG_BIN:-./target/release/tng}" --version 2>/dev/null | head -1 || echo unknown)"
     local git_ref
-    git_ref="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    # Remote hosts run the scripts from a deployed dir that is not a git checkout,
+    # so TNG_GIT lets the operator stamp the measured binary's identity instead of
+    # falling back to the (missing) local HEAD.
+    git_ref="${TNG_GIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
     local my_ip
     my_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     python3 - "$json_path" "$role" "$tng_ver" "$git_ref" "$CTR" "$my_ip" \

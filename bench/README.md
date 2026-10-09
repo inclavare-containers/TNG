@@ -1,6 +1,6 @@
 # TNG Two-Host Benchmark
 
-Measure real TNG tunnel performance between two hosts over eth0. Supports keep-alive (long-connection) and short-connection modes, with and without remote attestation (RA).
+Measure real TNG tunnel performance between two hosts over eth0, with and without remote attestation (RA). Every run measures three scenarios: iperf3 TCP throughput, HTTP keep-alive, and HTTP no-keep-alive.
 
 ## Prerequisites
 
@@ -13,53 +13,39 @@ On the **server (TEE) host** (for RA only):
 - Attestation Agent: `dnf install -y attestation-agent libtdx-attest && systemctl start attestation-agent`.
 - TDX hardware (`/dev/tdx_guest`).
 
-## Two key benchmark scenarios
+## What a run measures
 
-### 1. Long-connection (keep-alive): sustained connections
+- **Scenario A:** iperf3 TCP throughput.
+- **Scenario B:** HTTP / wrk, keep-alive. wrk maintains `-c` persistent TCP+TLS connections (HTTP/1.1 keep-alive). Each connection does one TLS handshake at start, then reuses it for all subsequent requests. **RA overhead is amortized** (one handshake per connection, not per request). This is the production case for long-lived connections (microservice-to-microservice, persistent API clients).
+- **Scenario C:** HTTP / wrk, no keep-alive. wrk sends `Connection: close`, the server closes after each response, and wrk opens a new TCP+TLS connection for the next request. **Every request pays a full TLS handshake** (plus attestation+verification if RA is on). This isolates the cost of connection establishment: the production case for short-lived connections (API gateway, per-request load balancer, serverless).
 
-wrk maintains `-c` persistent TCP+TLS connections (HTTP/1.1 keep-alive). Each connection does one TLS handshake at start, then reuses it for all subsequent requests. **RA overhead is amortized** (one handshake per connection, not per request).
-
-This measures steady-state throughput and per-request latency on established tunnels: the production case for long-lived connections (microservice-to-microservice, persistent API clients).
-
-```bash
-# Server (P host):
-TNG_BIN=/root/tng bash bench/server.sh
-
-# Client (D host):
-# no_ra:
-TNG_BIN=/root/tng bash bench/client.sh <SERVER_IP>
-# with RA (builtin AS + hardware_only):
-TNG_BIN=/root/tng RA_MODE=1 bash bench/client.sh <SERVER_IP>
-```
-
-### 2. Short-connection (Connection: close): per-request connections
-
-wrk sends `Connection: close` → server closes after each response → wrk opens a new TCP+TLS connection for the next request. **Every request pays a full TLS handshake** (plus RA attestation+verification if RA is on). This isolates the per-connection handshake cost.
-
-This measures the cost of connection establishment: the production case for short-lived connections (API gateway, per-request load balancer, serverless).
+Both HTTP scenarios are measured in every client invocation; there is no single-mode pin.
 
 ```bash
 # Server (P host):
-TNG_BIN=/root/tng bash bench/server.sh          # no_ra
-# or with RA:
-TNG_BIN=/root/tng RA_MODE=1 bash bench/server.sh
+TNG_BIN=/root/tng bash bench/server.sh            # no RA
+TNG_BIN=/root/tng RA_MODE=1 bash bench/server.sh  # with RA (builtin AS + hardware_only)
 
 # Client (D host):
-# no_ra short-conn:
-TNG_BIN=/root/tng WRK_SHORT_CONN=1 bash bench/client.sh <SERVER_IP>
-# with RA short-conn:
-TNG_BIN=/root/tng RA_MODE=1 WRK_SHORT_CONN=1 bash bench/client.sh <SERVER_IP>
+TNG_BIN=/root/tng bash bench/client.sh <SERVER_IP>            # no RA
+TNG_BIN=/root/tng RA_MODE=1 bash bench/client.sh <SERVER_IP>  # with RA
 ```
 
 ## Report generation
 
-Each run writes three JSON files: `server-info.json` and `client-info.json` (host environment and tool versions) and `bench-results.json` (the measured metrics). After copying `server-info.json` off the server host, generate the Markdown report:
+Each run writes three JSON files: `server-info.json` and `client-info.json` (host environment and tool versions) and `bench-results.json` (the measured metrics; keep-alive workloads are keyed `http+...`, no-keep-alive `http-shortconn+...`). After copying `server-info.json` off the server host, generate the Markdown report:
 
 ```bash
+# Single-run report (Scenarios A/B/C):
 bash bench/gen-report.sh <server-info.json> <client-info.json> <bench-results.json> [output.md]
+
+# Comparison report (baseline vs experimental):
+bash bench/gen-report.sh --compare \
+  <base-server-info.json> <base-client-info.json> <base-results.json> \
+  <exp-server-info.json> <exp-client-info.json> <exp-results.json> <output.md>
 ```
 
-The report has one table per scenario (iperf3, HTTP), with one row per workload and one column per metric. It documents its own sampling methodology in a note under each table, so this README does not repeat it. To read a row:
+The single report has one table per scenario (iperf3, HTTP keep-alive, HTTP no-keep-alive), with one row per workload and one column per metric. It documents its own sampling methodology in a note under each table, so this README does not repeat it. The comparison report shows only the environment, condition, and tool entries that differ between the two runs; in each scenario table the reference baselines (raw, stunnel, haproxy) appear once with the baseline values, and each TNG workload row appears twice, labeled with its run: `rats-tls(baseline)`, then the bolded `rats-tls(experimental)` row (markdown has no row-level bold); both rows carry the vs-raw annotation, and every experimental value ends with a direction-aware marker (✅ better than or within ±1% of baseline, ⚠️ worse; throughput/RPS/success higher is better, latency/CPU/memory lower is better). To read a row:
 
 - **Throughput (Gbps):** payload bandwidth (iperf3) or HTTP bandwidth (wrk).
 - **RPS:** wrk requests per second (HTTP only).
@@ -75,15 +61,15 @@ The report has one table per scenario (iperf3, HTTP), with one row per workload 
 | `TNG_BIN` | `./target/release/tng` | Path to the tng binary. |
 | `SERVER_IP` | — (required, client) | Server host IP. |
 | `RA_MODE` | `0` | `1` = enable remote attestation (attest on server, verify via builtin AS + hardware_only on client). |
-| `WRK_SHORT_CONN` | `0` | `1` = each request opens a new TCP+TLS connection (`Connection: close`). `0` = keep-alive (default). |
 | `WRK_WARMUP` | `1` | `1` = run a 1-connection warmup before each measured point (primes TLS session ticket for 0-RTT resumption). |
 | `IPERF_STREAMS` | `1,8,16,32,64,128` | iperf3 parallel stream counts. |
 | `IPERF_DURATION` | `15` | Seconds per iperf3 round. |
 | `IPERF_ROUNDS` | `3` | Rounds per point (median recorded). |
-| `WRK_CONNS` | `1,8,16,32,64,128` | wrk connection counts (keep-alive) or concurrency (short-conn). |
+| `WRK_CONNS` | `1,8,16,32,64,128` | wrk connection counts, swept in both HTTP scenarios (keep-alive and no keep-alive). |
 | `WRK_DURATION` | `15` | Seconds per wrk round. |
 | `WRK_ROUNDS` | `3` | Rounds per point (median recorded). |
 | `HTTP_BODY_KB` | `64` | HTTP response body size (KiB) served by nginx. |
+| `TNG_GIT` | repo HEAD | Identity recorded in the info JSONs; set it when running the scripts from a deployed dir that is not a git checkout. |
 | `BENCH_LABEL` | `bench-host` | Prefix for the per-run output directory. |
 | `--output-dir DIR` | `bench/artifacts` | Parent directory for the per-run output directory. |
 
@@ -106,7 +92,7 @@ ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
 | Scenario | Workloads | Baselines |
 | --- | --- | --- |
 | iperf3 (TCP throughput) | rats-tls, rats-tls+mux | raw, stunnel, haproxy |
-| HTTP (wrk, 64 KiB body) | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy |
+| HTTP (wrk, 64 KiB body, keep-alive and no keep-alive) | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy |
 
 All TNG paths use `mapping` mode. RA mode adds `attest` (server, via AA) + `verify` (client, builtin AS + hardware_only).
 
@@ -147,4 +133,4 @@ make bench                    # single-host netns dev bench (unchanged)
 make bench-multiplex          # same, with multiplex=true
 ```
 
-For RA or short-conn modes, use the env vars above with `bash bench/server.sh` / `bash bench/client.sh` directly.
+For RA mode, use the env vars above with `bash bench/server.sh` / `bash bench/client.sh` directly.
