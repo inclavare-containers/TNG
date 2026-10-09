@@ -18,7 +18,15 @@ jobs:
   build:
     runs-on: ${{ contains( inputs.target, 'linux' ) && 'ubuntu-latest' || ( contains( inputs.target, 'apple' ) && 'macos-latest' || ( contains( inputs.target, 'windows-msvc' ) && 'windows-latest' || 'ubuntu-latest' ) ) }}
     env:
-      build-tool: ${{ contains( inputs.target, 'windows-msvc' ) && 'build' || 'zigbuild' }}
+      # windows-msvc builds natively on a Windows runner. Apple targets also
+      # build natively: they run on a macos runner whose clang cross-compiles
+      # both arches, and zig's macOS SDK/framework detection broke when the
+      # macos-latest image rotated (2026-10: every zig version failed dcap-qvl
+      # with "unable to find system framework CoreFoundation"); the
+      # build-python-sdk workflow already builds its macOS binaries natively
+      # and stayed green through the same rotation. zigbuild remains for the
+      # Linux-runner cross targets (aarch64-linux, windows-gnu).
+      build-tool: ${{ contains( inputs.target, 'windows-msvc' ) && 'build' || ( contains( inputs.target, 'apple' ) && 'build' || 'zigbuild' ) }}
       executable: ./target/${{inputs.target}}/release/*.exe
       exe_name: ${{ contains( inputs.target, 'windows' ) && 'tng.exe' || 'tng' }}
     steps:
@@ -33,6 +41,12 @@ jobs:
         run: rustup target add ${{ inputs.target }}
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ env.build-tool == 'zigbuild' }}
+        with:
+          # Pinned, never master: an unpinned setup-zig tracks zig master, so
+          # every nightly drift lands in CI untested. 0.17.0 is the stable
+          # release of the line the last green zigbuild ran. Bump
+          # deliberately, after a green run on the new version.
+          version: 0.17.0
       - name: Install cargo-zigbuild
         if: ${{ env.build-tool == 'zigbuild' }}
         run: rustup toolchain add nightly && cargo +nightly install cargo-zigbuild --version 0.19.8
@@ -40,6 +54,11 @@ jobs:
         if: ${{ contains( inputs.target, 'windows' ) && env.build-tool == 'zigbuild' }}
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
       - name: cargo compile
+        env:
+          # Keep the released binary runnable on macOS 11+, matching the
+          # wheel workflow's tag. Without this a native clang build would
+          # target the build runner's SDK version instead.
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(inputs.target, 'apple') && '11.0' || '' }}
         run: |
           ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/ --cfg tokio_unstable"' || 'RUSTFLAGS="--cfg tokio_unstable"'  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
       - name: Get binary path
