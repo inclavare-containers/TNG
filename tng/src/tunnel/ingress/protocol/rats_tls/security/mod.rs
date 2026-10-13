@@ -146,9 +146,20 @@ impl RatsTlsSecurityLayer {
                             .await?;
 
                         // Build the hyper client from the security connector.
+                        // Windows and frame size match the egress h2 server so
+                        // the mux tunnel ends negotiate the same data-plane
+                        // tuning (see the constants' rationale).
                         let client = RatsTlsClient {
                             id,
-                            hyper: Client::builder(self.runtime.clone()).build(connector),
+                            hyper: Client::builder(self.runtime.clone())
+                                .http2_initial_stream_window_size(
+                                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW,
+                                )
+                                .http2_initial_connection_window_size(
+                                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW,
+                                )
+                                .http2_max_frame_size(crate::tunnel::utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
+                                .build(connector),
                         };
                         write.insert(pool_key.to_owned(), client.clone());
                         client

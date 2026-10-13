@@ -65,6 +65,10 @@ impl RatsTlsWrappingLayer {
 
         if let Err(error) = hyper::server::conn::http2::Builder::new(runtime_cloned)
             .keep_alive_interval(None)
+            .initial_stream_window_size(utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW)
+            .initial_connection_window_size(utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW)
+            .max_frame_size(utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
+            .max_send_buf_size(utils::hyper::H2_TUNNEL_MAX_SEND_BUF_SIZE)
             .serve_connection(TokioIo::new(tls_stream), svc)
             .instrument(span)
             .await
