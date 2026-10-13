@@ -109,7 +109,7 @@ impl OhttpServerApi {
                 e
             })?;
 
-        tracing::debug!(
+        tracing::trace!(
             ?metadata,
             key_id = header_decoded.key_id(),
             "Received OHTTP request"
@@ -165,7 +165,7 @@ impl OhttpServerApi {
         // Copy configured outer headers (outer → inner) onto the decrypted
         // request, skipping protected headers (e.g. `Host`, `content-type`).
         let outer_passthrough =
-            passthrough_request.collect_passthrough_headers(&outer_request_headers, &protected);
+            passthrough_request.collect_passthrough_headers(&outer_request_headers, protected);
         let inner_headers = request.headers_mut();
         for (name, value) in outer_passthrough {
             // `insert` replaces any existing inner value; protected headers are
@@ -182,7 +182,7 @@ impl OhttpServerApi {
             self.forward_client_ip,
         );
 
-        tracing::debug!(
+        tracing::trace!(
             method = ?request.method(),
             version = ?request.version(),
             uri = ?request.uri(),
@@ -192,7 +192,7 @@ impl OhttpServerApi {
         // Forward the request to the upstream server
         let response = context.forward_request(request, None).await?;
 
-        tracing::debug!(
+        tracing::trace!(
             status = ?response.status(),
             version = ?response.version(),
             "Received response from upstream server"
@@ -204,7 +204,7 @@ impl OhttpServerApi {
         let protected = crate::config::header_passthrough::protected_ohttp_headers();
         let passthrough_headers = self
             .passthrough_response_headers
-            .collect_passthrough_headers(response.headers(), &protected);
+            .collect_passthrough_headers(response.headers(), protected);
 
         // Encode the response to bhttp message
         let bhttp_encoder = BhttpEncoder::from_response(response);

@@ -169,7 +169,7 @@ impl OhttpServer {
                     .get(http::header::CONTENT_LENGTH)
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<usize>().ok());
-                tracing::debug!(
+                tracing::trace!(
                     ?method,
                     ?uri,
                     ?content_len,
@@ -285,6 +285,14 @@ pub async fn log_request(
     req: Request,
     next: Next,
 ) -> Result<Response, (axum::http::StatusCode, String)> {
+    // One event per request on the hot path: never `info` (the repo log-level
+    // rule), and `debug` would still flood at the default `tng=debug` filter,
+    // so this is `trace` and the clones, timer and header parsing are skipped
+    // when TRACE is off.
+    if !tracing::enabled!(tracing::Level::TRACE) {
+        return Ok(next.run(req).await);
+    }
+
     let method = req.method().clone();
     let uri = req.uri().clone();
     let version = req.version();
@@ -308,7 +316,7 @@ pub async fn log_request(
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
 
-    tracing::info!(
+    tracing::trace!(
         "\"{method} {uri} ({ohttp_api}) {version:?}\" {status} {content_length} {:.2}ms",
         duration.as_secs_f64() * 1000.0
     );

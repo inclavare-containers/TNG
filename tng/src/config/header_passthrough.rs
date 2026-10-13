@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
 
 /// Marker that (de)serializes only to/from the literal string `"all"`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -73,7 +73,11 @@ impl HeaderPassthroughSpec {
 /// These would corrupt the OHTTP protocol contract or HTTP framing, or are
 /// managed explicitly by TNG. `origin` is deliberately NOT protected — it is
 /// the header egress `request_headers` exists to copy.
-pub fn protected_ohttp_headers() -> HashSet<&'static str> {
+///
+/// Built once and shared: every ohttp request consults it twice on each
+/// host (request and response direction), and a per-request `HashSet` build
+/// was measurable in the hot-path profile.
+static PROTECTED_OHTTP_HEADERS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         http::header::CONTENT_TYPE.as_str(), // "content-type"
         "content-length",
@@ -92,6 +96,10 @@ pub fn protected_ohttp_headers() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
+});
+
+pub fn protected_ohttp_headers() -> &'static HashSet<&'static str> {
+    &PROTECTED_OHTTP_HEADERS
 }
 
 #[cfg(test)]

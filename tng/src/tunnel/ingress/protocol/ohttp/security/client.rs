@@ -461,7 +461,7 @@ impl OHttpClientInner {
     ) -> Vec<(http::HeaderName, http::HeaderValue)> {
         let protected = crate::config::header_passthrough::protected_ohttp_headers();
         self.passthrough_request_headers
-            .collect_passthrough_headers(request.headers(), &protected)
+            .collect_passthrough_headers(request.headers(), protected)
     }
 
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
@@ -489,7 +489,7 @@ impl OHttpClientInner {
             .map_err(TngError::ClientSelectHpkeConfigurationFailed)?
             .clone();
 
-        tracing::debug!(
+        tracing::trace!(
             public_key = ?key_config.public_key(),
             "Encrypting request with HPKE key"
         );
@@ -541,7 +541,7 @@ impl OHttpClientInner {
                         &mut client_request,
                     )
                     .await?;
-                    tracing::debug!(bytes_copied, "BHTTP request encoded and encrypted");
+                    tracing::trace!(bytes_copied, "BHTTP request encoded and encrypted");
                     let mut client_request = client_request.into_inner();
                     client_request.close().await?; // Remember to close the response stream
 
@@ -591,7 +591,7 @@ impl OHttpClientInner {
             {
                 let mut body_bytes = metadata_buf;
                 body_bytes.extend_from_slice(&encrypted_request);
-                tracing::debug!(
+                tracing::trace!(
                     body_length = body_bytes.len(),
                     "Encrypted request body length"
                 );
@@ -610,7 +610,7 @@ impl OHttpClientInner {
         // Forward the request to the upstream server
         let url = self.base_url.clone();
 
-        tracing::debug!(?url, "Sending OHTTP request to upstream server");
+        tracing::trace!(?url, "Sending OHTTP request to upstream server");
 
         let mut request_builder = self
             .http_client
@@ -633,13 +633,13 @@ impl OHttpClientInner {
             .map_err(TngError::HttpCipherTextForwardError)?;
 
         #[cfg(unix)]
-        tracing::debug!(
+        tracing::trace!(
             status = ?response.status(),
             version = ?response.version(),
             "Received OHTTP response from upstream server"
         );
         #[cfg(wasm)]
-        tracing::debug!(
+        tracing::trace!(
             status = ?response.status(),
             "Received OHTTP response from upstream server"
         );
@@ -655,7 +655,7 @@ impl OHttpClientInner {
                 .and_then(|v| v.parse::<usize>().ok())
         };
         #[cfg(unix)]
-        tracing::debug!(
+        tracing::trace!(
             status = ?status_code,
             ?content_len,
             "OHTTP response content length before decapsulation"
@@ -698,7 +698,7 @@ impl OHttpClientInner {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
         #[cfg(unix)]
-        tracing::debug!(
+        tracing::trace!(
             content_length = ?content_len,
             "OHTTP response body stream ready for decapsulation"
         );
@@ -753,7 +753,7 @@ impl OHttpClientInner {
         // Copy configured outer response headers (outer → inner) onto the
         // decrypted response returned to the caller, skipping protected headers.
         let outer_passthrough =
-            passthrough_response.collect_passthrough_headers(&outer_response_headers, &protected);
+            passthrough_response.collect_passthrough_headers(&outer_response_headers, protected);
         let inner_headers = response.headers_mut();
         for (name, value) in outer_passthrough {
             inner_headers.insert(name, value);
@@ -763,7 +763,7 @@ impl OHttpClientInner {
             let (head, body) = response.into_parts();
             // Log only the status; the full head carries upstream response headers
             // (e.g. Set-Cookie, Authorization) which are plaintext application data.
-            tracing::debug!(
+            tracing::trace!(
                 status = %head.status,
                 "Decrypted response from upstream server"
             );
