@@ -523,7 +523,8 @@ impl OHttpClientInner {
                 client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
 
             #[cfg(not(wasm))]
-            let (encrypted_request, request_write) = tokio::io::duplex(4096);
+            let (encrypted_request, request_write) =
+                tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
             #[cfg(not(wasm))]
             let client_request = client.encapsulate_stream(request_write.compat())?;
 
@@ -599,7 +600,10 @@ impl OHttpClientInner {
             #[cfg(not(wasm))]
             {
                 let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
-                reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(body))
+                reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::with_capacity(
+                    body,
+                    crate::tunnel::ohttp::RELAY_CHUNK_SIZE,
+                ))
             }
         };
 

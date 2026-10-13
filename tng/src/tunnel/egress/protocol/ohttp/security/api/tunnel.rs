@@ -210,7 +210,8 @@ impl OhttpServerApi {
         let bhttp_encoder = BhttpEncoder::from_response(response);
         // Encrypt to get the ohttp message
         let encrypted_response = {
-            let (response_read, response_write) = tokio::io::duplex(4096);
+            let (response_read, response_write) =
+                tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
             let server_response =
                 server_response_encapsulator.encapsulate_response(response_write.compat())?;
             context.runtime.spawn_supervised_task_current_span(async {
@@ -249,8 +250,9 @@ impl OhttpServerApi {
         }
 
         let response = response_builder
-            .body(axum::body::Body::from_stream(ReaderStream::new(
+            .body(axum::body::Body::from_stream(ReaderStream::with_capacity(
                 encrypted_response,
+                crate::tunnel::ohttp::RELAY_CHUNK_SIZE,
             )))
             .map_err(TngError::ConstructHttpResponseFailed)?;
 

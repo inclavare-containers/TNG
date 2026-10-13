@@ -28,7 +28,7 @@ impl TngStreamContext {
     {
         // TODO: maybe adjust forward the request to the upstream server with reqwest?
 
-        let (s1, s2) = tokio::io::duplex(4096);
+        let (s1, s2) = tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
 
         self.sender
             .send((Box::new(s2), attestation_result))

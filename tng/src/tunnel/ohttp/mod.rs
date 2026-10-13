@@ -1,2 +1,18 @@
 pub mod key_config;
 pub mod protocol;
+
+/// Capacity of the in-memory `tokio::io::duplex` pipes that join the ohttp
+/// relay stages (backend stream, seal/encrypt streams). Every pipe-full or
+/// pipe-empty transition parks and wakes a task, and at the 4 KiB default a
+/// 64 KiB response pays that round trip 16+ times per pipe on the request
+/// critical path. Duplex buffers grow lazily, so this is a cap, not a
+/// reservation.
+#[cfg(not(wasm))]
+pub(crate) const RELAY_PIPE_SIZE: usize = 128 * 1024;
+
+/// Read chunk size for the `tokio_util::io::ReaderStream`s that turn relay
+/// streams into HTTP body chunks. `ReaderStream::new` defaults to 4 KiB and
+/// `with_capacity` preallocates, so a full 64 KiB response plus seal framing
+/// lands in two reads instead of sixteen.
+#[cfg(not(wasm))]
+pub(crate) const RELAY_CHUNK_SIZE: usize = 64 * 1024;
