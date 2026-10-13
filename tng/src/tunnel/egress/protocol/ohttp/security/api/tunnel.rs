@@ -217,14 +217,18 @@ impl OhttpServerApi {
             context.runtime.spawn_supervised_task_current_span(async {
                 async {
                     let mut server_response = server_response.compat_write();
-                    tokio::io::copy(
-                        &mut bhttp_encoder
+                    // BufReader at the protocol's 16 KiB max chunk + copy_buf
+                    // so each write to the seal stream carries up to one full
+                    // AEAD chunk and skips copy's intermediate 8 KiB buffer
+                    // copy; tokio::io::copy would cap chunks at 8 KiB.
+                    let mut bhttp_reader = tokio::io::BufReader::with_capacity(
+                        crate::tunnel::ohttp::SEAL_CHUNK_SIZE,
+                        bhttp_encoder
                             .map_err(std::io::Error::other)
                             .into_async_read()
                             .compat(),
-                        &mut server_response,
-                    )
-                    .await?;
+                    );
+                    tokio::io::copy_buf(&mut bhttp_reader, &mut server_response).await?;
                     let mut server_response = server_response.into_inner();
                     server_response.close().await?; // Remember to close the response stream
 

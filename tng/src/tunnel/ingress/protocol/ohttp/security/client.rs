@@ -533,14 +533,19 @@ impl OHttpClientInner {
             let encryption_task = async {
                 async {
                     let mut client_request = client_request.compat_write();
-                    let bytes_copied = tokio::io::copy(
-                        &mut bhttp_encoder
+                    // BufReader at the protocol's 16 KiB max chunk + copy_buf
+                    // so each seal write carries up to one full AEAD chunk and
+                    // skips copy's intermediate 8 KiB buffer copy;
+                    // tokio::io::copy would cap chunks at 8 KiB.
+                    let mut bhttp_reader = tokio::io::BufReader::with_capacity(
+                        crate::tunnel::ohttp::SEAL_CHUNK_SIZE,
+                        bhttp_encoder
                             .map_err(std::io::Error::other)
                             .into_async_read()
                             .compat(),
-                        &mut client_request,
-                    )
-                    .await?;
+                    );
+                    let bytes_copied =
+                        tokio::io::copy_buf(&mut bhttp_reader, &mut client_request).await?;
                     tracing::trace!(bytes_copied, "BHTTP request encoded and encrypted");
                     let mut client_request = client_request.into_inner();
                     client_request.close().await?; // Remember to close the response stream

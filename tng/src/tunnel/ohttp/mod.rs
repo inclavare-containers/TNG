@@ -16,3 +16,9 @@ pub(crate) const RELAY_PIPE_SIZE: usize = 128 * 1024;
 /// lands in two reads instead of sixteen.
 #[cfg(not(wasm))]
 pub(crate) const RELAY_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Seal pump buffer: the ohttp protocol's max plaintext chunk
+/// (`MAX_CHUNK_PLAINTEXT`), so one pump write carries at most one full AEAD
+/// chunk. Not cfg-gated: the ingress request-encryption task body compiles
+/// for wasm too (it is awaited inline there).
+pub(crate) const SEAL_CHUNK_SIZE: usize = 16 * 1024;
