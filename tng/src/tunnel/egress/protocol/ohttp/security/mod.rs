@@ -54,6 +54,7 @@ impl OHttpSecurityLayer {
                 runtime: self.runtime.clone(),
                 sender,
                 peer_addr: peer,
+                backend: Arc::default(),
             };
             let app = self
                 .ohttp_server
