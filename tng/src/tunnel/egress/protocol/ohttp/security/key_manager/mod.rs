@@ -70,9 +70,14 @@ impl KeyInfo {
             key_id,
             ohttp::hpke::Kem::X25519Sha256,
             vec![
+                // The client picks the first suite it supports from this list.
+                // AES-128-GCM runs on AES-NI/VAES + CLMUL and seals 64 KiB
+                // responses several times faster than the software AVX2
+                // ChaCha20Poly1305 backend, so it goes first; ChaCha stays
+                // advertised for clients that only implement it.
                 ohttp::SymmetricSuite::new(
                     ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::ChaCha20Poly1305,
+                    ohttp::hpke::Aead::Aes128Gcm,
                 ),
                 ohttp::SymmetricSuite::new(
                     ohttp::hpke::Kdf::HkdfSha256,
@@ -80,7 +85,7 @@ impl KeyInfo {
                 ),
                 ohttp::SymmetricSuite::new(
                     ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::Aes128Gcm,
+                    ohttp::hpke::Aead::ChaCha20Poly1305,
                 ),
             ],
         )
@@ -113,9 +118,12 @@ impl KeyInfo {
             0,
             hpke::Kem::X25519Sha256,
             vec![
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::ChaCha20Poly1305),
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes256Gcm),
+                // Suite order matches `generate()`: the client selects the
+                // first suite it supports, and AES-128-GCM is the
+                // hardware-accelerated one.
                 ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes128Gcm),
+                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes256Gcm),
+                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::ChaCha20Poly1305),
             ],
             pem_data,
         )
@@ -217,5 +225,23 @@ mod tests {
         assert!(debug.contains("status"));
         assert!(debug.contains("actived_at"));
         assert!(debug.contains("expire_at"));
+    }
+
+    /// The client selects `symmetric[0]`, so the advertised order is the
+    /// negotiated suite. AES-128-GCM must come first; AES-256-GCM is stripped
+    /// by the rust-hpke backend, leaving AES-128-GCM then ChaCha20Poly1305.
+    #[test]
+    fn generated_key_config_advertises_aes128_gcm_first() {
+        let info = KeyInfo::generate(7, KeyStatus::Active, SystemTime::get(), 300)
+            .expect("generate key info");
+        let suites = info.key_config.symmetric();
+        assert!(!suites.is_empty());
+        assert_eq!(suites[0].aead(), ohttp::hpke::Aead::Aes128Gcm);
+        assert!(
+            suites
+                .iter()
+                .any(|s| s.aead() == ohttp::hpke::Aead::ChaCha20Poly1305),
+            "ChaCha20Poly1305 must stay advertised for old clients"
+        );
     }
 }
