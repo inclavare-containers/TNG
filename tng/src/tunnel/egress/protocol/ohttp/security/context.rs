@@ -126,7 +126,7 @@ impl TngStreamContext {
             }
         });
 
-        tracing::trace!("Forwarding HTTP request to upstream now");
+        tracing::debug!("Forwarding HTTP request to upstream now");
         let response = send_request.send_request(req).await;
         *slot = Some(send_request);
 

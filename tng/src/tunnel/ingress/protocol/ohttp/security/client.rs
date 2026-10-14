@@ -489,7 +489,7 @@ impl OHttpClientInner {
             .map_err(TngError::ClientSelectHpkeConfigurationFailed)?
             .clone();
 
-        tracing::trace!(
+        tracing::debug!(
             public_key = ?key_config.public_key(),
             "Encrypting request with HPKE key"
         );
@@ -546,7 +546,7 @@ impl OHttpClientInner {
                     );
                     let bytes_copied =
                         tokio::io::copy_buf(&mut bhttp_reader, &mut client_request).await?;
-                    tracing::trace!(bytes_copied, "BHTTP request encoded and encrypted");
+                    tracing::debug!(bytes_copied, "BHTTP request encoded and encrypted");
                     let mut client_request = client_request.into_inner();
                     client_request.close().await?; // Remember to close the response stream
 
@@ -596,7 +596,7 @@ impl OHttpClientInner {
             {
                 let mut body_bytes = metadata_buf;
                 body_bytes.extend_from_slice(&encrypted_request);
-                tracing::trace!(
+                tracing::debug!(
                     body_length = body_bytes.len(),
                     "Encrypted request body length"
                 );
@@ -615,7 +615,7 @@ impl OHttpClientInner {
         // Forward the request to the upstream server
         let url = self.base_url.clone();
 
-        tracing::trace!(?url, "Sending OHTTP request to upstream server");
+        tracing::debug!(?url, "Sending OHTTP request to upstream server");
 
         let mut request_builder = self
             .http_client
@@ -638,13 +638,13 @@ impl OHttpClientInner {
             .map_err(TngError::HttpCipherTextForwardError)?;
 
         #[cfg(unix)]
-        tracing::trace!(
+        tracing::debug!(
             status = ?response.status(),
             version = ?response.version(),
             "Received OHTTP response from upstream server"
         );
         #[cfg(wasm)]
-        tracing::trace!(
+        tracing::debug!(
             status = ?response.status(),
             "Received OHTTP response from upstream server"
         );
@@ -660,7 +660,7 @@ impl OHttpClientInner {
                 .and_then(|v| v.parse::<usize>().ok())
         };
         #[cfg(unix)]
-        tracing::trace!(
+        tracing::debug!(
             status = ?status_code,
             ?content_len,
             "OHTTP response content length before decapsulation"
@@ -703,7 +703,7 @@ impl OHttpClientInner {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
         #[cfg(unix)]
-        tracing::trace!(
+        tracing::debug!(
             content_length = ?content_len,
             "OHTTP response body stream ready for decapsulation"
         );
@@ -768,7 +768,7 @@ impl OHttpClientInner {
             let (head, body) = response.into_parts();
             // Log only the status; the full head carries upstream response headers
             // (e.g. Set-Cookie, Authorization) which are plaintext application data.
-            tracing::trace!(
+            tracing::debug!(
                 status = %head.status,
                 "Decrypted response from upstream server"
             );

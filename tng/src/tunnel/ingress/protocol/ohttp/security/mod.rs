@@ -282,7 +282,7 @@ impl OHttpSecurityLayer {
                 rewrited_path.insert(0, '/');
             }
 
-            tracing::trace!(original_path, rewrited_path, "path is rewrited");
+            tracing::debug!(original_path, rewrited_path, "path is rewrited");
 
             let url = format!(
                 "{}://{}{rewrited_path}",

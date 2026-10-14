@@ -109,7 +109,7 @@ impl OhttpServerApi {
                 e
             })?;
 
-        tracing::trace!(
+        tracing::debug!(
             ?metadata,
             key_id = header_decoded.key_id(),
             "Received OHTTP request"
@@ -182,7 +182,7 @@ impl OhttpServerApi {
             self.forward_client_ip,
         );
 
-        tracing::trace!(
+        tracing::debug!(
             method = ?request.method(),
             version = ?request.version(),
             uri = ?request.uri(),
@@ -192,7 +192,7 @@ impl OhttpServerApi {
         // Forward the request to the upstream server
         let response = context.forward_request(request, None).await?;
 
-        tracing::trace!(
+        tracing::debug!(
             status = ?response.status(),
             version = ?response.version(),
             "Received response from upstream server"
