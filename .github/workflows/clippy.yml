@@ -19,16 +19,17 @@ jobs:
       run:
         shell: bash
     container:
-      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      image: rockylinux:8
     steps:
-      - name: Update yum mirror
+      - name: Install build dependencies
         run: |
           set -e
           set -x
 
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+          # PowerTools carries the -devel packages that the spec's
+          # BuildRequires (protobuf-devel) pulls in via yum-builddep.
+          yum install -y yum-utils
+          yum-config-manager -y --enable powertools
 
           # install build tools
           yum install -y make git cargo protobuf-devel yum-utils perl openssl-devel clang
