@@ -12,43 +12,22 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-release:
+  test:
+    # Runs in parallel with build-and-release: the www config test, the
+    # chrome-driven wasm unit test, and the js-sdk integration suite all
+    # gate the release below without sitting in front of it. The publish
+    # jobs need both this job and build-and-release to pass.
+    #
+    # Stays on the alinux3 image: the Attestation Service this job runs is
+    # only packaged for alinux3 (an RPM whose binaries need glibc 2.32).
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     defaults:
       run:
         shell: bash
     container:
       image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
       options: --privileged
-
     steps:
-      - name: Determine label
-        run: |
-          tag="${GITHUB_REF#refs/*/}"
-          echo "tag=$tag"
-          if [[ ${tag} == *alpha* ]] ; then
-              label=alpha
-          elif [[ ${tag} == *beta* ]] ; then
-              label=beta
-          else
-              label=latest
-          fi
-          echo "label=$label"
-          echo "NPM_PKG_LABEL=$label" >> $GITHUB_ENV
-
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-              version=${{ github.ref_name }}
-              if [[ $version == v* ]]; then
-                  version=${version#v}
-              fi
-              version=${version}
-              echo "version=$version"
-              echo "NPM_PKG_VERSION=$version" >> $GITHUB_ENV
-          fi
-
       - name: Install build dependencies
         run: |
           set -e
@@ -165,6 +144,81 @@ jobs:
           # Run test
           env TNG_WASM_TEST_CHROMEDRIVER_LOG_ALL=true make wasm-integration-test
 
+      - name: Print background service logs
+        if: always()
+        run: |
+          echo "=== Attestation Agent Log ==="
+          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
+          echo "=== Attestation Service Log ==="
+          cat /tmp/as.log 2>/dev/null || echo "(no log file)"
+
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: rockylinux:8
+
+    steps:
+      - name: Determine label
+        run: |
+          tag="${GITHUB_REF#refs/*/}"
+          echo "tag=$tag"
+          if [[ ${tag} == *alpha* ]] ; then
+              label=alpha
+          elif [[ ${tag} == *beta* ]] ; then
+              label=beta
+          else
+              label=latest
+          fi
+          echo "label=$label"
+          echo "NPM_PKG_LABEL=$label" >> $GITHUB_ENV
+
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+              version=${{ github.ref_name }}
+              if [[ $version == v* ]]; then
+                  version=${version#v}
+              fi
+              version=${version}
+              echo "version=$version"
+              echo "NPM_PKG_VERSION=$version" >> $GITHUB_ENV
+          fi
+
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+
+          # PowerTools carries protobuf-devel.
+          yum install -y yum-utils
+          yum-config-manager -y --enable powertools
+
+          # The default nodejs module stream on EL8 is 10; wasm-pack pack
+          # shells out to npm, which also needs a modern node.
+          dnf module reset -y nodejs || true
+          dnf module enable -y nodejs:20
+
+          yum install -y git make tar clang protobuf-devel jq openssl-devel nodejs npm
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: "true"
+
+      - uses: dtolnay/rust-toolchain@1.89.0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-07-07
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: wasm-nightly
+
       - name: Build JS SDK
         run: |
           make wasm-build-release
@@ -179,14 +233,6 @@ jobs:
 
           mkdir -p $GITHUB_WORKSPACE/npm/
           cp -r tng-wasm/pkg/*.tgz $GITHUB_WORKSPACE/npm/
-
-      - name: Print background service logs
-        if: always()
-        run: |
-          echo "=== Attestation Agent Log ==="
-          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
-          echo "=== Attestation Service Log ==="
-          cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -207,7 +253,7 @@ jobs:
 
   publish-github:
     name: Publish to GitHub Packages
-    needs: build-and-release
+    needs: [test, build-and-release]
     if: >-
       github.repository == 'inclavare-containers/TNG' &&
       (
@@ -241,7 +287,7 @@ jobs:
 
   publish-npm:
     name: Publish to npmjs.com
-    needs: build-and-release
+    needs: [test, build-and-release]
     if: >-
       github.repository == 'inclavare-containers/TNG' &&
       (
@@ -273,7 +319,7 @@ jobs:
 
   deploy-pages:
     name: Deploy demo to GitHub Pages
-    needs: build-and-release
+    needs: [test, build-and-release]
     if: >-
       github.repository == 'inclavare-containers/TNG' &&
       (
