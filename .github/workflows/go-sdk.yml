@@ -12,7 +12,11 @@ on:
 
 jobs:
   go-sdk-tests:
-    runs-on: oracle-vm-16cpu-64gb-x86-64
+    # The self-hosted oracle-vm pool is small and shared with the on-source
+    # test workflow, which used to queue this job for over an hour. The
+    # suite runs fine in a privileged container on GitHub-hosted runners,
+    # same setup as build-rpm's on-bin test job.
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -34,6 +38,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: "true"
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Go
         uses: actions/setup-go@v5
