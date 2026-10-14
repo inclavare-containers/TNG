@@ -15,6 +15,12 @@ catch() {
 ENABLE_COVERAGE=false
 INSTALL_TOOL=true
 GENERATE_REPORT=true
+SKIP_UNIT_TESTS=false
+SHARD_SPEC=""
+SHARD_INDEX=""
+SHARD_TOTAL=""
+EXPORT_PROFRAW_DIR=""
+MERGE_PROFRAW_DIR=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,6 +37,22 @@ while [[ $# -gt 0 ]]; do
             GENERATE_REPORT=false
             shift
             ;;
+        --shard)
+            SHARD_SPEC="$2"
+            shift 2
+            ;;
+        --skip-unit-tests)
+            SKIP_UNIT_TESTS=true
+            shift
+            ;;
+        --export-profraw)
+            EXPORT_PROFRAW_DIR="$2"
+            shift 2
+            ;;
+        --merge-report)
+            MERGE_PROFRAW_DIR="$2"
+            shift 2
+            ;;
         -*)
             echo "Unknown option: $1" >&2
             exit 1
@@ -41,10 +63,34 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate the shard spec early so a typo fails before any build work.
+if [[ -n "$SHARD_SPEC" ]]; then
+    if [[ ! "$SHARD_SPEC" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+        echo "Invalid --shard spec '$SHARD_SPEC': expected <index>/<total>" >&2
+        exit 1
+    fi
+    SHARD_INDEX=${BASH_REMATCH[1]}
+    SHARD_TOTAL=${BASH_REMATCH[2]}
+    if (( SHARD_TOTAL < 1 || SHARD_INDEX < 1 || SHARD_INDEX > SHARD_TOTAL )); then
+        echo "Shard index out of range: $SHARD_SPEC" >&2
+        exit 1
+    fi
+fi
+
+# Merge mode only rebuilds binaries and reports on external profraw files.
+if [[ -n "$MERGE_PROFRAW_DIR" ]]; then
+    SKIP_UNIT_TESTS=true
+fi
+
 project_root=$(dirname "$(realpath "$0")")/../
 cd "$project_root"
 
 export RUST_BACKTRACE=1
+
+# Where cargo-llvm-cov puts instrumented builds and *.profraw files. CI sets
+# CARGO_LLVM_COV_TARGET_DIR=target so the compiled dependencies land in the
+# directory the CI cache manages.
+cov_target_dir="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
 
 failed=0
 declare -a summary_lines=()
@@ -134,42 +180,52 @@ if ! $ENABLE_COVERAGE; then
 fi
 
 # Run unit tests
-echo "============= Starting unit test ============="
-summary_lines+=("$(format_result "Unit tests" "")")
-
-unit_args=(
-    --no-report
-    --workspace
-    --bins
-    --lib
-    --exclude tng-wasm
-    --
-    --nocapture
-)
-
-unit_output=$(run_tests "${unit_args[@]}" 2>&1) || unit_failed=true || true
-echo "$unit_output"
-
-if [[ "${unit_failed:-false}" == "true" ]]; then
-    failed=1
-    summary_lines+=("$(format_result "  unit test" "FAILED")")
-    # Extract failed test names from cargo test output
-    failed_unit_tests=$(echo "$unit_output" | grep -E '^test .* FAILED$' | sed 's/ --- FAILED$//' | sed 's/^test //')
-    if [[ -n "$failed_unit_tests" ]]; then
-        while IFS= read -r t; do
-            summary_lines+=("$(format_result "    -> $t" "FAILED")")
-            failed_tests="${failed_tests:+${failed_tests}, }unit:$t"
-        done <<< "$failed_unit_tests"
-    fi
+if $SKIP_UNIT_TESTS; then
+    echo "============= Skipping unit test ============="
+    summary_lines+=("$(format_result "  unit test" "SKIP")")
 else
-    summary_lines+=("$(format_result "  unit test" "PASS")")
+    echo "============= Starting unit test ============="
+    summary_lines+=("$(format_result "Unit tests" "")")
+
+    unit_args=(
+        --no-report
+        --workspace
+        --bins
+        --lib
+        --exclude tng-wasm
+        --
+        --nocapture
+    )
+
+    unit_output=$(run_tests "${unit_args[@]}" 2>&1) || unit_failed=true || true
+    echo "$unit_output"
+
+    if [[ "${unit_failed:-false}" == "true" ]]; then
+        failed=1
+        summary_lines+=("$(format_result "  unit test" "FAILED")")
+        # Extract failed test names from cargo test output
+        failed_unit_tests=$(echo "$unit_output" | grep -E '^test .* FAILED$' | sed 's/ --- FAILED$//' | sed 's/^test //')
+        if [[ -n "$failed_unit_tests" ]]; then
+            while IFS= read -r t; do
+                summary_lines+=("$(format_result "    -> $t" "FAILED")")
+                failed_tests="${failed_tests:+${failed_tests}, }unit:$t"
+            done <<< "$failed_unit_tests"
+        fi
+    else
+        summary_lines+=("$(format_result "  unit test" "PASS")")
+    fi
+    echo "============= Finished unit test ============="
 fi
-echo "============= Finished unit test ============="
 
 # Run integration tests (find .rs files recursively in tests/ subdirectories)
 # Test names are derived from the file name (without path or extension) to match [[test]] sections
 # Discover test names from Cargo.toml [[test]] sections
 test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | grep -v '^tng-testsuite$')
+
+# Merge mode runs no tests; the loop below naturally iterates over nothing.
+if [[ -n "$MERGE_PROFRAW_DIR" ]]; then
+    test_cases=""
+fi
 
 # The active feature set for this run (matches the --features flag used below)
 active_features="on-source-code"
@@ -226,7 +282,16 @@ should_skip_test() {
 
 summary_lines+=("$(format_result "Integration tests" "")")
 
+shard_seq=0
 for case_name in $test_cases; do
+    # Round-robin split across shards: consecutive tests are often similarly
+    # slow (same mode family), so a contiguous split would unbalance the jobs.
+    if [[ -n "$SHARD_TOTAL" ]] && (( shard_seq % SHARD_TOTAL != SHARD_INDEX - 1 )); then
+        shard_seq=$((shard_seq + 1))
+        continue
+    fi
+    shard_seq=$((shard_seq + 1))
+
     echo "============= Starting integration test case: $case_name ============="
 
     if should_skip_test "$case_name"; then
@@ -265,6 +330,37 @@ for line in "${summary_lines[@]}"; do
     echo "$line"
 done
 echo "========================================"
+
+# Hand the raw per-run profile data to the caller (the CI coverage-merge job);
+# report generation happens there once all shards' profraw files are combined.
+if $ENABLE_COVERAGE && [[ -n "$EXPORT_PROFRAW_DIR" ]]; then
+    mkdir -p "$EXPORT_PROFRAW_DIR"
+    exported=0
+    for profraw in "$cov_target_dir"/*.profraw; do
+        [[ -e "$profraw" ]] || continue
+        # profraw filenames embed the PID of the test process, which is not
+        # unique across runners; prefix with the shard index so files from
+        # different shards never overwrite each other when combined.
+        cp "$profraw" "$EXPORT_PROFRAW_DIR/shard${SHARD_INDEX:-0}-$(basename "$profraw")"
+        exported=$((exported + 1))
+    done
+    echo "Exported $exported profraw files to $EXPORT_PROFRAW_DIR"
+    GENERATE_REPORT=false
+fi
+
+if $ENABLE_COVERAGE && [[ -n "$MERGE_PROFRAW_DIR" ]]; then
+    echo "============= Merging coverage from $MERGE_PROFRAW_DIR ============="
+    # Rebuild the instrumented test binaries without running any tests, then
+    # fold the shards' profraw files in. Coverage mappings depend only on
+    # source and compiler flags, so binaries rebuilt here match profiles that
+    # were produced on other runners from the same commit.
+    eval "$(cargo llvm-cov show-env --export-prefix)"
+    export CARGO_LLVM_COV_TARGET_DIR="$cov_target_dir"
+    cargo test --no-run --workspace --bins --lib --exclude tng-wasm
+    cargo test --no-run --no-default-features --features on-source-code --package tng-testsuite --tests
+    cp "$MERGE_PROFRAW_DIR"/*.profraw "$cov_target_dir"/
+    echo "============= Coverage merge input prepared ============="
+fi
 
 # Generate coverage reports if enabled and requested
 if $ENABLE_COVERAGE && $GENERATE_REPORT; then

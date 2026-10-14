@@ -10,12 +10,24 @@ on:
     branches:
       - 'master'
 
+env:
+  # Route cargo-llvm-cov's instrumented builds into target/ so the CI Rust
+  # cache manages them natively; the default target/llvm-cov-target is not
+  # covered by the cache.
+  CARGO_LLVM_COV_TARGET_DIR: target
+
 jobs:
   test:
+    name: test (${{ matrix.distro }}, shard ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
       matrix:
-        # distro: [anolis8, anolis23, alinux3]
+        # Integration tests are split round-robin across shards; each shard is
+        # a separate runner, so the shared-netns/iptables serialization inside
+        # run-test.sh still holds within each job. Shard 1 additionally runs
+        # the unit tests. Keep the count in sync with the /4 passed to
+        # --shard below.
+        shard: [1, 2, 3, 4]
         distro: [alinux3]
         include:
           # - distro: anolis8
@@ -25,7 +37,7 @@ jobs:
           - distro: alinux3
             distro_img: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
 
-    runs-on: oracle-vm-16cpu-64gb-x86-64
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -55,6 +67,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Shared with the coverage job so it restores what the shards built.
+          shared-key: on-source-cov
 
       - name: Run Attestation Agent, ASR, and Attestation Service
         run: |
@@ -132,8 +149,25 @@ jobs:
 
           # Append dns server
           echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-          # Run test
-          make run-test-coverage
+
+          # Export the raw profile data for the coverage job; the per-shard
+          # artifacts are merged into one report there.
+          args="--shard ${{ matrix.shard }}/4 --export-profraw profraw-export"
+          if [[ "${{ matrix.shard }}" -ne 1 ]]; then
+              args="$args --skip-unit-tests"
+          fi
+
+          make run-test-coverage COV_ARGS="$args"
+
+      - name: Upload raw coverage data
+        # Always upload: a failed shard still contributes the coverage of the
+        # test binaries that ran before the failure.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: profraw-shard-${{ matrix.shard }}
+          path: profraw-export/
+          if-no-files-found: warn
 
       - name: Print background service logs
         if: always()
@@ -143,10 +177,60 @@ jobs:
           echo "=== Attestation Service Log ==="
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
+  coverage:
+    name: coverage (merge)
+    needs: test
+    # Merge whatever profile data the shards produced even when one shard
+    # failed, so the report reflects partial coverage instead of nothing.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
+      options: --privileged
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -e
+          set -x
+
+          # replace the mirror
+          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
+          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
+
+          yum install -y git make tar jq clang
+
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: llvm-tools  # for providing llvm-profdata and llvm-cov
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Shared with the shard jobs so the compiled dependencies are warm.
+          shared-key: on-source-cov
+
+      - name: Download raw coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: profraw-shard-*
+          path: profraw-incoming
+          merge-multiple: true
+
+      - name: Rebuild instrumented binaries and merge coverage
+        run: |
+          set -e
+          set -x
+
+          make run-test-coverage COV_ARGS="--merge-report profraw-incoming"
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
-        # We only need to upload coverage report once
-        if: ${{ matrix.distro == 'alinux3' }}
         with:
           files: target/codecov.json
           fail_ci_if_error: true
@@ -155,10 +239,9 @@ jobs:
       - name: Upload codecov.json artifact
         # Preserve the line-level coverage report as a downloadable artifact so
         # it can be inspected without the Codecov web UI.
-        if: ${{ always() && matrix.distro == 'alinux3' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: codecov-json
           path: target/codecov.json
           if-no-files-found: warn
-

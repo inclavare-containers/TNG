@@ -16,7 +16,7 @@ run-test: install-test-deps
 run-test-coverage: install-test-deps
 	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
 
-	./tng-testsuite/run-test.sh --coverage
+	./tng-testsuite/run-test.sh --coverage $(COV_ARGS)
 
 .PHONY: run-test-on-bin
 run-test-on-bin: install-test-deps
