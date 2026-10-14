@@ -18,8 +18,26 @@ use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime, A
 
 use super::StreamManager;
 
+/// Which protocol forwarder this manager routes to, so the status tree only
+/// advertises the subtree that actually exists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ForwarderKind {
+    OHttp,
+    RatsTls,
+}
+
+impl ForwarderKind {
+    fn segment(&self) -> &'static str {
+        match self {
+            ForwarderKind::OHttp => "ohttp",
+            ForwarderKind::RatsTls => "rats_tls",
+        }
+    }
+}
+
 pub struct TrustedStreamManager {
     stream_forwarder: Box<dyn ProtocolStreamForwarder + Send + Sync + 'static>,
+    forwarder_kind: ForwarderKind,
 
     #[allow(unused)]
     runtime: TokioRuntime,
@@ -120,6 +138,11 @@ impl TrustedStreamManager {
                     }
                 }
             },
+            forwarder_kind: if common_args.ohttp.is_some() {
+                ForwarderKind::OHttp
+            } else {
+                ForwarderKind::RatsTls
+            },
             runtime,
         })
     }
@@ -145,8 +168,13 @@ impl StreamManager for TrustedStreamManager {
 impl StatusProvider for TrustedStreamManager {
     async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
         match path {
-            [] => Ok(StatusQueryResult::Subtree(vec!["ohttp".into()])),
-            ["ohttp", rest @ ..] => self.stream_forwarder.query_status(rest).await,
+            [] => Ok(StatusQueryResult::Subtree(vec![self
+                .forwarder_kind
+                .segment()
+                .into()])),
+            [segment, rest @ ..] if *segment == self.forwarder_kind.segment() => {
+                self.stream_forwarder.query_status(rest).await
+            }
             _ => Err(TngError::StatusPathNotFound),
         }
     }

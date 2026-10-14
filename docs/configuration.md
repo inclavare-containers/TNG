@@ -96,7 +96,7 @@ The following fields are shared between Ingress and Egress, describing transport
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `multiplex` | boolean | `false` | When `true`, uses HTTP/2 CONNECT to multiplex multiple TCP streams over a single TLS connection, suitable for many short-lived connections; when `false`, each connection has an independent TLS session with higher single-stream throughput, recommended for high-bandwidth scenarios |
-| `multiplex_max_streams_per_connection` | number | unset | Ingress only, requires `multiplex: true`. Caps the concurrent streams carried by each tunnel connection; once every tunnel to an endpoint is at the cap, the ingress lazily opens another tunnel (its own TLS + attestation handshake, resumed from cache for extra tunnels) and routes new streams to the least-loaded tunnel. Unset keeps the single-tunnel behavior. The cap is soft and is clamped to 200 by the egress h2 server's `max_concurrent_streams` default |
+| `multiplex_max_streams_per_connection` | number | unset | Ingress only, requires `multiplex: true`. Caps the concurrent streams carried by each tunnel connection; once every tunnel to an endpoint is at the cap, the ingress lazily opens another tunnel (its own TLS + attestation handshake, resumed from cache for extra tunnels) and routes new streams to the least-loaded tunnel. Unset keeps the single-tunnel behavior. The cap is soft and is clamped to 200 by the egress h2 server's `max_concurrent_streams` default. Streams riding a resumed tunnel report a Resumed (not Fresh) attestation state; rustls binds the resumed session to the previously attested identity |
 | `multiplex_max_connections` | number | CPU core count | Ingress only, requires `multiplex: true`. Caps the number of parallel tunnels kept open to one endpoint; past the cap, new streams overflow onto the least-loaded tunnel (the per-tunnel stream cap becomes a soft limit) instead of opening another tunnel. After a concurrency peak the pool keeps this watermark without shrinking: at low concurrency each new stream tends to land on its own least-loaded tunnel, so a small value trades peak throughput for fewer handshakes. Unset derives the cap from the CPU core count, where the sharding parallelism saturates |
 
 
@@ -1491,6 +1491,7 @@ Generate using `openssl genpkey -algorithm X25519 -outform PEM`. TNG uses inotif
 | `/status/egress/{id}/ohttp/keys` | Returns the OHTTP key status snapshot for the specified egress |
 | `/status/ingress/` | Returns a list of ingress instance IDs |
 | `/status/ingress/{id}/ohttp/keys` | Returns the ingress OHTTP client cache state |
+| `/status/ingress/{id}/rats_tls/pool` | Returns the ingress mux tunnel pool state: the resolved sharding knobs, the stream-overflow counter, and per-endpoint shard counts with active stream counts. Only present on rats-tls ingresses |
 
 ---
 

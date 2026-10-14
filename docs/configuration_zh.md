@@ -96,7 +96,7 @@
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `multiplex` | boolean | `false` | `true` 时使用 HTTP/2 CONNECT 在单条 TLS 连接上复用多个 TCP 流，适合大量短连接；`false` 时每条连接独立 TLS 会话，单流吞吐量更高，推荐高带宽场景 |
-| `multiplex_max_streams_per_connection` | number | 未设置 | 仅 Ingress 生效，需配合 `multiplex: true`。限制每条隧道连接承载的并发流数；当某端点的每条隧道都达到上限时，Ingress 惰性新建一条隧道（独立 TLS + 远程证明握手，额外隧道从会话缓存恢复），并把新流路由到负载最轻的隧道。未设置时保持单隧道行为。上限为软限制，且受 Egress h2 server 默认 `max_concurrent_streams`（200）约束，实际上限为 min(N, 200) |
+| `multiplex_max_streams_per_connection` | number | 未设置 | 仅 Ingress 生效，需配合 `multiplex: true`。限制每条隧道连接承载的并发流数；当某端点的每条隧道都达到上限时，Ingress 惰性新建一条隧道（独立 TLS + 远程证明握手，额外隧道从会话缓存恢复），并把新流路由到负载最轻的隧道。未设置时保持单隧道行为。上限为软限制，且受 Egress h2 server 默认 `max_concurrent_streams`（200）约束，实际上限为 min(N, 200)。经恢复隧道承载的流报告 Resumed（而非 Fresh）证明状态；rustls 将恢复会话绑定到先前已验证的身份 |
 | `multiplex_max_connections` | number | CPU 核数 | 仅 Ingress 生效，需配合 `multiplex: true`。限制对同一端点保持打开的并行隧道数；达到上限后，新流溢出到负载最轻的隧道（每隧道流数上限变为软限制），而不是再开新隧道。并发峰值过后池保持该水位不收缩：低并发时每条新流倾向于落到各自负载最轻的隧道，因此取值小是用峰值吞吐换更少握手。未设置时按 CPU 核数推导，分片并行度在该值处饱和 |
 
 
@@ -1471,6 +1471,7 @@ MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
 | `/status/egress/{id}/ohttp/keys` | 返回 egress 的 OHTTP 密钥状态快照 |
 | `/status/ingress/` | 返回 ingress 实例 ID 列表 |
 | `/status/ingress/{id}/ohttp/keys` | 返回 ingress OHTTP 客户端缓存状态 |
+| `/status/ingress/{id}/rats_tls/pool` | 返回 ingress 复用隧道池状态：已生效的分片配置、流溢出计数，以及每个端点的分片数与各分片活跃流数。仅 rats-tls ingress 存在 |
 
 ---
 

@@ -127,8 +127,14 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
 
 #[async_trait]
 impl StatusProvider for RatsTlsStreamForwarder {
-    async fn query_status(&self, _path: &[&str]) -> Result<StatusQueryResult, TngError> {
-        Err(TngError::StatusPathNotFound)
+    async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
+        match path {
+            [] => Ok(StatusQueryResult::Subtree(vec!["pool".into()])),
+            ["pool"] => Ok(StatusQueryResult::Value(
+                self.security_layer.mux_pool_status().await,
+            )),
+            _ => Err(TngError::StatusPathNotFound),
+        }
     }
 }
 

@@ -342,4 +342,160 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_status_ingress_rats_tls_mux_pool() -> Result<()> {
+        let port = portpicker::pick_unused_port().unwrap();
+        let ingress_in_port = portpicker::pick_unused_port().unwrap();
+        let egress_port = portpicker::pick_unused_port().unwrap();
+        let backend_port = portpicker::pick_unused_port().unwrap();
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "control_interface": {
+                    "restful": {
+                        "host": "127.0.0.1",
+                        "port": port
+                    }
+                },
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": { "port": ingress_in_port },
+                            "out": { "host": "127.0.0.1", "port": egress_port }
+                        },
+                        "no_ra": true,
+                        "rats_tls": {
+                            "multiplex": true,
+                            "multiplex_max_streams_per_connection": 2,
+                            "multiplex_max_connections": 2
+                        }
+                    }
+                ],
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "127.0.0.1", "port": egress_port },
+                            "out": { "host": "127.0.0.1", "port": backend_port }
+                        },
+                        "no_ra": true,
+                        "rats_tls": { "multiplex": true }
+                    }
+                ]
+            }
+        ))?;
+
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let tng_runtime = TngRuntime::from_config(config).await?;
+        let canceller = tng_runtime.canceller();
+
+        #[allow(clippy::disallowed_methods)]
+        let join_handle =
+            tokio::task::spawn(async move { tng_runtime.serve_with_ready(ready_sender).await });
+
+        ready_receiver.await?;
+
+        // Backend: accept the tunnelled connection and keep it open so the
+        // mux stream stays active while the status is queried.
+        let backend = tokio::net::TcpListener::bind(("127.0.0.1", backend_port)).await?;
+        #[allow(clippy::disallowed_methods)]
+        let backend_conn = tokio::spawn(async move {
+            if let Ok((conn, _)) = backend.accept().await {
+                // Hold the accepted connection until the test ends.
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                drop(conn);
+            }
+        });
+
+        let client = tokio::net::TcpStream::connect(("127.0.0.1", ingress_in_port)).await?;
+        // Give the ingress time to establish the shard tunnel and its CONNECT
+        // stream before querying the pool status.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // /status/ingress/0/ advertises the rats_tls subtree.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/ingress/0/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            assert_eq!(body, vec!["rats_tls"]);
+        }
+
+        // /status/ingress/0/rats_tls/ lists the pool node.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/rats_tls/"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            assert_eq!(body, vec!["pool"]);
+        }
+
+        // /status/ingress/0/rats_tls/pool reports the live shard state.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/rats_tls/pool"
+                ))
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            assert!(status == StatusCode::OK, "got {status}: {body_text}");
+            let body: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
+            assert_eq!(body["multiplex"], serde_json::json!(true));
+            assert_eq!(
+                body["multiplex_max_streams_per_connection"],
+                serde_json::json!(2)
+            );
+            assert_eq!(body["multiplex_max_connections"], serde_json::json!(2));
+            assert_eq!(body["overflowed_streams"], serde_json::json!(0));
+            let endpoints = body["endpoints"].as_array().cloned().unwrap_or_default();
+            assert_eq!(
+                endpoints.len(),
+                1,
+                "one pooled endpoint, got: {endpoints:?}"
+            );
+            assert_eq!(endpoints[0]["shard_count"], serde_json::json!(1));
+            assert_eq!(endpoints[0]["cooling_shards"], serde_json::json!(0));
+            let shards = endpoints[0]["shards"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(shards.len(), 1);
+            assert_eq!(shards[0]["active_streams"], serde_json::json!(1));
+        }
+
+        // Unknown path under rats_tls is a 404.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/rats_tls/nope"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::NOT_FOUND);
+        }
+
+        drop(client);
+        canceller.cancel();
+        backend_conn.abort();
+        let _ = join_handle.await;
+
+        Ok(())
+    }
 }

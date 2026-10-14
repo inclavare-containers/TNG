@@ -389,6 +389,48 @@ impl RatsTlsSecurityLayer {
         }
     }
 
+    /// Snapshot of the mux shard pool for the status interface: the resolved
+    /// knobs, the overflow counter, and per-endpoint shard states. Endpoints
+    /// are sorted by their string form so repeated queries are comparable
+    /// despite the pool's hash-map iteration order.
+    pub async fn mux_pool_status(&self) -> serde_json::Value {
+        let read = self.pool.read().await;
+        let mut entries: Vec<(String, &Vec<RatsTlsClient>)> = read
+            .iter()
+            .map(|(key, shards)| (key.get_endpoint().to_string(), shards))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let now = Instant::get();
+        let endpoints: Vec<serde_json::Value> = entries
+            .into_iter()
+            .map(|(endpoint, shards)| {
+                let cooling = shards.iter().filter(|shard| shard.is_cooling(now)).count();
+                serde_json::json!({
+                    "endpoint": endpoint,
+                    "shard_count": shards.len(),
+                    "cooling_shards": cooling,
+                    "shards": shards
+                        .iter()
+                        .map(|shard| serde_json::json!({
+                            "id": shard.id,
+                            "active_streams": shard.active_streams(),
+                        }))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "multiplex": self.multiplex,
+            "multiplex_max_streams_per_connection":
+                self.multiplex_max_streams_per_connection.map(NonZeroU32::get),
+            "multiplex_max_connections": self.multiplex_max_connections,
+            "overflowed_streams": self.overflowed_streams.load(Ordering::Relaxed),
+            "endpoints": endpoints,
+        })
+    }
+
     /// Open the non-multiplex upstream TLS connection for 0-RTT. Thin delegator
     /// over [`RatsTlsWrappingLayer::create_stream_raw_0rtt`] so `forward_stream`
     /// can keep calling the security layer; the stream-building logic lives in
