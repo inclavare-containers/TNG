@@ -71,6 +71,13 @@ jobs:
         with:
           toolchain: nightly-2025-07-07
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The wasm builds run on the pinned nightly and write to the
+          # workspace target dir; a dedicated prefix keeps the cache entry
+          # from colliding with stable-toolchain jobs.
+          prefix-key: wasm-nightly
+
       - name: Run www demo config unit test
         run: |
           node --version
