@@ -20,6 +20,7 @@ use pin_project::pin_project;
 use pool::{ClientPool, HyperClientType, PoolKey};
 use tokio::sync::RwLock;
 use tracing::{Instrument, Span};
+use web_time_compat::{Instant, InstantExt};
 
 use crate::{
     tunnel::{
@@ -46,11 +47,35 @@ pub struct RatsTlsClient {
     /// stream is assigned to the shard, decremented when its upgraded stream
     /// is dropped (see `ShardGuardedStream`).
     active: Arc<AtomicU32>,
+    /// Cooldown deadline after a failed CONNECT (see
+    /// `pool::SHARD_CONNECT_FAILURE_COOLDOWN`); `None` while the shard is
+    /// healthy. Guarded by a mutex because `Instant` is not atomic.
+    cooldown_until: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 impl RatsTlsClient {
     fn active_streams(&self) -> u32 {
         self.active.load(Ordering::Relaxed)
+    }
+
+    fn is_cooling(&self, now: Instant) -> bool {
+        self.cooldown_until
+            .lock()
+            .map(|deadline| deadline.is_some_and(|d| d > now))
+            // A poisoned lock must not block allocation; treat as healthy.
+            .unwrap_or(false)
+    }
+
+    fn record_failure(&self) {
+        if let Ok(mut deadline) = self.cooldown_until.lock() {
+            *deadline = Some(Instant::get() + pool::SHARD_CONNECT_FAILURE_COOLDOWN);
+        }
+    }
+
+    fn record_success(&self) {
+        if let Ok(mut deadline) = self.cooldown_until.lock() {
+            *deadline = None;
+        }
     }
 }
 
@@ -120,6 +145,12 @@ impl tokio::io::AsyncWrite for ShardGuardedStream {
     }
 }
 
+/// Upper bound on tunnel (TLS + attestation) handshakes in flight at once.
+/// Each newly created shard performs its handshake on the first CONNECT; a
+/// burst cold-start would otherwise fire every handshake at the AA/AS
+/// simultaneously.
+const MAX_CONCURRENT_TUNNEL_HANDSHAKES: usize = 8;
+
 pub struct RatsTlsSecurityLayer {
     next_id: AtomicU64,
     pool: RwLock<ClientPool>,
@@ -129,6 +160,8 @@ pub struct RatsTlsSecurityLayer {
     multiplex: bool,
     multiplex_max_streams_per_connection: Option<NonZeroU32>,
     multiplex_max_connections: usize,
+    handshake_gate: tokio::sync::Semaphore,
+    overflowed_streams: AtomicU64,
 }
 
 impl RatsTlsSecurityLayer {
@@ -163,6 +196,8 @@ impl RatsTlsSecurityLayer {
             multiplex_max_connections: multiplex_max_connections
                 .map(|v| v.get() as usize)
                 .unwrap_or_else(pool::default_max_connections),
+            handshake_gate: tokio::sync::Semaphore::const_new(MAX_CONCURRENT_TUNNEL_HANDSHAKES),
+            overflowed_streams: AtomicU64::new(0),
         })
     }
 
@@ -181,7 +216,7 @@ impl RatsTlsSecurityLayer {
         })
     }
 
-    async fn get_client(&self, pool_key: &PoolKey) -> Result<RatsTlsClient> {
+    async fn get_client(&self, pool_key: &PoolKey) -> Result<(RatsTlsClient, bool)> {
         self.get_client_with_span(pool_key, Span::current())
             .instrument(tracing::info_span!(
                 "security",
@@ -190,80 +225,106 @@ impl RatsTlsSecurityLayer {
             .await
     }
 
+    /// Claim a shard for a new stream: increment its active counter and
+    /// surface an overflow when the stream lands past the per-tunnel cap.
+    /// Returns the claimed client, or `None` when the caller must create a
+    /// new shard. The second tuple element is `created_new`, always false
+    /// here.
+    fn claim_shard(
+        &self,
+        shards: &[RatsTlsClient],
+        pool_key: &PoolKey,
+        max: Option<u32>,
+    ) -> Option<(RatsTlsClient, bool)> {
+        let pick = pool::pick_shard(shards, max, self.multiplex_max_connections)?;
+        let client = shards[pick.index()].clone();
+        client.active.fetch_add(1, Ordering::Relaxed);
+        Span::current().record("session_id", client.id);
+        tracing::debug!(session_id = client.id, "Reuse existed rats-tls session");
+        if pick.is_overflow() {
+            self.note_overflow(pool_key, &client);
+        }
+        Some((client, false))
+    }
+
+    /// Count and warn about a stream overflowing onto a capped tunnel. Past
+    /// the tunnel bound every new stream overflows; warn on the first and
+    /// then every 100th so sustained overload stays visible without spamming
+    /// the log.
+    fn note_overflow(&self, pool_key: &PoolKey, shard: &RatsTlsClient) {
+        let overflowed = self.overflowed_streams.fetch_add(1, Ordering::Relaxed) + 1;
+        if overflowed == 1 || overflowed % 100 == 0 {
+            tracing::warn!(
+                endpoint = ?pool_key.get_endpoint(),
+                shard_id = shard.id,
+                shard_active = shard.active_streams(),
+                max_connections = self.multiplex_max_connections,
+                overflowed_streams = overflowed,
+                "mux pool at the tunnel bound: stream overflows onto the least-loaded tunnel"
+            );
+        }
+    }
+
     async fn get_client_with_span(
         &self,
         pool_key: &PoolKey,
         parent_span: Span,
-    ) -> Result<RatsTlsClient> {
+    ) -> Result<(RatsTlsClient, bool)> {
         let max = self
             .multiplex_max_streams_per_connection
             .map(NonZeroU32::get);
-        let max_connections = self.multiplex_max_connections;
 
         // Try to reuse a shard tunnel with a free stream slot.
         let reused = {
             let read = self.pool.read().await;
-            read.get(pool_key).and_then(|shards| {
-                pool::pick_shard(shards, max, max_connections).map(|idx| shards[idx].clone())
-            })
+            read.get(pool_key)
+                .and_then(|shards| self.claim_shard(shards, pool_key, max))
         };
+        if let Some(claimed) = reused {
+            return Ok(claimed);
+        }
 
-        let client = match reused {
-            Some(c) => {
-                c.active.fetch_add(1, Ordering::Relaxed);
-                Span::current().record("session_id", c.id);
-                tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
-                c
-            }
-            None => {
-                // All shards are at their stream cap (or none exist), so create
-                // a new shard tunnel under the write lock. Re-check first: a
-                // concurrent allocate may have just added a shard or freed a slot.
-                let mut write = self.pool.write().await;
-                let shards = write.entry(pool_key.to_owned()).or_default();
-                if let Some(idx) = pool::pick_shard(shards, max, max_connections) {
-                    let c = shards[idx].clone();
-                    c.active.fetch_add(1, Ordering::Relaxed);
-                    Span::current().record("session_id", c.id);
-                    tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
-                    return Ok(c);
-                }
+        // All shards are at their stream cap (or none exist), so create
+        // a new shard tunnel under the write lock. Re-check first: a
+        // concurrent allocate may have just added a shard or freed a slot.
+        let mut write = self.pool.write().await;
+        let shards = write.entry(pool_key.to_owned()).or_default();
+        if let Some(claimed) = self.claim_shard(shards, pool_key, max) {
+            return Ok(claimed);
+        }
 
-                let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                Span::current().record("session_id", id);
-                tracing::debug!(
-                    session_id = id,
-                    "No rats-tls session found, create a new one"
-                );
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        Span::current().record("session_id", id);
+        tracing::debug!(
+            session_id = id,
+            "No rats-tls session found, create a new one"
+        );
 
-                // Prepare the security connector
-                let connector = self
-                    .create_security_connector(pool_key, parent_span)
-                    .await?;
+        // Prepare the security connector
+        let connector = self
+            .create_security_connector(pool_key, parent_span)
+            .await?;
 
-                // Build the hyper client from the security connector.
-                // Windows and frame size match the egress h2 server so
-                // the mux tunnel ends negotiate the same data-plane
-                // tuning (see the constants' rationale).
-                let client = RatsTlsClient {
-                    id,
-                    active: Arc::new(AtomicU32::new(1)),
-                    hyper: Client::builder(self.runtime.clone())
-                        .http2_initial_stream_window_size(
-                            crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW,
-                        )
-                        .http2_initial_connection_window_size(
-                            crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW,
-                        )
-                        .http2_max_frame_size(crate::tunnel::utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
-                        .build(connector),
-                };
-                shards.push(client.clone());
-                client
-            }
+        // Build the hyper client from the security connector.
+        // Windows and frame size match the egress h2 server so
+        // the mux tunnel ends negotiate the same data-plane
+        // tuning (see the constants' rationale).
+        let client = RatsTlsClient {
+            id,
+            active: Arc::new(AtomicU32::new(1)),
+            cooldown_until: Arc::default(),
+            hyper: Client::builder(self.runtime.clone())
+                .http2_initial_stream_window_size(
+                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW,
+                )
+                .http2_initial_connection_window_size(
+                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW,
+                )
+                .http2_max_frame_size(crate::tunnel::utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
+                .build(connector),
         };
-
-        Ok(client)
+        shards.push(client.clone());
+        Ok((client, true))
     }
 
     pub async fn allocate_multiplex_stream(
@@ -290,12 +351,27 @@ impl RatsTlsSecurityLayer {
         // The claimed slot must be released exactly once: the Err arm below is
         // the only fallible step between the claim and handing the guarded box
         // to the caller, whose Drop is the other release site.
-        let client = self.get_client(&pool_key).await?;
-        match RatsTlsWrappingLayer::create_stream_from_hyper(&client)
-            .instrument(tracing::info_span!("wrapping", mode = "h2"))
-            .await
-        {
+        let (client, created) = self.get_client(&pool_key).await?;
+        // A freshly created shard performs its TLS + attestation handshake on
+        // this first CONNECT; gate those handshakes so a burst cold-start
+        // cannot fire all of them at the AA/AS simultaneously. Reconnects of
+        // idle-dead shards are not gated: they are spread over time by traffic.
+        let handshake_permit = if created {
+            Some(
+                self.handshake_gate
+                    .acquire()
+                    .await
+                    .context("mux tunnel handshake gate closed")?,
+            )
+        } else {
+            None
+        };
+        let connect = RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+            .instrument(tracing::info_span!("wrapping", mode = "h2"));
+        match connect.await {
             Ok((stream, local_addr, state, session_id)) => {
+                drop(handshake_permit);
+                client.record_success();
                 let guarded = ShardGuardedStream {
                     inner: Box::new(stream),
                     active: client.active.clone(),
@@ -303,7 +379,10 @@ impl RatsTlsSecurityLayer {
                 Ok((Box::new(guarded), local_addr, state, session_id))
             }
             Err(error) => {
-                // The stream never materialized; release the claimed slot.
+                // The stream never materialized; release the claimed slot and
+                // cool the shard down so the next stream prefers another one.
+                drop(handshake_permit);
+                client.record_failure();
                 client.active.fetch_sub(1, Ordering::Relaxed);
                 Err(error)
             }
