@@ -1,0 +1,30 @@
+# CI builder image for the alinux3 test jobs.
+#
+# The alinux3 base installs its packages over China-hosted mirrors, which
+# costs about 11 minutes per job from GitHub-hosted US runners. This image
+# bakes the full dependency set once so consuming jobs skip that entirely.
+#
+# The Attestation Service (trustee RPM) and its glibc 2.32 binaries are
+# alinux3-only; they cannot move to another distro, which is why this image
+# keeps the alinux3 base.
+#
+# The Rust toolchain is deliberately NOT baked in: dtolnay/rust-toolchain
+# installs it in seconds, and keeping it out means the image does not need a
+# rebuild on every toolchain bump.
+#
+# Changing this file produces a new recipe-hash image tag (see
+# builder-image.yml); the rolling alinux3 tag is republished from this
+# recipe on the next master push or manual dispatch.
+FROM alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+
+RUN sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo \
+ && sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo \
+ && yum install -y \
+      git make tar jq clang llvm yum-utils curl openssl \
+      gcc pkg-config perl bind-utils iputils iproute ipset iptables \
+      openssl-devel protobuf-devel cmake wget net-tools file gnupg tree \
+      libcurl-devel libseccomp-devel binutils-devel \
+      nodejs npm python3 \
+      trustee \
+ && yum clean all \
+ && rm -rf /var/cache/yum

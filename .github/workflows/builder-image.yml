@@ -1,0 +1,85 @@
+name: CI Builder Image
+
+on:
+  push:
+    branches:
+      - 'master'
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - 'master'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the recipe tag is already published
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # The default docker driver cannot export the gha build cache; buildx's
+      # docker-container driver can (same setup as build-docker.yml).
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute recipe tag
+        run: |
+          recipe_hash=$(sha256sum ci/Dockerfile.alinux3 | cut -c1-12)
+          echo "RECIPE_TAG=alinux3-${recipe_hash}" >> "$GITHUB_ENV"
+          echo "Recipe tag: alinux3-${recipe_hash}"
+
+      # The repo-wide trigger convention runs this workflow on every push;
+      # skip the build when the image for this exact recipe is already in
+      # ghcr, so an unchanged recipe costs about a minute.
+      - name: Check whether this recipe is already published
+        id: published
+        run: |
+          if docker manifest inspect "ghcr.io/inclavare-containers/tng-ci:${RECIPE_TAG}" >/dev/null 2>&1; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "ghcr.io/inclavare-containers/tng-ci:${RECIPE_TAG} is already published"
+          else
+              echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build image
+        if: ${{ steps.published.outputs.published != 'true' || inputs.force }}
+        uses: docker/build-push-action@v6.9.0
+        with:
+          context: ci
+          file: ci/Dockerfile.alinux3
+          tags: |
+            ghcr.io/inclavare-containers/tng-ci:alinux3
+            ghcr.io/inclavare-containers/tng-ci:${{ env.RECIPE_TAG }}
+          # load, not push: the export into the runner's docker daemon lets
+          # the gated push steps below decide whether publishing is allowed.
+          load: true
+          cache-from: type=gha,scope=ci-builder-alinux3
+          cache-to: type=gha,scope=ci-builder-alinux3,mode=max
+
+      # Fork pull requests run with a read-only token; only push events,
+      # manual dispatches, and same-repo pull requests can publish.
+      - name: Login to GHCR
+        if: >-
+          (steps.published.outputs.published != 'true' || inputs.force) &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push image
+        if: >-
+          (steps.published.outputs.published != 'true' || inputs.force) &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          docker push ghcr.io/inclavare-containers/tng-ci:alinux3
+          docker push "ghcr.io/inclavare-containers/tng-ci:${RECIPE_TAG}"
