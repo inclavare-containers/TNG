@@ -1,6 +1,9 @@
 pub mod key_config;
 pub mod protocol;
 
+#[cfg(not(wasm))]
+pub(crate) mod seal_stream;
+
 /// Capacity of the in-memory `tokio::io::duplex` pipes that join the ohttp
 /// relay stages (backend stream, seal/encrypt streams). Every pipe-full or
 /// pipe-empty transition parks and wakes a task, and at the 4 KiB default a

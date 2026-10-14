@@ -4,16 +4,13 @@ use base64::Engine as _;
 use bhttp::http_compat::decode::{BhttpDecoder, HttpMessage};
 use bhttp::http_compat::encode::BhttpEncoder;
 use bytes::BytesMut;
-use futures::{AsyncWriteExt, StreamExt as _, TryStreamExt as _};
+use futures::{StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
 
 use crate::tunnel::provider::{ProviderType, TngToken};
 use tokio::io::AsyncReadExt;
-use tokio_util::compat::FuturesAsyncReadCompatExt as _;
-use tokio_util::compat::FuturesAsyncWriteCompatExt as _;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
-use tokio_util::io::ReaderStream;
 
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
@@ -208,37 +205,22 @@ impl OhttpServerApi {
 
         // Encode the response to bhttp message
         let bhttp_encoder = BhttpEncoder::from_response(response);
-        // Encrypt to get the ohttp message
+        // Encrypt to get the ohttp message.  The seal runs synchronously
+        // inside the response body stream's poll (no task, no pipe): the
+        // always-ready sink keeps the seal's writes non-blocking, so
+        // bhttp-encode and seal happen per frame on the serving worker.
         let encrypted_response = {
-            let (response_read, response_write) =
-                tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
+            let sink = crate::tunnel::ohttp::seal_stream::BufferSink::new();
             let server_response =
-                server_response_encapsulator.encapsulate_response(response_write.compat())?;
-            context.runtime.spawn_supervised_task_current_span(async {
-                async {
-                    let mut server_response = server_response.compat_write();
-                    // BufReader at the protocol's 16 KiB max chunk + copy_buf
-                    // so each write to the seal stream carries up to one full
-                    // AEAD chunk and skips copy's intermediate 8 KiB buffer
-                    // copy; tokio::io::copy would cap chunks at 8 KiB.
-                    let mut bhttp_reader = tokio::io::BufReader::with_capacity(
-                        crate::tunnel::ohttp::SEAL_CHUNK_SIZE,
-                        bhttp_encoder
-                            .map_err(std::io::Error::other)
-                            .into_async_read()
-                            .compat(),
-                    );
-                    tokio::io::copy_buf(&mut bhttp_reader, &mut server_response).await?;
-                    let mut server_response = server_response.into_inner();
-                    server_response.close().await?; // Remember to close the response stream
-
-                    Ok::<_, anyhow::Error>(())
-                }
-                .await
-                .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting response"))
-            });
-
-            response_read
+                server_response_encapsulator.encapsulate_response(sink.clone())?;
+            let bhttp_reader = bhttp_encoder
+                .map_err(std::io::Error::other)
+                .into_async_read();
+            crate::tunnel::ohttp::seal_stream::sealed_response_body(
+                bhttp_reader,
+                server_response,
+                sink,
+            )
         };
 
         // Return the response
@@ -254,10 +236,7 @@ impl OhttpServerApi {
         }
 
         let response = response_builder
-            .body(axum::body::Body::from_stream(ReaderStream::with_capacity(
-                encrypted_response,
-                crate::tunnel::ohttp::RELAY_CHUNK_SIZE,
-            )))
+            .body(axum::body::Body::from_stream(encrypted_response))
             .map_err(TngError::ConstructHttpResponseFailed)?;
 
         Ok(response)

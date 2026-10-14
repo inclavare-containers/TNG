@@ -5,7 +5,9 @@ use bhttp::http_compat::{
     encode::BhttpEncoder,
 };
 use bytes::{BufMut, BytesMut};
-use futures::{AsyncWriteExt as _, StreamExt, TryStreamExt as _};
+#[cfg(wasm)]
+use futures::AsyncWriteExt as _;
+use futures::{StreamExt, TryStreamExt as _};
 #[cfg(unix)]
 use hpke::Serializable;
 use hpke::{kem::X25519HkdfSha256, Kem};
@@ -29,15 +31,9 @@ use serde::Serialize;
 use tracing::Instrument;
 
 use crate::tunnel::provider::{ProviderType, TngEvidence, TngToken};
-#[cfg(not(wasm))]
-use tokio::io::AsyncReadExt;
-use tokio_util::{
-    compat::{
-        FuturesAsyncReadCompatExt as _, FuturesAsyncWriteCompatExt as _,
-        TokioAsyncReadCompatExt as _,
-    },
-    io::StreamReader,
-};
+#[cfg(wasm)]
+use tokio_util::compat::{FuturesAsyncReadCompatExt as _, FuturesAsyncWriteCompatExt as _};
+use tokio_util::{compat::TokioAsyncReadCompatExt as _, io::StreamReader};
 use url::Url;
 
 use std::{pin::Pin, sync::Arc};
@@ -515,18 +511,11 @@ impl OHttpClientInner {
             }
         };
 
+        #[cfg(wasm)]
         let (encrypted_request, client_response_decapsulator) = {
-            #[cfg(wasm)]
             let mut encrypted_request = Vec::new();
-            #[cfg(wasm)]
             let client_request =
                 client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
-
-            #[cfg(not(wasm))]
-            let (encrypted_request, request_write) =
-                tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
-            #[cfg(not(wasm))]
-            let client_request = client.encapsulate_stream(request_write.compat())?;
 
             let client_response_decapsulator = client_request.response_decapsulator()?;
 
@@ -558,14 +547,23 @@ impl OHttpClientInner {
 
             // We have to avoid using spawn_supervised_task_current_span(), since it may randomly not got executed on wasm (web) and currently we have no idea why.
             //  streaming request is not supported, so we can just wait for the encryption task to finish here.
-            #[cfg(wasm)]
             let _: () = encryption_task.await;
 
-            #[cfg(not(wasm))]
-            self.runtime
-                .spawn_supervised_task_current_span(encryption_task);
-
             (encrypted_request, client_response_decapsulator)
+        };
+
+        #[cfg(not(wasm))]
+        let (client_response_decapsulator, request_sink, request_seal, request_reader) = {
+            // The seal runs synchronously inside the outer body stream's
+            // poll (no task, no duplex): the always-ready sink keeps every
+            // seal write non-blocking.
+            let sink = crate::tunnel::ohttp::seal_stream::BufferSink::new();
+            let client_request = client.encapsulate_stream(sink.clone())?;
+            let client_response_decapsulator = client_request.response_decapsulator()?;
+            let reader = bhttp_encoder
+                .map_err(std::io::Error::other)
+                .into_async_read();
+            (client_response_decapsulator, sink, client_request, reader)
         };
 
         let ohttp_request_body = {
@@ -604,10 +602,11 @@ impl OHttpClientInner {
             }
             #[cfg(not(wasm))]
             {
-                let body = std::io::Cursor::new(metadata_buf).chain(encrypted_request);
-                reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::with_capacity(
-                    body,
-                    crate::tunnel::ohttp::RELAY_CHUNK_SIZE,
+                reqwest::Body::wrap_stream(crate::tunnel::ohttp::seal_stream::sealed_request_body(
+                    metadata_buf.freeze(),
+                    request_reader,
+                    request_seal,
+                    request_sink,
                 ))
             }
         };
