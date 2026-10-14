@@ -21,18 +21,13 @@ jobs:
       run:
         shell: bash
     container:
-      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      # Builder image from builder-image.yml: alinux3 base with the full
+      # dependency set (including the alinux3-only trustee RPM) baked in, so
+      # this job skips the ~11-minute inline yum over China-hosted mirrors.
+      image: ghcr.io/inclavare-containers/tng-ci:alinux3
       options: --privileged
 
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-          yum install -y git make tar clang protobuf-devel jq iptables
-
       - uses: dtolnay/rust-toolchain@1.89.0
 
       - uses: actions/checkout@v6

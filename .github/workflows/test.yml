@@ -30,12 +30,12 @@ jobs:
         shard: [1, 2, 3, 4]
         distro: [alinux3]
         include:
-          # - distro: anolis8
-          #   distro_img: registry.openanolis.cn/openanolis/anolisos:8
-          # - distro: anolis23
-          #   distro_img: registry.openanolis.cn/openanolis/anolisos:23
+          # Builder image from builder-image.yml: alinux3 base with the full
+          # dependency set (including the alinux3-only trustee RPM) baked in,
+          # so these jobs skip the ~11-minute inline yum over China-hosted
+          # mirrors.
           - distro: alinux3
-            distro_img: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
+            distro_img: "ghcr.io/inclavare-containers/tng-ci:alinux3"
 
     runs-on: ubuntu-latest
     defaults:
@@ -45,21 +45,6 @@ jobs:
       image: ${{ matrix.distro_img }}
       options: --privileged
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-
-          if [[ "${{ matrix.distro }}" == anolis23 ]] ; then
-              yum install anolis-epao-release -y
-          fi
-
-          yum install -y git make tar jq clang
-
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: llvm-tools  # for providing llvm-profdata and llvm-cov
@@ -188,20 +173,9 @@ jobs:
       run:
         shell: bash
     container:
-      image: "alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest"
+      image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
       options: --privileged
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-
-          yum install -y git make tar jq clang
-
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: llvm-tools  # for providing llvm-profdata and llvm-cov
