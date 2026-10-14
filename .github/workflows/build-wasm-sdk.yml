@@ -56,6 +56,10 @@ jobs:
           # workspace target dir; a dedicated prefix keeps the cache entry
           # from colliding with stable-toolchain jobs.
           prefix-key: wasm-nightly
+          # This job runs in the alinux3 container; cached host binaries
+          # (wasm-pack, build scripts) are glibc-specific, so the Rocky 8
+          # build job below must never restore this entry (or vice versa).
+          shared-key: alinux3
 
       - name: Run www demo config unit test
         run: |
@@ -218,6 +222,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: wasm-nightly
+          # Host binaries in the cache are linked against this container's
+          # glibc (2.28), so the entry must not be shared with the alinux3
+          # test job above.
+          shared-key: rocky8
 
       - name: Build JS SDK
         run: |
