@@ -1,6 +1,6 @@
 ---
 name: perf-iterate
-description: Use when optimizing TNG rats-tls performance to close the gap with HAProxy (or another TLS proxy baseline). Drives the measure→profile→optimize→re-measure loop. wrk runs short-connection by default (each request = new TCP+TLS); each iteration measures RA (attestation on) only. no_ra is a dev-only diagnostic, not measured or reported.
+description: Use when optimizing TNG rats-tls performance to close the gap with HAProxy (or another TLS proxy baseline). Drives the measure→profile→optimize→re-measure loop. Every run measures RA (attestation on) in BOTH HTTP scenarios (keep-alive and no-keep-alive). no_ra is a debug-level option: never measured, never reported, never optimized for.
 ---
 
 # Performance Iteration Loop
@@ -9,7 +9,47 @@ Drive the iterative optimization of TNG rats-tls performance against a TLS proxy
 
 Two hosts: a server (TEE) host and a client host. Pass the server IP as `bash bench/client.sh <SERVER_IP>` or via the `SERVER_IP` env (see `bench/README.md`). The controller is the repo worktree (cargo + bench scripts). The client-side tng is the **ingress** and carries RA `verify` (builtin AS, hardware_only); the server-side tng is the **egress** and carries RA `attest` (via AA socket). So the RA verification hotspot (`verity_pending_cert`) lives in the client-side tng process.
 
-**RA is the evaluation and decision anchor.** Production deployments use RA; `no_ra: true` is a dev/validation/eval toggle that disables remote attestation and is NOT measured or reported by this loop. Do not anchor decisions on no_ra numbers.
+**RA is the evaluation and decision anchor.** `no_ra: true` is a debug-level option that disables remote attestation. It is never measured, never reported, and never optimized for: an optimization whose benefit exists only under no_ra is worthless to production and is FORBIDDEN in this loop. Every proposal is evaluated on RA numbers; every verdict lands on RA numbers.
+
+## Performance report format (canonical, script-generated)
+
+All performance reports come out of `bench/gen-report.sh`. Never hand-build, re-type, or "improve" a results table by hand — if the format is missing something, extend the script.
+
+**Report writing rules (apply to ALL performance reports, summaries, and PR descriptions):**
+
+1. **A reader with zero session context must understand the report.** No session-internal references ("the agent", "the state file", "iteration N" without defining what was tried). No shorthand without definition. If a term appears, it must be either self-evident or defined at first use.
+2. **State the test setup before any number.** What system, what test tool, what configuration (RA on, tunnel mode, body size), what hardware. Numbers without context are meaningless.
+3. **One column, one unit.** A table column must not mix absolute values, percentages, and "of HAProxy" fractions. If you need both, use two columns with clear headers.
+4. **Baseline must be stated as absolute numbers, not just percentages.** "27% of HAProxy" is meaningless without "HAProxy = 23,000 RPS" printed somewhere.
+5. **If a baseline is re-measured per run and jitters, say so before showing percentages.** Otherwise a reader sees RPS go up while "vs baseline %" goes down and thinks the table is broken.
+6. **Do not contradict yourself.** If the summary says "ineffective", the body must not prove "the mechanism engaged but the effect was noise". Use precise language: "mechanism verified, effect within measurement noise" not "ineffective".
+7. **Explain the causal mechanism, do not just assert it.** "Sharding to N tunnels improved throughput because [the specific bottleneck it removed]" — not just "sharding improved throughput".
+8. **Numbers from different measurement runs must be labeled as such.** If the baseline table and the iteration table use different runs, say "measured in a separate run" or use the same numbers.
+
+**Naming convention for all prose, commit messages, PR descriptions, and reports:**
+
+Always describe a measured case as: **test tool + connection mode + encryption mode** — never mix layers. TNG has THREE tunnel configurations that must always be named explicitly: (1) "rats-tls, non-multiplexed" (one TLS connection per client connection), (2) "rats-tls, multiplexed" (multiple client connections share one HTTP/2 tunnel), (3) "ohttp" (HPKE-sealed envelopes, separate protocol). Never say "TNG latency" or "TNG throughput" without naming the configuration. iperf3 and keep-alive are different layers (transport vs HTTP behavior); comparing them in one label ("iperf3 vs keep-alive") is meaningless. Correct forms:
+
+- "TCP (iperf3) through the multiplexed TNG tunnel" — NOT "iperf3 mux" or "iperf3+mux"
+- "HTTP (wrk, keep-alive) through the multiplexed TNG tunnel" — NOT "keep-alive mux"
+- "HTTP (wrk, no keep-alive) through the multiplexed TNG tunnel" — NOT "short-conn mux" or "no-keep-alive mux"
+- "TCP (iperf3) through the non-multiplexed TNG tunnel" — NOT "iperf3 non-mux" or just "iperf3 rats-tls"
+- "HTTP (wrk, keep-alive) through the non-multiplexed TNG tunnel" — NOT "keep-alive rats-tls" or just "keep-alive"
+- "HTTP (wrk, no keep-alive) through the non-multiplexed TNG tunnel" — NOT "short-conn rats-tls" or just "short-conn"
+
+In tables where space is limited, use full self-contained labels: "TCP/iperf3, mux tunnel", "HTTP/wrk KA, mux tunnel", "HTTP/wrk SC, mux tunnel", "HTTP/wrk KA, non-mux tunnel" etc. Never use bare "mux" or bare "keep-alive" as a row/column label without the test tool and connection mode.
+
+**Single-test report** (one binary, one environment) — the script's md output, three result scenarios:
+- `### Scenario A` — TCP throughput (iperf3)
+- `### Scenario B` — HTTP / wrk, keep-alive (persistent connections)
+- `### Scenario C` — HTTP / wrk, no keep-alive (`Connection: close`, each request = new TCP+TLS)
+The bench measures BOTH HTTP modes in every run and the report shows both; there is no single-mode pin anymore.
+
+**Performance PRs must include the full comparison report.** Every PR that claims a performance improvement must have the complete `gen-report.sh --compare` output (all scenarios, all workloads, all metrics, all concurrency levels) in the PR body — not just a summary table. The comparison report is the evidence; a summary table without the full report is not acceptable.
+
+**Comparison report** (baseline vs experimental — a tng change or an environment change), generated by `bench/gen-report.sh` in compare mode from the two result datasets:
+- `1. Test Environment`, `2. Test Conditions`, `Test Tool Versions`: DIFFERENCE ROWS ONLY. One table per section listing only the entries whose values differ, baseline and experimental as two columns. No narrative ("X changed to Y" prose is forbidden — the reader is a professional and reads tables).
+- Result scenarios (A/B/C): do NOT paste two complete tables, and do NOT add delta columns, "vs baseline" percentages, or any per-cell `base | head | Δ` scheme. raw/stunnel/haproxy rows appear ONCE with the baseline values — differences in the reference baselines are not our subject. Each `rats-tls` / `rats-tls+mux` / `ohttp` row becomes TWO rows: the upper row labeled `rats-tls(baseline)` carries the baseline values, the row directly below labeled `rats-tls(experimental)` carries the experimental values with every cell bolded (markdown has no row-level bold, so bold each cell). Both rows carry the vs-raw annotation against the same displayed raw row. Every value in the EXPERIMENTAL row (only that row) ends with a direction-aware marker: ✅ when better than, or within ±1% of, the baseline value of the same metric; ⚠️ when worse. Better-direction follows the metric semantics: throughput/RPS/success are better when higher; latency/CPU/memory are better when lower. The reader compares the two adjacent rows by eye; clarity of the table is the only goal.
 
 ## ALWAYS
 
@@ -18,8 +58,8 @@ Two hosts: a server (TEE) host and a client host. Pass the server IP as `bash be
 - Always record a complete analysis in the state file after each iteration, regardless of whether the optimization improved, degraded, or had no effect. The analysis must explain WHY the result is what it is by correlating measured numbers with the architecture. "Null" is not an acceptable result label — every iteration produces understanding.
 - Always have the proposed optimization reviewed by THREE independent expert subagents before executing. Dispatch them in parallel, collect their opinions, and only proceed if at least 2 of 3 agree the proposal is sound (correct root cause, feasible change, expected impact is realistic). Record all opinions + the ranking in the state file.
 - Always run a SECOND review on the actual implemented diff (Phase 4), after Implement and before Build. Phase 2 reviews the plan; Phase 4 reviews the code that ships. Apply the superpowers:receiving-code-review discipline: verify each finding against source, reject incorrect findings with a reason, do not apply suggestions out of performative agreement.
-- Always anchor evaluation and decisions on RA. `no_ra: true` is a dev / validation / eval toggle that disables remote attestation; production deployments use RA (`Attest` / `AttestAndVerify` arms). This loop measures and reports RA only; do not run no_ra, do not generate a no_ra report, do not cite no_ra numbers as the basis for keep/revert/continue decisions. If an analysis is easier to reason about on no_ra (e.g. a static-cert mechanism), you may reference no_ra conceptually, but the measured verdict is RA.
-- Always surface the script-generated md report to the user as the FULL results table. The bench scripts write the complete table (every workload, every concurrency, p50/p90/p95/p99, success%, server CPU%/mem, vs-raw deltas) to `bench/artifacts/iter-N-{nora,ra}-report.md` via `gen-report.sh`. The workflow's text return is a SHORT highlight (verdict + key deltas + success-criteria check + the md report paths), NOT a re-typed full table. Do not re-extract or re-table what the md already contains; point the user at the md and highlight the cells that changed and the ones that did not.
+- Always anchor evaluation and decisions on RA. `no_ra: true` is a debug-level option; production uses RA. This loop measures and reports RA only. An optimization whose benefit exists only under no_ra is forbidden outright — it optimizes a debug toggle, not the product. If an analysis is easier to reason about conceptually on no_ra, that is fine as reasoning, but the measured verdict is RA.
+- Always surface the script-generated md report to the user as the FULL results table. The bench scripts write the complete table (every workload, every concurrency, p50/p90/p95/p99, success%, server CPU%/mem, vs-raw deltas, Scenarios A/B/C) to `bench/artifacts/iter-N-ra-report.md` via `gen-report.sh`. The workflow's text return is a SHORT highlight (verdict + key deltas + success-criteria check + the md report path), NOT a re-typed full table. Do not re-extract or re-table what the md already contains; point the user at the md and highlight the cells that changed and the ones that did not.
 - Always report p95 (and p99), not just p50. p50 is the median and hides tail latency; a regression at p95/p99 is invisible if only p50 is shown. The md report carries p90/p95/p99 (p95 comes from a wrk Lua done() callback, `latency:percentile(95), since wrk --latency omits 95%); the highlight should call out p95/p99, not only p50.
 - Always report SERVER-side component CPU% + mem alongside the latency/RPS. The egress tng (or haproxy-srv on the server host) is frequently the bottleneck (iter-5 root-caused the RA egress as the wall, 95% brotli); the md report's Server CPU%/Mem columns come from `pidstat -u -r -p <PIDs> 1 <duration>` (Average row, haproxy master+workers summed, mem in MiB, client proxy excluded). The highlight should include server-side numbers, not only client-visible RPS/latency.
 - Always run exactly ONE optimization per iteration. No batching. Clean attribution requires a single variable change between measurements.
@@ -28,7 +68,7 @@ Two hosts: a server (TEE) host and a client host. Pass the server IP as `bash be
 - Always rebuild (`cargo build --release -p tng`) AND redeploy to both hosts (`scp` to `/root/tng` on the server and client host) after each code change.
 - Always run the full pre-commit gate before measuring, not just `cargo build`: `cargo fmt`, then `make clippy` (which is `cargo clippy --all-targets -- -D warnings`), then `cargo build --release -p tng`. The crate denies `clippy::expect_used` and `clippy::unwrap_used` in `tng/src/lib.rs` and `tng/src/bin/tng/main.rs` (`clippy.toml` allows them only in tests) — production paths must propagate errors with `.context()`/`?`, never `expect`/`unwrap` to panic. Skipping clippy lets a `.expect()` slip in (this happened in iteration 4's first cut and was caught only on review).
 - Always verify the deployed binary version after redeploy: `ssh` to the client host `'/root/tng --version'` (and the server). The running tng must be the binary you just built, not a stale one.
-- Always use the exact same bench parameters across iterations. Pin `WRK_CONNS=1,8,16,32,64,128` and `IPERF_STREAMS=1,8,16,32,64,128` (both sweep the full concurrency range), `WRK_DURATION=3 WRK_ROUNDS=2 IPERF_DURATION=3 IPERF_ROUNDS=2` (fast iteration values; the README defaults of 15s/3 rounds are for full baselines, not the per-iteration loop), and `WRK_SHORT_CONN=1` (wrk short-connection is the default; do not run or report long-connection). Leave `HTTP_BODY_KB` and `WRK_WARMUP` at their defaults (64 and 1). Run RA only (`RA_MODE=1`); do not run or generate a no_ra report.
+- Always use the exact same bench parameters across iterations. Pin `WRK_CONNS=1,8,16,32,64,128` and `IPERF_STREAMS=1,8,16,32,64,128` (both sweep the full concurrency range), `WRK_DURATION=3 WRK_ROUNDS=2 IPERF_DURATION=3 IPERF_ROUNDS=2` (fast iteration values; the README defaults of 15s/3 rounds are for full baselines, not the per-iteration loop). The HTTP workloads run BOTH keep-alive and no-keep-alive (Scenarios B and C) in every run — the bench does this itself; there is no `WRK_SHORT_CONN` pin anymore. Leave `HTTP_BODY_KB` and `WRK_WARMUP` at their defaults (64 and 1). Run RA only (`RA_MODE=1`); do not run or generate a no_ra report.
 - Always run the bench scripts via the remote paths they expect: `bash /root/bench/server.sh` and `bash /root/bench/client.sh <SERVER_IP>` (they `source lib/common.sh` relative to their own dir, so the `lib/` tree must be deployed alongside them on both hosts).
 - Always profile before optimizing. Identify the top hotspot from a `perf` flamegraph (or `pidstat` fallback) before touching code. Never guess the bottleneck.
 - Always tear down the server after the client run finishes (it ends in `wait` and stays foreground): kill the backgrounded server ssh and stop its tng so the next iteration starts clean.
@@ -43,7 +83,8 @@ Two hosts: a server (TEE) host and a client host. Pass the server IP as `bash be
 - Never label an iteration's result as "no_change" or leave the state file without a complete analysis. Every iteration — whether it improved by 50%, by 2%, or not at all — must produce a full before/after comparison with an architectural explanation of WHY the numbers are what they are.
 - Never report a number without naming the exact case. Every reported metric must carry: the scenario (RA short-conn), the workload pair being compared (http+rats-tls vs http+haproxy), and the concurrency level. A bare claim like "rats-tls improved 3-5x, now beats HAProxy" is useless without "RA, short-conn, http+rats-tls vs http+haproxy, c=32: 388→4358 RPS, gap 89%→+25%". The reader cannot assess a result they cannot locate.
 - Never re-extract or re-type the full results table in the workflow's text return. The full table is the generated md report (surfaced to the user by path); the workflow returns a short highlight only. When highlighting, cover RA at every concurrency (not just the improved rows), and include p95/p99 and server-side metrics, so the user can see what moved and what did not.
-- Never run or report no_ra as a deliverable. no_ra is dev/validation/eval only; this loop measures RA only. Do not generate a no_ra report, and do not cite no_ra numbers as the basis for keep/revert. A no_ra-only observation can be mentioned as a mechanism illustration, but the measured verdict is RA.
+- Never optimize for no_ra. `no_ra` is a debug-level option; an optimization whose benefit exists only under no_ra optimizes a debug toggle, not the product, and is forbidden in this loop. Every measured verdict is RA.
+- Never hand-build a comparison table. The comparison report (baseline vs experimental) is generated by `bench/gen-report.sh` in compare mode, following the format defined in "Performance report format" above: diff-only environment/conditions/tool sections, TNG workload rows doubled (baseline row + bolded experimental row), reference baselines shown once, no delta columns.
 - Never change bench parameters between iterations (`WRK_CONNS`, `WRK_DURATION`, `WRK_ROUNDS`, `HTTP_BODY_KB`, `WRK_WARMUP`, `RA_MODE`, `WRK_SHORT_CONN`). A changed parameter invalidates the before/after comparison.
 - Never modify the RA blocking contract: `forward_stream` must wait for `verity_pending_cert` before forwarding data. "Async RA verification (don't block the data plane)" is explicitly rejected (see guide Phase 4); verification must complete before data flows.
 - Never touch the HAProxy or stunnel configs/code/deploy. They are baselines, not optimization targets. A "faster baseline" is cheating, not optimizing.
@@ -147,11 +188,11 @@ Phase 5: Build + Deploy
   SHOULD: fail fast if fmt, clippy, or build fails
   SHOULD NOT: run bench here
 
-Phase 6: Measure (RA short-conn)
+Phase 6: Measure (RA, both HTTP scenarios)
   Actions:
   - Clean stale on both hosts
-  - RA run: verify AA, start server (RA_MODE=1), run client (WRK_SHORT_CONN=1 WRK_CONNS=1,8,16,32,64,128 IPERF_STREAMS=1,8,16,32,64,128), tear down. RA only; do not run a no_ra round and do not generate a no_ra report.
-  - Fetch results + generate the RA short-conn md report to bench/artifacts/ (iter-N-ra-report.md)
+  - RA run: verify AA, start server (RA_MODE=1), run client (WRK_CONNS=1,8,16,32,64,128 IPERF_STREAMS=1,8,16,32,64,128 — the bench measures keep-alive AND no-keep-alive in one run), tear down. RA only; do not run a no_ra round and do not generate a no_ra report.
+  - Fetch results + generate the RA md report (Scenarios A/B/C) to bench/artifacts/ (iter-N-ra-report.md)
   Return: raw metrics + the generated md report path
   SHOULD: retry once if Connection refused
   SHOULD: check AA before RA run
@@ -159,12 +200,12 @@ Phase 6: Measure (RA short-conn)
 
 Phase 7: Compare + Decide
   Actions:
-  - The bench scripts already wrote the FULL results table to the generated md report (`bench/artifacts/iter-N-{nora,ra}-report.md` via `gen-report.sh`): every workload, every concurrency, p50/p90/p95/p99, success%, server CPU%/mem, and vs-raw deltas. That md IS the full table to surface to the user. Do NOT re-extract or re-type the full table in the workflow's return.
-  - Read `bench-results.json` + the state file baseline; compute change% vs baseline and gap% (rats-tls vs HAProxy) at each concurrency for RA.
+  - The bench scripts already wrote the FULL results (Scenarios A/B/C) to the generated md report. For iterations comparing against a baseline run, generate the COMPARISON report via `bench/gen-report.sh` compare mode (baseline results JSON + experimental results JSON) — the canonical comparison format (diff-only env/conditions/tools; TNG rows doubled with the bolded experimental row; no delta columns). Do NOT re-type either table in the workflow's return.
+  - Read `bench-results.json` + the state file baseline; compute change% vs baseline and gap% (rats-tls vs HAProxy) at each concurrency for RA, in both HTTP scenarios.
   - Verdict: improved (+5% at >=2 levels) / degraded (-5%) / no_change (+-5%) / done (gap <10% all levels).
-  - Pull a SHORT highlight only (a few numbers, not a re-typed table): per-concurrency rats-tls RPS + rats-vs-HAProxy gap% + p50/p95/p99 + server CPU%/mem for rats-tls and HAProxy, and an explicit success-criteria check (which of c=1,8,16,32,64,128 met RA RPS/HAProxy >= 90% and RA p50/HAProxy <= 110%). Note unchanged cases as well as changed ones.
-  Return: verdict + the highlight (key numbers, not a full table) + the path to the generated RA md report (so the main session surfaces the full table from the md, not from the workflow's text).
-  SHOULD: surface the generated RA md report path prominently; the user reads the full table from the md
+  - Pull a SHORT highlight only (a few numbers, not a re-typed table): per-concurrency rats-tls RPS + rats-vs-HAProxy gap% + p50/p95/p99 + server CPU%/mem, and an explicit success-criteria check. Note unchanged cases as well as changed ones.
+  Return: verdict + the highlight (key numbers, not a full table) + the path to the generated report (single or comparison) so the main session surfaces the full table from the md.
+  SHOULD: surface the generated report path prominently; the user reads the full table from the md
   SHOULD: cover RA at every concurrency in the highlight (not just the improved rows)
   SHOULD NOT: re-extract or re-type the full results table (the md report already has it)
   SHOULD NOT: make optimization decisions
@@ -198,7 +239,7 @@ Phase 8: Revert if no_change/degraded
   "ra": {"1": {...}, "8": {...}, "16": {...}, "32": {...}, "64": {...}, "128": {...}},
   "verdict": "improved" | "no_change" | "degraded" | "done",
   "reverted": true | false,
-  "artifacts": {"ra_report": "bench/artifacts/iter-N-ra-report.md"},
+  "artifacts": {"ra_report": "bench/artifacts/iter-N-ra-report.md", "comparison_report": "bench/artifacts/iter-N-vs-baseline-report.md (when a baseline run is compared)"},
   "next_proposals": "<ranked list of future optimization candidates for the state file>"
 }
 
@@ -232,7 +273,7 @@ Every iteration produces a complete analysis result — whether the optimization
 
 ## Success criteria
 
-The deliverable target is the **RA short-conn** gap (production uses RA; `no_ra` is dev-only and not measured by this loop). Must hold at c=1,8,16,32,64,128 (all six levels), short-conn:
+The deliverable target is the **RA** gap (production uses RA; `no_ra` is a debug option, never measured). Must hold at c=1,8,16,32,64,128 (all six levels), in BOTH HTTP scenarios (keep-alive, Scenario B; no-keep-alive, Scenario C):
 
 | Metric | Target |
 |---|---|

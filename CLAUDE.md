@@ -1,5 +1,15 @@
 # CLAUDE.md
 
+## TNG Encryption Modes (always specify in prose, reports, and PRs)
+
+TNG provides **two** distinct encryption protocols, and rats-tls has a multiplexing toggle — three configurations total. Any performance report, comparison, or prose that mentions a TNG tunnel must state which configuration is being discussed:
+
+1. **rats-tls, non-multiplexed**: each client TCP connection maps to one TLS connection to the egress. One tunnel per connection.
+2. **rats-tls, multiplexed**: multiple client connections share a single HTTP/2 CONNECT tunnel to the egress (amortizes handshake/RA cost across streams, but serializes all traffic onto fewer connections).
+3. **ohttp (Oblivious HTTP, RFC 9458)**: a separate protocol entirely, not related to rats-tls. Uses HPKE-sealed request/response envelopes. In TNG's implementation, the ohttp ingress POSTs encrypted messages to the ohttp egress via plain HTTP.
+
+Never say "TNG's latency" or "TNG's throughput" without specifying which of the three configurations. The numbers differ by 4-7x between modes.
+
 ## Default Branch
 
 The default/main branch for this project is **`master`**, not `main`. When a branch is not specified (e.g., in git commands, PR targets, or CI references), assume `master`.
