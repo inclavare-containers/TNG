@@ -25,6 +25,9 @@ RUN sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.c
       openssl-devel protobuf-devel cmake wget net-tools file gnupg tree \
       libcurl-devel libseccomp-devel binutils-devel \
       nodejs npm python3 \
+      # podman is not a build tool: build-docker.yml's test job runs the
+      # on-podman integration suite inside this container.
+      podman \
       trustee \
  && yum clean all \
  && rm -rf /var/cache/yum
