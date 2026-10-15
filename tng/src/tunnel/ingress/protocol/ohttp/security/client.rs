@@ -4,10 +4,10 @@ use bhttp::http_compat::{
     decode::{BhttpDecoder, HttpMessage},
     encode::BhttpEncoder,
 };
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 #[cfg(wasm)]
 use futures::AsyncWriteExt as _;
-use futures::{StreamExt, TryStreamExt as _};
+use futures::{Stream, StreamExt, TryStreamExt as _};
 #[cfg(unix)]
 use hpke::Serializable;
 use hpke::{kem::X25519HkdfSha256, Kem};
@@ -462,6 +462,11 @@ impl OHttpClientInner {
 
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
     /// and send the encrypted ciphertext as the request body to the server.
+    ///
+    /// Pipeline: select the HPKE encapsulator, seal the bhttp-encoded inner
+    /// request into the outer POST body, send it, validate the outer
+    /// response, then decapsulate and bhttp-decode the reply into the inner
+    /// response.
     async fn send_encrypted_request(
         &self,
         server_key_config_list: &[KeyConfig],
@@ -478,7 +483,112 @@ impl OHttpClientInner {
         // Encode the request to bhttp message
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
-        // Encrypt to get the ohttp message
+        // Select the server key config and build the HPKE request encapsulator
+        let (key_config, client) =
+            Self::build_request_encapsulator(server_key_config_list, client_key)?;
+
+        // Seal stage: encrypt the bhttp stream into the ohttp envelope that
+        // becomes the outer body, with a per-platform strategy because the
+        // HTTP clients behave differently:
+        //   wasm: `reqwest` on top of the browser `fetch` cannot stream a
+        //     request body and task spawn is unreliable on the web, so the
+        //     sealed request is fully buffered here and sent as one body.
+        //   native: the seal runs inline in the outer body stream's poll: an
+        //     always-ready sink keeps every seal write non-blocking, and
+        //     sealed frames are pumped as reqwest pulls the body.
+        // The ohttp seal writer and the response decapsulator are types from
+        // ohttp's private stream module, so the decapsulator is created and
+        // consumed within this scope.
+        #[cfg(wasm)]
+        let (client_response_decapsulator, ohttp_request_body) = {
+            let mut encrypted_request = Vec::new();
+            let client_request =
+                client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
+            let client_response_decapsulator = client_request.response_decapsulator()?;
+
+            // We have to avoid using spawn_supervised_task_current_span(), since it may randomly not got executed on wasm (web) and currently we have no idea why.
+            //  streaming request is not supported, so we can just wait for the encryption to finish here.
+            seal_request_into_buffer(client_request, bhttp_encoder)
+                .await
+                .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting request"));
+
+            let metadata_buf = Self::build_metadata_block(client_auth, &key_config)?;
+            let mut body_bytes = metadata_buf;
+            body_bytes.extend_from_slice(&encrypted_request);
+            tracing::debug!(
+                body_length = body_bytes.len(),
+                "Encrypted request body length"
+            );
+            (
+                client_response_decapsulator,
+                reqwest::Body::from(body_bytes.freeze()),
+            )
+        };
+        #[cfg(not(wasm))]
+        let (client_response_decapsulator, ohttp_request_body) = {
+            // The seal runs synchronously inside the outer body stream's
+            // poll (no task, no duplex): the always-ready sink keeps every
+            // seal write non-blocking.
+            let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
+            let client_request = client.encapsulate_stream(sink.clone())?;
+            let client_response_decapsulator = client_request.response_decapsulator()?;
+            let metadata_buf = Self::build_metadata_block(client_auth, &key_config)?;
+            let reader = bhttp_encoder
+                .map_err(std::io::Error::other)
+                .into_async_read();
+            let body = crate::tunnel::ohttp::seal_stream::sealed_request_body(
+                metadata_buf.freeze(),
+                reader,
+                client_request,
+                sink,
+            );
+            (
+                client_response_decapsulator,
+                reqwest::Body::wrap_stream(body),
+            )
+        };
+
+        // Forward the sealed request to the upstream server
+        let response = self
+            .post_sealed_request(ohttp_request_body, passthrough_headers)
+            .await?;
+
+        // Validate the outer response and take the sealed body stream
+        let (outer_response_headers, response_body) =
+            self.validate_outer_response(response).await?;
+
+        // Decrypt the ohttp response message
+        let decrypted_response = client_response_decapsulator.decapsulate_response(
+            StreamReader::new(response_body.map(|result| result.map_err(std::io::Error::other)))
+                .compat(),
+        ).map_err(|e| {
+            tracing::error!(
+                error = ?e,
+                "OHTTP response decapsulation failed (likely server returned malformed ciphertext)"
+            );
+            e
+        })?;
+
+        self.decode_inner_response(decrypted_response, &outer_response_headers)
+            .await
+    }
+
+    /// Select the server's first advertised key config and build the HPKE
+    /// request encapsulator. The metadata hint and the seal need the selected
+    /// config too, so return it alongside.
+    ///
+    /// With an attested client key (native RA mode) the seal runs in HPKE
+    /// Auth mode using that key, so the envelope's sender matches the `pk_s`
+    /// advertised in the metadata and the egress can authenticate it.
+    /// Without one -- and always on wasm, where the client has no attester --
+    /// HPKE Base mode generates an ephemeral sender key.
+    fn build_request_encapsulator(
+        server_key_config_list: &[KeyConfig],
+        client_key: Option<&(
+            <X25519HkdfSha256 as Kem>::PrivateKey,
+            <X25519HkdfSha256 as Kem>::PublicKey,
+        )>,
+    ) -> Result<(KeyConfig, ohttp::ClientRequest), TngError> {
         let mut key_config = server_key_config_list
             .first()
             .context("No key config found")
@@ -490,164 +600,70 @@ impl OHttpClientInner {
             "Encrypting request with HPKE key"
         );
 
-        let client = {
-            #[cfg(unix)]
-            {
-                match client_key {
-                    Some((sk, _pk)) => {
-                        let sk_bytes = hpke::Serializable::to_bytes(sk);
-                        ohttp::ClientRequest::from_config_with_client_key_bytes(
-                            &mut key_config,
-                            sk_bytes.as_ref(),
-                        )?
-                    }
-                    None => ohttp::ClientRequest::from_config(&mut key_config)?,
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = client_key; // unused on wasm
-                ohttp::ClientRequest::from_config(&mut key_config)?
-            }
-        };
-
-        #[cfg(wasm)]
-        let (encrypted_request, client_response_decapsulator) = {
-            let mut encrypted_request = Vec::new();
-            let client_request =
-                client.encapsulate_stream(futures::io::Cursor::new(&mut encrypted_request))?;
-
-            let client_response_decapsulator = client_request.response_decapsulator()?;
-
-            let encryption_task = async {
-                async {
-                    let mut client_request = client_request.compat_write();
-                    // BufReader at the protocol's 16 KiB max chunk + copy_buf
-                    // so each seal write carries up to one full AEAD chunk and
-                    // skips copy's intermediate 8 KiB buffer copy;
-                    // tokio::io::copy would cap chunks at 8 KiB.
-                    let mut bhttp_reader = tokio::io::BufReader::with_capacity(
-                        crate::tunnel::ohttp::SEAL_CHUNK_SIZE,
-                        bhttp_encoder
-                            .map_err(std::io::Error::other)
-                            .into_async_read()
-                            .compat(),
-                    );
-                    let bytes_copied =
-                        tokio::io::copy_buf(&mut bhttp_reader, &mut client_request).await?;
-                    tracing::debug!(bytes_copied, "BHTTP request encoded and encrypted");
-                    let mut client_request = client_request.into_inner();
-                    client_request.close().await?; // Remember to close the response stream
-
-                    Ok::<_, anyhow::Error>(())
-                }
-                .await
-                .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting request"))
-            };
-
-            // We have to avoid using spawn_supervised_task_current_span(), since it may randomly not got executed on wasm (web) and currently we have no idea why.
-            //  streaming request is not supported, so we can just wait for the encryption task to finish here.
-            let _: () = encryption_task.await;
-
-            (encrypted_request, client_response_decapsulator)
-        };
-
-        #[cfg(not(wasm))]
-        let (client_response_decapsulator, request_sink, request_seal, request_reader) = {
-            // The seal runs synchronously inside the outer body stream's
-            // poll (no task, no duplex): the always-ready sink keeps every
-            // seal write non-blocking.
-            let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
-            let client_request = client.encapsulate_stream(sink.clone())?;
-            let client_response_decapsulator = client_request.response_decapsulator()?;
-            let reader = bhttp_encoder
-                .map_err(std::io::Error::other)
-                .into_async_read();
-            (client_response_decapsulator, sink, client_request, reader)
-        };
-
-        let ohttp_request_body = {
-            let metadata_buf = {
-                let metadata = Metadata {
-                    client_auth: Some(client_auth.clone()), // TODO: optimize this clone
-                    key_config_hint: Some(ServerKeyConfigHint {
-                        public_key: key_config.public_key()?.into_vec(),
-                    }),
-                };
-
-                let metadata_len = metadata.encoded_len();
-                if metadata_len > METADATA_MAX_LEN {
-                    return Err(TngError::MetadataTooLong);
-                }
-                let mut metadata_buf = BytesMut::new();
-                metadata_buf
-                    .put_u32(u32::try_from(metadata_len).map_err(|_| TngError::MetadataTooLong)?); // big-endian
-                metadata_buf.reserve(metadata_len); // to prevent reallocations during encoding
-                metadata
-                    .encode(&mut metadata_buf)
-                    .map_err(TngError::MetadataEncodeError)?;
-                tracing::trace!(metadata_length = metadata_buf.len(), "metadata length");
-                metadata_buf
-            };
-
-            #[cfg(wasm)]
-            {
-                let mut body_bytes = metadata_buf;
-                body_bytes.extend_from_slice(&encrypted_request);
-                tracing::debug!(
-                    body_length = body_bytes.len(),
-                    "Encrypted request body length"
-                );
-                reqwest::Body::from(body_bytes.freeze())
-            }
-            #[cfg(not(wasm))]
-            {
-                reqwest::Body::wrap_stream(crate::tunnel::ohttp::seal_stream::sealed_request_body(
-                    metadata_buf.freeze(),
-                    request_reader,
-                    request_seal,
-                    request_sink,
-                ))
-            }
-        };
-
-        // Forward the request to the upstream server
-        let url = self.base_url.clone();
-
-        tracing::debug!(?url, "Sending OHTTP request to upstream server");
-
-        let mut request_builder = self
-            .http_client
-            .post(url)
-            .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
-            .header(
-                http::header::CONTENT_TYPE,
-                OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
-            );
-
-        // Copy passthrough headers from the original downstream request
-        for (name, value) in passthrough_headers {
-            request_builder = request_builder.header(name, value);
-        }
-
-        let response = request_builder
-            .body(ohttp_request_body)
-            .send()
-            .await
-            .map_err(TngError::HttpCipherTextForwardError)?;
-
         #[cfg(unix)]
-        tracing::debug!(
-            status = ?response.status(),
-            version = ?response.version(),
-            "Received OHTTP response from upstream server"
-        );
-        #[cfg(wasm)]
-        tracing::debug!(
-            status = ?response.status(),
-            "Received OHTTP response from upstream server"
-        );
+        let client = match client_key {
+            Some((sk, _pk)) => {
+                let sk_bytes = hpke::Serializable::to_bytes(sk);
+                ohttp::ClientRequest::from_config_with_client_key_bytes(
+                    &mut key_config,
+                    sk_bytes.as_ref(),
+                )?
+            }
+            None => ohttp::ClientRequest::from_config(&mut key_config)?,
+        };
+        #[cfg(not(unix))]
+        let client = {
+            let _ = client_key; // unused on wasm
+            ohttp::ClientRequest::from_config(&mut key_config)?
+        };
 
+        Ok((key_config, client))
+    }
+
+    /// Encode the metadata block that precedes the sealed request body: a
+    /// big-endian `u32` prost length followed by that many prost bytes. The
+    /// egress parses the same block in its `read_metadata_block`.
+    fn build_metadata_block(
+        client_auth: &ClientAuth,
+        key_config: &KeyConfig,
+    ) -> Result<BytesMut, TngError> {
+        let metadata = Metadata {
+            client_auth: Some(client_auth.clone()), // TODO: optimize this clone
+            key_config_hint: Some(ServerKeyConfigHint {
+                public_key: key_config.public_key()?.into_vec(),
+            }),
+        };
+
+        let metadata_len = metadata.encoded_len();
+        if metadata_len > METADATA_MAX_LEN {
+            return Err(TngError::MetadataTooLong);
+        }
+        let mut metadata_buf = BytesMut::new();
+        metadata_buf.put_u32(u32::try_from(metadata_len).map_err(|_| TngError::MetadataTooLong)?); // big-endian
+        metadata_buf.reserve(metadata_len); // to prevent reallocations during encoding
+        metadata
+            .encode(&mut metadata_buf)
+            .map_err(TngError::MetadataEncodeError)?;
+        tracing::trace!(metadata_length = metadata_buf.len(), "metadata length");
+        Ok(metadata_buf)
+    }
+
+    /// Validate the outer POST response and hand back what the decapsulate
+    /// stage needs: a clone of the outer response headers (for the inner
+    /// response's passthrough) and the outer body stream of sealed bytes.
+    /// A `422` maps to `ShouldRequestNewKeyConfigFromServerError` so the
+    /// caller invalidates the cached key config and refetches on the next
+    /// request.
+    async fn validate_outer_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<
+        (
+            http::HeaderMap,
+            impl Stream<Item = Result<Bytes, reqwest::Error>>,
+        ),
+        TngError,
+    > {
         // Check the response status code
         let status_code = response.status();
         #[cfg(unix)]
@@ -692,8 +708,6 @@ impl OHttpClientInner {
         // reqwest::Response. These are copied onto the decrypted inner response
         // returned to the caller (ingress `response_headers`: outer → inner).
         let outer_response_headers = response.headers().clone();
-        let passthrough_response = self.passthrough_response_headers.clone();
-        let protected = crate::config::header_passthrough::protected_ohttp_headers();
 
         #[cfg(unix)]
         let content_len = response
@@ -727,19 +741,21 @@ impl OHttpClientInner {
             receiver
         };
 
-        // Decrypt the ohttp response message
-        let decrypted_response = client_response_decapsulator.decapsulate_response(
-            StreamReader::new(response_body.map(|result| result.map_err(std::io::Error::other)))
-                .compat(),
-        ).map_err(|e| {
-            tracing::error!(
-                error = ?e,
-                "OHTTP response decapsulation failed (likely server returned malformed ciphertext)"
-            );
-            e
-        })?;
-        // Decode the bhttp binary message
-        let decode_result = BhttpDecoder::new(decrypted_response)
+        Ok((outer_response_headers, response_body))
+    }
+
+    /// Decode stage: bhttp-decode the decrypted inner response, copy the
+    /// configured passthrough headers (outer → inner) onto it skipping
+    /// protected headers, and hand it to the downstream caller.
+    async fn decode_inner_response<R>(
+        &self,
+        decrypted_body: R,
+        outer_response_headers: &http::HeaderMap,
+    ) -> Result<axum::response::Response, TngError>
+    where
+        R: futures::AsyncRead + Unpin + Send + 'static,
+    {
+        let decode_result = BhttpDecoder::new(decrypted_body)
             .decode_message()
             .await
             .map_err(|e| {
@@ -754,10 +770,10 @@ impl OHttpClientInner {
             return Err(TngError::InvalidHttpResponse);
         };
 
-        // Copy configured outer response headers (outer → inner) onto the
-        // decrypted response returned to the caller, skipping protected headers.
-        let outer_passthrough =
-            passthrough_response.collect_passthrough_headers(&outer_response_headers, protected);
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+        let outer_passthrough = self
+            .passthrough_response_headers
+            .collect_passthrough_headers(outer_response_headers, protected);
         let inner_headers = response.headers_mut();
         for (name, value) in outer_passthrough {
             inner_headers.insert(name, value);
@@ -775,6 +791,52 @@ impl OHttpClientInner {
         };
 
         Ok(axum::response::IntoResponse::into_response(response))
+    }
+
+    /// Send stage: POST the sealed envelope to the egress. The outer request
+    /// carries the tunnel API header, the streaming ohttp request content
+    /// type, and the passthrough headers collected from the inner request.
+    async fn post_sealed_request(
+        &self,
+        ohttp_request_body: reqwest::Body,
+        passthrough_headers: Vec<(http::HeaderName, http::HeaderValue)>,
+    ) -> Result<reqwest::Response, TngError> {
+        let url = self.base_url.clone();
+
+        tracing::debug!(?url, "Sending OHTTP request to upstream server");
+
+        let mut request_builder = self
+            .http_client
+            .post(url)
+            .header(OhttpApi::HEADER_NAME, OhttpApi::TUNNEL)
+            .header(
+                http::header::CONTENT_TYPE,
+                OHTTP_CHUNKED_REQUEST_CONTENT_TYPE,
+            );
+
+        for (name, value) in passthrough_headers {
+            request_builder = request_builder.header(name, value);
+        }
+
+        let response = request_builder
+            .body(ohttp_request_body)
+            .send()
+            .await
+            .map_err(TngError::HttpCipherTextForwardError)?;
+
+        #[cfg(unix)]
+        tracing::debug!(
+            status = ?response.status(),
+            version = ?response.version(),
+            "Received OHTTP response from upstream server"
+        );
+        #[cfg(wasm)]
+        tracing::debug!(
+            status = ?response.status(),
+            "Received OHTTP response from upstream server"
+        );
+
+        Ok(response)
     }
 
     /// Interface 3: Attestation Forward - Get Challenge
@@ -839,6 +901,40 @@ impl OHttpClientInner {
 
         Ok(result)
     }
+}
+
+/// wasm seal strategy: drive the bhttp-encoded inner request through the
+/// seal writer (an ohttp stream encapsulator over the caller's buffer) until
+/// EOF, then close the seal so it emits its final chunk. The caller awaits
+/// this inline: web task spawn is unreliable and `fetch` cannot stream a
+/// request body, so the whole sealed request must be in the buffer before
+/// the POST goes out.
+#[cfg(wasm)]
+async fn seal_request_into_buffer<W>(
+    seal: W,
+    bhttp_encoder: BhttpEncoder<axum::body::Body>,
+) -> Result<(), anyhow::Error>
+where
+    W: futures::AsyncWrite + Unpin,
+{
+    let mut client_request = seal.compat_write();
+    // BufReader at the protocol's 16 KiB max chunk + copy_buf
+    // so each seal write carries up to one full AEAD chunk and
+    // skips copy's intermediate 8 KiB buffer copy;
+    // tokio::io::copy would cap chunks at 8 KiB.
+    let mut bhttp_reader = tokio::io::BufReader::with_capacity(
+        crate::tunnel::ohttp::SEAL_CHUNK_SIZE,
+        bhttp_encoder
+            .map_err(std::io::Error::other)
+            .into_async_read()
+            .compat(),
+    );
+    let bytes_copied = tokio::io::copy_buf(&mut bhttp_reader, &mut client_request).await?;
+    tracing::debug!(bytes_copied, "BHTTP request encoded and encrypted");
+    let mut client_request = client_request.into_inner();
+    client_request.close().await?; // Remember to close the response stream
+
+    Ok(())
 }
 
 /// Verify the attestation bound to an ohttp `KeyConfigResponse` against a

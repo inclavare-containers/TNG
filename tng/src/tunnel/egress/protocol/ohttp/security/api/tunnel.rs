@@ -3,8 +3,8 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
 use bhttp::http_compat::decode::{BhttpDecoder, HttpMessage};
 use bhttp::http_compat::encode::BhttpEncoder;
-use bytes::BytesMut;
-use futures::{StreamExt as _, TryStreamExt as _};
+use bytes::{Bytes, BytesMut};
+use futures::{AsyncRead, AsyncWrite, Stream, StreamExt as _, TryStreamExt as _};
 use prost::Message as _;
 use rats_cert::tee::{GenericVerifier as _, ReportData};
 
@@ -33,26 +33,16 @@ impl OhttpServerApi {
     /// Clients use the hpke_key_config obtained from Interface 1 to encrypt a standard HTTP request,
     /// and send the encrypted ciphertext as the request body to the server. The server decrypts and processes
     /// the request, then encrypts the HTTP response and returns it.
+    ///
+    /// Pipeline: parse the metadata block, decapsulate the sealed inner
+    /// request, rewrite its headers, forward it to the backend, then seal
+    /// the backend response into the outer ohttp body.
     pub async fn process_encrypted_request(
         &self,
         payload: axum::extract::Request,
         context: TngStreamContext,
     ) -> Result<axum::response::Response, TngError> {
-        // Check content-type
-        match payload.headers().get(http::header::CONTENT_TYPE) {
-            Some(value) => {
-                if value != OHTTP_CHUNKED_REQUEST_CONTENT_TYPE {
-                    return Err(TngError::InvalidOHttpRequest(anyhow!(
-                        "Wrong content-type header"
-                    )));
-                }
-            }
-            None => {
-                return Err(TngError::InvalidOHttpRequest(anyhow!(
-                    "Wrong content-type header"
-                )));
-            }
-        }
+        check_request_content_type(payload.headers())?;
 
         // Capture outer request headers (e.g. the browser's `Origin`) before the
         // body is consumed. These are copied onto the decrypted inner request so
@@ -60,8 +50,6 @@ impl OhttpServerApi {
         // forbidden header set by the browser on the outer fetch; only the egress
         // server (which terminates the outer HTTP) can see it.
         let outer_request_headers = payload.headers().clone();
-        let protected = crate::config::header_passthrough::protected_ohttp_headers();
-        let passthrough_request = self.passthrough_request_headers.clone();
 
         let mut reader = tokio_util::io::StreamReader::new(
             payload
@@ -70,33 +58,95 @@ impl OhttpServerApi {
                 .map(|result| result.map_err(std::io::Error::other)),
         );
 
-        // Read and decode matadata
-        let metadata = {
-            let metadata_len = reader
-                .read_u32() // big-endian
-                .await
-                .map_err(TngError::MetadataReadError)?;
+        // Parse stage: read and decode metadata
+        let metadata = read_metadata_block(&mut reader).await?;
 
-            let metadata_len =
-                usize::try_from(metadata_len).map_err(|_| TngError::MetadataTooLong)?;
+        // Decapsulate stage: open the sealed inner request and open the
+        // response seal bound to this request's HPKE context.
+        let (mut request, response_seal, sealed_sink) =
+            self.decapsulate_request(reader.compat(), metadata).await?;
 
-            if metadata_len > METADATA_MAX_LEN {
-                return Err(TngError::MetadataTooLong);
-            }
+        // Rewrite stage: copy the configured outer request headers onto the
+        // inner request and annotate it with the relay peer's client IP.
+        self.rewrite_inner_request_headers(&mut request, &outer_request_headers, context.peer_addr);
 
-            let mut buf = BytesMut::with_capacity(metadata_len);
+        tracing::debug!(
+            method = ?request.method(),
+            version = ?request.version(),
+            uri = ?request.uri(),
+            "Forwarding request to upstream server"
+        );
 
-            while buf.len() < metadata_len {
-                reader
-                    .read_buf(&mut buf)
-                    .await
-                    .map_err(TngError::MetadataReadError)?;
-            }
+        // Forward the request to the upstream server
+        let response = context.forward_request(request, None).await?;
 
-            Metadata::decode(buf.as_ref()).map_err(TngError::MetadataDecodeError)?
-        };
+        tracing::debug!(
+            status = ?response.status(),
+            version = ?response.version(),
+            "Received response from upstream server"
+        );
 
-        let header_decoded = ohttp::Server::decode_header(reader.compat())
+        // Collect passthrough headers before the response is consumed by BhttpEncoder.
+        // Uses the unified HeaderPassthroughSpec (`"all"` or allowlist) and the
+        // shared protected set. Inner (backend) response → outer (browser) response.
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+        let passthrough_headers = self
+            .passthrough_response_headers
+            .collect_passthrough_headers(response.headers(), protected);
+
+        // Seal stage: encrypt the bhttp-encoded response into the outer body.
+        let encrypted_response = seal_bhttp_response(response, response_seal, sealed_sink);
+
+        // Return the response
+        let mut response_builder = http::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(
+                http::header::CONTENT_TYPE,
+                OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
+            );
+
+        for (name, value) in passthrough_headers {
+            response_builder = response_builder.header(name, value);
+        }
+
+        let response = response_builder
+            .body(axum::body::Body::from_stream(encrypted_response))
+            .map_err(TngError::ConstructHttpResponseFailed)?;
+
+        Ok(response)
+    }
+
+    /// Decapsulate stage: decode the ohttp request header, check the client
+    /// attestation carried in the metadata against this server's RA config,
+    /// open the envelope with the hinted HPKE key, and bhttp-decode the
+    /// plaintext into the inner request. It also opens the response seal:
+    /// the ohttp response must encrypt under the same HPKE context the
+    /// request opened, so this returns the inner request, its seal writer,
+    /// and the sink that collects the sealed response bytes.
+    ///
+    /// The plaintext reader (`ServerRequest`) and the response seal
+    /// (`ServerResponse`) are types in ohttp's private stream module, so
+    /// they leave this function only as opaque `impl Trait` values: they are
+    /// handed to the bhttp decoder and the seal pump, which accept them
+    /// generically. Nothing that cannot be named here crosses the boundary.
+    async fn decapsulate_request<S>(
+        &self,
+        sealed_body: S,
+        metadata: Metadata,
+    ) -> Result<
+        (
+            http::Request<
+                impl http_body::Body<Data = Bytes, Error = bhttp::Error> + Send + 'static,
+            >,
+            impl AsyncWrite + Send + 'static,
+            crate::tunnel::ohttp::seal_stream::SealedBytesSink,
+        ),
+        TngError,
+    >
+    where
+        S: AsyncRead + Unpin + Send + 'static,
+    {
+        let header_decoded = ohttp::Server::decode_header(sealed_body)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -154,15 +204,29 @@ impl OhttpServerApi {
         // Decode the bhttp binary message
         let decode_result = BhttpDecoder::new(plain_text).decode_message().await?;
         let server_response_encapsulator = decode_result.reader_ref().response_encapsulator()?;
-
-        let HttpMessage::Request(mut request) = decode_result.into_full_message()? else {
+        let HttpMessage::Request(request) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpRequest);
         };
 
-        // Copy configured outer headers (outer → inner) onto the decrypted
-        // request, skipping protected headers (e.g. `Host`, `content-type`).
-        let outer_passthrough =
-            passthrough_request.collect_passthrough_headers(&outer_request_headers, protected);
+        let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
+        let response_seal = server_response_encapsulator.encapsulate_response(sink.clone())?;
+
+        Ok((request, response_seal, sink))
+    }
+
+    /// Rewrite stage: copy the configured passthrough headers from the outer
+    /// request onto the decrypted inner request and inject the
+    /// forwarded-client-IP headers, before the request goes to the backend.
+    fn rewrite_inner_request_headers<B>(
+        &self,
+        request: &mut http::Request<B>,
+        outer_request_headers: &http::HeaderMap,
+        peer_addr: Option<std::net::SocketAddr>,
+    ) {
+        let protected = crate::config::header_passthrough::protected_ohttp_headers();
+        let outer_passthrough = self
+            .passthrough_request_headers
+            .collect_passthrough_headers(outer_request_headers, protected);
         let inner_headers = request.headers_mut();
         for (name, value) in outer_passthrough {
             // `insert` replaces any existing inner value; protected headers are
@@ -170,76 +234,10 @@ impl OhttpServerApi {
             inner_headers.insert(name, value);
         }
 
-        // Inject nginx-standard forwarded-client-IP headers from the direct
-        // TCP peer (the relay) so the upstream backend can see which relay
-        // forwarded this request. No-op when disabled or peer unknown.
-        inject_forwarded_client_ip(
-            request.headers_mut(),
-            context.peer_addr,
-            self.forward_client_ip,
-        );
-
-        tracing::debug!(
-            method = ?request.method(),
-            version = ?request.version(),
-            uri = ?request.uri(),
-            "Forwarding request to upstream server"
-        );
-
-        // Forward the request to the upstream server
-        let response = context.forward_request(request, None).await?;
-
-        tracing::debug!(
-            status = ?response.status(),
-            version = ?response.version(),
-            "Received response from upstream server"
-        );
-
-        // Collect passthrough headers before the response is consumed by BhttpEncoder.
-        // Uses the unified HeaderPassthroughSpec (`"all"` or allowlist) and the
-        // shared protected set. Inner (backend) response → outer (browser) response.
-        let protected = crate::config::header_passthrough::protected_ohttp_headers();
-        let passthrough_headers = self
-            .passthrough_response_headers
-            .collect_passthrough_headers(response.headers(), protected);
-
-        // Encode the response to bhttp message
-        let bhttp_encoder = BhttpEncoder::from_response(response);
-        // Encrypt to get the ohttp message.  The seal runs synchronously
-        // inside the response body stream's poll (no task, no pipe): the
-        // always-ready sink keeps the seal's writes non-blocking, so
-        // bhttp-encode and seal happen per frame on the serving worker.
-        let encrypted_response = {
-            let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
-            let server_response =
-                server_response_encapsulator.encapsulate_response(sink.clone())?;
-            let bhttp_reader = bhttp_encoder
-                .map_err(std::io::Error::other)
-                .into_async_read();
-            crate::tunnel::ohttp::seal_stream::sealed_response_body(
-                bhttp_reader,
-                server_response,
-                sink,
-            )
-        };
-
-        // Return the response
-        let mut response_builder = http::Response::builder()
-            .status(axum::http::StatusCode::OK)
-            .header(
-                http::header::CONTENT_TYPE,
-                OHTTP_CHUNKED_RESPONSE_CONTENT_TYPE,
-            );
-
-        for (name, value) in passthrough_headers {
-            response_builder = response_builder.header(name, value);
-        }
-
-        let response = response_builder
-            .body(axum::body::Body::from_stream(encrypted_response))
-            .map_err(TngError::ConstructHttpResponseFailed)?;
-
-        Ok(response)
+        // The direct TCP peer (the relay) is reported so the upstream
+        // backend can see which relay forwarded this request. No-op when
+        // disabled or peer unknown.
+        inject_forwarded_client_ip(request.headers_mut(), peer_addr, self.forward_client_ip);
     }
 
     /// Validates that the provided client metadata type is consistent with the server's
@@ -295,6 +293,73 @@ impl OhttpServerApi {
 
         Ok(())
     }
+}
+
+/// Front gate: the outer POST must carry the streaming ohttp request
+/// content type, matching what the ingress `post_sealed_request` sends.
+fn check_request_content_type(headers: &http::HeaderMap) -> Result<(), TngError> {
+    match headers.get(http::header::CONTENT_TYPE) {
+        Some(value) => {
+            if value != OHTTP_CHUNKED_REQUEST_CONTENT_TYPE {
+                return Err(TngError::InvalidOHttpRequest(anyhow!(
+                    "Wrong content-type header"
+                )));
+            }
+        }
+        None => {
+            return Err(TngError::InvalidOHttpRequest(anyhow!(
+                "Wrong content-type header"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Parse stage: read the metadata block that prefixes the sealed body: a
+/// big-endian `u32` prost length followed by that many prost bytes, the
+/// mirror of the ingress `build_metadata_block`. `METADATA_MAX_LEN` caps the
+/// client-supplied length before the read buffer is reserved.
+async fn read_metadata_block<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<Metadata, TngError> {
+    let metadata_len = reader
+        .read_u32() // big-endian
+        .await
+        .map_err(TngError::MetadataReadError)?;
+
+    let metadata_len = usize::try_from(metadata_len).map_err(|_| TngError::MetadataTooLong)?;
+
+    if metadata_len > METADATA_MAX_LEN {
+        return Err(TngError::MetadataTooLong);
+    }
+
+    let mut buf = BytesMut::with_capacity(metadata_len);
+
+    while buf.len() < metadata_len {
+        reader
+            .read_buf(&mut buf)
+            .await
+            .map_err(TngError::MetadataReadError)?;
+    }
+
+    Metadata::decode(buf.as_ref()).map_err(TngError::MetadataDecodeError)
+}
+
+/// Seal stage: bhttp-encode the backend response and pump it through the
+/// request's ohttp seal (`response_seal` writing into `sink`) into the
+/// sealed outer response body. The seal runs synchronously inside the
+/// response body stream's poll (no task, no pipe): the always-ready sink
+/// keeps the seal's writes non-blocking, so bhttp-encode and seal happen per
+/// frame on the serving worker.
+fn seal_bhttp_response<W: AsyncWrite + Send + 'static>(
+    response: axum::response::Response,
+    response_seal: W,
+    sink: crate::tunnel::ohttp::seal_stream::SealedBytesSink,
+) -> impl Stream<Item = std::io::Result<Bytes>> + Send + 'static {
+    let bhttp_reader = BhttpEncoder::from_response(response)
+        .map_err(std::io::Error::other)
+        .into_async_read();
+    crate::tunnel::ohttp::seal_stream::sealed_response_body(bhttp_reader, response_seal, sink)
 }
 
 /// Inject nginx-standard forwarded-client-IP headers onto the decrypted
