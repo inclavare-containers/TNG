@@ -24,9 +24,9 @@ jobs:
       matrix:
         # Integration tests are split round-robin across shards; each shard is
         # a separate runner, so the shared-netns/iptables serialization inside
-        # run-test.sh still holds within each job. Shard 1 additionally runs
-        # the unit tests. Keep the count in sync with the /4 passed to
-        # --shard below.
+        # run-test.sh still holds within each job. The unit tests run in the
+        # separate `unit` job so no shard carries that extra ~10 minutes.
+        # Keep the count in sync with the /4 passed to --shard below.
         shard: [1, 2, 3, 4]
         distro: [alinux3]
         include:
@@ -127,7 +127,7 @@ jobs:
             sleep 1
           done
 
-      - name: Run unit tests and integration tests
+      - name: Run integration tests
         run: |
           set -e
           set -x
@@ -137,12 +137,7 @@ jobs:
 
           # Export the raw profile data for the coverage job; the per-shard
           # artifacts are merged into one report there.
-          args="--shard ${{ matrix.shard }}/4 --export-profraw profraw-export"
-          if [[ "${{ matrix.shard }}" -ne 1 ]]; then
-              args="$args --skip-unit-tests"
-          fi
-
-          make run-test-coverage COV_ARGS="$args"
+          make run-test-coverage COV_ARGS="--shard ${{ matrix.shard }}/4 --skip-unit-tests --export-profraw profraw-export"
 
       - name: Upload raw coverage data
         # Always upload: a failed shard still contributes the coverage of the
@@ -162,11 +157,134 @@ jobs:
           echo "=== Attestation Service Log ==="
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
+  unit:
+    name: unit (alinux3)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
+      options: --privileged
+    steps:
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: llvm-tools  # for providing llvm-profdata and llvm-cov
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Shared with the shard jobs so the compiled dependencies are warm.
+          shared-key: on-source-cov
+
+      # The CoCo e2e flow and converter unit tests live in crate lib test
+      # modules and talk to AA/AS/ASR, so this job needs the same services the
+      # shard jobs start.
+      - name: Run Attestation Agent, ASR, and Attestation Service
+        run: |
+          # Start services in background and capture PIDs
+          # Use nohup + redirect to avoid Broken pipe when this step's shell exits
+          nohup make test-dep-aa > /tmp/aa.log 2>&1 &
+          AA_PID=$!
+          nohup make test-dep-as > /tmp/as.log 2>&1 &
+          AS_PID=$!
+
+          # Wait for ASR TCP :8006 (max 5 minutes)
+          echo "Waiting for ASR (PID: $AA_PID)..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if (echo > /dev/tcp/127.0.0.1/8006) 2>/dev/null; then
+              echo "ASR is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for ASR"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for Attestation Agent socket (max 5 minutes)
+          echo "Waiting for Attestation Agent socket..."
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then
+              echo "Attestation Agent is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for Attestation Agent"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Wait for Attestation Service HTTP :8080 (max 5 minutes)
+          echo "Waiting for Attestation Service (PID: $AS_PID)..."
+          for i in $(seq 1 300); do
+            if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then
+              echo "Attestation Service is ready"
+              break
+            fi
+            if [ $i -gt 60 ] && ! kill -0 $AS_PID 2>/dev/null; then
+              echo "Attestation Service process exited unexpectedly"
+              cat /tmp/as.log
+              exit 1
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for Attestation Service"
+              cat /tmp/as.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run unit tests
+        run: |
+          set -e
+          set -x
+
+          # Unit tests only; their raw profile data joins the shards' in the
+          # coverage merge job.
+          make run-test-coverage COV_ARGS="--skip-integration-tests --export-profraw profraw-export"
+
+      - name: Upload raw coverage data
+        # Always upload: a failed unit job still contributes the coverage of
+        # the crates that ran before the failure.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: profraw-unit
+          path: profraw-export/
+          if-no-files-found: warn
+
+      - name: Print background service logs
+        if: always()
+        run: |
+          echo "=== Attestation Agent Log ==="
+          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
+          echo "=== Attestation Service Log ==="
+          cat /tmp/as.log 2>/dev/null || echo "(no log file)"
+
   coverage:
     name: coverage (merge)
-    needs: test
-    # Merge whatever profile data the shards produced even when one shard
-    # failed, so the report reflects partial coverage instead of nothing.
+    needs: [test, unit]
+    # Merge whatever profile data the shard and unit jobs produced even when
+    # one of them failed, so the report reflects partial coverage instead of
+    # nothing.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
@@ -192,7 +310,9 @@ jobs:
       - name: Download raw coverage data
         uses: actions/download-artifact@v4
         with:
-          pattern: profraw-shard-*
+          # profraw-shard-* from the test job plus profraw-unit from the unit
+          # job.
+          pattern: profraw-*
           path: profraw-incoming
           merge-multiple: true
 

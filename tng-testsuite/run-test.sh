@@ -16,6 +16,7 @@ ENABLE_COVERAGE=false
 INSTALL_TOOL=true
 GENERATE_REPORT=true
 SKIP_UNIT_TESTS=false
+SKIP_INTEGRATION_TESTS=false
 SHARD_SPEC=""
 SHARD_INDEX=""
 SHARD_TOTAL=""
@@ -43,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-unit-tests)
             SKIP_UNIT_TESTS=true
+            shift
+            ;;
+        --skip-integration-tests)
+            SKIP_INTEGRATION_TESTS=true
             shift
             ;;
         --export-profraw)
@@ -222,8 +227,9 @@ fi
 # Discover test names from Cargo.toml [[test]] sections
 test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | grep -v '^tng-testsuite$')
 
-# Merge mode runs no tests; the loop below naturally iterates over nothing.
-if [[ -n "$MERGE_PROFRAW_DIR" ]]; then
+# Merge mode and --skip-integration-tests runs execute no integration cases;
+# the loop below naturally iterates over nothing.
+if [[ -n "$MERGE_PROFRAW_DIR" ]] || $SKIP_INTEGRATION_TESTS; then
     test_cases=""
 fi
 
@@ -281,6 +287,10 @@ should_skip_test() {
 }
 
 summary_lines+=("$(format_result "Integration tests" "")")
+if $SKIP_INTEGRATION_TESTS; then
+    echo "============= Skipping integration tests ============="
+    summary_lines+=("$(format_result "  integration tests" "SKIP")")
+fi
 
 shard_seq=0
 for case_name in $test_cases; do
