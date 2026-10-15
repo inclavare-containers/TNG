@@ -18,27 +18,19 @@ jobs:
     # gate the release below without sitting in front of it. The publish
     # jobs need both this job and build-and-release to pass.
     #
-    # Stays on the alinux3 image: the Attestation Service this job runs is
+    # Stays on the alinux3 distro: the Attestation Service this job runs is
     # only packaged for alinux3 (an RPM whose binaries need glibc 2.32).
+    # Runs on the tng-ci builder image so the dependency set (including that
+    # RPM) is already baked in, skipping the ~11-minute inline yum over
+    # China-hosted mirrors.
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
     container:
-      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
       options: --privileged
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-
-          yum install -y git make tar clang protobuf-devel npm jq openssl-devel
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:

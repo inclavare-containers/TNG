@@ -62,24 +62,13 @@ jobs:
         shell: bash
     needs: build
     container:
-      image: alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest
+      # Builder image from builder-image.yml: alinux3 base with the test
+      # dependency set and podman baked in, so this job skips the inline yum
+      # over China-hosted mirrors. Both matrix variants share this runner
+      # container; the variant only selects which tng image is tested.
+      image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
       options: --privileged
     steps:
-      - name: Install build dependencies
-        run: |
-          set -e
-          set -x
-
-          # replace the mirror
-          sed -i -E 's|https?://mirrors.openanolis.cn/anolis/|https://mirrors.aliyun.com/anolis/|g' /etc/yum.repos.d/*.repo
-          sed -i -E 's|https?://mirrors.cloud.aliyuncs.com/|https://mirrors.aliyun.com/|g' /etc/yum.repos.d/*.repo
-
-          yum install -y git make tar jq clang
-
-      - name: Install Podman
-        run: |
-          yum install -y podman
-
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
