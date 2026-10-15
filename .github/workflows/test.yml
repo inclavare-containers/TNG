@@ -135,18 +135,19 @@ jobs:
           # Append dns server
           echo "nameserver 8.8.8.8" >> /etc/resolv.conf
 
-          # Export the raw profile data for the coverage job; the per-shard
-          # artifacts are merged into one report there.
-          make run-test-coverage COV_ARGS="--shard ${{ matrix.shard }}/4 --skip-unit-tests --export-profraw profraw-export"
+          # Each shard generates its partial lcov report locally, where the
+          # instrumented binaries already exist; the coverage job merges the
+          # per-shard files without ever rebuilding them.
+          make run-test-coverage COV_ARGS="--shard ${{ matrix.shard }}/4 --skip-unit-tests --export-lcov lcov-report/shard-${{ matrix.shard }}.info"
 
-      - name: Upload raw coverage data
+      - name: Upload lcov report
         # Always upload: a failed shard still contributes the coverage of the
         # test binaries that ran before the failure.
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: profraw-shard-${{ matrix.shard }}
-          path: profraw-export/
+          name: lcov-shard-${{ matrix.shard }}
+          path: lcov-report/
           if-no-files-found: warn
 
       - name: Print background service logs
@@ -257,18 +258,18 @@ jobs:
           set -e
           set -x
 
-          # Unit tests only; their raw profile data joins the shards' in the
-          # coverage merge job.
-          make run-test-coverage COV_ARGS="--skip-integration-tests --export-profraw profraw-export"
+          # Unit tests only; their partial lcov report joins the shards' in
+          # the coverage merge job.
+          make run-test-coverage COV_ARGS="--skip-integration-tests --export-lcov lcov-report/unit.info"
 
-      - name: Upload raw coverage data
+      - name: Upload lcov report
         # Always upload: a failed unit job still contributes the coverage of
         # the crates that ran before the failure.
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: profraw-unit
-          path: profraw-export/
+          name: lcov-unit
+          path: lcov-report/
           if-no-files-found: warn
 
       - name: Print background service logs
@@ -282,8 +283,8 @@ jobs:
   coverage:
     name: coverage (merge)
     needs: [test, unit]
-    # Merge whatever profile data the shard and unit jobs produced even when
-    # one of them failed, so the report reflects partial coverage instead of
+    # Merge whatever lcov data the shard and unit jobs produced even when one
+    # of them failed, so the report reflects partial coverage instead of
     # nothing.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -292,50 +293,38 @@ jobs:
         shell: bash
     container:
       image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
-      options: --privileged
     steps:
-      - uses: dtolnay/rust-toolchain@1.89.0
-        with:
-          components: llvm-tools  # for providing llvm-profdata and llvm-cov
-
+      # Text-level lcov merge only: no compiler, no toolchain, no rebuild.
       - uses: actions/checkout@v6
-        with:
-          submodules: 'true'
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Shared with the shard jobs so the compiled dependencies are warm.
-          shared-key: on-source-cov
-
-      - name: Download raw coverage data
+      - name: Download lcov reports
         uses: actions/download-artifact@v4
         with:
-          # profraw-shard-* from the test job plus profraw-unit from the unit
-          # job.
-          pattern: profraw-*
-          path: profraw-incoming
+          # lcov-shard-* from the test job plus lcov-unit from the unit job.
+          pattern: lcov-*
+          path: lcov-incoming
           merge-multiple: true
 
-      - name: Rebuild instrumented binaries and merge coverage
+      - name: Merge lcov reports
         run: |
           set -e
           set -x
 
-          make run-test-coverage COV_ARGS="--merge-report profraw-incoming"
+          ./tng-testsuite/run-test.sh --coverage --merge-lcov lcov-incoming
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
-          files: target/codecov.json
+          files: target/merged-lcov.info
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Upload codecov.json artifact
+      - name: Upload merged lcov artifact
         # Preserve the line-level coverage report as a downloadable artifact so
         # it can be inspected without the Codecov web UI.
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: codecov-json
-          path: target/codecov.json
+          name: coverage-lcov
+          path: target/merged-lcov.info
           if-no-files-found: warn

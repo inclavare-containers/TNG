@@ -20,8 +20,8 @@ SKIP_INTEGRATION_TESTS=false
 SHARD_SPEC=""
 SHARD_INDEX=""
 SHARD_TOTAL=""
-EXPORT_PROFRAW_DIR=""
-MERGE_PROFRAW_DIR=""
+EXPORT_LCOV_PATH=""
+MERGE_LCOV_DIR=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -50,12 +50,12 @@ while [[ $# -gt 0 ]]; do
             SKIP_INTEGRATION_TESTS=true
             shift
             ;;
-        --export-profraw)
-            EXPORT_PROFRAW_DIR="$2"
+        --export-lcov)
+            EXPORT_LCOV_PATH="$2"
             shift 2
             ;;
-        --merge-report)
-            MERGE_PROFRAW_DIR="$2"
+        --merge-lcov)
+            MERGE_LCOV_DIR="$2"
             shift 2
             ;;
         -*)
@@ -82,8 +82,8 @@ if [[ -n "$SHARD_SPEC" ]]; then
     fi
 fi
 
-# Merge mode only rebuilds binaries and reports on external profraw files.
-if [[ -n "$MERGE_PROFRAW_DIR" ]]; then
+# Merge mode only combines the shards' lcov reports; no tests run here.
+if [[ -n "$MERGE_LCOV_DIR" ]]; then
     SKIP_UNIT_TESTS=true
 fi
 
@@ -91,11 +91,6 @@ project_root=$(dirname "$(realpath "$0")")/../
 cd "$project_root"
 
 export RUST_BACKTRACE=1
-
-# Where cargo-llvm-cov puts instrumented builds and *.profraw files. CI sets
-# CARGO_LLVM_COV_TARGET_DIR=target so the compiled dependencies land in the
-# directory the CI cache manages.
-cov_target_dir="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
 
 failed=0
 declare -a summary_lines=()
@@ -167,8 +162,9 @@ run_tests() {
     fi
 }
 
-# Prepare command
-if $ENABLE_COVERAGE; then
+# Prepare command. The merge mode never invokes cargo, so it skips the
+# toolchain setup entirely.
+if $ENABLE_COVERAGE && [[ -z "$MERGE_LCOV_DIR" ]]; then
     install_cargo_llvm_cov || exit 1
 
     # Clean previous coverage data
@@ -229,7 +225,7 @@ test_cases=$(grep 'name = ' tng-testsuite/Cargo.toml | sed 's/.*"\(.*\)"/\1/' | 
 
 # Merge mode and --skip-integration-tests runs execute no integration cases;
 # the loop below naturally iterates over nothing.
-if [[ -n "$MERGE_PROFRAW_DIR" ]] || $SKIP_INTEGRATION_TESTS; then
+if [[ -n "$MERGE_LCOV_DIR" ]] || $SKIP_INTEGRATION_TESTS; then
     test_cases=""
 fi
 
@@ -341,35 +337,37 @@ for line in "${summary_lines[@]}"; do
 done
 echo "========================================"
 
-# Hand the raw per-run profile data to the caller (the CI coverage-merge job);
-# report generation happens there once all shards' profraw files are combined.
-if $ENABLE_COVERAGE && [[ -n "$EXPORT_PROFRAW_DIR" ]]; then
-    mkdir -p "$EXPORT_PROFRAW_DIR"
-    exported=0
-    for profraw in "$cov_target_dir"/*.profraw; do
-        [[ -e "$profraw" ]] || continue
-        # profraw filenames embed the PID of the test process, which is not
-        # unique across runners; prefix with the shard index so files from
-        # different shards never overwrite each other when combined.
-        cp "$profraw" "$EXPORT_PROFRAW_DIR/shard${SHARD_INDEX:-0}-$(basename "$profraw")"
-        exported=$((exported + 1))
-    done
-    echo "Exported $exported profraw files to $EXPORT_PROFRAW_DIR"
+# Generate this job's partial lcov report for the CI coverage-merge job. The
+# instrumented binaries are right here, so no other runner ever has to rebuild
+# them to produce a report.
+if $ENABLE_COVERAGE && [[ -n "$EXPORT_LCOV_PATH" ]]; then
+    mkdir -p "$(dirname "$EXPORT_LCOV_PATH")"
+    cargo llvm-cov report \
+        --ignore-filename-regex 'deps/*' \
+        --lcov \
+        --output-path "$EXPORT_LCOV_PATH"
+    echo "lcov report written to $EXPORT_LCOV_PATH"
     GENERATE_REPORT=false
 fi
 
-if $ENABLE_COVERAGE && [[ -n "$MERGE_PROFRAW_DIR" ]]; then
-    echo "============= Merging coverage from $MERGE_PROFRAW_DIR ============="
-    # Rebuild the instrumented test binaries without running any tests, then
-    # fold the shards' profraw files in. Coverage mappings depend only on
-    # source and compiler flags, so binaries rebuilt here match profiles that
-    # were produced on other runners from the same commit.
-    eval "$(cargo llvm-cov show-env --export-prefix)"
-    export CARGO_LLVM_COV_TARGET_DIR="$cov_target_dir"
-    cargo test --no-run --workspace --bins --lib --exclude tng-wasm
-    cargo test --no-run --no-default-features --features on-source-code --package tng-testsuite --tests
-    cp "$MERGE_PROFRAW_DIR"/*.profraw "$cov_target_dir"/
-    echo "============= Coverage merge input prepared ============="
+# Text-level merge of the partial lcov reports from the test shards and the
+# unit job. lcov sums the per-line counters across tracefiles, so the merged
+# file is the union of what every job executed.
+if $ENABLE_COVERAGE && [[ -n "$MERGE_LCOV_DIR" ]]; then
+    echo "============= Merging lcov reports from $MERGE_LCOV_DIR ============="
+    if ! command -v lcov >/dev/null 2>&1; then
+        yum install -y lcov
+    fi
+    mkdir -p target
+    merge_args=(--output-file target/merged-lcov.info)
+    for tracefile in "$MERGE_LCOV_DIR"/*.info; do
+        [[ -e "$tracefile" ]] || continue
+        merge_args+=(--add-tracefile "$tracefile")
+    done
+    lcov "${merge_args[@]}"
+    lcov --summary target/merged-lcov.info
+    echo "Merged lcov report at target/merged-lcov.info"
+    GENERATE_REPORT=false
 fi
 
 # Generate coverage reports if enabled and requested

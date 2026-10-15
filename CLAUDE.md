@@ -180,7 +180,7 @@ The global `fix-ci-failure`, `coverage-guided-tests`, and `release-version` skil
 - CI splits test jobs by binary source: `on-source-code` jobs run in `test.yml` via `make run-test`; **on-bin tests (hook / `tng exec`) run only in `build-rpm.yml`** via `make run-test-on-bin` and are skipped by `test.yml`. A regression in one does not show up in the other.
 - on-bin tests need a `tng` built with default features (has `__builtin-as`); for `as_type:"builtin"`/`trust_all` set `TNG_BINARY=target/release/tng` (build with `cargo build --release -p tng`). The pre-installed system binary may lack `__builtin-as` and reject the config at parse time.
 - Reproduction commands: `make run-test` for an on-source-code job (sequential, never parallel: shared netns/iptables); `make run-test-on-bin`, or `cargo test --no-default-features --features on-bin --package tng-testsuite --test <name> -- --nocapture`, for an on-bin job.
-- `test.yml` also runs `make run-test-coverage` (`cargo llvm-cov`), writing `target/codecov.json`, uploaded as the `codecov-json` artifact and to Codecov via codecov-action.
+- `test.yml` shards the suite across parallel jobs (`run-test.sh --shard i/N`), each exporting a partial lcov report (`--export-lcov`); a separate `coverage` job text-merges them (`--merge-lcov`, `lcov`) into `target/merged-lcov.info`, uploaded as the `coverage-lcov` artifact and to Codecov via codecov-action.
 
 ## GitHub Actions Workflow Triggers
 
