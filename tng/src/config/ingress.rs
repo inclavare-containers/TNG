@@ -52,6 +52,24 @@ pub struct RatsTlsArgs {
     /// whose bandwidth is limited by the TLS encryption capacity of one CPU core.
     #[serde(default)]
     pub multiplex: bool,
+    /// With `multiplex: true`, the maximum number of concurrent streams carried
+    /// by each tunnel connection. When every tunnel to an endpoint is at this
+    /// cap, the ingress lazily opens another tunnel (its own TLS + attestation
+    /// handshake) and routes new streams to the least-loaded tunnel. Unset
+    /// (default) keeps the single-tunnel behavior. Only meaningful with
+    /// `multiplex: true`. Values above 200 are clamped by the egress h2 server's
+    /// default `max_concurrent_streams` (200): the effective cap is min(N, 200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplex_max_streams_per_connection: Option<std::num::NonZeroU32>,
+    /// With `multiplex: true`, the maximum number of parallel tunnels the
+    /// ingress keeps open to one endpoint. When the limit is reached, new
+    /// streams overflow onto the least-loaded tunnel even past its
+    /// `multiplex_max_streams_per_connection` cap (soft limit), so the pool
+    /// never grows beyond this watermark. Unset (default) derives the limit
+    /// from the number of CPU cores: past that, extra tunnels only add
+    /// handshake cost, not parallelism. Only meaningful with `multiplex: true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplex_max_connections: Option<std::num::NonZeroU32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -532,8 +550,59 @@ mod tests {
 
     use super::{
         AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
-        OHttpArgs, PathDefault, Socks5AuthArgs,
+        OHttpArgs, PathDefault, RatsTlsArgs, Socks5AuthArgs,
     };
+
+    #[test]
+    fn rats_tls_args_multiplex_sharding() -> Result<()> {
+        let args: RatsTlsArgs = serde_json::from_value(
+            json!({"multiplex": true, "multiplex_max_streams_per_connection": 4}),
+        )?;
+        assert_eq!(
+            args.multiplex_max_streams_per_connection,
+            std::num::NonZeroU32::new(4)
+        );
+
+        // Unset keeps the single-tunnel default; existing configs parse unchanged.
+        let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
+        assert_eq!(args.multiplex_max_streams_per_connection, None);
+
+        // 0 is rejected instead of silently disabling multiplexing capacity.
+        assert!(serde_json::from_value::<RatsTlsArgs>(
+            json!({"multiplex_max_streams_per_connection": 0})
+        )
+        .is_err());
+
+        // Round-trip: unset omits the field entirely.
+        let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
+        assert!(serde_json::to_value(&args)?
+            .get("multiplex_max_streams_per_connection")
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn rats_tls_args_multiplex_max_connections() -> Result<()> {
+        let args: RatsTlsArgs =
+            serde_json::from_value(json!({"multiplex": true, "multiplex_max_connections": 8}))?;
+        assert_eq!(args.multiplex_max_connections, std::num::NonZeroU32::new(8));
+
+        // Unset defers to the CPU-count default applied at tunnel setup.
+        let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
+        assert_eq!(args.multiplex_max_connections, None);
+
+        // 0 is rejected: zero tunnels would deadlock every stream.
+        assert!(
+            serde_json::from_value::<RatsTlsArgs>(json!({"multiplex_max_connections": 0})).is_err()
+        );
+
+        // Round-trip: unset omits the field entirely.
+        let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
+        assert!(serde_json::to_value(&args)?
+            .get("multiplex_max_connections")
+            .is_none());
+        Ok(())
+    }
 
     #[test]
     fn test_deserialize_ingress_hook_capture_local_traffic() -> Result<()> {

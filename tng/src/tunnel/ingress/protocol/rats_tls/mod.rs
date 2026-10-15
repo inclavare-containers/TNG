@@ -34,6 +34,8 @@ impl RatsTlsStreamForwarder {
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
         multiplex: bool,
+        multiplex_max_streams_per_connection: Option<std::num::NonZeroU32>,
+        multiplex_max_connections: Option<std::num::NonZeroU32>,
     ) -> Result<Self> {
         Ok(Self {
             security_layer: RatsTlsSecurityLayer::new(
@@ -42,6 +44,8 @@ impl RatsTlsStreamForwarder {
                 ra_context,
                 runtime,
                 multiplex,
+                multiplex_max_streams_per_connection,
+                multiplex_max_connections,
             )
             .await?,
         })

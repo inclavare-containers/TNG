@@ -40,6 +40,15 @@ impl TrustedStreamManager {
             bail!("Cannot specify both `ohttp` and `rats_tls` — they are mutually exclusive");
         }
 
+        if let Some(rats_tls) = &common_args.rats_tls {
+            if (rats_tls.multiplex_max_streams_per_connection.is_some()
+                || rats_tls.multiplex_max_connections.is_some())
+                && !rats_tls.multiplex
+            {
+                bail!("`multiplex_max_streams_per_connection` and `multiplex_max_connections` require `rats_tls.multiplex: true`");
+            }
+        }
+
         // Use a standalone runtime for ohttp and H2 multiplex scenarios to avoid
         // contention with the traffic capture module. For multiplex=false (single TLS
         // per stream), share the parent runtime since there is no H2 task scheduling overhead.
@@ -91,11 +100,7 @@ impl TrustedStreamManager {
                     ),
 
                     None => {
-                        let multiplex = common_args
-                            .rats_tls
-                            .as_ref()
-                            .unwrap_or(&Default::default())
-                            .multiplex;
+                        let rats_tls = common_args.rats_tls.as_ref().cloned().unwrap_or_default();
                         Box::new(
                             RatsTlsStreamForwarder::new(
                                 #[cfg(any(
@@ -106,7 +111,9 @@ impl TrustedStreamManager {
                                 transport_so_mark,
                                 ra_context,
                                 runtime.clone(),
-                                multiplex,
+                                rats_tls.multiplex,
+                                rats_tls.multiplex_max_streams_per_connection,
+                                rats_tls.multiplex_max_connections,
                             )
                             .await?,
                         )

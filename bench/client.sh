@@ -72,13 +72,21 @@ start_ingress() {
     else
         RA_OPT='"no_ra": true'
     fi
+    # Optional mux pool sharding for the experimental side of a comparison run
+    # (ingress-only knob). Unset keeps today's single-tunnel mux config.
+    if [ -n "${MUX_MAX_STREAMS:-}" ]; then
+        MUX_SHARD=",\"multiplex_max_streams_per_connection\":${MUX_MAX_STREAMS}"
+        ok "mux sharding: multiplex_max_streams_per_connection=${MUX_MAX_STREAMS}"
+    else
+        MUX_SHARD=""
+    fi
     cat > "$OUTDIR/configs/ingress.json" <<EOF
 {
   "add_ingress": [
     {"mapping":{"in":{"host":"0.0.0.0","port":50001},"out":{"host":"${SERVER_IP}","port":40001}},"rats_tls":{"multiplex":false},${RA_OPT}},
-    {"mapping":{"in":{"host":"0.0.0.0","port":50002},"out":{"host":"${SERVER_IP}","port":40002}},"rats_tls":{"multiplex":true},${RA_OPT}},
+    {"mapping":{"in":{"host":"0.0.0.0","port":50002},"out":{"host":"${SERVER_IP}","port":40002}},"rats_tls":{"multiplex":true${MUX_SHARD}},${RA_OPT}},
     {"mapping":{"in":{"host":"0.0.0.0","port":50003},"out":{"host":"${SERVER_IP}","port":40003}},"rats_tls":{"multiplex":false},${RA_OPT}},
-    {"mapping":{"in":{"host":"0.0.0.0","port":50004},"out":{"host":"${SERVER_IP}","port":40004}},"rats_tls":{"multiplex":true},${RA_OPT}},
+    {"mapping":{"in":{"host":"0.0.0.0","port":50004},"out":{"host":"${SERVER_IP}","port":40004}},"rats_tls":{"multiplex":true${MUX_SHARD}},${RA_OPT}},
     {"mapping":{"in":{"host":"0.0.0.0","port":50005},"out":{"host":"${SERVER_IP}","port":40005}},"ohttp":{},${RA_OPT}}
   ]
 }

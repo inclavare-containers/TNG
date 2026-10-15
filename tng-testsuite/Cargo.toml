@@ -152,6 +152,10 @@ name = "rats_tls_multiplex"
 path = "tests/rats_tls_multiplex.rs"
 
 [[test]]
+name = "rats_tls_multiplex_sharding"
+path = "tests/rats_tls_multiplex_sharding.rs"
+
+[[test]]
 name = "no_ra_http_encapulation_with_egress_mapping"
 path = "tests/http/no_ra_http_encapulation_with_egress_mapping.rs"
 

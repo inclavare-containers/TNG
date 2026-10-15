@@ -65,14 +65,27 @@ fn collect_ports(v: &serde_json::Value) -> std::collections::HashSet<u16> {
 
 /// Patch a TNG config JSON to inject a REST control_interface on the given port.
 ///
-/// Returns the patched config JSON string. Fails if `control_interface` already exists.
-pub fn patch_config_with_control_interface(config_json: &str, port: u16) -> Result<String> {
+/// Returns the patched config JSON and the port to poll `/readyz` on. A config
+/// that already declares a `restful` control interface keeps it unchanged and
+/// its port is returned, so a test can expose its own status endpoints and
+/// still get readiness polling (the existing restful host must answer on
+/// loopback). Fails if `control_interface` exists without a usable `restful`
+/// port: nothing can be polled.
+pub fn patch_config_with_control_interface(config_json: &str, port: u16) -> Result<(String, u16)> {
     let mut tng_config: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(config_json)
             .with_context(|| format!("Failed to parse config json: {config_json}"))?;
 
-    if tng_config.contains_key("control_interface") {
-        bail!("control_interface config already exists in the config json");
+    if let Some(existing) = tng_config.get("control_interface") {
+        let restful_port = existing
+            .get("restful")
+            .and_then(|restful| restful.get("port"))
+            .and_then(|port| port.as_u64())
+            .and_then(|port| u16::try_from(port).ok())
+            .context(
+                "control_interface exists without a usable restful port; /readyz cannot be polled",
+            )?;
+        return Ok((config_json.to_string(), restful_port));
     }
 
     tng_config.insert(
@@ -85,7 +98,7 @@ pub fn patch_config_with_control_interface(config_json: &str, port: u16) -> Resu
         }),
     );
 
-    Ok(serde_json::to_string(&tng_config)?)
+    Ok((serde_json::to_string(&tng_config)?, port))
 }
 
 /// Result of checking the child process status during readyz polling.

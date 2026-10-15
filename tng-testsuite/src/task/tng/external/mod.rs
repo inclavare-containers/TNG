@@ -30,7 +30,8 @@ impl TngInstance {
 
         let free_port = pick_control_port(&config_json)?;
 
-        let config_json = patch_config_with_control_interface(&config_json, free_port)?;
+        let (config_json, control_port) =
+            patch_config_with_control_interface(&config_json, free_port)?;
 
         tracing::info!("Run tng with {config_json}");
 
@@ -45,7 +46,7 @@ impl TngInstance {
         };
 
         // Wait for the tng process to be ready by polling /readyz.
-        wait_for_readyz(free_port, || match process.try_wait() {
+        wait_for_readyz(control_port, || match process.try_wait() {
             Ok(Some(status)) => ProcessStatus::Exited(status.code()),
             Ok(None) => ProcessStatus::Running,
             Err(e) => {

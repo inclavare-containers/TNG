@@ -4,9 +4,10 @@ use std::{
     collections::HashMap,
     future::Future,
     net::SocketAddr,
+    num::NonZeroU32,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
     task::Poll,
@@ -41,6 +42,82 @@ use super::transport::{RatsTlsTransportLayerConnector, RatsTlsTransportLayerCrea
 pub struct RatsTlsClient {
     pub id: u64,
     pub hyper: HyperClientType,
+    /// CONNECT streams currently riding this h2 tunnel. Incremented when a
+    /// stream is assigned to the shard, decremented when its upgraded stream
+    /// is dropped (see `ShardGuardedStream`).
+    active: Arc<AtomicU32>,
+}
+
+impl RatsTlsClient {
+    fn active_streams(&self) -> u32 {
+        self.active.load(Ordering::Relaxed)
+    }
+}
+
+/// Counts a mux stream against its shard tunnel for as long as the upgraded
+/// io is alive. Drop-based so cancelled or failed forwards always release the
+/// slot, keeping the shard cap a soft bound instead of leaking quota.
+struct ShardGuardedStream {
+    inner: Box<dyn CommonStreamTrait + Sync>,
+    active: Arc<AtomicU32>,
+}
+
+impl Drop for ShardGuardedStream {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+impl tokio::io::AsyncRead for ShardGuardedStream {
+    #[inline]
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for ShardGuardedStream {
+    #[inline]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    #[inline]
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+
+    #[inline]
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    #[inline]
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
 }
 
 pub struct RatsTlsSecurityLayer {
@@ -50,6 +127,8 @@ pub struct RatsTlsSecurityLayer {
     tls_config_generator: Arc<TlsConfigGenerator>,
     runtime: TokioRuntime,
     multiplex: bool,
+    multiplex_max_streams_per_connection: Option<NonZeroU32>,
+    multiplex_max_connections: usize,
 }
 
 impl RatsTlsSecurityLayer {
@@ -63,6 +142,8 @@ impl RatsTlsSecurityLayer {
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
         multiplex: bool,
+        multiplex_max_streams_per_connection: Option<NonZeroU32>,
+        multiplex_max_connections: Option<NonZeroU32>,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -78,6 +159,10 @@ impl RatsTlsSecurityLayer {
             tls_config_generator,
             runtime,
             multiplex,
+            multiplex_max_streams_per_connection,
+            multiplex_max_connections: multiplex_max_connections
+                .map(|v| v.get() as usize)
+                .unwrap_or_else(pool::default_max_connections),
         })
     }
 
@@ -110,61 +195,71 @@ impl RatsTlsSecurityLayer {
         pool_key: &PoolKey,
         parent_span: Span,
     ) -> Result<RatsTlsClient> {
-        // Try to get the client from pool
-        let client = {
+        let max = self
+            .multiplex_max_streams_per_connection
+            .map(NonZeroU32::get);
+        let max_connections = self.multiplex_max_connections;
+
+        // Try to reuse a shard tunnel with a free stream slot.
+        let reused = {
             let read = self.pool.read().await;
-            read.get(pool_key).cloned()
+            read.get(pool_key).and_then(|shards| {
+                pool::pick_shard(shards, max, max_connections).map(|idx| shards[idx].clone())
+            })
         };
 
-        let client = match client {
+        let client = match reused {
             Some(c) => {
+                c.active.fetch_add(1, Ordering::Relaxed);
                 Span::current().record("session_id", c.id);
                 tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
                 c
             }
             None => {
-                // If client not exist then we need to create one
+                // All shards are at their stream cap (or none exist), so create
+                // a new shard tunnel under the write lock. Re-check first: a
+                // concurrent allocate may have just added a shard or freed a slot.
                 let mut write = self.pool.write().await;
-                // Check if client has been created by other "task"
-                match write.get(pool_key) {
-                    Some(c) => {
-                        Span::current().record("session_id", c.id);
-                        tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
-                        c.clone()
-                    }
-                    None => {
-                        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                        Span::current().record("session_id", id);
-                        tracing::debug!(
-                            session_id = id,
-                            "No rats-tls session found, create a new one"
-                        );
-
-                        // Prepare the security connector
-                        let connector = self
-                            .create_security_connector(pool_key, parent_span)
-                            .await?;
-
-                        // Build the hyper client from the security connector.
-                        // Windows and frame size match the egress h2 server so
-                        // the mux tunnel ends negotiate the same data-plane
-                        // tuning (see the constants' rationale).
-                        let client = RatsTlsClient {
-                            id,
-                            hyper: Client::builder(self.runtime.clone())
-                                .http2_initial_stream_window_size(
-                                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW,
-                                )
-                                .http2_initial_connection_window_size(
-                                    crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW,
-                                )
-                                .http2_max_frame_size(crate::tunnel::utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
-                                .build(connector),
-                        };
-                        write.insert(pool_key.to_owned(), client.clone());
-                        client
-                    }
+                let shards = write.entry(pool_key.to_owned()).or_default();
+                if let Some(idx) = pool::pick_shard(shards, max, max_connections) {
+                    let c = shards[idx].clone();
+                    c.active.fetch_add(1, Ordering::Relaxed);
+                    Span::current().record("session_id", c.id);
+                    tracing::debug!(session_id = c.id, "Reuse existed rats-tls session");
+                    return Ok(c);
                 }
+
+                let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+                Span::current().record("session_id", id);
+                tracing::debug!(
+                    session_id = id,
+                    "No rats-tls session found, create a new one"
+                );
+
+                // Prepare the security connector
+                let connector = self
+                    .create_security_connector(pool_key, parent_span)
+                    .await?;
+
+                // Build the hyper client from the security connector.
+                // Windows and frame size match the egress h2 server so
+                // the mux tunnel ends negotiate the same data-plane
+                // tuning (see the constants' rationale).
+                let client = RatsTlsClient {
+                    id,
+                    active: Arc::new(AtomicU32::new(1)),
+                    hyper: Client::builder(self.runtime.clone())
+                        .http2_initial_stream_window_size(
+                            crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_STREAM_WINDOW,
+                        )
+                        .http2_initial_connection_window_size(
+                            crate::tunnel::utils::hyper::H2_TUNNEL_INITIAL_CONNECTION_WINDOW,
+                        )
+                        .http2_max_frame_size(crate::tunnel::utils::hyper::H2_TUNNEL_MAX_FRAME_SIZE)
+                        .build(connector),
+                };
+                shards.push(client.clone());
+                client
             }
         };
 
@@ -180,18 +275,39 @@ impl RatsTlsSecurityLayer {
         AttestationState,
         /* session_id */ u64,
     )> {
-        // Multiplex path: a single long-lived TLS connection. The non-multiplex
-        // path goes through connect_0rtt + prime in forward_stream, not here.
+        // Multiplex path: streams ride shard tunnels, one TLS connection per
+        // shard. Each shard attests at its own handshake before its first
+        // CONNECT stream rides it; extra shards for the same endpoint usually
+        // resume (see the resumption note below), which rustls binds to the
+        // attested identity, so the RA contract holds per tunnel either way.
+        // The non-multiplex path goes through connect_0rtt + prime in
+        // forward_stream, not here.
         // handshake_with_stream already classified attestation into the tri-state
         // carrier (Fresh / Resumed / Unattested); a reconnect can resume if a
         // ticket is cached, so Resumed is possible here too.
         let pool_key = PoolKey::new(endpoint);
+        // get_client has already claimed an active-stream slot on the shard.
+        // The claimed slot must be released exactly once: the Err arm below is
+        // the only fallible step between the claim and handing the guarded box
+        // to the caller, whose Drop is the other release site.
         let client = self.get_client(&pool_key).await?;
-        let (stream, local_addr, state, session_id) =
-            RatsTlsWrappingLayer::create_stream_from_hyper(&client)
-                .instrument(tracing::info_span!("wrapping", mode = "h2"))
-                .await?;
-        Ok((Box::new(stream), local_addr, state, session_id))
+        match RatsTlsWrappingLayer::create_stream_from_hyper(&client)
+            .instrument(tracing::info_span!("wrapping", mode = "h2"))
+            .await
+        {
+            Ok((stream, local_addr, state, session_id)) => {
+                let guarded = ShardGuardedStream {
+                    inner: Box::new(stream),
+                    active: client.active.clone(),
+                };
+                Ok((Box::new(guarded), local_addr, state, session_id))
+            }
+            Err(error) => {
+                // The stream never materialized; release the claimed slot.
+                client.active.fetch_sub(1, Ordering::Relaxed);
+                Err(error)
+            }
+        }
     }
 
     /// Open the non-multiplex upstream TLS connection for 0-RTT. Thin delegator
