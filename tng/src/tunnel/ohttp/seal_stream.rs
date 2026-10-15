@@ -1,3 +1,8 @@
+//! The seal pump fuses ohttp sealing into the HTTP body stream it feeds.
+//! Data flow: bhttp plaintext is written through the ohttp seal writer, the
+//! seal appends its AEAD chunks to an always-ready sink, and the pump drains
+//! that sink into frames of at most `SEALED_FRAME_SIZE` for the body.
+
 use std::{
     io,
     pin::Pin,
@@ -9,27 +14,29 @@ use bytes::{Bytes, BytesMut};
 use futures::{io::BufReader, AsyncBufRead, AsyncRead, AsyncWrite, Stream, StreamExt};
 use parking_lot::Mutex;
 
-use crate::tunnel::ohttp::{RELAY_CHUNK_SIZE, SEAL_CHUNK_SIZE};
+use crate::tunnel::ohttp::{SEALED_FRAME_SIZE, SEAL_CHUNK_SIZE};
 
-/// Always-ready in-memory destination handed to an ohttp seal stream. The
-/// seal writer's `poll_write` then never parks and never buffers internally
-/// beyond one AEAD chunk: every accepted byte lands here. That is the
-/// precondition for running the seal synchronously inside the body stream's
-/// poll instead of a task of its own behind a `tokio::io::duplex`.
+/// The always-ready in-memory destination that collects a seal stream's
+/// sealed bytes. The seal writer's `poll_write` then never parks and never
+/// buffers internally beyond one AEAD chunk: every accepted byte lands here.
+/// That is the precondition for running the seal synchronously inside the
+/// body stream's poll instead of a task of its own behind a
+/// `tokio::io::duplex`.
 ///
 /// Clone to hand one copy to `encapsulate_response`/`encapsulate_stream` and
 /// keep the other to drain sealed bytes. Both clones are only touched by the
 /// single task polling the pump, so there is no real contention; `parking_lot`
 /// additionally keeps the mutex panic-proof across the lock boundary.
 #[derive(Clone)]
-pub(crate) struct BufferSink(Arc<Mutex<BytesMut>>);
+pub(crate) struct SealedBytesSink(Arc<Mutex<BytesMut>>);
 
-impl BufferSink {
+impl SealedBytesSink {
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(BytesMut::new())))
     }
 
-    fn drain(&self, out: &mut BytesMut) {
+    /// Move the sealed bytes accumulated since the last drain into `out`.
+    fn drain_into(&self, out: &mut BytesMut) {
         let sealed = std::mem::take(&mut *self.0.lock());
         if !sealed.is_empty() {
             out.extend_from_slice(&sealed);
@@ -37,7 +44,7 @@ impl BufferSink {
     }
 }
 
-impl AsyncWrite for BufferSink {
+impl AsyncWrite for SealedBytesSink {
     fn poll_write(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -58,17 +65,22 @@ impl AsyncWrite for BufferSink {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PumpState {
+    /// Reading plaintext and writing it through the seal.
     Running,
+    /// Plaintext exhausted: flushing and closing the seal, which emits the
+    /// final ohttp chunk.
     Closing,
+    /// Seal closed (or failed): handing over the sealed bytes still buffered.
     Draining,
+    /// Everything handed over; the stream ends.
     Done,
 }
 
-/// Write the whole fill through the seal, returning the byte count it
-/// accepted and, if it stopped early, why.  Free-standing so the
-/// `fill` borrow (which pins the reader) ends when this returns and the
-/// caller can `consume` on the reader and drain the sink without an
-/// overlapping mutable borrow.
+/// Push the current fill -- the plaintext window `poll_fill_buf` returned --
+/// through the seal, returning the byte count it accepted and, if it stopped
+/// early, why.  Free-standing so the `fill` borrow (which pins the reader)
+/// ends when this returns and the caller can `consume` on the reader and
+/// drain the sink without an overlapping mutable borrow.
 fn write_fill(
     seal: &mut Pin<Box<dyn AsyncWrite + Send + 'static>>,
     cx: &mut Context<'_>,
@@ -102,7 +114,7 @@ fn write_fill(
 /// chunk; flush and close the seal exactly once at EOF (the fork emits the
 /// final `FINAL_CHUNK_AAD` chunk during close, so drain after it); end the
 /// stream once the buffered output is handed over. Output frames are
-/// coalesced to `RELAY_CHUNK_SIZE`, the granularity of the `ReaderStream`s
+/// coalesced to `SEALED_FRAME_SIZE`, the granularity of the `ReaderStream`s
 /// that were removed.
 ///
 /// Source or seal errors are logged under the construction-time span (the
@@ -118,28 +130,40 @@ fn write_fill(
 /// outside the crate, so reader and seal are boxed at construction; the
 /// pump itself is `Unpin` and polled by the body without an extra pin.
 struct SealPump {
-    reader: Pin<Box<dyn AsyncBufRead + Send + 'static>>,
+    /// The bhttp plaintext to seal, buffered at `SEAL_CHUNK_SIZE` (one AEAD
+    /// chunk) so chunk boundaries match the removed relay.
+    plaintext: Pin<Box<dyn AsyncBufRead + Send + 'static>>,
+    /// The seal writer fed by `plaintext`; its AEAD chunks land in `sink`.
     seal: Pin<Box<dyn AsyncWrite + Send + 'static>>,
-    sink: BufferSink,
-    out: BytesMut,
+    /// The seal's write destination; drained into `unsent` after every step
+    /// so it never holds more than the chunk just written.
+    sink: SealedBytesSink,
+    /// Sealed bytes not yet handed over as body frames.
+    unsent: BytesMut,
     state: PumpState,
+    /// Plaintext bytes consumed, for the completion log.
     plain_bytes: u64,
+    /// Log line emitted on a source or seal failure.
     error_msg: &'static str,
+    /// Log line emitted when the pump finishes cleanly, if the caller wants
+    /// one.
     done_msg: Option<&'static str>,
+    /// The request span captured where the removed relay task was spawned;
+    /// pump logs enter it so they keep the same context.
     span: tracing::Span,
 }
 
 impl SealPump {
-    fn new<R, S>(reader: R, seal: S, sink: BufferSink, error_msg: &'static str) -> Self
+    fn new<R, S>(plaintext: R, seal: S, sink: SealedBytesSink, error_msg: &'static str) -> Self
     where
         R: AsyncRead + Send + 'static,
         S: AsyncWrite + Send + 'static,
     {
         Self {
-            reader: Box::pin(BufReader::with_capacity(SEAL_CHUNK_SIZE, reader)),
+            plaintext: Box::pin(BufReader::with_capacity(SEAL_CHUNK_SIZE, plaintext)),
             seal: Box::pin(seal),
             sink,
-            out: BytesMut::new(),
+            unsent: BytesMut::new(),
             state: PumpState::Running,
             plain_bytes: 0,
             error_msg,
@@ -148,9 +172,13 @@ impl SealPump {
         }
     }
 
+    /// Wind down after a source or seal failure: log it, hand over the
+    /// sealed bytes produced so far, and end the stream without an error
+    /// item, leaving the peer to report truncation (see the struct doc for
+    /// why this matches the removed relay).
     fn fail(&mut self, error: &dyn std::fmt::Debug) {
         tracing::error!(?error, "{}", self.error_msg);
-        self.sink.drain(&mut self.out);
+        self.sink.drain_into(&mut self.unsent);
         self.state = PumpState::Draining;
     }
 }
@@ -166,8 +194,8 @@ impl Stream for SealPump {
         let _guard = span.enter();
         loop {
             // Hand over accumulated sealed bytes before doing more work.
-            if this.out.len() >= RELAY_CHUNK_SIZE {
-                let frame = this.out.split_to(RELAY_CHUNK_SIZE).freeze();
+            if this.unsent.len() >= SEALED_FRAME_SIZE {
+                let frame = this.unsent.split_to(SEALED_FRAME_SIZE).freeze();
                 return Poll::Ready(Some(Ok(frame)));
             }
             match this.state {
@@ -175,7 +203,7 @@ impl Stream for SealPump {
                 PumpState::Running => {
                     let mut park = false;
                     let mut failed: Option<io::Error> = None;
-                    match this.reader.as_mut().poll_fill_buf(cx) {
+                    match this.plaintext.as_mut().poll_fill_buf(cx) {
                         Poll::Ready(Ok([])) => {
                             this.state = PumpState::Closing;
                         }
@@ -183,10 +211,10 @@ impl Stream for SealPump {
                             let len = fill.len();
                             let (consumed, error) = write_fill(&mut this.seal, cx, fill);
                             if consumed > 0 {
-                                this.reader.as_mut().consume(consumed);
+                                this.plaintext.as_mut().consume(consumed);
                                 this.plain_bytes += consumed as u64;
                             }
-                            this.sink.drain(&mut this.out);
+                            this.sink.drain_into(&mut this.unsent);
                             failed = error;
                             park = failed.is_none() && consumed < len;
                         }
@@ -198,10 +226,10 @@ impl Stream for SealPump {
                         continue;
                     }
                     if park {
-                        if this.out.is_empty() {
+                        if this.unsent.is_empty() {
                             return Poll::Pending;
                         }
-                        let frame = std::mem::take(&mut this.out).freeze();
+                        let frame = std::mem::take(&mut this.unsent).freeze();
                         return Poll::Ready(Some(Ok(frame)));
                     }
                 }
@@ -216,32 +244,32 @@ impl Stream for SealPump {
                     }
                     match this.seal.as_mut().poll_close(cx) {
                         Poll::Ready(Ok(())) => {
-                            this.sink.drain(&mut this.out);
+                            this.sink.drain_into(&mut this.unsent);
                             this.state = PumpState::Draining;
                         }
                         Poll::Ready(Err(error)) => {
-                            this.sink.drain(&mut this.out);
+                            this.sink.drain_into(&mut this.unsent);
                             this.fail(&error);
                         }
                         Poll::Pending => {
-                            this.sink.drain(&mut this.out);
-                            if this.out.is_empty() {
+                            this.sink.drain_into(&mut this.unsent);
+                            if this.unsent.is_empty() {
                                 return Poll::Pending;
                             }
-                            let frame = std::mem::take(&mut this.out).freeze();
+                            let frame = std::mem::take(&mut this.unsent).freeze();
                             return Poll::Ready(Some(Ok(frame)));
                         }
                     }
                 }
                 PumpState::Draining => {
-                    if this.out.is_empty() {
+                    if this.unsent.is_empty() {
                         if let Some(msg) = this.done_msg {
                             tracing::debug!(bytes_copied = this.plain_bytes, "{msg}");
                         }
                         this.state = PumpState::Done;
                     } else {
-                        let take = this.out.len().min(RELAY_CHUNK_SIZE);
-                        let frame = this.out.split_to(take).freeze();
+                        let take = this.unsent.len().min(SEALED_FRAME_SIZE);
+                        let frame = this.unsent.split_to(take).freeze();
                         return Poll::Ready(Some(Ok(frame)));
                     }
                 }
@@ -250,33 +278,35 @@ impl Stream for SealPump {
     }
 }
 
-/// Sealed ohttp response body over an `encapsulate_response` stream.
+/// Sealed ohttp response body over an `encapsulate_response` stream: the
+/// pump seals `plaintext` through `seal` and yields its frames, taking
+/// sealed bytes out of `sink` (the seal's write destination).
 pub(crate) fn sealed_response_body<R, S>(
-    reader: R,
+    plaintext: R,
     seal: S,
-    sink: BufferSink,
+    sink: SealedBytesSink,
 ) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static
 where
     R: AsyncRead + Send + 'static,
     S: AsyncWrite + Send + 'static,
 {
-    SealPump::new(reader, seal, sink, "Error when encrypting response")
+    SealPump::new(plaintext, seal, sink, "Error when encrypting response")
 }
 
 /// Sealed ohttp request body for the outer POST: the prost metadata buffer
-/// as the first frame, then the sealed inner request from an
-/// `encapsulate_stream` stream.
+/// as the first frame, then the sealed inner request pumped from `plaintext`
+/// through `seal`, exactly as in [`sealed_response_body`].
 pub(crate) fn sealed_request_body<R, S>(
     metadata: Bytes,
-    reader: R,
+    plaintext: R,
     seal: S,
-    sink: BufferSink,
+    sink: SealedBytesSink,
 ) -> impl Stream<Item = io::Result<Bytes>> + Send + 'static
 where
     R: AsyncRead + Send + 'static,
     S: AsyncWrite + Send + 'static,
 {
-    let mut pump = SealPump::new(reader, seal, sink, "Error when encrypting request");
+    let mut pump = SealPump::new(plaintext, seal, sink, "Error when encrypting request");
     // Preserve the relay path's completion debug line (level unchanged).
     pump.done_msg = Some("BHTTP request encoded and encrypted");
     futures::stream::once(async move { Ok(metadata) }).chain(pump)
@@ -342,7 +372,7 @@ mod tests {
     async fn pump_and_open(plaintext: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -376,11 +406,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn frames_bounded_by_relay_chunk_size() {
+    async fn frames_bounded_by_sealed_frame_size() {
         let plaintext = vec![9u8; 1024 * 1024];
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -395,10 +425,10 @@ mod tests {
         while let Some(item) = pump.next().await {
             let frame = item.expect("ok frame");
             assert!(
-                frame.len() <= RELAY_CHUNK_SIZE,
+                frame.len() <= SEALED_FRAME_SIZE,
                 "frame {} exceeds relay cap {}",
                 frame.len(),
-                RELAY_CHUNK_SIZE
+                SEALED_FRAME_SIZE
             );
             frames += 1;
         }
@@ -448,7 +478,7 @@ mod tests {
             };
             let mut legacy_sealed = Vec::new();
             while let Some(chunk) = futures::StreamExt::next(
-                &mut tokio_util::io::ReaderStream::with_capacity(&mut read_half, RELAY_CHUNK_SIZE),
+                &mut tokio_util::io::ReaderStream::with_capacity(&mut read_half, SEALED_FRAME_SIZE),
             )
             .await
             {
@@ -489,7 +519,7 @@ mod tests {
         }
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -526,7 +556,7 @@ mod tests {
         let metadata = Bytes::from_static(b"\x00\x00\x00\x05METAD");
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -580,7 +610,7 @@ mod tests {
         let plaintext: Vec<u8> = (0..5000).map(|i| (i % 251) as u8).collect();
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -627,7 +657,7 @@ mod tests {
         let closes = Arc::new(Mutex::new(0usize));
         let mut kc = aes128_config();
         let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let seal = client
             .encapsulate_stream(sink.clone())
             .expect("encapsulate");
@@ -652,7 +682,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn stalling_seal_delivers_everything() {
         struct StallSeal {
-            inner: BufferSink,
+            inner: SealedBytesSink,
             stall_next: bool,
         }
         impl AsyncWrite for StallSeal {
@@ -680,7 +710,7 @@ mod tests {
             }
         }
         let plaintext: Vec<u8> = (0..5000).map(|i| (i % 251) as u8).collect();
-        let sink = BufferSink::new();
+        let sink = SealedBytesSink::new();
         let stall = StallSeal {
             inner: sink.clone(),
             stall_next: false,

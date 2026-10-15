@@ -557,7 +557,7 @@ impl OHttpClientInner {
             // The seal runs synchronously inside the outer body stream's
             // poll (no task, no duplex): the always-ready sink keeps every
             // seal write non-blocking.
-            let sink = crate::tunnel::ohttp::seal_stream::BufferSink::new();
+            let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
             let client_request = client.encapsulate_stream(sink.clone())?;
             let client_response_decapsulator = client_request.response_decapsulator()?;
             let reader = bhttp_encoder

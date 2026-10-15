@@ -210,7 +210,7 @@ impl OhttpServerApi {
         // always-ready sink keeps the seal's writes non-blocking, so
         // bhttp-encode and seal happen per frame on the serving worker.
         let encrypted_response = {
-            let sink = crate::tunnel::ohttp::seal_stream::BufferSink::new();
+            let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
             let server_response =
                 server_response_encapsulator.encapsulate_response(sink.clone())?;
             let bhttp_reader = bhttp_encoder
