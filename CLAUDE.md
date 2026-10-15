@@ -64,6 +64,10 @@ The `tng-wasm/www/` directory is the source for the live demo published at **<ht
 
 ## PR Requirements
 
+### Performance optimization PR messages (mandatory)
+
+Before creating or updating a performance-related PR title/body, read and follow [bench/performance-pr-requirements.md](bench/performance-pr-requirements.md). Retain complete benchmark comparison tables, collapsed by default, with five-class before/after markers. Before each full table, show main findings and an expanded classification-count table: Change class, Count (%), then the exact metric headers/units/order of the full table. Use no N/A class; flag incomplete comparisons as data issues. Explicitly label comparison references, disclose regressions/resource costs, and run the policy checks against the final diff and measured build. Additional highlight tables are optional and never replace full data.
+
 When creating a pull request, always:
 
 1. Update relevant documentation **in both languages** — the English file and its `*_zh.md` counterpart (see the Bilingual Documentation Convention above; this includes each crate's `README.md`/`README_zh.md` and `docs/*.md`/`docs/*_zh.md`, notably `docs/configuration.md` ↔ `docs/configuration_zh.md`). Only document what the user needs to know: new config options, new user-visible features, or breaking changes. Do not add documentation for internal optimizations that have no new config option or user-visible behavior change. Do not document standard protocol behaviors (e.g. TLS 1.3 ticket lifecycle, anti-replay rules) that the project follows without modification. Do not explain internal implementation details (e.g. how session resumption works, ticket consumption mechanics) in user-facing docs — those belong in commit messages or code comments.
@@ -267,3 +271,9 @@ Releases are driven by the global `release-version` skill; this section holds th
 ## Landing Work
 
 At the end of a development branch's implementation, before merging or opening a PR, use the global `organize-commits` skill to reorganize commits into clean, independently verifiable logical blocks. For the pull-request route use the global `land-pr-review` (open the PR and watch its CI to green) followed by `land-pr-merge` (fast-forward merge the PR into the target branch); for the local no-PR route use `land-ff-local`.
+
+Performance-report presentation: separate the report from PR prose with `---`; sections 1-3 must show expanded metadata differences plus default-collapsed full actual tables, and section 4 methodology must be collapsed. Verify both hosts' tested binary/source identities; unknown revisions require investigation, not substitution with current HEAD.
+
+Report automation: use `bench/gen-report.sh --compare` for policy-compliant counts/markers, folds and validation; see `bench/reporting.md`. New benchmark builds must use `bench/record-build.py` and deploy the matching binary manifest. Run `python3 bench/test_report.py` after renderer/identity changes. Keep interpretation and final claim checks in the agent workflow; do not hand-edit generated tables.
+
+Final PR prose checks: follow the narrative-consistency section in `bench/performance-pr-requirements.md`; match every quoted number to its exact run/scenario, qualify improvement/no-regression claims, and keep detailed methodology/comparison prose inside the default-collapsed method block with only compact per-table legends outside.
