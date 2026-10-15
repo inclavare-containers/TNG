@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
 
 use anyhow::{bail, Result};
-use axum::{body::Body, extract::Request, middleware::Next, routing::any, Router};
+use axum::{
+    body::Body, extract::Request, middleware::Next, response::Response, routing::any, Router,
+};
 use axum_extra::extract::Host;
 use http::StatusCode;
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -89,6 +91,61 @@ pub async fn launch_http_server(
             }
 
             tracing::info!("The HTTP server task normally exited");
+            Ok(())
+        }
+        .instrument(parent_span),
+    ))
+}
+
+/// Echo server for streaming-body tests: `POST /*` returns the request body
+/// byte-for-byte; `/abort-mid` sends ~100 KiB of a chunked 200 response and
+/// then fails the stream, so the tunnel must surface an upstream abort.
+pub async fn launch_http_echo_server(
+    token: CancellationToken,
+    port: u16,
+) -> Result<JoinHandle<Result<()>>> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!("Listening on 0.0.0.0:{port} (echo server)");
+
+    let parent_span = tracing::Span::current();
+    let span_for_layer = parent_span.clone();
+    let app = Router::new()
+        .route(
+            "/abort-mid",
+            axum::routing::post(|_body: axum::body::Bytes| async move {
+                use futures::StreamExt as _;
+                let stream =
+                    futures::stream::once(async { Ok::<_, std::io::Error>(vec![7u8; 100_000]) })
+                        .chain(futures::stream::once(async {
+                            Err::<Vec<u8>, _>(std::io::Error::other("mid-stream abort"))
+                        }));
+                Response::new(Body::from_stream(stream))
+            }),
+        )
+        .route(
+            "/{*path}",
+            axum::routing::post(|body: axum::body::Bytes| async move { body }),
+        );
+    let server = axum::serve(
+        listener,
+        app.layer(axum::middleware::from_fn(
+            move |request: Request<Body>, next: Next| {
+                let span = span_for_layer.clone();
+                async move { next.run(request).await }.instrument(span)
+            },
+        )),
+    );
+
+    Ok(tokio::task::spawn(
+        async move {
+            tokio::select! {
+                _ = token.cancelled() => {}
+                res = server => {
+                    res?;
+                }
+            }
+            tracing::info!("The echo server task normally exited");
             Ok(())
         }
         .instrument(parent_span),

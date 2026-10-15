@@ -29,6 +29,8 @@ pub enum AppType {
         expected_path_and_query: &'static str,
     },
     #[allow(dead_code)]
+    HttpEchoServer { port: u16 },
+    #[allow(dead_code)]
     HttpServerWithHeaders {
         port: u16,
         expected_host_header: &'static str,
@@ -86,6 +88,7 @@ impl Task for AppType {
         match self {
             AppType::HttpServer { .. }
             | AppType::HttpServerWithHeaders { .. }
+            | AppType::HttpEchoServer { .. }
             | AppType::TcpServer { .. } => "app_server",
             AppType::UdpServer { .. } | AppType::UdpClient { .. } => "app_udp",
             AppType::HttpClient { .. }
@@ -103,6 +106,7 @@ impl Task for AppType {
         match self {
             AppType::HttpServer { .. }
             | AppType::HttpServerWithHeaders { .. }
+            | AppType::HttpEchoServer { .. }
             | AppType::TcpServer { .. } => NodeType::Server,
             AppType::UdpServer { .. } => NodeType::Server,
             AppType::HttpClient { .. }
@@ -131,6 +135,9 @@ impl Task for AppType {
                     Vec::new(),
                 )
                 .await
+            }
+            AppType::HttpEchoServer { port } => {
+                http_server::launch_http_echo_server(token, *port).await
             }
             AppType::HttpServerWithHeaders {
                 port,

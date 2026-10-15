@@ -204,6 +204,10 @@ name = "ohttp_cors_passthrough"
 path = "tests/ohttp/ohttp_cors_passthrough.rs"
 
 [[test]]
+name = "ohttp_stream_bodies"
+path = "tests/ohttp/ohttp_stream_bodies.rs"
+
+[[test]]
 name = "ohttp_tls"
 path = "tests/ohttp/ohttp_tls.rs"
 
