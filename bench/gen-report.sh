@@ -9,18 +9,15 @@
 #   bash bench/gen-report.sh --compare \
 #     <base-server-info> <base-client-info> <base-results> \
 #     <exp-server-info> <exp-client-info> <exp-results> <output.md>
-# Optional: --deltas <file.md> (compare mode only) also writes the per-workload
-# before/after delta percentages computed from the same unrounded data as the markers.
-# Optional: --metrics m1,m2 (compare mode only) restricts the report to metrics the
-# run actually collected (historical/partial datasets); results may not contain
-# measured metrics outside the listed subset.
+# Optional: --title HEADING replaces the default report title and demotes all
+# internal headings one level, so several reports nest as sub-reports of one
+# PR chapter (see render-pr-reports.sh). Every report renders the full metric
+# registry; metrics a dataset did not collect render '-'.
 set -euo pipefail
 
 MODE=single
 ALLOW_UNVERIFIED=0
 ALLOW_MIXED=0
-DELTAS_OUT=""
-METRICS=""
 TITLE=""
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
@@ -28,34 +25,22 @@ while [[ "${1:-}" == --* ]]; do
         --allow-unverified) ALLOW_UNVERIFIED=1; shift ;;
         --allow-mixed-versions) ALLOW_MIXED=1; shift ;;
         --title) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --title requires a heading" >&2; exit 2; }; TITLE="$2"; shift 2 ;;
-        --deltas) [ $# -ge 2 ] || { echo "usage: --deltas requires a path" >&2; exit 2; }; DELTAS_OUT="$2"; shift 2 ;;
-        --metrics) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --metrics requires a comma-separated list" >&2; exit 2; }; METRICS="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
-if [ -n "$DELTAS_OUT" ] && [ "$MODE" != compare ]; then
-    echo "error: --deltas is only valid with --compare" >&2
-    exit 2
-fi
-if [ -n "$METRICS" ] && [ "$MODE" != compare ]; then
-    echo "error: --metrics is only valid with --compare" >&2
-    exit 2
-fi
 if [ "$MODE" = compare ]; then
-    [ $# -eq 7 ] || { echo "usage: $0 --compare [--allow-unverified] [--allow-mixed-versions] [--deltas FILE] [--metrics LIST] <base-server-info> <base-client-info> <base-results> <exp-server-info> <exp-client-info> <exp-results> <output.md>" >&2; exit 2; }
+    [ $# -eq 7 ] || { echo "usage: $0 --compare [--allow-unverified] [--allow-mixed-versions] [--title HEADING] <base-server-info> <base-client-info> <base-results> <exp-server-info> <exp-client-info> <exp-results> <output.md>" >&2; exit 2; }
 else
     [ $# -ge 3 ] && [ $# -le 4 ] || { echo "usage: $0 [--allow-unverified] [--allow-mixed-versions] <server-info> <client-info> <results> [output.md]" >&2; exit 2; }
     [ $# -eq 3 ] && set -- "$@" ./bench-report.md
 fi
 
-python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$DELTAS_OUT" "$METRICS" "$TITLE" "$MODE" "$@" <<'PY_REPORT'
+python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$TITLE" "$MODE" "$@" <<'PY_REPORT'
 import json, os, sys, tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv.pop(1))
 ALLOW_UNVERIFIED = sys.argv.pop(1) == "1"
 ALLOW_MIXED = sys.argv.pop(1) == "1"
-DELTAS_OUT = sys.argv.pop(1)
-METRICS = sys.argv.pop(1)
 TITLE = sys.argv.pop(1)
 from report_support import CLASSES, check_identity, classify, number
 
@@ -86,8 +71,6 @@ def validate_results(data, context):
             if not str(key).isdigit() or int(key) <= 0 or str(int(key)) != key or not isinstance(metrics, dict):
                 raise SystemExit(f"{context}: invalid concurrency/metrics for {workload}: {key!r}")
             for name, value in metrics.items():
-                if METRIC_SEL is not None and name in ALL_METRIC_NAMES and name not in METRIC_SEL:
-                    raise SystemExit(f"{context}: {workload} concurrency {key} records metric {name!r} outside --metrics; drop the measurement or add it to the subset")
                 n = number(value)
                 if n is not None and (n < 0 or (name == 'success_pct' and n > 100)):
                     raise SystemExit(f"{context}: invalid {name} for {workload}, concurrency={key}: {value!r}")
@@ -148,43 +131,20 @@ HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
           ("cli_cpu_pct", "Ingress CPU %", "%.1f", False),
           ("srv_cpu_pct", "Server CPU %", "%.1f", False),
           ("srv_mem_mib", "Server Mem (MiB)", "%.1f", False)]
-# Some drivers sample the client-side TNG ingress process with pidstat (the
-# per-host ablation runs record cli_cpu_pct), but the standard harness never
-# does. Optional metrics render only for datasets that carry them, so a
-# canonical run's report keeps its existing column set with no empty column.
-OPTIONAL_METRICS = {"cli_cpu_pct"}
 # TNG workloads get a labeled (baseline) row + a bolded (experimental) row in
 # compare mode; the reference baselines (raw/stunnel/haproxy) appear once with
 # baseline values, unlabeled.
 TNG_MARKS = ("rats-tls", "rats-tls+mux", "ohttp")
 
-# --metrics restricts the columns to what a (historical or partial) run actually
-# collected. Restricting away measured columns present in the data is rejected;
-# the chosen subset is disclosed in the report by the missing columns themselves
-# and in the PR text by the caller.
-ALL_METRIC_NAMES = {t[0] for t in IPERF_M} | {t[0] for t in HTTP_M}
-METRIC_SEL = None
-if METRICS:
-    sel = {m.strip() for m in METRICS.split(',') if m.strip()}
-    unknown = sorted(sel - ALL_METRIC_NAMES)
-    if unknown:
-        raise SystemExit(f"--metrics: unknown metric(s) {', '.join(unknown)}; allowed: {', '.join(sorted(ALL_METRIC_NAMES))}")
-    METRIC_SEL = sel
-    IPERF_M = [t for t in IPERF_M if t[0] in sel]
-    HTTP_M = [t for t in HTTP_M if t[0] in sel]
 
 def lbl(w): return w.split("+", 1)[1] if "+" in w else w
 def num(v): return number(v)
 def visible_metrics(res_list, wls, metrics):
-    """Registry metrics for this scenario's columns, minus optional ones the
-    datasets do not carry. A metric counted or classified must be present as
-    a number in the cells it is applied to, so dropping absent optional
-    metrics here is what keeps uncollected columns from failing classification."""
-    return [t for t in metrics
-            if t[0] not in OPTIONAL_METRICS
-            or any(num(m.get(t[0])) is not None
-                   for res in res_list for w in wls
-                   for m in res.get(w, {}).values() if isinstance(m, dict))]
+    """Every report renders the full registry: format identity between the
+    PR-level report and ablation sub-reports is a hard requirement, so columns
+    never adapt to what a particular dataset happens to carry. Uncollected
+    cells render '-' and stay out of the classification counts."""
+    return metrics
 def row(cells):
     def escape(c):
         return str(c).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|").replace("\n", "<br>").replace("\r", "")
@@ -223,8 +183,10 @@ def metric_cells(m, metrics, raw_m, annotate, base_m=None, structural_raw=False)
                 pct = (vn - rv) / rv * 100.0
                 cell = "%s (%+.0f%%)" % (cell, pct)
         if base_m is not None:
-            cls, _ = classify(base_m.get(mk), v, mk)
-            cell += CLASSES[cls][0]
+            bv = base_m.get(mk)
+            if bv is not None and num(bv) is not None:
+                cls, _ = classify(bv, v, mk)
+                cell += CLASSES[cls][0]
         r.append(cell)
     return r
 
@@ -401,6 +363,10 @@ def comparison_summary(rb, re, wls, metrics, controls=False):
             for i, (mk, hdr, fmt, has_raw) in enumerate(metrics):
                 if controls and w == wls[0] and not has_raw:
                     continue
+                if mk not in mb and mk not in me:
+                    # Structurally uncollected for this workload pair: render
+                    # '-' in the tables, count nothing, flag nothing.
+                    continue
                 try:
                     cls, delta = classify(mb.get(mk), me.get(mk), mk)
                 except ValueError as e:
@@ -423,40 +389,11 @@ def comparison_summary(rb, re, wls, metrics, controls=False):
     table.append(row(['**Total**', f'**{total} (100.0%)**',
                       *[f'**{sum(c[i] for c in counts)}**' for i in range(len(metrics))]]))
     assert sum(sum(c[i] for c in counts) for i in range(len(metrics))) == total
-    intro = [f"**Measured changes:** {sum(counts[0])} improved, {sum(counts[1])} stable, "
-             f"{sum(counts[2])} mild, {sum(counts[3])} moderate and {sum(counts[4])} severe degradations. "
-             "These counts do not weight metric importance; attribution and causes require review.", ""]
+    intro = []
     if findings:
-        intro += ['**Notable adverse measurements (causes not inferred):**', '', *['- ' + f for f in findings], '']
+        intro += ['**Notable adverse measurements:**', '', *['- ' + f for f in findings], '']
     return intro + table
 
-DELTA_BLOCKS = []
-
-def capture_deltas(title, rb, re, wls, metrics, axis):
-    for w in wls:
-        if lbl(w) not in TNG_MARKS or not (rb.get(w) or re.get(w)):
-            continue
-        ks = sorted(set(rb.get(w, {})) | set(re.get(w, {})), key=lambda x: int(x))
-        per = [[] for _ in metrics]
-        rows = [row([axis] + [m[1] for m in metrics]), row(['---'] + ['---:'] * len(metrics))]
-        for k in ks:
-            mb = rb.get(w, {}).get(k, {})
-            me = re.get(w, {}).get(k, {})
-            cells = [k]
-            for i, (mk, hdr, fmt, _) in enumerate(metrics):
-                try:
-                    _, chg = classify(mb.get(mk), me.get(mk), mk)
-                except ValueError as e:
-                    raise SystemExit(f"deltas: {w}, concurrency={k}: {e}")
-                per[i].append(chg)
-                cells.append('%+.1f' % chg)
-            rows.append(row(cells))
-        if ks:
-            for agg, name in ((min, 'min'), (max, 'max'), (lambda v: sum(v) / len(v), 'mean')):
-                rows.append(row(['**%s**' % name] + ['**%+.1f**' % agg(v) for v in per]))
-        DELTA_BLOCKS.extend([title, '',
-                             "Workload `%s`; delta%% = (after - before) / before * 100 on unrounded recorded medians, positive = increase; aggregates span concurrencies." % lbl(w),
-                             '', *rows, ''])
 
 def compare_scenario(title, rb, re, wls, metrics, axis):
     L.extend([title, ''])
@@ -467,15 +404,6 @@ def compare_scenario(title, rb, re, wls, metrics, axis):
     L.extend(comparison_summary(rb, re, wls, metrics))
     L.extend(fold('Full ' + title[4:] + ' comparison',
                   compare_merged_table(rb, re, wls, metrics, axis)))
-    capture_deltas(title, rb, re, wls, metrics, axis)
-    references = [w for w in wls if lbl(w) not in TNG_MARKS]
-    if any(rb.get(w) or re.get(w) for w in references):
-        # Keep both runs' references rather than hiding drift behind a single row.
-        ref_metrics = visible_metrics((rb, re), references, metrics)
-        L.extend(['**Reference/control before–after comparison**', ''])
-        L.extend(comparison_summary(rb, re, wls, ref_metrics, controls=True))
-        L.extend(fold('Full reference/control comparison',
-                      compare_merged_table(rb, re, references, ref_metrics, axis, controls=True)))
 
 METH_BODY = [
     "**Topology and tunnel modes**", "",
@@ -490,7 +418,7 @@ METH_BODY = [
     "**Resource sampling and units**", "",
     "- TCP Tunnel CPU/Mem columns sample the client-side tunnel process during the final iperf3 round: one-second pidstat CPU windows and ps RSS samples are averaged. The legacy `Tunnel Mem (GB)` label stores RSS KiB divided by 1024² (GiB).",
     "- HTTP Server CPU/Mem columns sample the server-side tunnel component during the final round using `pidstat -u -r -p <PIDs> 1 <duration>` Average rows. TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process. CPU sums threads/processes (100% = one logical core); RSS is converted from KiB to MiB.",
-    "- The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method, only for drivers that record it (the standard harness does not); datasets without the sample render no Ingress CPU % column.",
+    "- The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method; datasets whose driver did not record it render '-' in the column and exclude it from the counts.",
     "- Raw reference rows have no tunnel process, so their resource fields are structurally uncollected. Shared TNG process RSS can include allocations retained from earlier workloads; a change across multiple modes does not by itself establish a per-mode cause.", "",
     "**Comparison and classification**", "",
     "- Before/after rows compare identical workload and concurrency keys. Parenthesized values compare with the displayed baseline-run raw row; colored markers and classification counts compare with the before row. The exact thresholds and counting scope remain visible beside each result table.",
@@ -594,10 +522,4 @@ with tempfile.NamedTemporaryFile('w', dir=os.path.dirname(os.path.abspath(out_pa
     temp_path = f.name
 os.replace(temp_path, out_path)
 print(out_path)
-if DELTAS_OUT:
-    with open(DELTAS_OUT, 'w') as f:
-        f.write('\n'.join(['# Isolated deltas vs the before run', '',
-                           'Generated by the same classification pass as the report markers.',
-                           ''] + DELTA_BLOCKS) + '\n')
-    print(DELTAS_OUT)
 PY_REPORT

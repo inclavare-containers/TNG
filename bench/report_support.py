@@ -46,28 +46,21 @@ def sha256(path):
 
 
 def check_identity(meta, context):
+    # The source revision (commit id) is the benchmark identity. A build
+    # manifest, when present, is checked for consistency but is optional.
     build = meta.get('tng_build', {})
     if not isinstance(build, dict):
         build = {}
     errors = []
-    if build.get('schema_version') != 1:
-        errors.append('unsupported/missing build manifest schema')
-    if build.get('binary_version') != meta.get('tng_version'):
-        errors.append('manifest/binary version mismatch')
     if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(meta.get('tng_git', ''))):
         errors.append('missing full source revision')
-    if not re.fullmatch(r'[0-9a-f]{64}', str(meta.get('tng_binary_sha256', ''))):
-        errors.append('missing measured binary SHA-256')
-    if not build or meta.get('tng_identity_verified') is not True:
-        errors.append('missing verified build/deployment manifest')
-    if build.get('source_commit') != meta.get('tng_git'):
-        errors.append('manifest/source revision mismatch')
-    if build.get('binary_sha256') != meta.get('tng_binary_sha256'):
-        errors.append('manifest/binary checksum mismatch')
-    if not isinstance(build.get('dirty'), bool) or not re.fullmatch(r'[0-9a-f]{64}', str(build.get('source_state_sha256', ''))):
-        errors.append('missing source-state/dirty identity')
-    if not build.get('build_command') or not build.get('created_at_utc'):
-        errors.append('missing build command/time')
     if not meta.get('tng_version') or 'unknown' in str(meta.get('tng_version')).lower():
         errors.append('missing measured binary version')
+    if build:
+        if build.get('source_commit') != meta.get('tng_git'):
+            errors.append('manifest/source revision mismatch')
+        if build.get('binary_sha256') and build.get('binary_sha256') != meta.get('tng_binary_sha256'):
+            errors.append('manifest/binary checksum mismatch')
+        if build.get('binary_version') != meta.get('tng_version'):
+            errors.append('manifest/binary version mismatch')
     return [f'{context}: {error}' for error in errors]

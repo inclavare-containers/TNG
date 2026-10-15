@@ -109,7 +109,7 @@ class Reports(unittest.TestCase):
         self.exp['http+ohttp']['1'].update(rps=120, mean_us=99, p50_us=103, p95_us=115, p99_us=116)
         p, text = self.run_report()
         self.assertEqual(p.returncode, 0, p.stderr)
-        block = text.split('### Scenario B')[1].split('**Reference/control')[0]
+        block = text.split('### Scenario B')[1].split('### Scenario C')[0]
         summary, full = block.split('<details>', 1)
         for symbol in ('🟢', '⚪', '🟡', '🟠', '🔴'):
             row = next(x for x in summary.splitlines() if x.startswith('| ' + symbol))
@@ -117,29 +117,6 @@ class Reports(unittest.TestCase):
             total = int(cells[1].split()[0])
             self.assertEqual(total, sum(map(int, cells[2:])))
             self.assertEqual(total, full.count(symbol))
-
-    def test_isolated_deltas_file(self):
-        self.exp['http+ohttp']['1'].update(rps=120, mean_us=80)
-        dpath = self.path / 'deltas.md'
-        p, _ = self.run_report(['--deltas', str(dpath)])
-        self.assertEqual(p.returncode, 0, p.stderr)
-        d = dpath.read_text()
-        self.assertIn('### Scenario B', d)
-        self.assertIn('### Scenario C', d)
-        # First `ohttp` workload block = Scenario B (the file orders scenarios A, B, C).
-        seg = d.split('Workload `ohttp`')[1].split('### Scenario')[0]
-        row1 = [x for x in seg.splitlines() if x.startswith('| 1 |')][0]
-        cells = [x.strip() for x in row1.strip('|').split('|')]
-        # HTTP_M column order: Throughput, RPS, Mean, p50, p90, p95, p99, Success, CPU, Mem.
-        self.assertEqual(cells[1], '+0.0')  # throughput unchanged (100 -> 100)
-        self.assertEqual(cells[2], '+20.0')
-        self.assertEqual(cells[3], '-20.0')
-        self.assertIn('| **mean** |', d)
-        self.assertIn('Scenario A', d)  # full fixture also has iperf TNG rows
-
-    def test_deltas_requires_compare(self):
-        p, _ = self.run_report(['--deltas', str(self.path / 'd.md')], single=True)
-        self.assertEqual(p.returncode, 2)
 
     def test_ohttp_only_subset_compares_cleanly(self):
         for res in (self.base, self.exp):
@@ -155,8 +132,9 @@ class Reports(unittest.TestCase):
         self.assertNotIn('Parenthesized percentages are vs the displayed baseline-run raw row.', text)
         self.assertNotIn('Scope:', text)
 
-    def test_metrics_subset_for_partial_runs(self):
-        # Historical ablation rows recorded only RPS and egress CPU.
+    def test_partial_data_renders_full_format(self):
+        # A dataset that recorded only some metrics still renders the full
+        # column set; uncollected cells are '-' and stay out of the counts.
         for res in (self.base, self.exp):
             for w in list(res):
                 if not w.endswith('ohttp'):
@@ -167,28 +145,13 @@ class Reports(unittest.TestCase):
                     res[w][c] = {'rps': res[w][c]['rps'], 'srv_cpu_pct': res[w][c]['srv_cpu_pct']}
         self.exp['http+ohttp']['1']['rps'] = 120
         p, text = self.run_report()
-        self.assertNotEqual(p.returncode, 0)  # unrounded latency/success cells are genuinely missing
-        p, text = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn('RPS', text)
-        self.assertNotIn('p99 (us)', text)
+        self.assertIn('| Mean (us) |', text)
         self.assertIn('| **Total** | **2 (100.0%)** |', text)
-        p, _ = self.run_report(['--metrics', 'rps,bogus'])
-        self.assertNotEqual(p.returncode, 0)
-        self.assertIn('unknown metric', p.stderr)
-        # Measured columns may not be silently dropped from a restricted report.
-        self.base['http+ohttp']['1']['p99_us'] = 100
-        p, _ = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
-        self.assertNotEqual(p.returncode, 0)
-        self.exp['http+ohttp']['1']['p99_us'] = 100
-        p, _ = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
-        self.assertNotEqual(p.returncode, 0)
+        seg = text.split('Full Scenario B')[1]
+        self.assertIn('**-**', seg)
 
     def test_optional_ingress_cpu_metric(self):
-        # Some ablation drivers sampled the client-side TNG ingress process
-        # (cli_cpu_pct); the standard harness never does, so the metric is
-        # optional: rendered when present, rejected when dropped while
-        # measured, and absent-column-free for datasets that lack the sample.
         for res in (self.base, self.exp):
             for w in list(res):
                 if not w.endswith('ohttp'):
@@ -201,10 +164,7 @@ class Reports(unittest.TestCase):
                                  'cli_cpu_pct': res[w][c]['srv_cpu_pct'] / 2}
         self.exp['http+ohttp']['1']['rps'] = 120
         self.exp['http+ohttp']['1']['cli_cpu_pct'] = 40
-        p, _ = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
-        self.assertNotEqual(p.returncode, 0)
-        self.assertIn('cli_cpu_pct', p.stderr)  # measured ingress CPU may not be dropped
-        p, text = self.run_report(['--metrics', 'rps,cli_cpu_pct,srv_cpu_pct'])
+        p, text = self.run_report()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('| Ingress CPU % |', text)
         self.assertIn('| **Total** | **3 (100.0%)** |', text)
@@ -212,9 +172,9 @@ class Reports(unittest.TestCase):
             for w in res:
                 for c in res[w]:
                     del res[w][c]['cli_cpu_pct']
-        p, text = self.run_report(['--metrics', 'rps,cli_cpu_pct,srv_cpu_pct'])
+        p, text = self.run_report()
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn('| Ingress CPU % |', text)  # uncollected optional metrics render no column
+        self.assertIn('| Ingress CPU % |', text)
         self.assertIn('| **Total** | **2 (100.0%)** |', text)
 
     def test_missing_cell_fails_without_overwriting(self):

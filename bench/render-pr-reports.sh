@@ -29,11 +29,15 @@ n=0
   echo ''
 } > "$OUT"
 
-while IFS=$'\t' read -r title flags bsrv bcli bres esrv ecli eres; do
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  case "$line" in \#*) continue ;; esac
+  # Split on tabs preserving empty fields (read -r with IFS collapses them).
+  IFS=$'\t' read -r title flags bsrv bcli bres esrv ecli eres _ <<< "$line" || true
   [ -n "${title:-}" ] || continue
-  case "$title" in \#*) continue ;; esac
+  [ "$flags" = "-" ] && flags=""
   for f in "$bsrv" "$bcli" "$bres" "$esrv" "$ecli" "$eres"; do
-    [ -f "$f" ] || { echo "error: input not found for '$title': $f" >&2; exit 2; }
+    [ -n "$f" ] && [ -f "$f" ] || { echo "error: input not found for '$title': $f" >&2; exit 2; }
   done
   n=$((n + 1))
   part="$TMPDIR_RENDER/part-$n.md"
