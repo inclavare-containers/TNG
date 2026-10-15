@@ -371,16 +371,44 @@ print('%.2f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%.2f\t%s\t%s' % (med(0), med(1), med(2), 
     rm -f "$tmp"
 }
 
-# Write env.json with machine + tool metadata. Caller must set the *_IMAGE/*_VERSION vars.
+# Verify the deployed executable against its build-time source/binary manifest.
+# Deploy <binary>.build.json beside the binary, or set TNG_BUILD_MANIFEST.
+verify_tng_build() {
+    local bench_dir
+    bench_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    TNG_VERIFIED_BUILD="$(python3 - "$bench_dir" "${TNG_BIN:-./target/release/tng}" "${TNG_BUILD_MANIFEST:-}" "${TNG_GIT:-}" <<'PY_ID'
+import json, pathlib, subprocess, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from report_support import check_identity, sha256
+binary = pathlib.Path(sys.argv[2]).resolve()
+manifest = pathlib.Path(sys.argv[3]) if sys.argv[3] else pathlib.Path(str(binary) + '.build.json')
+try:
+    build = json.loads(manifest.read_text())
+    version = subprocess.check_output([str(binary), '--version'], universal_newlines=True).strip().splitlines()[0]
+    meta = {'tng_build': build, 'tng_version': version,
+            'tng_git': build.get('source_commit'), 'tng_binary_sha256': sha256(binary),
+            'tng_identity_verified': True}
+    errors = check_identity(meta, 'deployed TNG')
+    if version != build.get('binary_version'):
+        errors.append('binary --version does not match build manifest')
+    if sys.argv[4] and sys.argv[4] != meta['tng_git']:
+        errors.append('TNG_GIT does not equal the full manifest source commit')
+    if errors:
+        raise ValueError('; '.join(errors))
+    print(json.dumps(meta))
+except (OSError, ValueError, TypeError, AttributeError, IndexError, subprocess.CalledProcessError) as e:
+    raise SystemExit(f'TNG identity collection failed: {e}. Build through bench/record-build.py and deploy the binary plus its .build.json manifest; do not stamp the benchmark host HEAD.')
+PY_ID
+)" || return 1
+    export TNG_VERIFIED_BUILD
+}
+
+# Write per-host machine, build identity, configuration and tool metadata.
 collect_info() {
     local json_path="$1" role="$2"
-    local tng_ver
-    tng_ver="$("${TNG_BIN:-./target/release/tng}" --version 2>/dev/null | head -1 || echo unknown)"
-    local git_ref
-    # Remote hosts run the scripts from a deployed dir that is not a git checkout,
-    # so TNG_GIT lets the operator stamp the measured binary's identity instead of
-    # falling back to the (missing) local HEAD.
-    git_ref="${TNG_GIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+    verify_tng_build || return 1
+    local tng_ver="" git_ref=""
     local my_ip
     my_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     python3 - "$json_path" "$role" "$tng_ver" "$git_ref" "$CTR" "$my_ip" \
@@ -389,7 +417,7 @@ collect_info() {
         "${WRK_IMAGE:-}" "${WRK_SOURCE:-}" "${WRK_VERSION:-}" "${WRK_DIGEST:-}" \
         "${STUNNEL_IMAGE:-}" "${STUNNEL_SOURCE:-}" "${STUNNEL_VERSION:-}" "${STUNNEL_DIGEST:-}" \
         "${HAPROXY_IMAGE:-}" "${HAPROXY_SOURCE:-}" "${HAPROXY_VERSION:-}" "${HAPROXY_DIGEST:-}" <<'PY'
-import json, os, platform, subprocess, sys
+import hashlib, json, os, platform, subprocess, sys
 json_path, role, tng_ver, git_ref, ctr, my_ip = sys.argv[1:7]
 groups = {
     "iperf3": sys.argv[7:11], "nginx": sys.argv[11:15],
@@ -413,7 +441,8 @@ meta = {
   "cpu_model": sh("grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs"),
   "cpu_count": os.cpu_count(),
   "mem": sh("grep MemTotal /proc/meminfo | awk '{print $2\" kB\"}'"),
-  "tng_version": tng_ver, "tng_git": git_ref,
+  **json.loads(os.environ["TNG_VERIFIED_BUILD"]),
+  "run_id": os.path.basename(os.path.dirname(os.path.abspath(json_path))),
   "runtime": sh(ver_cmd),
   "params": {
     "iperf_duration": os.environ.get("IPERF_DURATION","15"),
@@ -424,6 +453,8 @@ meta = {
     "wrk_threads": os.environ.get("WRK_THREADS","auto"),
     "wrk_conns": os.environ.get("WRK_CONNS","1,8,16,32,64,128"),
     "wrk_rounds": os.environ.get("WRK_ROUNDS","3"),
+    "wrk_warmup": os.environ.get("WRK_WARMUP","1"),
+    "mux_max_streams": os.environ.get("MUX_MAX_STREAMS", "unset"),
     "http_body_kb": os.environ.get("HTTP_BODY_KB","64"),
     "server_ip": os.environ.get("SERVER_IP",""),
     "tng_mode": "mapping",
@@ -436,6 +467,11 @@ meta = {
   },
   "tools": tools,
 }
+config_name = "ingress.json" if role == "client" else "egress.json"
+config_path = os.path.join(os.path.dirname(json_path), "configs", config_name)
+if os.path.isfile(config_path):
+    with open(config_path, "rb") as config_file:
+        meta["configuration"] = {"config SHA-256": hashlib.sha256(config_file.read()).hexdigest()}
 with open(json_path, "w") as f:
     json.dump(meta, f, indent=2)
 PY
@@ -483,142 +519,12 @@ print(json.dumps(d))
 PY
 }
 
-# Build bench-report.md from env.json + a results JSON file (template form).
-# Usage: write_markdown <results_json_path>
+# Legacy entry point delegates to the canonical renderer, avoiding format drift.
+# Usage: write_markdown <results_json_path> (requires both host-info files).
 write_markdown() {
-    local results="$1"
-    python3 - "$OUTDIR" "$results" <<'PY'
-import json, os, sys
-outdir, results_path = sys.argv[1], sys.argv[2]
-env = json.load(open(os.path.join(outdir, "env.json")))
-res = {}
-if results_path:
-    try: res = json.load(open(results_path))
-    except Exception: res = {}
-p = env.get("params", {})
-
-IPERF_WL = ["iperf3+raw", "iperf3+stunnel", "iperf3+rats-tls", "iperf3+rats-tls+mux"]
-HTTP_WL  = ["http+raw", "http+stunnel", "http+rats-tls", "http+rats-tls+mux", "http+ohttp"]
-IPERF_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
-           ("cpu_pct", "Tunnel CPU %", "%.1f", False),
-           ("mem_gb", "Tunnel Mem (GB)", "%.3f", False)]
-HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
-          ("rps", "RPS", "%.0f", True),
-          ("mean_us", "Mean (us)", "%d", True),
-          ("p50_us", "p50 (us)", "%d", True),
-          ("p90_us", "p90 (us)", "%d", True),
-          ("p95_us", "p95 (us)", "%d", True),
-          ("p99_us", "p99 (us)", "%d", True),
-          ("success_pct", "Success %", "%.1f", True),
-          ("srv_cpu_pct", "Server CPU %", "%.1f", False),
-          ("srv_mem_mib", "Server Mem (MiB)", "%.1f", False)]
-
-def lbl(w): return w.split("+", 1)[1] if "+" in w else w
-def row(cells): return "| " + " | ".join(str(c) for c in cells) + " |"
-def num(v):
-    try: return float(v)
-    except Exception: return None
-
-def keys(wls):
-    ks = set()
-    for w in wls:
-        for k in res.get(w, {}): ks.add(k)
-    try: return sorted(ks, key=lambda x: int(x))
-    except Exception: return sorted(ks)
-
-def merged_table(wls, metrics, axis):
-    cols = [axis, "Workload"] + [m[1] for m in metrics]
-    out = [row(cols), row(["---"] * len(cols))]
-    for k in keys(wls):
-        raw_m = res.get(wls[0], {}).get(str(k), {})
-        for w in wls:
-            m = res.get(w, {}).get(str(k), {})
-            r = [k, lbl(w)]
-            for (mk, hdr, fmt, has_raw) in metrics:
-                v = m.get(mk)
-                if v is None or v == "" or (isinstance(v, str) and v in ("N/A", "-")):
-                    r.append("-"); continue
-                if not has_raw and w == wls[0]:
-                    r.append("-"); continue
-                vn = num(v)
-                if vn is None:
-                    r.append("-"); continue
-                cell = fmt % vn
-                if w != wls[0] and has_raw:
-                    rv = num(raw_m.get(mk))
-                    if rv is not None and rv != 0:
-                        pct = (vn - rv) / rv * 100.0
-                        cell = "%s (%+.0f%%)" % (cell, pct)
-                r.append(cell)
-            out.append(row(r))
-    return out
-
-L = []
-L.append("# TNG Two-Host Benchmark Report")
-L.append("")
-# 1. Environment
-L.append("## 1. Test Environment")
-L.append("")
-L.append("| Item | Value |")
-L.append("| --- | --- |")
-L.append("| Client host | %s |" % env.get("host", ""))
-L.append("| Kernel | %s |" % env.get("uname", ""))
-L.append("| CPU | %s (%s vCPU) |" % (env.get("cpu_model", ""), env.get("cpu_count", "")))
-L.append("| Memory | %s |" % env.get("mem", ""))
-L.append("| TNG | %s (git %s) |" % (env.get("tng_version", ""), env.get("tng_git", "")))
-L.append("| Container runtime | %s |" % env.get("runtime", ""))
-L.append("| Server IP | %s |" % p.get("server_ip", ""))
-L.append("")
-# 2. Conditions
-L.append("## 2. Test Conditions")
-L.append("")
-L.append("| Parameter | Value |")
-L.append("| --- | --- |")
-L.append("| TNG ingress/egress mode | %s |" % p.get("tng_mode", ""))
-L.append("| Remote attestation | no_ra=%s |" % p.get("no_ra", ""))
-L.append("| Load containers | --network host |")
-L.append("| iperf3 streams | %s |" % p.get("iperf_streams", ""))
-L.append("| iperf3 duration / rounds / len | %ss / %s / %s bytes |" % (p.get("iperf_duration",""), p.get("iperf_rounds",""), p.get("iperf_len","")))
-L.append("| wrk connections | %s |" % p.get("wrk_conns", ""))
-L.append("| wrk duration / rounds / threads | %ss / %s / %s |" % (p.get("wrk_duration",""), p.get("wrk_rounds",""), p.get("wrk_threads","")))
-L.append("| HTTP body size | %s KiB |" % p.get("http_body_kb", ""))
-L.append("| Result per point | median of N rounds |")
-L.append("")
-# 3. Tools
-L.append("## 3. Test Tool Versions")
-L.append("")
-L.append("| Tool | Image (resolved) | Version | Digest |")
-L.append("| --- | --- | --- | --- |")
-for name in ("iperf3", "nginx", "wrk", "stunnel"):
-    t = env.get("tools", {}).get(name, {})
-    L.append("| %s | %s | %s | %s |" % (name, t.get("image", ""), t.get("version", ""), t.get("digest", "")))
-L.append("")
-# 4. Methodology
-L.append("## 4. Test Methodology")
-L.append("")
-L.append("Two hosts (server/P and client/D) reach each other over eth0. The server runs iperf3, nginx, and stunnel backends plus one TNG egress process (five `mapping` entries on ports 40001-40005); the client runs one TNG ingress process (five `mapping` entries on 50001-50005) plus stunnel clients. All load tools run in `--network host` containers pulled mirror-first; TNG runs as a host binary.")
-L.append("")
-L.append("iperf3 sweeps parallel streams (`-P`); HTTP (wrk) sweeps connections (`-c`), each for a fixed duration. Each `(workload, stream/conn)` point runs N rounds and records the median of each metric. wrk runs with `--latency` so p50/p90/p99 come from the latency distribution; the mean is wrk's Thread Stats average; the success rate is (completed requests - non-2xx) / (completed + socket errors).")
-L.append("")
-L.append("The Server CPU % and Server Mem (MiB) columns are sampled on the server host during the steady-state round via `pidstat -u -r -p <PIDs> 1 <duration>`, taking the Average row. For TNG workloads the sampled component is the tng egress process (by its listen port, all threads summed by pidstat); for the haproxy baseline the haproxy-srv master plus all workers (pgrep, summed across processes); for the stunnel baseline the stunnel-srv process. The same method is used for every component so they are directly comparable. CPU % is summed across the component's processes (100 = one logical core); RSS is summed (KiB) and reported in MiB. Client-side proxy, bench scripts, curl, the backend, NLB, OS cache, and other processes are NOT counted. Raw baselines have no tunnel component, shown as `-`. Every numeric metric on a non-raw row is annotated with its percent change versus the raw baseline at the same concurrency; `-` marks a metric the raw baseline has no value for. p95 comes from a wrk Lua done() callback (latency:percentile(95)) since wrk --latency omits the 95th percentile.")
-L.append("")
-# 5. Results
-L.append("## 5. Results")
-L.append("")
-L.append("### Scenario A - iperf3 (TCP throughput)")
-L.append("")
-L.extend(merged_table(IPERF_WL, IPERF_M, "Streams"))
-L.append("")
-L.append("### Scenario B - HTTP / wrk (%s KiB body)" % p.get("http_body_kb", "64"))
-L.append("")
-L.extend(merged_table(HTTP_WL, HTTP_M, "Conns"))
-L.append("")
-L.append("Note: vs-raw percent change is in parentheses after each non-raw value. For throughput/RPS a negative value means lower than raw; for latency a positive value means slower than raw. At high concurrency the raw baseline's mean/p90/p99 are skewed by tail-latency spikes, so TNG rows can show large negative changes there, meaning TNG is more stable than a saturated raw server.")
-L.append("")
-
-open(os.path.join(outdir, "bench-report.md"), "w").write("\n".join(L))
-print(os.path.join(outdir, "bench-report.md"))
-PY
+    local bench_dir
+    bench_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    bash "$bench_dir/gen-report.sh" "$OUTDIR/server-info.json" "$OUTDIR/client-info.json" "$1" "$OUTDIR/bench-report.md"
 }
 
 # Idempotent teardown.

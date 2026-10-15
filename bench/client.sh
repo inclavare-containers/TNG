@@ -229,6 +229,7 @@ run_all() {
 }
 
 preflight
+verify_tng_build
 pull_tools
 start_ingress
 collect_info "$OUTDIR/client-info.json" client

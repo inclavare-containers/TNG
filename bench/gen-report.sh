@@ -9,27 +9,52 @@
 #   bash bench/gen-report.sh --compare \
 #     <base-server-info> <base-client-info> <base-results> \
 #     <exp-server-info> <exp-client-info> <exp-results> <output.md>
+# Optional: --deltas <file.md> (compare mode only) also writes the per-workload
+# before/after delta percentages computed from the same unrounded data as the markers.
+# Optional: --metrics m1,m2 (compare mode only) restricts the report to metrics the
+# run actually collected (historical/partial datasets); results may not contain
+# measured metrics outside the listed subset.
 set -euo pipefail
 
 MODE=single
-if [ "${1:-}" = "--compare" ]; then
-    MODE=compare; shift
+ALLOW_UNVERIFIED=0
+ALLOW_MIXED=0
+DELTAS_OUT=""
+METRICS=""
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --compare) MODE=compare; shift ;;
+        --allow-unverified) ALLOW_UNVERIFIED=1; shift ;;
+        --allow-mixed-versions) ALLOW_MIXED=1; shift ;;
+        --deltas) [ $# -ge 2 ] || { echo "usage: --deltas requires a path" >&2; exit 2; }; DELTAS_OUT="$2"; shift 2 ;;
+        --metrics) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --metrics requires a comma-separated list" >&2; exit 2; }; METRICS="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+if [ -n "$DELTAS_OUT" ] && [ "$MODE" != compare ]; then
+    echo "error: --deltas is only valid with --compare" >&2
+    exit 2
 fi
-if [ "$MODE" = "compare" ]; then
-    if [ $# -ne 7 ]; then
-        echo "usage: gen-report.sh --compare <base-server-info> <base-client-info> <base-results> <exp-server-info> <exp-client-info> <exp-results> <out.md>" >&2
-        exit 1
-    fi
+if [ -n "$METRICS" ] && [ "$MODE" != compare ]; then
+    echo "error: --metrics is only valid with --compare" >&2
+    exit 2
+fi
+if [ "$MODE" = compare ]; then
+    [ $# -eq 7 ] || { echo "usage: $0 --compare [--allow-unverified] [--allow-mixed-versions] [--deltas FILE] [--metrics LIST] <base-server-info> <base-client-info> <base-results> <exp-server-info> <exp-client-info> <exp-results> <output.md>" >&2; exit 2; }
 else
-    if [ $# -lt 3 ] || [ $# -gt 4 ]; then
-        echo "usage: gen-report.sh [--compare] <server-info.json> <client-info.json> <results.json> [out.md]" >&2
-        exit 1
-    fi
+    [ $# -ge 3 ] && [ $# -le 4 ] || { echo "usage: $0 [--allow-unverified] [--allow-mixed-versions] <server-info> <client-info> <results> [output.md]" >&2; exit 2; }
     [ $# -eq 3 ] && set -- "$@" ./bench-report.md
 fi
 
-python3 - "$MODE" "$@" <<'PY'
-import json, sys
+python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$DELTAS_OUT" "$METRICS" "$MODE" "$@" <<'PY_REPORT'
+import json, os, sys, tempfile
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv.pop(1))
+ALLOW_UNVERIFIED = sys.argv.pop(1) == "1"
+ALLOW_MIXED = sys.argv.pop(1) == "1"
+DELTAS_OUT = sys.argv.pop(1)
+METRICS = sys.argv.pop(1)
+from report_support import CLASSES, check_identity, classify, number
 
 mode = sys.argv[1]
 if mode == "compare":
@@ -38,8 +63,61 @@ else:
     srv_p, cli_p, res_p, out_path = sys.argv[2:6]
 
 def load(p):
-    try: return json.load(open(p))
-    except Exception as e: return {}
+    try:
+        with open(p) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        return data
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"Invalid input {p}: {e}")
+
+def validate_results(data, context):
+    if not data or not any(data.values()):
+        raise SystemExit(f"{context}: empty results; no measured workload")
+    allowed = set(IPERF_WL + HTTP_B_WL + HTTP_C_WL)
+    for workload, points in data.items():
+        if workload not in allowed or not isinstance(points, dict):
+            raise SystemExit(f"{context}: unsupported/malformed workload {workload!r}; extend the renderer rather than dropping it")
+        for key, metrics in points.items():
+            if not str(key).isdigit() or int(key) <= 0 or str(int(key)) != key or not isinstance(metrics, dict):
+                raise SystemExit(f"{context}: invalid concurrency/metrics for {workload}: {key!r}")
+            for name, value in metrics.items():
+                if METRIC_SEL is not None and name in ALL_METRIC_NAMES and name not in METRIC_SEL:
+                    raise SystemExit(f"{context}: {workload} concurrency {key} records metric {name!r} outside --metrics; drop the measurement or add it to the subset")
+                n = number(value)
+                if n is not None and (n < 0 or (name == 'success_pct' and n > 100)):
+                    raise SystemExit(f"{context}: invalid {name} for {workload}, concurrency={key}: {value!r}")
+
+IDENTITY_ISSUES = []
+MIXED_NOTES = []
+def validate_hosts(srv, cli, label):
+    for side, meta in (("server", srv), ("client", cli)):
+        IDENTITY_ISSUES.extend(check_identity(meta, f"{label} {side}"))
+    fields = ("tng_git", "tng_version")
+    differs = [f for f in fields if srv.get(f) != cli.get(f)]
+    # Different architectures can yield different binaries from the same source.
+    sb, cb = srv.get("tng_build") or {}, cli.get("tng_build") or {}
+    sb = sb if isinstance(sb, dict) else {}
+    cb = cb if isinstance(cb, dict) else {}
+    differs += [f for f in ("dirty", "source_state_sha256") if sb.get(f) != cb.get(f)]
+    if differs:
+        note = f"{label}: ingress/egress identities differ ({', '.join(differs)})."
+        if not ALLOW_MIXED:
+            raise SystemExit(note + " Investigate, or explicitly use --allow-mixed-versions for an intentional compatibility run.")
+        MIXED_NOTES.append(note)
+
+def identity_banner():
+    if IDENTITY_ISSUES and not ALLOW_UNVERIFIED:
+        raise SystemExit("Unverified benchmark identity:\n- " + "\n- ".join(IDENTITY_ISSUES) + "\nUse record-build.py and deploy its manifest with the binary. --allow-unverified is only for explicitly preliminary historical reports.")
+    if IDENTITY_ISSUES:
+        L.extend(["> **PRELIMINARY / UNVERIFIED: not final reproducible performance evidence.**", ""])
+        for issue in IDENTITY_ISSUES:
+            L.append("- " + issue)
+        L.append("")
+        print("Warning: unverified historical/preliminary report", file=sys.stderr)
+    for note in MIXED_NOTES:
+        L.extend(["> **Intentional mixed-version run:** " + note, ""])
 
 # Merge tool metadata: nginx/wrk each live on one side; iperf3/stunnel on both (same image).
 def merged_tools(srv, cli):
@@ -71,11 +149,30 @@ HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
 # baseline values, unlabeled.
 TNG_MARKS = ("rats-tls", "rats-tls+mux", "ohttp")
 
+# --metrics restricts the columns to what a (historical or partial) run actually
+# collected. Restricting away measured columns present in the data is rejected;
+# the chosen subset is disclosed in the report by the missing columns themselves
+# and in the PR text by the caller.
+ALL_METRIC_NAMES = {t[0] for t in IPERF_M} | {t[0] for t in HTTP_M}
+METRIC_SEL = None
+if METRICS:
+    sel = {m.strip() for m in METRICS.split(',') if m.strip()}
+    unknown = sorted(sel - ALL_METRIC_NAMES)
+    if unknown:
+        raise SystemExit(f"--metrics: unknown metric(s) {', '.join(unknown)}; allowed: {', '.join(sorted(ALL_METRIC_NAMES))}")
+    METRIC_SEL = sel
+    IPERF_M = [t for t in IPERF_M if t[0] in sel]
+    HTTP_M = [t for t in HTTP_M if t[0] in sel]
+
 def lbl(w): return w.split("+", 1)[1] if "+" in w else w
-def num(v):
-    try: return float(v)
-    except Exception: return None
-def row(cells): return "| " + " | ".join(str(c) for c in cells) + " |"
+def num(v): return number(v)
+def row(cells):
+    def escape(c):
+        return str(c).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|").replace("\n", "<br>").replace("\r", "")
+    return "| " + " | ".join(escape(c) for c in cells) + " |"
+
+def fold(title, lines):
+    return ["<details>", f"<summary>{title}</summary>", "", *lines, "", "</details>", ""]
 
 def keys_of(res, wls):
     ks = set()
@@ -87,17 +184,14 @@ def keys_of(res, wls):
 def has_data(res, wls):
     return any(res.get(w) for w in wls)
 
-# Direction-aware "better" sign: throughput/RPS/success are better when higher;
-# every latency and resource metric is better when lower.
-HIGHER_BETTER = {"throughput", "rps", "success_pct"}
-FLAT_BAND_PCT = 1.0  # within this band the experimental value counts as flat (still ✅)
-
-def metric_cells(m, metrics, raw_m, annotate, base_m=None):
+def metric_cells(m, metrics, raw_m, annotate, base_m=None, structural_raw=False):
     """Format one workload row's metric cells. annotate=True adds the vs-raw
     percent change (the raw row itself passes False). base_m (compare-mode
-    experimental rows) appends a direction-aware ✅/⚠️ vs the baseline value."""
+    experimental rows) appends a five-class direction-aware marker vs the baseline value."""
     r = []
     for (mk, hdr, fmt, has_raw) in metrics:
+        if structural_raw and not has_raw:
+            r.append("-"); continue
         v = m.get(mk)
         if v is None or v == "" or (isinstance(v, str) and v in ("N/A", "-")):
             r.append("-"); continue
@@ -110,11 +204,8 @@ def metric_cells(m, metrics, raw_m, annotate, base_m=None):
                 pct = (vn - rv) / rv * 100.0
                 cell = "%s (%+.0f%%)" % (cell, pct)
         if base_m is not None:
-            bv = num(base_m.get(mk))
-            if bv is not None and bv != 0:
-                sign = 1 if mk in HIGHER_BETTER else -1
-                better_pct = (vn - bv) / abs(bv) * 100.0 * sign
-                cell += "✅" if better_pct >= -FLAT_BAND_PCT else "⚠️"
+            cls, _ = classify(base_m.get(mk), v, mk)
+            cell += CLASSES[cls][0]
         r.append(cell)
     return r
 
@@ -131,7 +222,7 @@ def merged_table(res, wls, metrics, axis):
     return out
 
 # --- compare-mode result table ------------------------------------------------
-def compare_merged_table(res_b, res_e, wls, metrics, axis):
+def compare_merged_table(res_b, res_e, wls, metrics, axis, controls=False):
     cols = [axis, "Workload"] + [m[1] for m in metrics]
     out = [row(cols), row(["---"] * len(cols))]
     ks = set()
@@ -148,13 +239,13 @@ def compare_merged_table(res_b, res_e, wls, metrics, axis):
             # displayed raw row so the pair reads against one reference.
             mb = res_b.get(w, {}).get(str(k), {})
             if mb:
-                name = lbl(w) + "(baseline)" if lbl(w) in TNG_MARKS else lbl(w)
+                name = lbl(w) + "(baseline)" if controls or lbl(w) in TNG_MARKS else lbl(w)
                 out.append(row([k, name] + metric_cells(mb, metrics, raw_b, annotate=(w != wls[0]))))
-            if lbl(w) not in TNG_MARKS:
+            if not controls and lbl(w) not in TNG_MARKS:
                 continue
             me = res_e.get(w, {}).get(str(k), {})
             if me:
-                cells = [k, lbl(w) + "(experimental)"] + metric_cells(me, metrics, raw_b, annotate=True, base_m=mb)
+                cells = [k, lbl(w) + "(experimental)"] + metric_cells(me, metrics, raw_b, annotate=(w != wls[0]), base_m=mb, structural_raw=(controls and w == wls[0]))
                 out.append(row(["**%s**" % c for c in cells]))
     return out
 
@@ -163,16 +254,28 @@ def env_rows(srv, cli):
     rows = []
     def host_block(side, h):
         if not h: return
-        rows.append(("%s host" % side, "%s (IP %s)" % (h.get("host", ""), h.get("ip", ""))))
-        rows.append(("%s kernel" % side, h.get("uname", "")))
+        rows.append(("%s host" % side, "client/load host" if side == "Client" else "server/backend host"))
+        rows.append(("%s kernel" % side, " ".join(h.get("uname", "").split()[:1] + h.get("uname", "").split()[2:]) if len(h.get("uname", "").split()) > 2 else h.get("uname", "")))
         rows.append(("%s CPU" % side, "%s (%s vCPU)" % (h.get("cpu_model", ""), h.get("cpu_count", ""))))
         rows.append(("%s memory" % side, h.get("mem", "")))
     host_block("Client", cli)
     host_block("Server", srv)
-    rows.append(("TNG", "%s (git %s)" % (cli.get("tng_version") or srv.get("tng_version", ""),
-                                         cli.get("tng_git") or srv.get("tng_git", ""))))
+    for side, h in (("Client", cli), ("Server", srv)):
+        build = h.get("tng_build") or {}
+        build = build if isinstance(build, dict) else {}
+        rows.extend([
+            (f"{side} TNG", h.get("tng_version", "[missing]")),
+            (f"{side} TNG source revision", h.get("tng_git", "[missing]")),
+            (f"{side} TNG binary SHA-256", h.get("tng_binary_sha256", "[missing]")),
+            (f"{side} source state SHA-256", build.get("source_state_sha256", "[missing]")),
+            (f"{side} dirty source", build.get("dirty", "[missing]")),
+            (f"{side} build command", build.get("build_command", "[missing]")),
+            (f"{side} build environment", json.dumps(build.get("build_environment", {}), sort_keys=True)),
+            (f"{side} build time (UTC)", build.get("created_at_utc", "[missing]")),
+            (f"{side} run ID", h.get("run_id", "[missing]")),
+        ])
     rows.append(("Container runtime", cli.get("runtime") or srv.get("runtime", "")))
-    rows.append(("Link", "eth0: client %s <-> server %s" % (cli.get("ip", ""), srv.get("ip", ""))))
+    rows.append(("Link", "eth0: client/load host <-> server/backend host"))
     return rows
 
 def cond_rows(srv, cli, res):
@@ -195,6 +298,13 @@ def cond_rows(srv, cli, res):
     if any(k.startswith("http-shortconn+") for k in res): scens.append("no keep-alive (C)")
     rows.append(("HTTP scenarios measured", " + ".join(scens) if scens else "none"))
     rows.append(("Result per point", "median of N rounds"))
+    for side, meta in (("Client", cli), ("Server", srv)):
+        for key, value in sorted(meta.get("params", {}).items()):
+            if key == "server_ip":
+                value = "[redacted endpoint]"
+            rows.append((f"{side} parameter: {key}", value))
+        for name, value in sorted(meta.get("configuration", {}).items()):
+            rows.append((f"{side} configuration: {name}", value))
     return rows
 
 def tool_rows(tools):
@@ -203,6 +313,13 @@ def tool_rows(tools):
         t = tools.get(name, {})
         fields = [t.get("image", ""), t.get("source", ""), t.get("version", ""), t.get("digest", "")]
         rows.append((name, fields))
+    return rows
+
+def host_tool_rows(srv, cli):
+    rows = []
+    for side, meta in (("Client", cli), ("Server", srv)):
+        for name, fields in tool_rows(meta.get("tools", {})):
+            rows.append((f"{side} {name}", fields))
     return rows
 
 def tool_cell(fields):
@@ -214,7 +331,7 @@ def value_table(rows):
         out.append(row([item, value]))
     return out
 
-def diff_table(brows, erows):
+def diff_table(brows, erows, only_changes=True):
     """Rows whose values differ; identical entries are omitted entirely."""
     emap = dict(erows)
     brows_ = dict(brows)
@@ -229,29 +346,150 @@ def diff_table(brows, erows):
         else:
             bs = bv if bv not in (None, "") else "-"
             es = ev if ev not in (None, "") else "-"
-        if bs != es:
+        if not only_changes or bs != es:
             out.append(row([item, bs, es]))
     return out
 
 def diff_section(title, brows, erows, bhead, ehead):
-    L.append(title)
+    L.extend([title, ""])
+    header = [row(["Item", bhead, ehead]), row(["---"] * 3)]
+    changed = diff_table(brows, erows)
+    L.extend(header + changed if changed else ["No differences."])
     L.append("")
-    rows = diff_table(brows, erows)
-    if not rows:
-        L.append("No differences.")
-        L.append("")
+    L.extend(fold("Full " + title.split(". ", 1)[1].lower(),
+                  header + diff_table(brows, erows, only_changes=False)))
+
+LEGEND = ("Parenthesized percentages are vs the displayed baseline-run raw row. "
+          "Markers and counts compare the same metric/workload/concurrency with before: "
+          "🟢 favorable >1%; ⚪ within ±1%; 🟡 unfavorable >1–5%; 🟠 >5–15%; 🔴 >15%. "
+          "These are display thresholds, not statistical significance or a pass/fail score. "
+          "CPU/RSS increases are resource costs. Percentages in Count (%) use all counted metric cells.")
+LEGEND_NO_RAW = ("This comparison measured no reference rows, so cells carry no vs-raw percentages. "
+                 "Markers and counts compare the same metric/workload/concurrency with before: "
+                 "🟢 favorable >1%; ⚪ within ±1%; 🟡 unfavorable >1–5%; 🟠 >5–15%; 🔴 >15%. "
+                 "These are display thresholds, not statistical significance or a pass/fail score. "
+                 "CPU/RSS increases are resource costs. Percentages in Count (%) use all counted metric cells.")
+
+def legend_for(wls, rb, re):
+    return LEGEND if (rb.get(wls[0]) or re.get(wls[0])) else LEGEND_NO_RAW
+
+def comparison_summary(rb, re, wls, metrics, controls=False):
+    selected = [w for w in wls if (lbl(w) not in TNG_MARKS if controls else lbl(w) in TNG_MARKS)]
+    counts = [[0] * len(metrics) for _ in CLASSES]
+    findings = []
+    scope = []
+    missing = []
+    expected = {str(k) for k in keys_of(rb, wls)} | {str(k) for k in keys_of(re, wls)}
+    for w in selected:
+        if not rb.get(w) and not re.get(w):
+            # A mode absent from both runs (e.g. an ohttp-only ablation subset) is
+            # not measured; modes present in either run still need a complete matrix.
+            continue
+        bk, ek = set(rb.get(w, {})), set(re.get(w, {}))
+        if bk != expected or ek != expected:
+            missing.append(f"{w}: incomplete scenario concurrency matrix; expected {sorted(expected)}, before={sorted(bk)}, after={sorted(ek)}")
+        if bk != ek:
+            missing.append(f"{w}: before/after concurrency keys differ: {sorted(bk)} vs {sorted(ek)}")
+        for k in sorted(bk | ek, key=lambda x: int(x)):
+            scope.append((w, k))
+            mb, me = rb.get(w, {}).get(k, {}), re.get(w, {}).get(k, {})
+            for i, (mk, hdr, fmt, has_raw) in enumerate(metrics):
+                if controls and w == wls[0] and not has_raw:
+                    continue
+                try:
+                    cls, delta = classify(mb.get(mk), me.get(mk), mk)
+                except ValueError as e:
+                    missing.append(f"{w}, concurrency={k}: {e}")
+                    continue
+                counts[cls][i] += 1
+                # Always disclose adverse success-rate changes, even inside stable.
+                if cls >= 3 or (mk == 'success_pct' and delta < 0):
+                    findings.append(f"{CLASSES[cls][0]} {lbl(w)}, concurrency={k}, {hdr}: {fmt % number(mb[mk])} → {fmt % number(me[mk])} ({delta:+.1f}% vs before)")
+    if missing:
+        raise SystemExit("Incomplete comparison; no summary/report written:\n- " + "\n- ".join(missing))
+    total = sum(sum(c) for c in counts)
+    if not total:
+        raise SystemExit("No paired metrics available for classification")
+    columns = ['Change class', 'Count (%)'] + [m[1] for m in metrics]
+    table = [row(columns), row(['---', '---:'] + ['---:'] * len(metrics))]
+    for i, (symbol, label) in enumerate(CLASSES):
+        n = sum(counts[i])
+        table.append(row([f'{symbol} {label}', f'{n} ({n / total * 100:.1f}%)', *counts[i]]))
+    table.append(row(['**Total**', f'**{total} (100.0%)**',
+                      *[f'**{sum(c[i] for c in counts)}**' for i in range(len(metrics))]]))
+    assert sum(sum(c[i] for c in counts) for i in range(len(metrics))) == total
+    modes = ', '.join(lbl(w) for w in selected if rb.get(w) or re.get(w))
+    levels = ', '.join(sorted({k for _, k in scope}, key=lambda x: int(x)))
+    intro = [f"**Measured changes:** {sum(counts[0])} improved, {sum(counts[1])} stable, "
+             f"{sum(counts[2])} mild, {sum(counts[3])} moderate and {sum(counts[4])} severe degradations. "
+             "These counts do not weight metric importance; attribution and causes require review.", ""]
+    if findings:
+        intro += ['**Notable adverse measurements (causes not inferred):**', '', *['- ' + f for f in findings], '']
+    return intro + table + ['', f"Scope: {modes}; concurrency={levels}. Each eligible metric cell is counted once; before rows are not counted again. "
+                            "Reference-only rows are excluded from the main summary. Raw resource fields are structurally uncollected in control summaries.", '', legend_for(wls, rb, re), '']
+
+DELTA_BLOCKS = []
+
+def capture_deltas(title, rb, re, wls, metrics, axis):
+    for w in wls:
+        if lbl(w) not in TNG_MARKS or not (rb.get(w) or re.get(w)):
+            continue
+        ks = sorted(set(rb.get(w, {})) | set(re.get(w, {})), key=lambda x: int(x))
+        per = [[] for _ in metrics]
+        rows = [row([axis] + [m[1] for m in metrics]), row(['---'] + ['---:'] * len(metrics))]
+        for k in ks:
+            mb = rb.get(w, {}).get(k, {})
+            me = re.get(w, {}).get(k, {})
+            cells = [k]
+            for i, (mk, hdr, fmt, _) in enumerate(metrics):
+                try:
+                    _, chg = classify(mb.get(mk), me.get(mk), mk)
+                except ValueError as e:
+                    raise SystemExit(f"deltas: {w}, concurrency={k}: {e}")
+                per[i].append(chg)
+                cells.append('%+.1f' % chg)
+            rows.append(row(cells))
+        if ks:
+            for agg, name in ((min, 'min'), (max, 'max'), (lambda v: sum(v) / len(v), 'mean')):
+                rows.append(row(['**%s**' % name] + ['**%+.1f**' % agg(v) for v in per]))
+        DELTA_BLOCKS.extend([title, '',
+                             "Workload `%s`; delta%% = (after - before) / before * 100 on unrounded recorded medians, positive = increase; aggregates span concurrencies." % lbl(w),
+                             '', *rows, ''])
+
+def compare_scenario(title, rb, re, wls, metrics, axis):
+    L.extend([title, ''])
+    if not (has_data(rb, wls) or has_data(re, wls)):
+        L.extend(['Not measured in either run.', ''])
         return
-    L.append("| Item | %s | %s |" % (bhead, ehead))
-    L.append("| --- | --- | --- |")
-    L.extend(rows)
-    L.append("")
+    L.extend(comparison_summary(rb, re, wls, metrics))
+    L.extend(fold('Full ' + title[4:] + ' comparison',
+                  compare_merged_table(rb, re, wls, metrics, axis)))
+    capture_deltas(title, rb, re, wls, metrics, axis)
+    references = [w for w in wls if lbl(w) not in TNG_MARKS]
+    if any(rb.get(w) or re.get(w) for w in references):
+        # Keep both runs' references rather than hiding drift behind a single row.
+        L.extend(['**Reference/control before–after comparison**', ''])
+        L.extend(comparison_summary(rb, re, wls, metrics, controls=True))
+        L.extend(fold('Full reference/control comparison',
+                      compare_merged_table(rb, re, references, metrics, axis, controls=True)))
 
 METH_BODY = [
-    "Two hosts (server/P and client/D) reach each other over eth0. The server runs iperf3, nginx, and stunnel backends plus one TNG egress process (five `mapping` entries on ports 40001-40005); the client runs one TNG ingress process (five `mapping` entries on 50001-50005) plus stunnel clients. All load tools run in `--network host` containers pulled mirror-first; TNG runs as a host binary.",
-    "",
-    "iperf3 sweeps parallel streams (`-P`); HTTP (wrk) sweeps connections (`-c`), each for a fixed duration. The HTTP matrix is swept twice per run: keep-alive (Scenario B, persistent connections) and no keep-alive (Scenario C, wrk sends `Connection: close`, so every request pays a fresh TCP+TLS handshake). Each `(workload, stream/conn)` point runs N rounds and records the median of each metric. wrk runs with `--latency` so p50/p90/p99 come from the latency distribution; p95 comes from a wrk Lua done() callback (latency:percentile(95)) since wrk --latency omits the 95th percentile. The mean is wrk's Thread Stats average; the success rate is (completed requests - non-2xx) / (completed + socket errors).",
-    "",
-    "The Server CPU % and Server Mem (MiB) columns are sampled on the server host during the steady-state round via `pidstat -u -r -p <PIDs> 1 <duration>`, taking the Average row, with the SAME method for every tunnel type for a fair comparison: for TNG workloads the tng egress process (by its listen port, all threads summed by pidstat); for the haproxy baseline the haproxy-srv master plus all workers (pgrep, summed across processes); for the stunnel baseline the stunnel-srv process. CPU % is summed across the component's processes (100 = one logical core); RSS is summed (KiB) and reported in MiB. Client-side proxy, bench scripts, curl, the backend, NLB, OS cache, and other processes are NOT counted. raw baselines have no tunnel component, shown as `-`. Every numeric metric on a non-raw row is annotated with its percent change versus the raw baseline at the same concurrency.",
+    "**Topology and tunnel modes**", "",
+    "- Two hosts communicate over eth0: a client/load host runs TNG ingress and load generators; a server/backend host runs TNG egress, iperf3, nginx and TLS-proxy reference backends.",
+    "- TNG uses five mapping entries (ingress 50001–50005, egress 40001–40005). Load tools use host-network containers; TNG runs as a host executable. Protocol modes and attestation settings are recorded in Test Conditions.", "",
+    "**Workloads and run parameters**", "",
+    "- Scenario A measures TCP throughput with iperf3 parallel streams (`-P`). Scenario B measures HTTP/wrk persistent connections; Scenario C sends `Connection: close` for fresh client connections. Actual concurrency, body size, duration, warmup and round counts appear in Test Conditions.",
+    "- Each workload/concurrency point runs the recorded number of rounds. Workload metrics are aggregated as medians of the rounds; resource samples use the last round, as described below. Keep-alive and no-keep-alive are separate scenarios, not interchangeable workloads.", "",
+    "**HTTP latency and success metrics**", "",
+    "- wrk runs with `--latency`: p50/p90/p99 come from its reported distribution; p95 is obtained by the Lua `latency:percentile(95)` callback. Mean is wrk's Thread Stats average.",
+    "- Success rate is `(completed requests - non-2xx) / (completed requests + socket errors)`. Unchanged success rates are classified as stable, not improved. Any decline must still be investigated even within the display tolerance.", "",
+    "**Resource sampling and units**", "",
+    "- TCP Tunnel CPU/Mem columns sample the client-side tunnel process during the final iperf3 round: one-second pidstat CPU windows and ps RSS samples are averaged. The legacy `Tunnel Mem (GB)` label stores RSS KiB divided by 1024² (GiB).",
+    "- HTTP Server CPU/Mem columns sample the server-side tunnel component during the final round using `pidstat -u -r -p <PIDs> 1 <duration>` Average rows. TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process. CPU sums threads/processes (100% = one logical core); RSS is converted from KiB to MiB.",
+    "- Raw reference rows have no tunnel process, so their resource fields are structurally uncollected. Shared TNG process RSS can include allocations retained from earlier workloads; a change across multiple modes does not by itself establish a per-mode cause.", "",
+    "**Comparison and classification**", "",
+    "- Before/after rows compare identical workload and concurrency keys. Parenthesized values compare with the displayed baseline-run raw row; colored markers and classification counts compare with the before row. The exact thresholds and counting scope remain visible beside each result table.",
+    "- Classification is based on unrounded recorded metrics. Count (%) measures metric-cell frequency, not statistical confidence or importance. Reference-run drift is reported separately; attribution and acceptance decisions require review.",
 ]
 
 HTTP_SCENARIOS = [
@@ -259,77 +497,56 @@ HTTP_SCENARIOS = [
     ("### Scenario C - HTTP / wrk ({body} KiB body, no keep-alive)", HTTP_C_WL),
 ]
 
-L = []
+L = ['---', '']
 if mode == "compare":
-    bsrv = load(bsrv_p); bcli = load(bcli_p)
-    esrv = load(esrv_p); ecli = load(ecli_p)
-    try: bres = json.load(open(bres_p))
-    except Exception: bres = {}
-    try: eres = json.load(open(eres_p))
-    except Exception: eres = {}
-
-    L.append("# TNG Two-Host Benchmark Comparison Report")
-    L.append("")
-    diff_section("## 1. Test Environment",
-                 env_rows(bsrv, bcli), env_rows(esrv, ecli), "Baseline", "Experimental")
-    diff_section("## 2. Test Conditions",
-                 cond_rows(bsrv, bcli, bres), cond_rows(esrv, ecli, eres), "Baseline", "Experimental")
-    diff_section("## 3. Test Tool Versions",
-                 tool_rows(merged_tools(bsrv, bcli)), tool_rows(merged_tools(esrv, ecli)),
-                 "Baseline", "Experimental")
-    L.append("## 4. Test Methodology")
-    L.append("")
-    L.extend(METH_BODY)
-    L.append("")
-    L.append("The two runs are compared row by row, not by delta columns. The reference baselines (raw, stunnel, haproxy) appear once with the baseline values; differences in the reference baselines are not the subject. Each TNG workload (rats-tls, rats-tls+mux, ohttp) appears as two adjacent rows labeled with their run: the upper row `(baseline)` carries the baseline values, the lower row `(experimental)` carries the experimental values with every cell bolded (markdown has no row-level bold). Both rows carry the vs-raw percent-change annotation against the baseline run's raw row at the same concurrency, so the pair reads against one visible reference. Every experimental value ends with a direction-aware marker: ✅ when it is better than, or within ±1% of, the baseline value of the same metric; ⚠️ when worse. Better-direction follows the metric's semantics: throughput, RPS, and success rate are better when higher; latency, CPU, and memory are better when lower.")
-    L.append("")
-    L.append("## 5. Results")
-    L.append("")
-    L.append("### Scenario A - iperf3 (TCP throughput)")
-    L.append("")
-    if not (has_data(bres, IPERF_WL) or has_data(eres, IPERF_WL)):
-        L.append("Not measured in this run.")
-    else:
-        L.extend(compare_merged_table(bres, eres, IPERF_WL, IPERF_M, "Streams"))
-    L.append("")
-    body_b = (bcli.get("params", {}) or bsrv.get("params", {})).get("http_body_kb", "64")
-    body_e = (ecli.get("params", {}) or esrv.get("params", {})).get("http_body_kb", "64")
-    body = body_b if body_b else body_e
+    bsrv, bcli, bres = load(bsrv_p), load(bcli_p), load(bres_p)
+    esrv, ecli, eres = load(esrv_p), load(ecli_p), load(eres_p)
+    validate_results(bres, 'baseline')
+    validate_results(eres, 'experimental')
+    validate_hosts(bsrv, bcli, 'baseline')
+    validate_hosts(esrv, ecli, 'experimental')
+    L.extend(['# TNG Two-Host Benchmark Comparison Report', ''])
+    identity_banner()
+    diff_section("## 1. Test Environment", env_rows(bsrv, bcli), env_rows(esrv, ecli), "Baseline", "Experimental")
+    diff_section("## 2. Test Conditions", cond_rows(bsrv, bcli, bres), cond_rows(esrv, ecli, eres), "Baseline", "Experimental")
+    diff_section("## 3. Test Tool Versions", host_tool_rows(bsrv, bcli), host_tool_rows(esrv, ecli), "Baseline", "Experimental")
+    L.extend(['## 4. Test Methodology', ''])
+    L.extend(fold('Test methodology and metric definitions', METH_BODY))
+    L.extend(['## 5. Results', ''])
+    compare_scenario('### Scenario A - iperf3 (TCP throughput)', bres, eres, IPERF_WL, IPERF_M, 'Streams')
+    body_b = (bcli.get('params', {}) or bsrv.get('params', {})).get('http_body_kb', '64')
+    body_e = (ecli.get('params', {}) or esrv.get('params', {})).get('http_body_kb', '64')
+    body = body_b if body_b == body_e else f'before={body_b}, after={body_e}'
     for tmpl, wls in HTTP_SCENARIOS:
-        L.append(tmpl.format(body=body))
-        L.append("")
-        if not (has_data(bres, wls) or has_data(eres, wls)):
-            L.append("Not measured in this run.")
-        else:
-            L.extend(compare_merged_table(bres, eres, wls, HTTP_M, "Conns"))
-        L.append("")
+        compare_scenario(tmpl.format(body=body), bres, eres, wls, HTTP_M, 'Conns')
 else:
     srv = load(srv_p); cli = load(cli_p)
-    try: res = json.load(open(res_p))
-    except Exception: res = {}
+    res = load(res_p)
+    validate_results(res, "single run")
+    validate_hosts(srv, cli, "single run")
     tools = merged_tools(srv, cli)
     p = cli.get("params", {}) or srv.get("params", {})
 
     L.append("# TNG Two-Host Benchmark Report")
     L.append("")
+    identity_banner()
     L.append("## 1. Test Environment")
     L.append("")
-    L.extend(value_table(env_rows(srv, cli)))
+    L.extend(fold("Full test environment", value_table(env_rows(srv, cli))))
     L.append("")
     L.append("## 2. Test Conditions")
     L.append("")
-    L.extend(value_table(cond_rows(srv, cli, res)))
+    L.extend(fold("Full test conditions", value_table(cond_rows(srv, cli, res))))
     L.append("")
     L.append("## 3. Test Tool Versions")
     L.append("")
-    L.append("| Tool | Image (resolved) | Source | Version | Digest |")
-    L.append("| --- | --- | --- | --- | --- |")
-    for name, fields in tool_rows(tools):
-        L.append("| %s | %s | %s | %s | %s |" % (name, fields[0], fields[1], fields[2], fields[3]))
-    L.append("")
+    tool_lines = ["| Tool | Image (resolved) | Source | Version | Digest |", "| --- | --- | --- | --- | --- |"]
+    for name, fields in host_tool_rows(srv, cli):
+        tool_lines.append(row([name, *fields]))
+    L.extend(fold("Full test tool versions", tool_lines))
     L.append("## 4. Test Methodology")
     L.append("")
-    L.extend(METH_BODY)
+    L.extend(fold("Test methodology and metric definitions", METH_BODY))
     L.append("")
     L.append("## 5. Results")
     L.append("")
@@ -338,7 +555,7 @@ else:
     if not has_data(res, IPERF_WL):
         L.append("Not measured in this run.")
     else:
-        L.extend(merged_table(res, IPERF_WL, IPERF_M, "Streams"))
+        L.extend(fold("Full Scenario A results", merged_table(res, IPERF_WL, IPERF_M, "Streams")))
     L.append("")
     for tmpl, wls in HTTP_SCENARIOS:
         L.append(tmpl.format(body=p.get("http_body_kb", "64")))
@@ -346,11 +563,21 @@ else:
         if not has_data(res, wls):
             L.append("Not measured in this run.")
         else:
-            L.extend(merged_table(res, wls, HTTP_M, "Conns"))
+            L.extend(fold("Full scenario results", merged_table(res, wls, HTTP_M, "Conns")))
         L.append("")
-    L.append("Note: vs-raw percent change is in parentheses after each non-raw value, measured against the raw baseline of the same scenario. For throughput/RPS a negative value means lower than raw; for latency a positive value means slower than raw. At high concurrency the raw baseline's mean/p90/p99 are skewed by tail-latency spikes, so TNG rows can show large negative changes there, meaning TNG is more stable than a saturated raw server.")
+    L.append("Note: vs-raw percent change is in parentheses after each non-raw value, measured against the raw baseline of the same scenario. For throughput/RPS a negative value means lower than raw; for latency a positive value means slower than raw. At high concurrency the raw baseline's mean/p90/p99 are skewed by tail-latency spikes, so TNG rows can show large negative changes there, this does not establish the cause of the tail spikes or comparative stability.")
     L.append("")
 
-open(out_path, "w").write("\n".join(L))
+# Validation completes before replacing any existing report.
+with tempfile.NamedTemporaryFile('w', dir=os.path.dirname(os.path.abspath(out_path)), delete=False) as f:
+    f.write("\n".join(L) + "\n")
+    temp_path = f.name
+os.replace(temp_path, out_path)
 print(out_path)
-PY
+if DELTAS_OUT:
+    with open(DELTAS_OUT, 'w') as f:
+        f.write('\n'.join(['# Isolated deltas vs the before run', '',
+                           'Generated by the same classification pass as the report markers.',
+                           ''] + DELTA_BLOCKS) + '\n')
+    print(DELTAS_OUT)
+PY_REPORT

@@ -183,12 +183,13 @@ server_cleanup() {
 trap server_cleanup EXIT
 
 preflight
+verify_tng_build
 pull_all
-# Record server-side info (host env + iperf3/nginx/stunnel tool metadata) for the report generator.
-collect_info "$OUTDIR/server-info.json" server
-ok "server-side info written to $OUTDIR/server-info.json"
 start_backends
 start_egress
+# Capture the generated egress config and verified executable identity.
+collect_info "$OUTDIR/server-info.json" server
+ok "server-side info written to $OUTDIR/server-info.json"
 
 log "============================================="
 log "  Server ready. Tell the client this IP:"
