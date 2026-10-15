@@ -22,7 +22,7 @@
 //! `lib.rs`; this file is only compiled on Linux).
 
 use std::io::{self, Write};
-use std::os::unix::io::{FromRawFd, IntoRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::Path;
 
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -98,7 +98,7 @@ impl HookLogCollector {
     /// Receive loop. Each datagram is one complete frame, decoded and written
     /// to the matching `NonBlocking` writer. On cancel the loop breaks, then
     /// drains whatever children already queued in the kernel recv buffer
-    /// (non-blocking `try_recv` until `WouldBlock`) so in-flight frames are not
+    /// (raw non-blocking recv until `WouldBlock`) so in-flight frames are not
     /// lost on shutdown.
     pub async fn run(self, cancel: oneshot::Receiver<()>) {
         let Self {
@@ -145,12 +145,34 @@ impl HookLogCollector {
         }
 
         // Drain datagrams the children already queued before the socket is
-        // dropped. `try_recv` returns WouldBlock when the kernel buffer is
-        // empty, so this is bounded and fast. By the time `run` is cancelled
-        // (after `child.wait()` returned in `exec.rs`), no child is still
-        // sending, so the buffered set is final. The same truncation guard
-        // applies so a queued oversized record is dropped, not half-written.
-        while let Ok(n) = sock.try_recv(&mut buf) {
+        // dropped. This deliberately bypasses tokio's readiness tracking: a
+        // readiness-gated `try_recv` refuses to run the syscall unless the
+        // reactor has already marked the socket readable, and the cancel
+        // branch can win before any epoll event was delivered, so queued
+        // frames would look "not ready" and be silently lost. A raw recv on
+        // the O_NONBLOCK fd (set in `start`) reads whatever the kernel
+        // actually holds; WouldBlock means the buffer is empty, so the loop
+        // is bounded and fast. By the time `run` is cancelled (after
+        // `child.wait()` returned in `exec.rs`), no child is still sending,
+        // so the buffered set is final. The same truncation guard applies so
+        // a queued oversized record is dropped, not half-written.
+        let fd = sock.as_raw_fd();
+        loop {
+            // SAFETY: `fd` is a valid non-blocking datagram socket owned by
+            // `sock` for the duration of this loop, and the kernel writes at
+            // most `buf.len()` bytes into the (mutable, u8) buffer.
+            let n =
+                unsafe { libc::recv(fd, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len(), 0) };
+            if n < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                // WouldBlock: the kernel buffer is empty; any other error
+                // leaves nothing more we can do with the socket.
+                break;
+            }
+            let n = n as usize;
             if n == 0 {
                 continue;
             }
