@@ -142,8 +142,14 @@ HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
           ("p95_us", "p95 (us)", "%d", True),
           ("p99_us", "p99 (us)", "%d", True),
           ("success_pct", "Success %", "%.1f", True),
+          ("cli_cpu_pct", "Ingress CPU %", "%.1f", False),
           ("srv_cpu_pct", "Server CPU %", "%.1f", False),
           ("srv_mem_mib", "Server Mem (MiB)", "%.1f", False)]
+# Some drivers sample the client-side TNG ingress process with pidstat (the
+# per-host ablation runs record cli_cpu_pct), but the standard harness never
+# does. Optional metrics render only for datasets that carry them, so a
+# canonical run's report keeps its existing column set with no empty column.
+OPTIONAL_METRICS = {"cli_cpu_pct"}
 # TNG workloads get a labeled (baseline) row + a bolded (experimental) row in
 # compare mode; the reference baselines (raw/stunnel/haproxy) appear once with
 # baseline values, unlabeled.
@@ -166,6 +172,16 @@ if METRICS:
 
 def lbl(w): return w.split("+", 1)[1] if "+" in w else w
 def num(v): return number(v)
+def visible_metrics(res_list, wls, metrics):
+    """Registry metrics for this scenario's columns, minus optional ones the
+    datasets do not carry. A metric counted or classified must be present as
+    a number in the cells it is applied to, so dropping absent optional
+    metrics here is what keeps uncollected columns from failing classification."""
+    return [t for t in metrics
+            if t[0] not in OPTIONAL_METRICS
+            or any(num(m.get(t[0])) is not None
+                   for res in res_list for w in wls
+                   for m in res.get(w, {}).values() if isinstance(m, dict))]
 def row(cells):
     def escape(c):
         return str(c).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "\\|").replace("\n", "<br>").replace("\r", "")
@@ -461,6 +477,7 @@ def compare_scenario(title, rb, re, wls, metrics, axis):
     if not (has_data(rb, wls) or has_data(re, wls)):
         L.extend(['Not measured in either run.', ''])
         return
+    metrics = visible_metrics((rb, re), wls, metrics)
     L.extend(comparison_summary(rb, re, wls, metrics))
     L.extend(fold('Full ' + title[4:] + ' comparison',
                   compare_merged_table(rb, re, wls, metrics, axis)))
@@ -468,10 +485,11 @@ def compare_scenario(title, rb, re, wls, metrics, axis):
     references = [w for w in wls if lbl(w) not in TNG_MARKS]
     if any(rb.get(w) or re.get(w) for w in references):
         # Keep both runs' references rather than hiding drift behind a single row.
+        ref_metrics = visible_metrics((rb, re), references, metrics)
         L.extend(['**Reference/control before–after comparison**', ''])
-        L.extend(comparison_summary(rb, re, wls, metrics, controls=True))
+        L.extend(comparison_summary(rb, re, wls, ref_metrics, controls=True))
         L.extend(fold('Full reference/control comparison',
-                      compare_merged_table(rb, re, references, metrics, axis, controls=True)))
+                      compare_merged_table(rb, re, references, ref_metrics, axis, controls=True)))
 
 METH_BODY = [
     "**Topology and tunnel modes**", "",
@@ -486,6 +504,7 @@ METH_BODY = [
     "**Resource sampling and units**", "",
     "- TCP Tunnel CPU/Mem columns sample the client-side tunnel process during the final iperf3 round: one-second pidstat CPU windows and ps RSS samples are averaged. The legacy `Tunnel Mem (GB)` label stores RSS KiB divided by 1024² (GiB).",
     "- HTTP Server CPU/Mem columns sample the server-side tunnel component during the final round using `pidstat -u -r -p <PIDs> 1 <duration>` Average rows. TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process. CPU sums threads/processes (100% = one logical core); RSS is converted from KiB to MiB.",
+    "- The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method, only for drivers that record it (the standard harness does not); datasets without the sample render no Ingress CPU % column.",
     "- Raw reference rows have no tunnel process, so their resource fields are structurally uncollected. Shared TNG process RSS can include allocations retained from earlier workloads; a change across multiple modes does not by itself establish a per-mode cause.", "",
     "**Comparison and classification**", "",
     "- Before/after rows compare identical workload and concurrency keys. Parenthesized values compare with the displayed baseline-run raw row; colored markers and classification counts compare with the before row. The exact thresholds and counting scope remain visible beside each result table.",
@@ -563,7 +582,8 @@ else:
         if not has_data(res, wls):
             L.append("Not measured in this run.")
         else:
-            L.extend(fold("Full scenario results", merged_table(res, wls, HTTP_M, "Conns")))
+            L.extend(fold("Full scenario results",
+                          merged_table(res, wls, visible_metrics((res,), wls, HTTP_M), "Conns")))
         L.append("")
     L.append("Note: vs-raw percent change is in parentheses after each non-raw value, measured against the raw baseline of the same scenario. For throughput/RPS a negative value means lower than raw; for latency a positive value means slower than raw. At high concurrency the raw baseline's mean/p90/p99 are skewed by tail-latency spikes, so TNG rows can show large negative changes there, this does not establish the cause of the tail spikes or comparative stability.")
     L.append("")

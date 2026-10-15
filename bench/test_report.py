@@ -184,6 +184,39 @@ class Reports(unittest.TestCase):
         p, _ = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
         self.assertNotEqual(p.returncode, 0)
 
+    def test_optional_ingress_cpu_metric(self):
+        # Some ablation drivers sampled the client-side TNG ingress process
+        # (cli_cpu_pct); the standard harness never does, so the metric is
+        # optional: rendered when present, rejected when dropped while
+        # measured, and absent-column-free for datasets that lack the sample.
+        for res in (self.base, self.exp):
+            for w in list(res):
+                if not w.endswith('ohttp'):
+                    del res[w]
+        for res in (self.base, self.exp):
+            for w in res:
+                for c in res[w]:
+                    res[w][c] = {'rps': res[w][c]['rps'],
+                                 'srv_cpu_pct': res[w][c]['srv_cpu_pct'],
+                                 'cli_cpu_pct': res[w][c]['srv_cpu_pct'] / 2}
+        self.exp['http+ohttp']['1']['rps'] = 120
+        self.exp['http+ohttp']['1']['cli_cpu_pct'] = 40
+        p, _ = self.run_report(['--metrics', 'rps,srv_cpu_pct'])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('cli_cpu_pct', p.stderr)  # measured ingress CPU may not be dropped
+        p, text = self.run_report(['--metrics', 'rps,cli_cpu_pct,srv_cpu_pct'])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('| Ingress CPU % |', text)
+        self.assertIn('| **Total** | **3 (100.0%)** |', text)
+        for res in (self.base, self.exp):
+            for w in res:
+                for c in res[w]:
+                    del res[w][c]['cli_cpu_pct']
+        p, text = self.run_report(['--metrics', 'rps,cli_cpu_pct,srv_cpu_pct'])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn('| Ingress CPU % |', text)  # uncollected optional metrics render no column
+        self.assertIn('| **Total** | **2 (100.0%)** |', text)
+
     def test_missing_cell_fails_without_overwriting(self):
         del self.exp['http+ohttp']['1']['p99_us']
         p, text = self.run_report()
