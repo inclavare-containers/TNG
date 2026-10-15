@@ -16,7 +16,7 @@ async-stream = {workspace = true}
 async-trait = {workspace = true}
 auto_enums = {workspace = true}
 base64 = {workspace = true}
-bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "5613e2426264bc958fdb2d2ed81de93a01955e54", features = ["http-compat"]}
+bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "3e2e1123d395cf59f82e8a9f30758dae90597e22", features = ["http-compat"]}
 bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}
@@ -42,7 +42,7 @@ libc = "0.2"
 local-ip-address = "0.6"
 parking_lot = "0.12"
 nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "5613e2426264bc958fdb2d2ed81de93a01955e54"}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "3e2e1123d395cf59f82e8a9f30758dae90597e22"}
 opentelemetry = {workspace = true, optional = true}
 opentelemetry-otlp = {workspace = true, features = [
   "logs",
@@ -118,7 +118,7 @@ hyper = {workspace = true}
 hyper-util = {workspace = true}
 moka = {workspace = true}
 notify = {workspace = true}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "5613e2426264bc958fdb2d2ed81de93a01955e54", features = ["aws-lc"]}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "3e2e1123d395cf59f82e8a9f30758dae90597e22", features = ["aws-lc"]}
 quinn = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}
