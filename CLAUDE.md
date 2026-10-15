@@ -266,4 +266,4 @@ Releases are driven by the global `release-version` skill; this section holds th
 
 ## Landing Work
 
-At the end of a development branch's implementation, before merging or opening a PR, use the global `organize-commits` skill to reorganize commits into clean, independently verifiable logical blocks, then the global `land-pr` (pull-request route) or `land-ff` (local fast-forward route) skill to land the branch.
+At the end of a development branch's implementation, before merging or opening a PR, use the global `organize-commits` skill to reorganize commits into clean, independently verifiable logical blocks. For the pull-request route use the global `land-pr-review` (open the PR and watch its CI to green) followed by `land-pr-merge` (fast-forward merge the PR into the target branch); for the local no-PR route use `land-ff-local`.
