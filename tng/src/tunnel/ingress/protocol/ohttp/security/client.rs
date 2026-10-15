@@ -98,7 +98,14 @@ pub struct OHttpClientInner {
 }
 
 struct KeyStoreValue {
-    client_auth: ClientAuth,
+    /// The outer-POST metadata frame (big-endian length + prost-encoded
+    /// Metadata) for this key generation. Both of its inputs - `client_auth`
+    /// and the selected (first) server key config's public key - are fixed
+    /// per store generation, so the frame is built once here instead of per
+    /// request. `None` when the server returned an empty key-config list:
+    /// the request path then reports the same
+    /// `ClientSelectHpkeConfigurationFailed` as before.
+    outer_metadata: Option<Bytes>,
 
     client_key: Option<(
         <X25519HkdfSha256 as Kem>::PrivateKey,
@@ -145,11 +152,17 @@ impl OHttpClient {
     pub async fn new(
         ra_context: Arc<RaContext>,
         http_client: Arc<reqwest::Client>,
-        base_url: Url,
+        base_url: String,
         runtime: TokioRuntime,
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     ) -> Result<Self> {
+        // Parsed once per client, not per forwarded request. The error keeps
+        // the context text the per-request parse produced before; the caller
+        // in `security/mod.rs` maps it to `CreateOHttpClientFailed` as always.
+        let base_url =
+            url::Url::parse(&base_url).with_context(|| format!("Not a valid URL: {base_url}"))?;
+
         let refresh_strategy = {
             #[cfg(unix)]
             if let Some(attest_ctx) = ra_context.attest_context() {
@@ -207,7 +220,7 @@ impl OHttpClient {
             .inner
             .send_encrypted_request(
                 &key_store_value.server_key_config_list,
-                &key_store_value.client_auth,
+                key_store_value.outer_metadata.as_ref(),
                 key_store_value.client_key.as_ref(),
                 request,
             )
@@ -314,9 +327,18 @@ impl OHttpClientInner {
                 .as_ref(),
         )?;
 
+        // Fixed inputs (client auth + the selected first key config's public
+        // key), so the outer-POST metadata frame is built once per generation
+        // rather than re-encoded per request. An empty list keeps the
+        // request-time `ClientSelectHpkeConfigurationFailed` behavior.
+        let outer_metadata = match server_key_config_list.first() {
+            Some(key_config) => Some(Self::build_metadata_block(&client_auth, key_config)?),
+            None => None,
+        };
+
         Ok((
             KeyStoreValue {
-                client_auth,
+                outer_metadata,
                 client_key,
                 server_key_config_list,
                 server_attestation_result,
@@ -470,7 +492,7 @@ impl OHttpClientInner {
     async fn send_encrypted_request(
         &self,
         server_key_config_list: &[KeyConfig],
-        client_auth: &ClientAuth,
+        outer_metadata: Option<&Bytes>,
         client_key: Option<&(
             <X25519HkdfSha256 as Kem>::PrivateKey,
             <X25519HkdfSha256 as Kem>::PublicKey,
@@ -484,8 +506,7 @@ impl OHttpClientInner {
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
         // Select the server key config and build the HPKE request encapsulator
-        let (key_config, client) =
-            Self::build_request_encapsulator(server_key_config_list, client_key)?;
+        let client = Self::build_request_encapsulator(server_key_config_list, client_key)?;
 
         // Seal stage: encrypt the bhttp stream into the ohttp envelope that
         // becomes the outer body, with a per-platform strategy because the
@@ -512,8 +533,10 @@ impl OHttpClientInner {
                 .await
                 .unwrap_or_else(|error| tracing::error!(?error, "Error when encrypting request"));
 
-            let metadata_buf = Self::build_metadata_block(client_auth, &key_config)?;
-            let mut body_bytes = metadata_buf;
+            let metadata_buf = outer_metadata.cloned().ok_or_else(|| {
+                TngError::ClientSelectHpkeConfigurationFailed(anyhow!("No key config found"))
+            })?;
+            let mut body_bytes = BytesMut::from(&metadata_buf[..]);
             body_bytes.extend_from_slice(&encrypted_request);
             tracing::debug!(
                 body_length = body_bytes.len(),
@@ -532,12 +555,14 @@ impl OHttpClientInner {
             let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
             let client_request = client.encapsulate_stream(sink.clone())?;
             let client_response_decapsulator = client_request.response_decapsulator()?;
-            let metadata_buf = Self::build_metadata_block(client_auth, &key_config)?;
+            let metadata_buf = outer_metadata.cloned().ok_or_else(|| {
+                TngError::ClientSelectHpkeConfigurationFailed(anyhow!("No key config found"))
+            })?;
             let reader = bhttp_encoder
                 .map_err(std::io::Error::other)
                 .into_async_read();
             let body = crate::tunnel::ohttp::seal_stream::sealed_request_body(
-                metadata_buf.freeze(),
+                metadata_buf,
                 reader,
                 client_request,
                 sink,
@@ -554,8 +579,7 @@ impl OHttpClientInner {
             .await?;
 
         // Validate the outer response and take the sealed body stream
-        let (outer_response_headers, response_body) =
-            self.validate_outer_response(response).await?;
+        let (outer_passthrough, response_body) = self.validate_outer_response(response).await?;
 
         // Decrypt the ohttp response message
         let decrypted_response = client_response_decapsulator.decapsulate_response(
@@ -569,13 +593,13 @@ impl OHttpClientInner {
             e
         })?;
 
-        self.decode_inner_response(decrypted_response, &outer_response_headers)
+        self.decode_inner_response(decrypted_response, outer_passthrough)
             .await
     }
 
     /// Select the server's first advertised key config and build the HPKE
-    /// request encapsulator. The metadata hint and the seal need the selected
-    /// config too, so return it alongside.
+    /// request encapsulator. (The metadata hint for the selected config is
+    /// precomputed per key generation in `create_key_store_value`.)
     ///
     /// With an attested client key (native RA mode) the seal runs in HPKE
     /// Auth mode using that key, so the envelope's sender matches the `pk_s`
@@ -588,7 +612,7 @@ impl OHttpClientInner {
             <X25519HkdfSha256 as Kem>::PrivateKey,
             <X25519HkdfSha256 as Kem>::PublicKey,
         )>,
-    ) -> Result<(KeyConfig, ohttp::ClientRequest), TngError> {
+    ) -> Result<ohttp::ClientRequest, TngError> {
         let mut key_config = server_key_config_list
             .first()
             .context("No key config found")
@@ -617,18 +641,21 @@ impl OHttpClientInner {
             ohttp::ClientRequest::from_config(&mut key_config)?
         };
 
-        Ok((key_config, client))
+        Ok(client)
     }
 
     /// Encode the metadata block that precedes the sealed request body: a
     /// big-endian `u32` prost length followed by that many prost bytes. The
     /// egress parses the same block in its `read_metadata_block`.
+    ///
+    /// Both inputs are fixed per key-store generation, so `create_key_store_value`
+    /// encodes this once and each request only refcount-clones the result.
     fn build_metadata_block(
         client_auth: &ClientAuth,
         key_config: &KeyConfig,
-    ) -> Result<BytesMut, TngError> {
+    ) -> Result<Bytes, TngError> {
         let metadata = Metadata {
-            client_auth: Some(client_auth.clone()), // TODO: optimize this clone
+            client_auth: Some(client_auth.clone()),
             key_config_hint: Some(ServerKeyConfigHint {
                 public_key: key_config.public_key()?.into_vec(),
             }),
@@ -645,12 +672,13 @@ impl OHttpClientInner {
             .encode(&mut metadata_buf)
             .map_err(TngError::MetadataEncodeError)?;
         tracing::trace!(metadata_length = metadata_buf.len(), "metadata length");
-        Ok(metadata_buf)
+        Ok(metadata_buf.freeze())
     }
 
     /// Validate the outer POST response and hand back what the decapsulate
-    /// stage needs: a clone of the outer response headers (for the inner
-    /// response's passthrough) and the outer body stream of sealed bytes.
+    /// stage needs: the configured passthrough pairs selected from the outer
+    /// response headers (collected by reference before the body is taken) and
+    /// the outer body stream of sealed bytes.
     /// A `422` maps to `ShouldRequestNewKeyConfigFromServerError` so the
     /// caller invalidates the cached key config and refetches on the next
     /// request.
@@ -659,7 +687,7 @@ impl OHttpClientInner {
         response: reqwest::Response,
     ) -> Result<
         (
-            http::HeaderMap,
+            Vec<(http::HeaderName, http::HeaderValue)>,
             impl Stream<Item = Result<Bytes, reqwest::Error>>,
         ),
         TngError,
@@ -667,13 +695,11 @@ impl OHttpClientInner {
         // Check the response status code
         let status_code = response.status();
         #[cfg(unix)]
-        let content_len = {
-            let headers = response.headers().clone();
-            headers
-                .get(http::header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<usize>().ok())
-        };
+        let content_len = response
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok());
         #[cfg(unix)]
         tracing::debug!(
             status = ?status_code,
@@ -704,17 +730,17 @@ impl OHttpClientInner {
             }
         }
 
-        // Capture outer response headers before bytes_stream() consumes the
-        // reqwest::Response. These are copied onto the decrypted inner response
-        // returned to the caller (ingress `response_headers`: outer → inner).
-        let outer_response_headers = response.headers().clone();
+        // Select the configured outer response headers (outer -> inner) before
+        // bytes_stream() consumes the reqwest::Response. Only the chosen pairs
+        // are taken; the whole-HeaderMap clone existed just to outlive the
+        // stream handoff.
+        let outer_passthrough = self
+            .passthrough_response_headers
+            .collect_passthrough_headers(
+                response.headers(),
+                crate::config::header_passthrough::protected_ohttp_headers(),
+            );
 
-        #[cfg(unix)]
-        let content_len = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok());
         #[cfg(unix)]
         tracing::debug!(
             content_length = ?content_len,
@@ -741,16 +767,17 @@ impl OHttpClientInner {
             receiver
         };
 
-        Ok((outer_response_headers, response_body))
+        Ok((outer_passthrough, response_body))
     }
 
     /// Decode stage: bhttp-decode the decrypted inner response, copy the
-    /// configured passthrough headers (outer → inner) onto it skipping
-    /// protected headers, and hand it to the downstream caller.
+    /// configured passthrough headers (outer -> inner, collected by
+    /// `validate_outer_response`) onto it, and hand it to the downstream
+    /// caller.
     async fn decode_inner_response<R>(
         &self,
         decrypted_body: R,
-        outer_response_headers: &http::HeaderMap,
+        outer_passthrough: Vec<(http::HeaderName, http::HeaderValue)>,
     ) -> Result<axum::response::Response, TngError>
     where
         R: futures::AsyncRead + Unpin + Send + 'static,
@@ -770,10 +797,9 @@ impl OHttpClientInner {
             return Err(TngError::InvalidHttpResponse);
         };
 
-        let protected = crate::config::header_passthrough::protected_ohttp_headers();
-        let outer_passthrough = self
-            .passthrough_response_headers
-            .collect_passthrough_headers(outer_response_headers, protected);
+        // Copy the configured outer response headers (outer -> inner),
+        // collected by `validate_outer_response` before the body stream was
+        // taken, onto the decrypted response returned to the caller.
         let inner_headers = response.headers_mut();
         for (name, value) in outer_passthrough {
             inner_headers.insert(name, value);
