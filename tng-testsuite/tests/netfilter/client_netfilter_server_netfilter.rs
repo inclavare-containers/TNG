@@ -268,7 +268,9 @@ async fn test_ipset_and_port() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::BackgroundContinue,
+            // Foreground: the TNG client installs an iptables rule referencing
+            // the set at startup, so the set must exist before it launches.
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -325,7 +327,9 @@ async fn test_ipset_and_port_bad_case() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::BackgroundContinue,
+            // Foreground: the TNG client installs an iptables rule referencing
+            // the set at startup, so the set must exist before it launches.
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
@@ -384,7 +388,9 @@ async fn test_ipset_only() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::BackgroundContinue,
+            // Foreground: the TNG client installs an iptables rule referencing
+            // the set at startup, so the set must exist before it launches.
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),

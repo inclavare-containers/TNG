@@ -202,7 +202,11 @@ async fn test_ipset_and_port() -> Result<()> {
                     ipset list myset
                 "#
             .to_owned(),
-            mode: ShellMode::BackgroundContinue,
+            // Foreground, not background: the TNG client installs an iptables
+            // rule referencing the set at startup, so the set must exist before
+            // the client launches, or the rule install fails with
+            // "Set myset doesn't exist" (an intermittent race under load).
+            mode: ShellMode::ForegroundContinue,
         }
         .boxed(),
         TNG_SERVER_INSTANCE.clone().boxed(),
