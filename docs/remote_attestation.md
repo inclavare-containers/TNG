@@ -523,7 +523,7 @@ Connect to an external Attestation Service (restful HTTP or gRPC). Verification 
 | `as_addr` | string | — | AS address (required; trailing slash optional) |
 | `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
 | `policy_ids` | array [string] | — | Policy ID list, references policies predefined on the AS side (required; policies must be created on the AS side first, `default` is an example name only) |
-| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
+| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures. When nonempty, these roots are used without fetching `/certificate` from `as_addr`; the AS address is still used for evidence appraisal. |
 | `verify_signer_transparency` | boolean | `false` | Verify the `signer_transparency` claim in JWT tokens issued by Trustee AS (see the folded note) |
 | `skip_as_token_cert_verify` | boolean | `false` | **DANGER:** Skip AS token certificate verification. When `true`, neither `trusted_certs_paths` nor `as_addr` can be set. Only use this when you fully trust the token source. |
 
@@ -698,7 +698,7 @@ In the Passport model, the Verify configuration should include the following fie
 | `as_addr` | string | — | Attestation Service address (optional, but at least one of `as_addr` or `trusted_certs_paths` must be specified) |
 | `as_headers` | object | `{}` | Custom headers sent to AS (e.g., Authorization) |
 | `policy_ids` | array [string] | — | Policy ID list |
-| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures |
+| `trusted_certs_paths` | array [string] | `[]` | Root CA certificate paths for verifying Attestation Token signatures. When nonempty, these roots are used without fetching `/certificate` from `as_addr`. |
 | `verify_signer_transparency` | boolean | `false` | Verify `signer_transparency` claim in JWT tokens issued by Trustee AS |
 | `skip_as_token_cert_verify` | boolean | `false` | **DANGER:** Skip AS token certificate verification. When `true`, neither `trusted_certs_paths` nor `as_addr` can be set. Only use this when you fully trust the token source. |
 

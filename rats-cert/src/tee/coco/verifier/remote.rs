@@ -37,13 +37,19 @@ impl CocoRemoteVerifier {
             }
         }
 
+        // An explicitly pinned CA is authoritative. Mainline Trustee does not
+        // implement the OpenAnolis-only /certificate discovery endpoint.
+        #[cfg(not(wasm))]
+        let pinned_certificates = !trusted_certs_paths.is_empty();
+        #[cfg(wasm)]
+        let pinned_certificates = false;
         let config = AttestationTokenVerifierConfig {
             #[cfg(not(wasm))]
             trusted_certs_paths,
             trusted_certs: Default::default(),
             trusted_jwk_sets: Default::default(),
-            as_addr: if skip_as_token_cert_verify {
-                // Don't pass as_addr to token verifier when skipping cert verify
+            as_addr: if skip_as_token_cert_verify || pinned_certificates {
+                // Discovery is unnecessary with explicit roots or when skipped.
                 None
             } else {
                 as_addr_config.as_ref().map(|config| config.as_addr.clone())
@@ -93,6 +99,93 @@ impl GenericVerifier for CocoRemoteVerifier {
 mod tests {
     use super::*;
     use crate::tee::{claims::Claims, coco::verifier::remote::CocoRemoteVerifier};
+
+    #[cfg(not(wasm))]
+    #[tokio::test]
+    async fn pinned_roots_do_not_require_certificate_discovery() {
+        use std::time::Duration;
+
+        let (_dir, cert_path) = write_pem_to_temp_file(
+            include_str!("test_cases/simple.as-ca.pem"),
+            "simple.as-ca.pem",
+        )
+        .await;
+        // A service may appraise evidence without implementing /certificate.
+        // Hold the socket open: an unexpected discovery request must time out.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = Some(AttestationServiceAddrArgs {
+            as_addr: format!("http://{}", listener.local_addr().unwrap()),
+            as_is_grpc: false,
+            as_headers: Default::default(),
+        });
+        let verifier = tokio::time::timeout(
+            Duration::from_secs(1),
+            CocoRemoteVerifier::new(
+                &address,
+                &Some(vec![cert_path]),
+                &vec!["default".to_string()],
+                false,
+                false,
+            ),
+        )
+        .await
+        .expect("explicit roots must not contact /certificate")
+        .expect("load the pinned root");
+
+        let report_data = ReportData::Claims(Claims::default());
+        let approved =
+            CocoAsToken::new(include_str!("test_cases/simple.jwt").trim().into()).unwrap();
+        verifier
+            .verify_evidence(&approved, &report_data)
+            .await
+            .unwrap();
+        let unrelated = CocoAsToken::new(include_str!("test_cases/ear.jwt").trim().into()).unwrap();
+        assert!(verifier
+            .verify_evidence(&unrelated, &report_data)
+            .await
+            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(not(wasm))]
+    #[tokio::test]
+    async fn empty_roots_still_require_certificate_discovery() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = Some(AttestationServiceAddrArgs {
+            as_addr: format!("http://{}", listener.local_addr().unwrap()),
+            as_is_grpc: false,
+            as_headers: Default::default(),
+        });
+        let server = async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            stream.read_line(&mut request).await.unwrap();
+            assert!(request.starts_with("GET /certificate "));
+            stream
+                .get_mut()
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        };
+        let roots = Some(vec![]);
+        let policies = vec![];
+        let verify = CocoRemoteVerifier::new(&address, &roots, &policies, false, false);
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(verify, server)
+        })
+        .await
+        .expect("certificate discovery should finish");
+        assert!(result.is_err());
+    }
 
     /// Helper function to run JWT verification tests
     async fn run_jwt_verification_test(
