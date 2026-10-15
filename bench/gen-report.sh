@@ -21,11 +21,13 @@ ALLOW_UNVERIFIED=0
 ALLOW_MIXED=0
 DELTAS_OUT=""
 METRICS=""
+TITLE=""
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --compare) MODE=compare; shift ;;
         --allow-unverified) ALLOW_UNVERIFIED=1; shift ;;
         --allow-mixed-versions) ALLOW_MIXED=1; shift ;;
+        --title) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --title requires a heading" >&2; exit 2; }; TITLE="$2"; shift 2 ;;
         --deltas) [ $# -ge 2 ] || { echo "usage: --deltas requires a path" >&2; exit 2; }; DELTAS_OUT="$2"; shift 2 ;;
         --metrics) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --metrics requires a comma-separated list" >&2; exit 2; }; METRICS="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
@@ -46,7 +48,7 @@ else
     [ $# -eq 3 ] && set -- "$@" ./bench-report.md
 fi
 
-python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$DELTAS_OUT" "$METRICS" "$MODE" "$@" <<'PY_REPORT'
+python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$DELTAS_OUT" "$METRICS" "$TITLE" "$MODE" "$@" <<'PY_REPORT'
 import json, os, sys, tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv.pop(1))
@@ -54,6 +56,7 @@ ALLOW_UNVERIFIED = sys.argv.pop(1) == "1"
 ALLOW_MIXED = sys.argv.pop(1) == "1"
 DELTAS_OUT = sys.argv.pop(1)
 METRICS = sys.argv.pop(1)
+TITLE = sys.argv.pop(1)
 from report_support import CLASSES, check_identity, classify, number
 
 mode = sys.argv[1]
@@ -375,20 +378,6 @@ def diff_section(title, brows, erows, bhead, ehead):
     L.extend(fold("Full " + title.split(". ", 1)[1].lower(),
                   header + diff_table(brows, erows, only_changes=False)))
 
-LEGEND = ("Parenthesized percentages are vs the displayed baseline-run raw row. "
-          "Markers and counts compare the same metric/workload/concurrency with before: "
-          "🟢 favorable >1%; ⚪ within ±1%; 🟡 unfavorable >1–5%; 🟠 >5–15%; 🔴 >15%. "
-          "These are display thresholds, not statistical significance or a pass/fail score. "
-          "CPU/RSS increases are resource costs. Percentages in Count (%) use all counted metric cells.")
-LEGEND_NO_RAW = ("This comparison measured no reference rows, so cells carry no vs-raw percentages. "
-                 "Markers and counts compare the same metric/workload/concurrency with before: "
-                 "🟢 favorable >1%; ⚪ within ±1%; 🟡 unfavorable >1–5%; 🟠 >5–15%; 🔴 >15%. "
-                 "These are display thresholds, not statistical significance or a pass/fail score. "
-                 "CPU/RSS increases are resource costs. Percentages in Count (%) use all counted metric cells.")
-
-def legend_for(wls, rb, re):
-    return LEGEND if (rb.get(wls[0]) or re.get(wls[0])) else LEGEND_NO_RAW
-
 def comparison_summary(rb, re, wls, metrics, controls=False):
     selected = [w for w in wls if (lbl(w) not in TNG_MARKS if controls else lbl(w) in TNG_MARKS)]
     counts = [[0] * len(metrics) for _ in CLASSES]
@@ -434,15 +423,12 @@ def comparison_summary(rb, re, wls, metrics, controls=False):
     table.append(row(['**Total**', f'**{total} (100.0%)**',
                       *[f'**{sum(c[i] for c in counts)}**' for i in range(len(metrics))]]))
     assert sum(sum(c[i] for c in counts) for i in range(len(metrics))) == total
-    modes = ', '.join(lbl(w) for w in selected if rb.get(w) or re.get(w))
-    levels = ', '.join(sorted({k for _, k in scope}, key=lambda x: int(x)))
     intro = [f"**Measured changes:** {sum(counts[0])} improved, {sum(counts[1])} stable, "
              f"{sum(counts[2])} mild, {sum(counts[3])} moderate and {sum(counts[4])} severe degradations. "
              "These counts do not weight metric importance; attribution and causes require review.", ""]
     if findings:
         intro += ['**Notable adverse measurements (causes not inferred):**', '', *['- ' + f for f in findings], '']
-    return intro + table + ['', f"Scope: {modes}; concurrency={levels}. Each eligible metric cell is counted once; before rows are not counted again. "
-                            "Reference-only rows are excluded from the main summary. Raw resource fields are structurally uncollected in control summaries.", '', legend_for(wls, rb, re), '']
+    return intro + table
 
 DELTA_BLOCKS = []
 
@@ -589,6 +575,20 @@ else:
     L.append("")
 
 # Validation completes before replacing any existing report.
+if TITLE:
+    # Sub-report mode: the caller's heading replaces the default H1 and every
+    # other heading drops one level so the sub-report nests under the chapter
+    # heading the caller assembles.
+    shifted = []
+    replaced = False
+    for line in L:
+        if not replaced and line.startswith('# '):
+            line = '## ' + TITLE
+            replaced = True
+        elif line.startswith('#'):
+            line = '#' + line
+        shifted.append(line)
+    L = shifted
 with tempfile.NamedTemporaryFile('w', dir=os.path.dirname(os.path.abspath(out_path)), delete=False) as f:
     f.write("\n".join(L) + "\n")
     temp_path = f.name

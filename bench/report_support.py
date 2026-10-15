@@ -3,8 +3,8 @@ import hashlib
 import math
 import re
 
-CLASSES = [('🟢', 'Improved'), ('⚪', 'Stable'), ('🟡', 'Mild degradation'),
-           ('🟠', 'Moderate degradation'), ('🔴', 'Severe degradation')]
+CLASSES = [('🟢', 'Improved (>1%)'), ('⚪', 'Stable (±1%)'), ('🟡', 'Mild degradation (>1–5%)'),
+           ('🟠', 'Moderate degradation (>5–15%)'), ('🔴', 'Severe degradation (>15%)')]
 HIGHER_BETTER = {'throughput', 'rps', 'success_pct'}
 
 

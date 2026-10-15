@@ -152,8 +152,8 @@ class Reports(unittest.TestCase):
         self.assertIn('Not measured in either run.', text)
         self.assertIn('| **Total** | **10 (100.0%)** |', text)
         self.assertNotIn('Reference/control', text)
-        self.assertIn('no vs-raw percentages', text)
         self.assertNotIn('Parenthesized percentages are vs the displayed baseline-run raw row.', text)
+        self.assertNotIn('Scope:', text)
 
     def test_metrics_subset_for_partial_runs(self):
         # Historical ablation rows recorded only RPS and egress CPU.
