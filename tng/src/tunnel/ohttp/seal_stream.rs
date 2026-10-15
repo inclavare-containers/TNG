@@ -32,14 +32,21 @@ pub(crate) struct SealedBytesSink(Arc<Mutex<BytesMut>>);
 
 impl SealedBytesSink {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(BytesMut::new())))
+        // One AEAD chunk plus its length prefix lands here before the pump
+        // drains it, so size the buffer for that working set up front.
+        Self(Arc::new(Mutex::new(BytesMut::with_capacity(
+            SEAL_CHUNK_SIZE + 64,
+        ))))
     }
 
-    /// Move the sealed bytes accumulated since the last drain into `out`.
+    /// Copy the sealed bytes accumulated since the last drain into `out`.
     fn drain_into(&self, out: &mut BytesMut) {
-        let sealed = std::mem::take(&mut *self.0.lock());
+        let mut sealed = self.0.lock();
         if !sealed.is_empty() {
             out.extend_from_slice(&sealed);
+            // Clear rather than take: keeping the allocation lets the next
+            // chunk's writes reuse it instead of growing a fresh buffer.
+            sealed.clear();
         }
     }
 }
