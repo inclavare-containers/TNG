@@ -418,6 +418,16 @@ impl PeerSharedKeyManager {
             tracing::info!("Starting key watcher");
 
             loop {
+                // Re-check the handle on every iteration, not only when a rotation is
+                // due. The waits at the bottom of the loop are capped at one second so
+                // this runs even with no rotation pending; parked on the notify with no
+                // bound, the task would never notice the serf being dropped and would
+                // hold its shutdown guard forever, wedging supervised shutdown.
+                if serf.upgrade().is_none() {
+                    tracing::debug!("stop key watcher since serf has been dropped");
+                    break;
+                }
+
                 let now = SystemTime::get();
 
                 let should_check_rotation = {
@@ -518,8 +528,11 @@ impl PeerSharedKeyManager {
                             );
                             Duration::from_secs(1) // Force sleep 1 second to prevent busy-looping and CPU exhaustion when a bug causes repeated activations
                         });
+                        // Wake at least once per second so the dropped-handle check at
+                        // the top of the loop runs; key-set state is recomputed on every
+                        // wake, so a sleep shorter than the deadline is safe.
                         tokio::select! {
-                            _ = tokio::time::sleep(sleep_duration) => {
+                            _ = tokio::time::sleep(sleep_duration.min(Duration::from_secs(1))) => {
                                 // Time reached, continue to check
                             }
                             _ = inner.check_notify.notified() => {
@@ -528,8 +541,17 @@ impl PeerSharedKeyManager {
                         }
                     }
                     None => {
-                        // No pending deadlines, wait for notification
-                        inner.check_notify.notified().await;
+                        // No pending deadlines, wait for notification, but keep the same
+                        // one-second bound so a dropped serf handle is seen even with no
+                        // rotation due and no notification coming.
+                        tokio::select! {
+                            _ = inner.check_notify.notified() => {
+                                // Notified by modification, check immediately
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                                // Periodic wake, re-check the serf handle above
+                            }
+                        }
                     }
                 }
             }
