@@ -160,6 +160,9 @@ jobs:
 
   unit:
     name: unit (alinux3)
+    # Normal duration is ~25 min; cap a hung run to fail in 45 instead of
+    # burning GitHub's 6-hour default.
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     defaults:
       run:
