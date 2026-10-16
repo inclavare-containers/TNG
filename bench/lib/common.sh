@@ -91,6 +91,150 @@ except Exception:
 ' 2>/dev/null || return 1
 }
 
+# --- Fresh-stack (cold-start) per-cell restart -------------------------------
+# Every measured cell of a workload that has a proxy or tunnel process restarts
+# its process set first, so the cell's memory peak is that cell's own cost and
+# not an allocator high-water accumulated by earlier cells of the pass (a
+# long-lived process made cross-arm memory deltas order-dependent). The restart
+# re-derives the command line from the live process (same binary + config file,
+# or the same container definition) instead of duplicating the launch config,
+# kills it, verifies the old PIDs and listen ports are released, relaunches
+# detached, waits for the ports, and prints old/new PIDs for the run log. The
+# samplers locate processes by listen port, so they measure the new PIDs by
+# construction. A restart that does not complete cleanly fails the run: a cell
+# measured on a contaminated or half-dead stack is not attributable evidence.
+#
+# Snippets run via `bash -c` locally or `bash -s` over ssh; they must stay
+# single-quoted so argument expansion happens on the executing side.
+TNG_RESTART_SNIPPET='
+probe="$1"; shift
+ready="$*"
+port_pid() { ss -ltnp 2>/dev/null | grep -F ":$1 " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2; }
+pid=$(port_pid "$probe")
+[ -n "$pid" ] || { echo "no tng launcher listening on :$probe" >&2; exit 1; }
+exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null)
+cfg="" prev=""
+while IFS= read -r arg; do
+    [ "$prev" = "--config-file" ] && { cfg="$arg"; break; }
+    prev="$arg"
+done < <(tr "\0" "\n" < "/proc/$pid/cmdline" 2>/dev/null)
+[ -n "$exe" ] && [ -x "$exe" ] && [ -n "$cfg" ] && [ -f "$cfg" ] || { echo "cannot recover launcher binary/config from pid $pid" >&2; exit 1; }
+logf="$(dirname "$(dirname "$cfg")")/logs/$(basename "$cfg" .json).log"
+mkdir -p "$(dirname "$logf")"
+kill "$pid" 2>/dev/null || true
+for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; sleep 0.5; fi
+kill -0 "$pid" 2>/dev/null && { echo "pid $pid survived SIGKILL" >&2; exit 1; }
+for pp in $ready; do
+    [ -z "$(port_pid "$pp")" ] || { echo "port :$pp still held after killing $pid" >&2; exit 1; }
+done
+echo "$(date +%FT%T) fresh-stack restart: killed pid=$pid exe=$exe cfg=$cfg" >> "$logf"
+setsid "$exe" launch --config-file "$cfg" </dev/null >>"$logf" 2>&1 &
+count=0; for pp in $ready; do count=$((count+1)); done
+deadline=$(( $(date +%s) + 30 ))
+while :; do
+    n=0
+    for pp in $ready; do [ -n "$(port_pid "$pp")" ] && n=$((n+1)); done
+    [ "$n" -eq "$count" ] && break
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "launcher did not rebind $ready within 30s" >&2; tail -20 "$logf" >&2; exit 1; }
+    sleep 0.5
+done
+newpid=$(port_pid "$probe")
+[ -n "$newpid" ] && [ "$newpid" != "$pid" ] || { echo "restart did not produce a new pid on :$probe" >&2; exit 1; }
+[ "$(readlink -f "/proc/$newpid/exe" 2>/dev/null)" = "$exe" ] || { echo "new pid $newpid is not $exe" >&2; exit 1; }
+echo "$(date +%FT%T) fresh-stack restart: new pid=$newpid" >> "$logf"
+echo "old=$pid new=$newpid"
+'
+
+CONTAINER_RESTART_SNIPPET='
+ctr=$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+name="$1"; shift
+ready="$*"
+port_pids() { ss -ltnp 2>/dev/null | grep -F ":$1 " | grep -o "pid=[0-9]*" | cut -d= -f2; }
+oldpids=""
+for pp in $ready; do oldpids="$oldpids $(port_pids "$pp")"; done
+oldpids=$(echo $oldpids | tr " " "\n" | grep -v "^$" | sort -un | tr "\n" " ")
+[ -n "$oldpids" ] || { echo "no listener found on $ready for container $name" >&2; exit 1; }
+running=$($ctr inspect -f "{{.State.Running}}" "$name" 2>/dev/null) || { echo "container $name does not exist" >&2; exit 1; }
+[ "$running" = "true" ] || { echo "container $name is not running" >&2; exit 1; }
+$ctr stop -t 10 "$name" >/dev/null || { echo "failed to stop container $name" >&2; exit 1; }
+for _ in $(seq 1 50); do
+    [ "$($ctr inspect -f "{{.State.Running}}" "$name" 2>/dev/null)" = "false" ] && break
+    sleep 0.1
+done
+[ "$($ctr inspect -f "{{.State.Running}}" "$name" 2>/dev/null)" = "false" ] || { echo "container $name still running after stop" >&2; exit 1; }
+for p in $oldpids; do
+    kill -0 "$p" 2>/dev/null && { echo "pid $p of container $name survived stop" >&2; exit 1; }
+done
+for pp in $ready; do
+    [ -z "$(port_pids "$pp")" ] || { echo "port :$pp still held after stopping $name" >&2; exit 1; }
+done
+$ctr start "$name" >/dev/null || { echo "failed to start container $name" >&2; exit 1; }
+count=0; for pp in $ready; do count=$((count+1)); done
+deadline=$(( $(date +%s) + 30 ))
+while :; do
+    n=0
+    for pp in $ready; do [ -n "$(port_pids "$pp")" ] && n=$((n+1)); done
+    [ "$n" -eq "$count" ] && break
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "$name did not rebind $ready within 30s" >&2; $ctr logs --tail 20 "$name" >&2; exit 1; }
+    sleep 0.5
+done
+newpids=$(for pp in $ready; do port_pids "$pp"; done | sort -un | tr "\n" " ")
+for np in $newpids; do
+    for op in $oldpids; do
+        [ "$np" = "$op" ] && { echo "pid $np survived container restart of $name" >&2; exit 1; }
+    done
+done
+echo "old=$(echo $oldpids | tr " " ,) new=$(echo $newpids | tr " " ,)"
+'
+
+# Restart a `tng launch` host process. $1 probe port, $2 space-separated ready
+# ports, $3 remote host (empty = local). Echoes "old=<pid> new=<pid>".
+restart_tng_process() {
+    local probe="$1" ready="$2" host="${3:-}" out
+    if [ -n "$host" ]; then
+        out=$(printf '%s\n' "$TNG_RESTART_SNIPPET" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$host" bash -s -- "$probe" $ready) || return 1
+    else
+        out=$(bash -c "$TNG_RESTART_SNIPPET" fresh-stack "$probe" $ready) || return 1
+    fi
+    printf '%s\n' "$out"
+}
+
+# Restart the TNG tunnel pair (server egress over ssh, then local ingress)
+# before a measured TNG cell. $1 cell label, $2 server ip.
+fresh_stack_tng() {
+    local out
+    out=$(restart_tng_process 40001 "40001 40002 40003 40004 40005" "$2") || die "fresh-stack: egress restart failed before cell '$1'"
+    log "fresh-stack [$1]: egress $out"
+    out=$(restart_tng_process 50001 "50001 50002 50003 50004 50005") || die "fresh-stack: ingress restart failed before cell '$1'"
+    log "fresh-stack [$1]: ingress $out"
+    INGRESS_PID="${out##*new=}"
+    case "${INGRESS_PID}" in (''|*[!0-9]*) INGRESS_PID="" ;; esac
+}
+
+# Restart one proxy container. $1 name, $2 ready ports, $3 host
+# (empty = local). Echoes "old=<pids> new=<pids>".
+restart_container() {
+    local name="$1" ready="$2" host="${3:-}" out
+    if [ -n "$host" ]; then
+        out=$(printf '%s\n' "$CONTAINER_RESTART_SNIPPET" | ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$host" bash -s -- "$name" $ready) || return 1
+    else
+        out=$(bash -c "$CONTAINER_RESTART_SNIPPET" fresh-stack "$name" $ready) || return 1
+    fi
+    printf '%s\n' "$out"
+}
+
+# Restart a reference-proxy container pair (server side first, then client)
+# before a measured cell. $1 label, $2 server ip, $3 client container,
+# $4 client ready ports, $5 server container, $6 server ready ports.
+fresh_stack_containers() {
+    local out
+    out=$(restart_container "$5" "$6" "$2") || die "fresh-stack: server container '$5' restart failed before cell '$1'"
+    log "fresh-stack [$1]: $5 $out"
+    out=$(restart_container "$3" "$4") || die "fresh-stack: client container '$3' restart failed before cell '$1'"
+    log "fresh-stack [$1]: $3 $out"
+}
+
 # Run N rounds, echo median Gbps. Logs each round to stderr (like bench-netns.sh).
 # Sample the client-side tunnel component CPU% every ~2s for <duration>s.
 # target: "tng:<pid>" (host process) | "stunnel:<container>" | "raw:" (N/A).

@@ -162,9 +162,10 @@ EOF
 }
 
 client_cleanup() {
-    # $! may be the launcher (which already exited), not the real tng child, so also
-    # pkill any tng launch process to avoid orphaned ingresses holding ports 50001-50005.
-    [ -n "${INGRESS_PID:-}" ] && kill_pids "$INGRESS_PID" 2>/dev/null || true
+    # Fresh-stack restarts replace the ingress process per cell, so INGRESS_PID
+    # is often stale (and its number reusable). Kill the launcher by config path
+    # instead, then the generic sweep for orphans from a crashed run.
+    pkill -f "tng launch --config-file $OUTDIR/configs/ingress.json" 2>/dev/null || true
     pkill -f "tng launch" 2>/dev/null || true
     [ -n "${CTR:-}" ] && cleanup_containers bench-host-stunnel-client bench-host-stunnel-http-cli bench-host-haproxy-cli
     log "client cleaned up"
@@ -189,14 +190,20 @@ run_all() {
     local SRV_HP="${SERVER_IP}:haproxy:srv"
     local _iperf_json='{}' out
     for s in ${streams_list//,/ }; do
+        # Every workload cell with a proxy/tunnel process restarts that process
+        # set first (fresh stack), so each cell's memory peak is its own cost.
+        fresh_stack_tng "iperf3+rats-tls s=$s" "$SERVER_IP"
         out=$(run_iperf_median 127.0.0.1 50001 "$s" "iperf3+rats-tls" "$TNG_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+rats-tls" "$s" "$out")
+        fresh_stack_tng "iperf3+rats-tls+mux s=$s" "$SERVER_IP"
         out=$(run_iperf_median 127.0.0.1 50002 "$s" "iperf3+rats-tls+mux" "$TNG_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+rats-tls+mux" "$s" "$out")
         out=$(run_iperf_median "$SERVER_IP" "$IPERF_PORT" "$s" "iperf3+raw" "$RAW_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+raw" "$s" "$out")
+        fresh_stack_containers "iperf3+stunnel s=$s" "$SERVER_IP" bench-host-stunnel-client 5220 bench-host-stunnel-server 5210
         out=$(run_iperf_median 127.0.0.1 5220 "$s" "iperf3+stunnel" "$ST_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+stunnel" "$s" "$out")
+        fresh_stack_containers "iperf3+haproxy s=$s" "$SERVER_IP" bench-host-haproxy-cli "5222 5223" bench-host-haproxy-srv "5212 5213"
         out=$(run_iperf_median 127.0.0.1 5223 "$s" "iperf3+haproxy" "$HP_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+haproxy" "$s" "$out")
     done
@@ -210,16 +217,21 @@ run_all() {
     for prefix_mode in "http+:keepalive" "http-shortconn+:shortconn"; do
         prefix="${prefix_mode%%:*}"; mode="${prefix_mode##*:}"
         for c in ${conns_list//,/ }; do
+            fresh_stack_tng "${prefix}rats-tls c=$c" "$SERVER_IP"
             out=$(run_wrk_median "http://127.0.0.1:50003/file.bin" "$c" "${prefix}rats-tls" "$SRV_TNG" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}rats-tls" "$c" "$out")
+            fresh_stack_tng "${prefix}rats-tls+mux c=$c" "$SERVER_IP"
             out=$(run_wrk_median "http://127.0.0.1:50004/file.bin" "$c" "${prefix}rats-tls+mux" "$SRV_TNG_MUX" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}rats-tls+mux" "$c" "$out")
+            fresh_stack_tng "${prefix}ohttp c=$c" "$SERVER_IP"
             out=$(run_wrk_median "http://127.0.0.1:50005/file.bin" "$c" "${prefix}ohttp" "$SRV_OHTTP" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}ohttp" "$c" "$out")
             out=$(run_wrk_median "http://${SERVER_IP}:${NGINX_PORT}/file.bin" "$c" "${prefix}raw" "$RAW_T" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}raw" "$c" "$out")
+            fresh_stack_containers "${prefix}stunnel c=$c" "$SERVER_IP" bench-host-stunnel-http-cli 5221 bench-host-stunnel-http-srv 5211
             out=$(run_wrk_median "http://127.0.0.1:5221/file.bin" "$c" "${prefix}stunnel" "$SRV_ST" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}stunnel" "$c" "$out")
+            fresh_stack_containers "${prefix}haproxy c=$c" "$SERVER_IP" bench-host-haproxy-cli "5222 5223" bench-host-haproxy-srv "5212 5213"
             out=$(run_wrk_median "http://127.0.0.1:5222/file.bin" "$c" "${prefix}haproxy" "$SRV_HP" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}haproxy" "$c" "$out")
         done

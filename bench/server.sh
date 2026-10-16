@@ -175,7 +175,10 @@ EOF
 }
 
 server_cleanup() {
-    [ -n "${EGRESS_PID:-}" ] && kill_pids "$EGRESS_PID" 2>/dev/null || true
+    # Fresh-stack restarts replace the egress process per cell, so EGRESS_PID is
+    # often stale (and its number reusable). Kill the launcher by config path,
+    # then the generic sweep for orphans from a crashed run.
+    pkill -f "tng launch --config-file $OUTDIR/configs/egress.json" 2>/dev/null || true
     pkill -f "tng launch" 2>/dev/null || true
     [ -n "${CTR:-}" ] && cleanup_containers "$CTR_NAME_IPERF" "$CTR_NAME_NGINX" "$CTR_NAME_STUNNEL" "$CTR_NAME_STUNNEL_HTTP" "$CTR_NAME_HAPROXY"
     log "server cleaned up"
@@ -199,4 +202,19 @@ log "  TNG egress :40001-40005"
 log "  Output dir: $OUTDIR"
 log "  Press Ctrl-C when the client is done."
 log "============================================="
-wait
+# The client restarts the egress before every measured TNG cell (fresh stack),
+# so `wait` on the original child would return as soon as the first cell starts.
+# Stay up while a launcher holding this run's egress config exists; exit (the
+# trap tears the stack down) only after three consecutive 2s probes miss it --
+# a fresh-stack kill/relaunch gap is well under one second.
+alive=0
+while :; do
+    if pgrep -f "tng launch --config-file $OUTDIR/configs/egress.json" >/dev/null 2>&1; then
+        alive=0
+    else
+        alive=$((alive + 1))
+        [ "$alive" -ge 3 ] && break
+    fi
+    sleep 2
+done
+log "egress gone; exiting"
