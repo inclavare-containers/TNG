@@ -66,7 +66,7 @@ pub(crate) mod tests {
 
     use std::future::Future;
 
-    use anyhow::Result;
+    use anyhow::{anyhow, Result};
     use once_cell::sync::OnceCell;
     use scopeguard::defer;
     use serde_json::json;
@@ -121,7 +121,23 @@ pub(crate) mod tests {
         }
     }
 
+    // Serf cluster teardown can legitimately take seconds under CI CPU
+    // contention; 30s is far past that, so a longer wait means a supervised
+    // task is wedged, not merely slow.
+    const DEFAULT_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
     pub async fn run_test_with_tokio_runtime<F, T>(f: F) -> Result<()>
+    where
+        F: FnOnce(TokioRuntime) -> T,
+        T: Future<Output = Result<()>>,
+    {
+        run_test_with_tokio_runtime_with_shutdown_timeout(f, DEFAULT_SHUTDOWN_TIMEOUT).await
+    }
+
+    async fn run_test_with_tokio_runtime_with_shutdown_timeout<F, T>(
+        f: F,
+        shutdown_timeout: std::time::Duration,
+    ) -> Result<()>
     where
         F: FnOnce(TokioRuntime) -> T,
         T: Future<Output = Result<()>>,
@@ -137,9 +153,99 @@ pub(crate) mod tests {
         let res = async { f(TokioRuntime::current(shutdown.guard())?).await }.await;
 
         cancel.cancel();
-        shutdown.shutdown().await;
+        if tokio::time::timeout(shutdown_timeout, shutdown.shutdown())
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                ?shutdown_timeout,
+                "Supervised tasks did not drain before the shutdown timeout; a task is leaking its shutdown guard"
+            );
+            // The test's own failure takes precedence; the leak is already logged.
+            if res.is_ok() {
+                return Err(anyhow!(
+                    "supervised tasks did not finish within {shutdown_timeout:?} of test shutdown"
+                ));
+            }
+        }
 
         res
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_run_test_with_tokio_runtime_shutdown_timeout_on_leaked_guard() -> Result<()> {
+        let outer = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_test_with_tokio_runtime_with_shutdown_timeout(
+                |runtime| async move {
+                    runtime.spawn_supervised_task_with_span(
+                        tracing::info_span!("leaked_supervised_task"),
+                        std::future::pending::<()>(),
+                    );
+                    // A wedged supervised task holds a strong guard past its
+                    // own cancellation. Leak one synchronously in the body so
+                    // the blocked drain does not depend on when the spawned
+                    // task is first polled; otherwise shutdown can complete
+                    // before the task ever runs.
+                    let guard = runtime.shutdown_guard().clone();
+                    std::mem::forget(guard);
+                    Ok(())
+                },
+                std::time::Duration::from_secs(1),
+            ),
+        )
+        .await;
+
+        let res = match outer {
+            Err(_elapsed) => {
+                return Err(anyhow!(
+                    "run_test_with_tokio_runtime_with_shutdown_timeout hung despite the bounded shutdown wait"
+                ));
+            }
+            Ok(res) => res,
+        };
+        let err = match res {
+            Ok(()) => {
+                return Err(anyhow!(
+                    "wrapper returned Ok although a supervised task leaked its shutdown guard"
+                ));
+            }
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("did not finish within"),
+            "unexpected error message: {msg}"
+        );
+        assert!(
+            msg.contains("1s"),
+            "error message should name the shutdown timeout: {msg}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_run_test_with_tokio_runtime_waits_for_supervised_task() -> Result<()> {
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_test_with_tokio_runtime_with_shutdown_timeout(
+                |runtime| async move {
+                    runtime.spawn_supervised_task(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    });
+                    Ok(())
+                },
+                std::time::Duration::from_secs(5),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow!("wrapper did not return within its outer bound"))?;
+
+        assert!(
+            res.is_ok(),
+            "wrapper should return Ok when supervised tasks drain: {res:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
