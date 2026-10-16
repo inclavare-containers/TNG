@@ -40,3 +40,20 @@ bash -n bench/gen-report.sh bench/lib/common.sh bench/client.sh bench/server.sh
 测试使用合成 JSON 及本地程序替身，覆盖分档边界/方向、计数总数、折叠结构、身份校验、错误/缺失测量、历史及混合版本选项、部署文件被修改等情况，不启动 TNG 压测或连接外部服务。
 
 PR 文案要求见 performance-pr-requirements.md / performance-pr-requirements_zh.md。结论仍需评审：脚本不推断瓶颈原因、不证明统计显著性、不隔离组合优化贡献，也不决定 issue 是否关闭。
+
+## PR 呈现：报告以评论维护
+
+完整对比报告超出 GitHub 正文大小限制，以 PR 评论形式原地维护：
+
+```bash
+# 每份报告一条评论，整份报告折进一个折叠块，summary 为紧凑标题行
+bash bench/gen-report.sh --compare --fold "Full benchmark: <base>...<head>" \
+  <inputs...> main.md
+bash bench/gen-report.sh --compare --fold "Ablation step 1: <a>...<b> (改动)" \
+  <inputs...> step1.md
+# 发帖或原地更新（按折叠 summary 行匹配，绝不重复发帖）
+bash bench/pr-report-comments.sh <pr-number> <owner/repo> <comment-manifest.tsv>
+```
+
+manifest 每行一个评论 markdown 文件。正文用同样的紧凑文字链接各评论：
+`Full benchmark: [<a>...<b>](url)` 和 `Ablation step N: [<a>...<b>](url) (简短描述)`。

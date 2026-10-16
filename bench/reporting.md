@@ -39,4 +39,23 @@ bash -n bench/gen-report.sh bench/lib/common.sh bench/client.sh bench/server.sh
 
 The tests use synthetic JSON and a local fixture executable. They exercise class thresholds/direction, matching count totals, collapsed structure, identity validation, bad/missing measurements, historical/mixed-version flags, and deployed-binary tampering. They do not run TNG benchmarks or contact a service.
 
+## PR presentation: reports as comments
+
+Full comparison reports exceed GitHub's PR body limit, so they live as PR
+comments maintained in place:
+
+```bash
+# one report per comment, whole report inside a fold with a compact summary
+bash bench/gen-report.sh --compare --fold "Full benchmark: <base>...<head>" \
+  <inputs...> main.md
+bash bench/gen-report.sh --compare --fold "Ablation step 1: <a>...<b> (change)" \
+  <inputs...> step1.md
+# post or patch in place (matched by the fold summary line; never duplicated)
+bash bench/pr-report-comments.sh <pr-number> <owner/repo> <comment-manifest.tsv>
+```
+
+The manifest lists one comment markdown file per line. The body links to each
+comment with the same compact text: `Full benchmark: [<a>...<b>](url)` and
+`Ablation step N: [<a>...<b>](url) (short description)`.
+
 The PR communication requirements are in [performance-pr-requirements.md](performance-pr-requirements.md). Interpretations and prose still require review: the script does not infer bottleneck causes, prove statistical significance, isolate combined optimization benefits or decide whether an issue is closed.

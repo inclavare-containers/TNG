@@ -86,7 +86,7 @@ class Reports(unittest.TestCase):
         self.assertEqual(text.count('<details>'), text.count('</details>'))
         self.assertNotIn('<details open', text)
         self.assertIn('No differences.\n\n<details>\n<summary>Full test conditions', text)
-        method = text.split('## 4. Test Methodology')[1].split('## 5. Results')[0]
+        method = text.split('4. **Test Methodology**')[1].split('5. **Results**')[0]
         self.assertIn('<details>', method)
         self.assertIn("**Workloads and run parameters**\n\n- ", method)
         # Scope counts: 3 modes * 10 metrics = 30; references are separate.

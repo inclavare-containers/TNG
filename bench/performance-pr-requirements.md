@@ -14,7 +14,7 @@ Use these sections in order: Summary; Changes and configuration; Benchmark setup
 
 ## Full tables are mandatory evidence
 
-Include the complete script-generated comparison report IN THE PR BODY, covering every measured scenario, workload/control mode, concurrency and metric, including latency percentiles, success/errors, CPU and memory when collected. Do not prune bad rows, replace full tables with selected examples, or provide only a link. Each complete scenario data table MUST be inside a clearly labeled `<details>` block, collapsed by default (no `open` attribute). Keep its main findings, classification-count table and comparator legend outside the block and visible. Do not put all scenario summaries inside a single collapsed report. Preserve all environment/methodology sections as well. Preserve the generated Markdown artifact and underlying run data under the benchmark artifact policy. Link durable artifacts/manifests when available; a machine-local path alone is not an accessible reference for reviewers.
+Include the complete script-generated comparison report for every experiment, covering every measured scenario, workload/control mode, concurrency and metric, including latency percentiles, success/errors, CPU and memory when collected. Do not prune bad rows or replace full tables with selected examples. Full reports live as PR COMMENTS, not in the body (GitHub's body size limit cannot hold them): each report is one whole-report `<details>` block generated with `--fold`, maintained in place by `bench/pr-report-comments.sh` (matched by its summary line, patched, never duplicated). The PR body links to each comment with a compact hash-range line: `Full benchmark: [<base>...<head>](url)` for the main report and `Ablation step N: [<a>...<b>](url) (short natural-language description of the change)` per ablation step. Inside a report, each complete scenario data table stays inside its own clearly labeled `<details>` block, collapsed by default, with the classification-count table visible outside it. Preserve the generated Markdown artifact and underlying run data under the benchmark artifact policy.
 
 Generate tables using `bench/gen-report.sh --compare`; never retype measured tables by hand. If formatting needs to change, update the generator and verify it against retained input data instead of editing its output. Do not edit generated evidence by hand.
 
@@ -83,9 +83,9 @@ Scope: [paired modes and concurrency]. Parenthesized percentages are vs [raw ref
 
 Keep per-column units consistent. Counts do not weight metric importance: many improved latency percentiles cannot cancel a severe throughput or reliability regression. Main findings must name important adverse cases. Reference rows shown only once are context, not evidence of stability: investigate control-run drift and include paired control data when needed.
 
-## Report boundary, metadata tables and methodology
+## Report boundary, structure and metadata
 
-Separate the PR narrative from the generated benchmark report with a standalone Markdown horizontal rule (`---`, with blank lines before and after), immediately before the report title. Do not place the entire report inside a collapsed block: section headings, metadata differences and per-scenario findings/count tables must remain visible.
+Each generated report has exactly two chapters: `Benchmark setup` (the numbered plain lines 1. Test Environment, 2. Test Conditions, 3. Test Tool Versions, 4. Test Methodology — bold lines, not headings, with their full metadata in default-collapsed folds) and `Results` (the per-scenario sections). A report rendered as a PR comment (`--fold`) carries no top-level title: the fold's summary line is the title. Environment rows render host, kernel, CPU, memory, TNG version and TNG source revision only; the manifest-era fields (binary checksum, source-state, dirty, build command/environment, build time, run ID) are not rendered — the source revision is the identity.
 
 Sections `1. Test Environment`, `2. Test Conditions`, and `3. Test Tool Versions` each MUST show BOTH:
 

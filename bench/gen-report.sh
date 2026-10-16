@@ -11,20 +11,25 @@
 #     <exp-server-info> <exp-client-info> <exp-results> <output.md>
 # Optional: --title HEADING replaces the default report title and demotes all
 # internal headings one level, so several reports nest as sub-reports of one
-# PR chapter (see render-pr-reports.sh). Every report renders the full metric
-# registry; metrics a dataset did not collect render '-'.
+# PR chapter (see render-pr-reports.sh). Optional: --fold SUMMARY emits the
+# whole report inside one default-collapsed <details> block whose summary is
+# the given compact line (the PR-comment presentation); the report carries no
+# top-level title in that mode. Every report renders the full metric registry;
+# metrics a dataset did not collect render '-'.
 set -euo pipefail
 
 MODE=single
 ALLOW_UNVERIFIED=0
 ALLOW_MIXED=0
 TITLE=""
+FOLD=""
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --compare) MODE=compare; shift ;;
         --allow-unverified) ALLOW_UNVERIFIED=1; shift ;;
         --allow-mixed-versions) ALLOW_MIXED=1; shift ;;
         --title) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --title requires a heading" >&2; exit 2; }; TITLE="$2"; shift 2 ;;
+        --fold) [ $# -ge 2 ] && [ -n "$2" ] || { echo "usage: --fold requires a summary line" >&2; exit 2; }; FOLD="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -35,13 +40,14 @@ else
     [ $# -eq 3 ] && set -- "$@" ./bench-report.md
 fi
 
-python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$TITLE" "$MODE" "$@" <<'PY_REPORT'
+python3 - "$(dirname "$0")" "$ALLOW_UNVERIFIED" "$ALLOW_MIXED" "$TITLE" "$FOLD" "$MODE" "$@" <<'PY_REPORT'
 import json, os, sys, tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv.pop(1))
 ALLOW_UNVERIFIED = sys.argv.pop(1) == "1"
 ALLOW_MIXED = sys.argv.pop(1) == "1"
 TITLE = sys.argv.pop(1)
+FOLD = sys.argv.pop(1)
 from report_support import CLASSES, check_identity, classify, number
 
 mode = sys.argv[1]
@@ -242,18 +248,13 @@ def env_rows(srv, cli):
     host_block("Client", cli)
     host_block("Server", srv)
     for side, h in (("Client", cli), ("Server", srv)):
-        build = h.get("tng_build") or {}
-        build = build if isinstance(build, dict) else {}
+        # The source revision IS the benchmark identity; manifest-era fields
+        # (binary checksum, source-state, dirty, build command/environment,
+        # build time, run ID) are not rendered: nobody reads them and the
+        # full-SHA columns eat enormous width.
         rows.extend([
             (f"{side} TNG", h.get("tng_version", "[missing]")),
             (f"{side} TNG source revision", h.get("tng_git", "[missing]")),
-            (f"{side} TNG binary SHA-256", h.get("tng_binary_sha256", "[missing]")),
-            (f"{side} source state SHA-256", build.get("source_state_sha256", "[missing]")),
-            (f"{side} dirty source", build.get("dirty", "[missing]")),
-            (f"{side} build command", build.get("build_command", "[missing]")),
-            (f"{side} build environment", json.dumps(build.get("build_environment", {}), sort_keys=True)),
-            (f"{side} build time (UTC)", build.get("created_at_utc", "[missing]")),
-            (f"{side} run ID", h.get("run_id", "[missing]")),
         ])
     rows.append(("Container runtime", cli.get("runtime") or srv.get("runtime", "")))
     rows.append(("Link", "eth0: client/load host <-> server/backend host"))
@@ -331,13 +332,15 @@ def diff_table(brows, erows, only_changes=True):
             out.append(row([item, bs, es]))
     return out
 
-def diff_section(title, brows, erows, bhead, ehead):
+def diff_section(title, fold_label, brows, erows, bhead, ehead):
+    # The five report sections are plain numbered bold lines, not headings:
+    # they carry no navigation value and headings eat vertical space.
     L.extend([title, ""])
     header = [row(["Item", bhead, ehead]), row(["---"] * 3)]
     changed = diff_table(brows, erows)
     L.extend(header + changed if changed else ["No differences."])
     L.append("")
-    L.extend(fold("Full " + title.split(". ", 1)[1].lower(),
+    L.extend(fold("Full " + fold_label,
                   header + diff_table(brows, erows, only_changes=False)))
 
 def comparison_summary(rb, re, wls, metrics, controls=False):
@@ -440,12 +443,13 @@ if mode == "compare":
     validate_hosts(esrv, ecli, 'experimental')
     L.extend(['# TNG Two-Host Benchmark Comparison Report', ''])
     identity_banner()
-    diff_section("## 1. Test Environment", env_rows(bsrv, bcli), env_rows(esrv, ecli), "Baseline", "Experimental")
-    diff_section("## 2. Test Conditions", cond_rows(bsrv, bcli, bres), cond_rows(esrv, ecli, eres), "Baseline", "Experimental")
-    diff_section("## 3. Test Tool Versions", host_tool_rows(bsrv, bcli), host_tool_rows(esrv, ecli), "Baseline", "Experimental")
-    L.extend(['## 4. Test Methodology', ''])
+    L.extend(['## Benchmark setup', ''])
+    diff_section("1. **Test Environment**", "test environment", env_rows(bsrv, bcli), env_rows(esrv, ecli), "Baseline", "Experimental")
+    diff_section("2. **Test Conditions**", "test conditions", cond_rows(bsrv, bcli, bres), cond_rows(esrv, ecli, eres), "Baseline", "Experimental")
+    diff_section("3. **Test Tool Versions**", "test tool versions", host_tool_rows(bsrv, bcli), host_tool_rows(esrv, ecli), "Baseline", "Experimental")
+    L.extend(['4. **Test Methodology**', ''])
     L.extend(fold('Test methodology and metric definitions', METH_BODY))
-    L.extend(['## 5. Results', ''])
+    L.extend(['## Results', ''])
     compare_scenario('### Scenario A - iperf3 (TCP throughput)', bres, eres, IPERF_WL, IPERF_M, 'Streams')
     body_b = (bcli.get('params', {}) or bsrv.get('params', {})).get('http_body_kb', '64')
     body_e = (ecli.get('params', {}) or esrv.get('params', {})).get('http_body_kb', '64')
@@ -463,25 +467,27 @@ else:
     L.append("# TNG Two-Host Benchmark Report")
     L.append("")
     identity_banner()
-    L.append("## 1. Test Environment")
+    L.append("## Benchmark setup")
+    L.append("")
+    L.append("1. **Test Environment**")
     L.append("")
     L.extend(fold("Full test environment", value_table(env_rows(srv, cli))))
     L.append("")
-    L.append("## 2. Test Conditions")
+    L.append("2. **Test Conditions**")
     L.append("")
     L.extend(fold("Full test conditions", value_table(cond_rows(srv, cli, res))))
     L.append("")
-    L.append("## 3. Test Tool Versions")
+    L.append("3. **Test Tool Versions**")
     L.append("")
     tool_lines = ["| Tool | Image (resolved) | Source | Version | Digest |", "| --- | --- | --- | --- | --- |"]
     for name, fields in host_tool_rows(srv, cli):
         tool_lines.append(row([name, *fields]))
     L.extend(fold("Full test tool versions", tool_lines))
-    L.append("## 4. Test Methodology")
+    L.append("4. **Test Methodology**")
     L.append("")
     L.extend(fold("Test methodology and metric definitions", METH_BODY))
     L.append("")
-    L.append("## 5. Results")
+    L.append("## Results")
     L.append("")
     L.append("### Scenario A - iperf3 (TCP throughput)")
     L.append("")
@@ -503,6 +509,17 @@ else:
     L.append("")
 
 # Validation completes before replacing any existing report.
+if FOLD and TITLE:
+    raise SystemExit("--fold and --title are mutually exclusive")
+if FOLD:
+    # PR-comment presentation: the entire report inside one default-collapsed
+    # details block; the summary line is the report's only title.
+    body = [l for l in L if not l.startswith('# ')]
+    if body and body[0] == '---':   # body-context separator is noise in a comment fold
+        body = body[1:]
+        while body and body[0] == '':
+            body = body[1:]
+    L = ['<details>', '<summary>' + FOLD + '</summary>', ''] + body + ['', '</details>']
 if TITLE:
     # Sub-report mode: the caller's heading replaces the default H1 and every
     # other heading drops one level so the sub-report nests under the chapter
