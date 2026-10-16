@@ -92,9 +92,10 @@ except Exception:
 }
 
 # Run N rounds, echo median Gbps. Logs each round to stderr (like bench-netns.sh).
-# Sample the client-side tunnel component CPU% and mem(GB) every ~2s for <duration>s.
+# Sample the client-side tunnel component CPU% every ~2s for <duration>s.
 # target: "tng:<pid>" (host process) | "stunnel:<container>" | "raw:" (N/A).
-# Appends "cpu\tmem_gb" lines to <outfile>.
+# Appends "cpu\tN/A" lines to <outfile>; memory comes from sample_tunnel_mem_peak
+# (1 Hz VmRSS peak under load), not from this loop.
 # CPU % of a process (sums ALL threads) over a 1s window via pidstat (sysstat, preinstalled).
 # pidstat gives instantaneous windowed CPU% (not cumulative-since-start like ps %cpu),
 # sums all threads by default, 0.01% granularity, never negative (reads the kernel's
@@ -112,40 +113,39 @@ sample_tunnel() {
     fi
     local end=$(( $(date +%s) + duration ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        local cpu mem
+        local cpu
         # $id is the tunnel process's LISTEN port. Find its host PID via ss, then measure
-        # CPU with proc_cpu_pct (ticks, all threads, 1% granularity) and mem with ps RSS.
+        # CPU with proc_cpu_pct (ticks, all threads, 1% granularity).
         # Same method for tng and stunnel -> fair comparison. (ps -o times= is 100% steps;
         # podman stats is unreliable for these containers.)
-        local port="$id" pid rss
+        local port="$id" pid
         pid=$(ss -ltnp 2>/dev/null | grep -F ":$port " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
         if [ -n "$pid" ]; then
             cpu=$(proc_cpu_pct "$pid")
             [ -z "$cpu" ] && cpu="N/A"
-            rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
-            if [ -n "$rss" ]; then mem=$(python3 -c "print('%.3f' % ($rss/1048576))" 2>/dev/null); else mem="N/A"; fi
         else
-            cpu="N/A"; mem="N/A"
+            cpu="N/A"
         fi
-        printf '%s\t%s\n' "$cpu" "$mem" >> "$outfile"
+        printf '%s\tN/A\n' "$cpu" >> "$outfile"
         sleep 1
     done
 }
 
-# Remote-host counterpart of sample_tunnel: same metrics (1s pidstat CPU window,
-# ps RSS in GB) but the tunnel process lives on another host. One ssh call runs the
-# whole sampling loop remotely and streams "cpu\tmem" lines to the local outfile,
-# avoiding one-ssh-per-second overhead. host:port lookup uses ss just like the local
-# path (works for host tng processes and --network host containers). Missing PID -> N/A.
-# Sample a SERVER-side tunnel component (tng egress / haproxy master+workers /
-# stunnel-srv) on a remote host during the steady-state round. One
-# `pidstat -u -r -p <PIDs> 1 <duration>` call covers both CPU% and RSS; we take
-# the Average row and sum across PIDs. For haproxy, PIDs = pgrep (master + all
-# workers); for tng/stunnel, -p <pid> already sums all threads. CPU% is summed
-# (100 = one logical core); RSS is summed (KiB) then /1024 -> MiB. This matches
-# the project convention and EXCLUDES the client proxy, bench scripts, backend,
-# NLB, and OS cache (only the server-side tunnel component is counted). The
-# same method is used for tng and haproxy so they are directly comparable.
+# Remote-host counterpart of sample_tunnel: 1s pidstat CPU windows over the final
+# measured round, streamed as "cpu\tN/A" lines to the local outfile. Memory is
+# sampled separately by sample_server_mem_peak (1 Hz VmRSS under load). One ssh
+# call runs the whole loop remotely, avoiding one-ssh-per-second overhead.
+# host:port lookup uses ss (works for host tng processes and --network host
+# containers). Missing PID -> N/A.
+# Sample a SERVER-side tunnel component's CPU (tng egress / haproxy master+workers
+# / stunnel-srv) on a remote host during the steady-state round. One
+# `pidstat -u -p <PIDs> 1 <duration>` call covers CPU%; we take the Average row
+# and sum across PIDs. For haproxy, PIDs = pgrep (master + all workers); for
+# tng/stunnel, -p <pid> already sums all threads. CPU% is summed (100 = one
+# logical core). This matches the project convention and EXCLUDES the client
+# proxy, bench scripts, backend, NLB, and OS cache (only the server-side tunnel
+# component is counted). The same method is used for tng and haproxy so they are
+# directly comparable.
 # kind: tng | stunnel (PID by listen port) | haproxy (pgrep master+workers).
 sample_server() {
     local host="$1" kind="$2" id="$3" duration="$4" outfile="$5"
@@ -162,28 +162,106 @@ if [ -z "$pids" ]; then
     printf 'N/A\tN/A\n'; exit 0
 fi
 # LC_ALL=C forces the English "Average:" label. Average-data lines have a
-# numeric PID ($3). The CPU block has 10 fields (%CPU=$8); the RSS block has
-# 9 fields (RSS=$7, KiB). Sum across PIDs; RSS sum -> MiB (/1024).
-LC_ALL=C pidstat -u -r -p "$pids" 1 "$duration" 2>/dev/null | awk '
+# numeric PID ($3). The CPU block has 10 fields (%CPU=$8). Sum across PIDs.
+LC_ALL=C pidstat -u -p "$pids" 1 "$duration" 2>/dev/null | awk '
 /^Average:/ && $3 ~ /^[0-9]+$/ {
     if (NF == 10) cpu += $8;
-    else if (NF == 9) rss += $7;
 }
 END {
-    if (cpu == 0 && rss == 0) print "N/A\tN/A";
-    else printf "%.1f\t%.1f\n", cpu, rss/1024;
+    if (cpu == 0) print "N/A\tN/A";
+    else printf "%.1f\tN/A\n", cpu;
 }'
 REMOTE
     [ -s "$outfile" ] || printf 'N/A\tN/A\n' >> "$outfile"
 }
 
-# Average a sample_tunnel outfile into "cpu\tmem_gb" (N/A if no numeric samples).
+# Sample the SERVER-side tunnel component's memory UNDER LOAD, in parallel with
+# the measured pass. A remote loop reads /proc/<pid>/status VmRSS at 1 Hz for the
+# same PID set as sample_server (haproxy: master+workers; tng/stunnel: the listen
+# port's process) and appends one KiB value per second to <outfile>. The caller
+# reports the peak (max) of those samples: windowed RSS averages mixed the load
+# ramp into the plateau and were bistable run-to-run (±27..50 MiB on same-binary
+# reruns), while alternating single-workload A/B rounds of settled VmRSS read
+# within a few MiB. The peak answers how much memory serving this cell needs.
+# Stops via a duration cap; the caller kills it as soon as the pass ends.
+sample_server_mem_peak() {
+    local host="$1" kind="$2" id="$3" duration="$4" outfile="$5"
+    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$host" \
+        bash -s -- "$kind" "$id" "$duration" >> "$outfile" 2>/dev/null <<'REMOTE'
+kind="$1"; id="$2"; duration="$3"
+pids=""
+if [ "$kind" = "haproxy" ]; then
+    pids=$(pgrep haproxy 2>/dev/null)
+else
+    pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+fi
+[ -n "$pids" ] || exit 0
+end=$(( $(date +%s) + duration ))
+while [ "$(date +%s)" -lt "$end" ]; do
+    tot=0
+    for p in $pids; do
+        v=$(awk '/^VmRSS:/ {print $2}' "/proc/$p/status" 2>/dev/null)
+        [ -n "$v" ] && tot=$(( tot + v ))
+    done
+    [ "$tot" -gt 0 ] && printf '%d\n' "$tot"
+    sleep 1
+done
+REMOTE
+}
+
+# Sample the CLIENT-side tunnel component's memory UNDER LOAD (local counterpart
+# of sample_server_mem_peak): VmRSS from /proc/<pid>/status at 1 Hz, same PID
+# discovery as sample_tunnel (listen port -> pid via ss). Appends KiB lines.
+sample_tunnel_mem_peak() {
+    local target="$1" duration="$2" outfile="$3"
+    local kind="${target%%:*}" id="${target#*:}"
+    [ "$kind" = "raw" ] && return 0
+    local end=$(( $(date +%s) + duration ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+        local pid v tot=0
+        pid=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
+        if [ -n "$pid" ]; then
+            v=$(awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
+            [ -n "$v" ] && tot=$(( tot + v ))
+        fi
+        [ "$tot" -gt 0 ] && printf '%d\n' "$tot" >> "$outfile"
+        sleep 1
+    done
+}
+
+# Stop a backgrounded sampler: kill its children first (the ssh client holding the
+# remote 1 Hz loop; the remote loop dies on SIGPIPE when the pipe closes), then the
+# loop subshell itself, and reap.
+stop_sampler() {
+    local pid="$1"
+    [ -n "$pid" ] || return 0
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
+# Peak (max) of a raw 1 Hz VmRSS sample file (KiB per line). Echoed as MiB
+# ("mib", HTTP Server Mem) or GiB ("gib", legacy Tunnel Mem label); N/A if no
+# numeric samples.
+peak_mem() {
+    python3 -c "
+import os, sys
+vals = [int(l) for l in open(sys.argv[1]) if l.strip().isdigit()] if os.path.exists(sys.argv[1]) else []
+scale = {'mib': 1024.0, 'gib': 1048576.0}[sys.argv[2]]
+fmt = {'mib': '%.1f', 'gib': '%.3f'}[sys.argv[2]]
+print(fmt % (max(vals)/scale) if vals else 'N/A')
+" "$1" "$2" 2>/dev/null || printf 'N/A'
+}
+
+# Average a CPU sample outfile into "cpu\tmem" (N/A if no numeric samples).
+# The samplers keep a memory column in their line format but no longer fill it
+# (peak RSS comes from peak_mem over the raw VmRSS files).
 avg_samples() {
     python3 -c "
 import sys
-vals = [l.split('\t') for l in open(sys.argv[1]) if l.strip()]
+vals = [l.strip().split('\t') for l in open(sys.argv[1]) if l.strip()]
 c = [float(x[0]) for x in vals if x[0] not in ('N/A','')]
-m = [float(x[1]) for x in vals if x[1] not in ('N/A','')]
+m = [float(x[1]) for x in vals if len(x) > 1 and x[1] not in ('N/A','')]
 print('%s\t%s' % ('%.1f' % (sum(c)/len(c)) if c else 'N/A', '%.3f' % (sum(m)/len(m)) if m else 'N/A'))
 " "$1" 2>/dev/null || printf 'N/A\tN/A'
 }
@@ -192,10 +270,18 @@ run_iperf_median() {
     local host="$1" port="$2" streams="${3:-1}" label="$4" tunnel="${5:-raw:}"
     local -a results=()
     local rounds="${IPERF_ROUNDS:-3}"
-    local rawdir="${OUTDIR:-.}/logs/raw"
-    mkdir -p "$rawdir"
+    local rawdir="${OUTDIR:-.}/logs/raw" memdir="${OUTDIR:-.}/logs/mem"
+    mkdir -p "$rawdir" "$memdir"
     local cpu="N/A" mem="N/A" spid=""
     local i bw
+    # Memory under load: 1 Hz VmRSS over the whole measured pass, reported as the
+    # peak. Started before the rounds, stopped as soon as they finish.
+    local mspid="" mfile=""
+    if [ "$tunnel" != "raw:" ]; then
+        mfile="$memdir/${label}-s${streams}.memkib"
+        sample_tunnel_mem_peak "$tunnel" $(( (${IPERF_DURATION:-15} + 6) * rounds + 30 )) "$mfile" &
+        mspid=$!
+    fi
     for i in $(seq 1 "$rounds"); do
         local sfile=""
         if [ "$i" -eq "$rounds" ] && [ "$tunnel" != "raw:" ]; then
@@ -215,6 +301,10 @@ run_iperf_median() {
             rm -f "$sfile"
         fi
     done
+    stop_sampler "$mspid"
+    if [ -n "$mfile" ]; then
+        mem=$(peak_mem "$mfile" gib)
+    fi
     if [ ${#results[@]} -eq 0 ]; then
         fail "iperf3 all rounds failed for $label" >&2
         printf '0.00\tN/A\tN/A\n'; return 0
@@ -328,16 +418,29 @@ run_wrk_median() {
     fi
     local tmp; tmp=$(mktemp)
     local srv_cpu="N/A" srv_mem="N/A" rspid=""
+    local shost="" srest="" skind="" sid=""
+    if [ "$srv" != "raw:" ] && [ -n "$srv" ]; then
+        shost="${srv%%:*}"; srest="${srv#*:}"; skind="${srest%%:*}"; sid="${srest#*:}"
+    fi
+    # Memory under load: 1 Hz VmRSS on the server-side component over the whole
+    # measured pass, reported as the peak. Started before the rounds (after the
+    # warmup), stopped as soon as they finish; raw samples kept under logs/mem.
+    local mspid="" mfile=""
+    if [ -n "$skind" ]; then
+        local memdir="${OUTDIR:-.}/logs/mem"
+        mkdir -p "$memdir"
+        mfile="$memdir/${label}-c${conns}.memkib"
+        sample_server_mem_peak "$shost" "$skind" "$sid" $(( (${WRK_DURATION:-15} + 6) * rounds + 30 )) "$mfile" &
+        mspid=$!
+    fi
     local i line
     for i in $(seq 1 "$rounds"); do
         local rsfile=""
-        # Server-side component sampling on the last round, concurrent with wrk.
+        # Server-side component CPU sampling on the last round, concurrent with wrk.
         # srv = "host:kind:id": tng/stunnel id = listen port; haproxy id = any
         # (pgrep gathers master + workers). raw: -> no sampling.
-        if [ "$i" -eq "$rounds" ] && [ "$srv" != "raw:" ] && [ -n "$srv" ]; then
+        if [ "$i" -eq "$rounds" ] && [ -n "$skind" ]; then
             rsfile=$(mktemp)
-            local shost srest skind sid
-            shost="${srv%%:*}"; srest="${srv#*:}"; skind="${srest%%:*}"; sid="${srest#*:}"
             sample_server "$shost" "$skind" "$sid" "${WRK_DURATION:-15}" "$rsfile" &
             rspid=$!
         fi
@@ -349,10 +452,14 @@ run_wrk_median() {
         fi
         if [ -n "$rsfile" ]; then
             wait "$rspid" 2>/dev/null || true
-            read -r srv_cpu srv_mem <<< "$(avg_samples "$rsfile")"
+            read -r srv_cpu _ <<< "$(avg_samples "$rsfile")"
             rm -f "$rsfile"
         fi
     done
+    stop_sampler "$mspid"
+    if [ -n "$mfile" ]; then
+        srv_mem=$(peak_mem "$mfile" mib)
+    fi
     if [ ! -s "$tmp" ]; then
         fail "wrk all rounds failed for $label" >&2
         rm -f "$tmp"
@@ -505,7 +612,7 @@ PY
 
 # Merge one wrk result line "gbps\trps\tmean\tp50\tp90\tp95\tp99\tsuccess\tsrv_cpu\tsrv_mem" into the http JSON.
 # srv_cpu = server-side tunnel component CPU% (tng egress or haproxy master+workers),
-# srv_mem = server-side RSS in MiB. No client-side proxy columns (excluded by convention).
+# srv_mem = server-side peak RSS in MiB under load. No client-side proxy columns (excluded by convention).
 json_add_http() {
     python3 - "$@" <<'PY'
 import json, sys
