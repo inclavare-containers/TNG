@@ -28,10 +28,15 @@ use async_trait::async_trait;
 use http::HeaderValue;
 use serde::Serialize;
 use tokio::sync::{OnceCell, RwLock};
-use url::Url;
 
-/// Cached OHTTP client per base URL, lazily initialized on first use.
-type OhttpClientCache = RwLock<HashMap<Url, Arc<OnceCell<Arc<OHttpClient>>>>>;
+/// Cached OHTTP client per outer-POST URL string, lazily initialized on
+/// first use. Keyed by the plain URL string so a keep-alive request does not
+/// have to parse a `Url` just to look the entry up; `OHttpClient::new` parses
+/// it once. Two equivalent-but-differently-spelled paths therefore get two
+/// entries (the parsed-`Url` key used to canonicalize); the bounded cost is an
+/// extra client creation (one key-config fetch), never a routing difference:
+/// each client posts the parsed, normalized URL.
+type OhttpClientCache = RwLock<HashMap<String, Arc<OnceCell<Arc<OHttpClient>>>>>;
 
 /// Compute the outer OHTTP POST path used when no `path_rewrites` rule matches
 /// (or `path_rewrites` is unset/empty). The caller is responsible for ensuring
@@ -249,7 +254,7 @@ impl OHttpSecurityLayer {
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
         async {
-            let base_url = self.construct_base_url(endpoint, &request)?;
+            let base_url = self.construct_base_url(endpoint, &request);
 
             let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
 
@@ -262,44 +267,43 @@ impl OHttpSecurityLayer {
         })
     }
 
+    /// Outer-POST URL as a plain string: it is the cache key for the
+    /// per-endpoint `OHttpClient`, and the client parses it into a `Url`
+    /// once at creation. Parsing per request (and hashing/cloning the parsed
+    /// `Url` for the cache lookup) showed up in the keep-alive profile; the
+    /// parsed-URL error path moved into `OHttpClient::new`, same
+    /// `CreateOHttpClientFailed` variant and `Not a valid URL` context.
     fn construct_base_url(
         &self,
         endpoint: &TngEndpoint,
         request: &axum::extract::Request,
-    ) -> Result<Url, TngError> {
+    ) -> String {
         let old_uri = request.uri();
-        let base_url = {
-            let original_path = old_uri.path();
-            // When no path_rewrite rule matches (path_rewrites unset/empty or
-            // no regex hit), fall back according to `path_default`: `/` (Root,
-            // the historical default) or the inner request's original path.
-            let mut rewrited_path = self
-                .path_rewrite_group
-                .rewrite(original_path)
-                .unwrap_or_else(|| fallback_outer_path(self.path_default, original_path));
+        let original_path = old_uri.path();
+        // When no path_rewrite rule matches (path_rewrites unset/empty or
+        // no regex hit), fall back according to `path_default`: `/` (Root,
+        // the historical default) or the inner request's original path.
+        let mut rewrited_path = self
+            .path_rewrite_group
+            .rewrite(original_path)
+            .unwrap_or_else(|| fallback_outer_path(self.path_default, original_path));
 
-            if !rewrited_path.starts_with('/') {
-                rewrited_path.insert(0, '/');
-            }
+        if !rewrited_path.starts_with('/') {
+            rewrited_path.insert(0, '/');
+        }
 
-            tracing::debug!(original_path, rewrited_path, "path is rewrited");
+        tracing::debug!(original_path, rewrited_path, "path is rewrited");
 
-            let url = format!(
-                "{}://{}{rewrited_path}",
-                self.scheme,
-                endpoint.http_authority()
-            );
-
-            url.parse::<Url>()
-                .with_context(|| format!("Not a valid URL: {url}"))
-                .map_err(TngError::CreateOHttpClientFailed)?
-        };
-        Ok(base_url)
+        format!(
+            "{}://{}{rewrited_path}",
+            self.scheme,
+            endpoint.http_authority()
+        )
     }
 
     async fn get_or_create_ohttp_client(
         &self,
-        base_url: Url,
+        base_url: String,
     ) -> Result<Arc<OHttpClient>, TngError> {
         // Try to read the ohttp client entry.
         let cell = {

@@ -44,12 +44,19 @@ impl OhttpServerApi {
     ) -> Result<axum::response::Response, TngError> {
         check_request_content_type(payload.headers())?;
 
-        // Capture outer request headers (e.g. the browser's `Origin`) before the
-        // body is consumed. These are copied onto the decrypted inner request so
-        // the upstream backend can make its own CORS decision. `Origin` is a
-        // forbidden header set by the browser on the outer fetch; only the egress
-        // server (which terminates the outer HTTP) can see it.
-        let outer_request_headers = payload.headers().clone();
+        // Select the configured outer request headers (e.g. the browser's
+        // `Origin`) before the body is consumed; they are copied onto the
+        // decrypted inner request so the upstream backend can make its own
+        // CORS decision. `Origin` is a forbidden header set by the browser on
+        // the outer fetch; only the egress server (which terminates the outer
+        // HTTP) can see it. Only the matching pairs are taken, not a clone of
+        // the whole map.
+        let outer_passthrough = self
+            .passthrough_request_headers
+            .collect_passthrough_headers(
+                payload.headers(),
+                crate::config::header_passthrough::protected_ohttp_headers(),
+            );
 
         let mut reader = tokio_util::io::StreamReader::new(
             payload
@@ -68,7 +75,7 @@ impl OhttpServerApi {
 
         // Rewrite stage: copy the configured outer request headers onto the
         // inner request and annotate it with the relay peer's client IP.
-        self.rewrite_inner_request_headers(&mut request, &outer_request_headers, context.peer_addr);
+        self.rewrite_inner_request_headers(&mut request, outer_passthrough, context.peer_addr);
 
         tracing::debug!(
             method = ?request.method(),
@@ -214,19 +221,16 @@ impl OhttpServerApi {
         Ok((request, response_seal, sink))
     }
 
-    /// Rewrite stage: copy the configured passthrough headers from the outer
-    /// request onto the decrypted inner request and inject the
+    /// Rewrite stage: copy the configured passthrough pairs (collected by
+    /// `process_encrypted_request` from the outer request before its body was
+    /// consumed) onto the decrypted inner request and inject the
     /// forwarded-client-IP headers, before the request goes to the backend.
     fn rewrite_inner_request_headers<B>(
         &self,
         request: &mut http::Request<B>,
-        outer_request_headers: &http::HeaderMap,
+        outer_passthrough: Vec<(http::HeaderName, http::HeaderValue)>,
         peer_addr: Option<std::net::SocketAddr>,
     ) {
-        let protected = crate::config::header_passthrough::protected_ohttp_headers();
-        let outer_passthrough = self
-            .passthrough_request_headers
-            .collect_passthrough_headers(outer_request_headers, protected);
         let inner_headers = request.headers_mut();
         for (name, value) in outer_passthrough {
             // `insert` replaces any existing inner value; protected headers are

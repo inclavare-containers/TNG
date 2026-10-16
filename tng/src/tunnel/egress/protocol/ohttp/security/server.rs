@@ -290,12 +290,28 @@ pub async fn log_request(
     let version = req.version();
     let start = Instant::get();
 
-    let ohttp_api = req
+    // The four known api tags map to their `&'static` constants (the request
+    // is moved into `next.run`, so the tag must not borrow it); only an
+    // unexpected header value allocates. A missing header or a non-UTF-8
+    // value both stay "unknown", exactly as before.
+    let ohttp_api: std::borrow::Cow<'static, str> = match req
         .headers()
         .get(OhttpApi::HEADER_NAME)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_owned();
+    {
+        Some(v) => match v {
+            OhttpApi::KEY_CONFIG => std::borrow::Cow::Borrowed(OhttpApi::KEY_CONFIG),
+            OhttpApi::TUNNEL => std::borrow::Cow::Borrowed(OhttpApi::TUNNEL),
+            OhttpApi::BACKGROUND_CHECK_CHALLENGE => {
+                std::borrow::Cow::Borrowed(OhttpApi::BACKGROUND_CHECK_CHALLENGE)
+            }
+            OhttpApi::BACKGROUND_CHECK_VERIFY => {
+                std::borrow::Cow::Borrowed(OhttpApi::BACKGROUND_CHECK_VERIFY)
+            }
+            other => std::borrow::Cow::Owned(other.to_owned()),
+        },
+        None => std::borrow::Cow::Borrowed("unknown"),
+    };
 
     let res = next.run(req).await;
 
