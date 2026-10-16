@@ -7,7 +7,7 @@ use crate::tee::coco::converter::restful::RESTFUL_AS_CONNECT_TIMEOUT_DEFAULT;
 
 use super::AttestationTokenVerifierConfig;
 use anyhow::{anyhow, bail, Context};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk};
 use jsonwebtoken::{decode, decode_header, jwk, Algorithm, DecodingKey, Header, Validation};
@@ -37,6 +37,23 @@ use x509_cert::der::{Decode, DecodePem, Encode};
 use x509_cert::Certificate;
 
 const OPENID_CONFIG_URL_SUFFIX: &str = ".well-known/openid-configuration";
+
+fn decode_x5c(encoded: &str) -> anyhow::Result<Vec<u8>> {
+    // RFC 7517 section 4.7 requires standard Base64 for x5c (unlike the
+    // surrounding JWT). Retain compatibility with legacy URL-safe tokens.
+    STANDARD
+        .decode(encoded)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(encoded))
+        .context("Illegal x5c cert")
+}
+
+#[test]
+fn x5c_accepts_standard_and_legacy_encoding_but_rejects_invalid_data() {
+    let bytes = [0xfb, 0xff, 0xee, 0x01];
+    assert_eq!(decode_x5c(&STANDARD.encode(bytes)).unwrap(), bytes);
+    assert_eq!(decode_x5c(&URL_SAFE_NO_PAD.encode(bytes)).unwrap(), bytes);
+    assert!(decode_x5c("invalid!certificate").is_err());
+}
 
 #[derive(Error, Debug)]
 pub enum JwksGetError {
@@ -255,7 +272,7 @@ impl JwkAttestationTokenVerifier {
 
         // Parse leaf certificate
         let pem = x5c[0].split('\n').collect::<String>();
-        let leaf_der = URL_SAFE_NO_PAD.decode(pem).context("Illegal x5c cert")?;
+        let leaf_der = decode_x5c(&pem)?;
 
         // Verify JWK public key matches certificate public key
         {
@@ -281,7 +298,7 @@ impl JwkAttestationTokenVerifier {
         let mut intermediates = Vec::new();
         for cert_pem in &x5c[1..] {
             let pem = cert_pem.split('\n').collect::<String>();
-            let der = URL_SAFE_NO_PAD.decode(&pem).context("Illegal x5c cert")?;
+            let der = decode_x5c(&pem)?;
             intermediates.push(CertificateDer::from(der));
         }
 

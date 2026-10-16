@@ -523,7 +523,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `as_addr` | string | — | AS 地址（必填，结尾斜杠可选） |
 | `as_headers` | object | `{}` | 发送到 AS 的自定义头部（如 Authorization） |
 | `policy_ids` | array [string] | — | 策略 ID 列表，引用 AS 端已定义的策略（必填；策略需先在 AS 端创建，`default` 仅为示例名） |
-| `trusted_certs_paths` | array [string] | `[]` | 验证 Attestation Token 签名的根 CA 证书路径 |
+| `trusted_certs_paths` | array [string] | `[]` | 验证 Attestation Token 签名的根 CA 证书路径。非空时直接使用这些信任根，不从 `as_addr` 的 `/certificate` 获取证书；证据评估仍使用该 AS 地址。 |
 | `verify_signer_transparency` | boolean | `false` | 验证 Trustee AS 签发 JWT 中的 `signer_transparency` 声明（详见折叠） |
 | `skip_as_token_cert_verify` | boolean | `false` | **危险：** 跳过 AS token 证书验证。开启时 `trusted_certs_paths` 与 `as_addr` 均不可设置。仅在完全信任 token 来源时使用。 |
 
@@ -698,7 +698,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `as_addr` | string | — | Attestation Service 地址（可选，但 `as_addr` 或 `trusted_certs_paths` 至少需指定一个） |
 | `as_headers` | object | `{}` | 发送到 AS 的自定义头部（如 Authorization） |
 | `policy_ids` | array [string] | — | 策略 ID 列表 |
-| `trusted_certs_paths` | array [string] | `[]` | 验证 Attestation Token 签名的根 CA 证书路径 |
+| `trusted_certs_paths` | array [string] | `[]` | 验证 Attestation Token 签名的根 CA 证书路径。非空时直接使用这些信任根，不从 `as_addr` 的 `/certificate` 获取证书。 |
 | `verify_signer_transparency` | boolean | `false` | 验证 Trustee AS 签发的 JWT token 中的 `signer_transparency` 声明 |
 | `skip_as_token_cert_verify` | boolean | `false` | **危险：** 跳过 AS token 证书验证。开启时 `trusted_certs_paths` 与 `as_addr` 均不可设置。仅在完全信任 token 来源时使用。 |
 
