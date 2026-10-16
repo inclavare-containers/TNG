@@ -198,14 +198,15 @@ else
         --nocapture
     )
 
-    unit_output=$(run_tests "${unit_args[@]}" 2>&1) || unit_failed=true || true
-    echo "$unit_output"
+    # Stream live through tee so a hung run stays visible in the CI log as it
+    # happens; the tee'd file feeds the failed-test extraction below.
+    if ! run_tests "${unit_args[@]}" 2>&1 | tee /tmp/tng-unit-output.log; then unit_failed=true; fi
 
     if [[ "${unit_failed:-false}" == "true" ]]; then
         failed=1
         summary_lines+=("$(format_result "  unit test" "FAILED")")
         # Extract failed test names from cargo test output
-        failed_unit_tests=$(echo "$unit_output" | grep -E '^test .* FAILED$' | sed 's/ --- FAILED$//' | sed 's/^test //')
+        failed_unit_tests=$(grep -E '^test .* FAILED$' /tmp/tng-unit-output.log | sed 's/ --- FAILED$//' | sed 's/^test //')
         if [[ -n "$failed_unit_tests" ]]; then
             while IFS= read -r t; do
                 summary_lines+=("$(format_result "    -> $t" "FAILED")")
