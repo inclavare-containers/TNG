@@ -398,4 +398,84 @@ pub(crate) mod tests {
 
         Ok(())
     }
+
+    /// A service that fails before reporting ready must not produce a ready
+    /// signal: with the ingress port already held by an outside listener, the
+    /// runtime exits on the bind error and the ready channel closes without
+    /// ever sending. Guards the readiness loop against treating the ready
+    /// channel closing (every sender dropped by failing services) as if all
+    /// services had reported ready.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_no_ready_when_all_services_fail() -> Result<()> {
+        use tokio::net::TcpListener;
+
+        // Pick a port and grab it in one step; retry if another process
+        // raced us to it between portpicker's probe and our bind.
+        let (holder, port) = loop {
+            let port = portpicker::pick_unused_port().unwrap();
+            match TcpListener::bind(("0.0.0.0", port)).await {
+                Ok(listener) => break (listener, port),
+                Err(_) => continue,
+            }
+        };
+
+        let config: TngConfig = serde_json::from_value(json!(
+            {
+                "add_ingress": [
+                    {
+                        "mapping": {
+                            "in": {
+                                "port": port
+                            },
+                            "out": {
+                                "host": "127.0.0.1",
+                                "port": portpicker::pick_unused_port().unwrap()
+                            }
+                        },
+                        "no_ra": true
+                    }
+                ]
+            }
+        ))?;
+
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+
+        let tng_runtime = TngRuntime::from_config(config).await?;
+        #[allow(clippy::disallowed_methods)]
+        let join_handle =
+            tokio::task::spawn(async move { tng_runtime.serve_with_ready(ready_sender).await });
+
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            res = ready_receiver => {
+                if res.is_ok() {
+                    defer! {
+                        std::process::exit(1);
+                    }
+                    panic!("tng reported ready although the only service failed to serve");
+                }
+            }
+        }
+
+        // The runtime must exit on the bind error, whether it surfaces the
+        // error as a return value or only in the logs: what matters for this
+        // regression is that it never signaled ready on the way out.
+        select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                defer! {
+                    std::process::exit(1);
+                }
+                panic!("Wait for tng exit timeout")
+            }
+            _ = join_handle => {}
+        }
+
+        drop(holder);
+        Ok(())
+    }
 }

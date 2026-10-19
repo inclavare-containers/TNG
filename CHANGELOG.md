@@ -25,3 +25,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ohttp tunnels now recover after an upstream send failure: pooled backend connections are evicted instead of being reused against a dead upstream.
 - The hook log collector no longer drops queued log datagrams under burst; they are drained with a raw recv.
 - The serf key watcher no longer parks forever on a dropped serf handle; it re-checks the handle on every iteration.
+- tng no longer signals readiness when a service fails before reporting ready (e.g. an ingress port is already occupied); the ready callback now fires only after every service is actually serving.

@@ -407,9 +407,18 @@ impl TngRuntime {
         };
 
         let check_services_ready = async {
+            let mut all_reported = true;
             for _ in 0..service_count {
-                ready_receiver.recv().await;
+                // recv() returns None once every ready-sender is dropped. A
+                // service that ends before reporting ready drops its sender,
+                // so a closed channel here means at least one service is
+                // gone: never treat that as every service being ready.
+                if ready_receiver.recv().await.is_none() {
+                    all_reported = false;
+                    break;
+                }
             }
+            all_reported
         };
 
         let meter = self.meter_provider.meter("tng");
@@ -420,11 +429,13 @@ impl TngRuntime {
         live.record(0, &[]);
 
         let maybe_err = tokio::select! {
-            _ = check_services_ready => {
-                tracing::info!(service_count, "All services are ready");
-                live.record(1, &[]);
+            all_reported = check_services_ready => {
+                if all_reported {
+                    tracing::info!(service_count, "All services are ready");
+                    live.record(1, &[]);
 
-                let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
+                    let _ = self.state.ready.0.send(true); // Ignore any error occuring during send
+                }
 
                 // Now waiting for exiting signal
                 tokio::select! {
