@@ -303,11 +303,21 @@ jobs:
           fi
           echo "Previous tag: $PREV_TAG"
 
-          # Generate changelog with commit hashes
-          if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log "${PREV_TAG}..${CURRENT_TAG}" --pretty=format:"- (%h) %s" --no-merges)
+          # Release notes come from CHANGELOG.md's section for this version,
+          # which make bump-version-* cut before tagging. Fall back to commit
+          # subjects for tags that predate the changelog (pre-releases cut
+          # without bump-version).
+          CURRENT_VERSION_NUM="${CURRENT_VERSION#v}"
+          CHANGELOG=$(bash scripts/extract-changelog.sh "$CURRENT_VERSION_NUM" CHANGELOG.md) || true
+          if [ -n "$CHANGELOG" ]; then
+            echo "Found [$CURRENT_VERSION_NUM] section in CHANGELOG.md"
           else
-            CHANGELOG=$(git log --pretty=format:"- (%h) %s" --no-merges -20)
+            echo "WARNING: no [$CURRENT_VERSION_NUM] section in CHANGELOG.md, falling back to commit log"
+            if [ -n "$PREV_TAG" ]; then
+              CHANGELOG=$(git log "${PREV_TAG}..${CURRENT_TAG}" --pretty=format:"- (%h) %s" --no-merges)
+            else
+              CHANGELOG=$(git log --pretty=format:"- (%h) %s" --no-merges -20)
+            fi
           fi
 
           # Write to file

@@ -75,9 +75,16 @@ define determine-last-tag
 	$(eval LAST_TAG := $(if $(TAG_EXISTS),$(EXPECTED_TAG),$(shell git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1)))
 endef
 
-# Function to write commits to file for RPM (uses -)
-define write-commits-to-file
-	@git log $(LAST_TAG)..HEAD --pretty=format:"- %s" --no-merges > $(1) 2>/dev/null || echo "- Version bump to $(2)" > $(1)
+# Function to cut CHANGELOG.md [Unreleased] into a released version section
+# $(1) = new version, $(2) = previous version tag (e.g. v2.11.0)
+define cut-changelog
+	@bash scripts/cut-changelog.sh $(1) $(2)
+endef
+
+# Function to write CHANGELOG.md entries of a released section to a file for RPM
+# $(1) = target file, $(2) = released version
+define write-changelog-entries-to-file
+	@bash scripts/extract-changelog.sh $(2) CHANGELOG.md | grep '^- ' > $(1) || { echo "ERROR: no changelog entries under [$(2)]"; exit 1; }
 endef
 
 # Function to update RPM spec version and changelog
@@ -86,12 +93,12 @@ define update-rpm-spec
 	@sed -i 's/^Version: .*/Version: $(1)/' trusted-network-gateway.spec
 	$(eval RPM_DATE := $(shell LC_ALL=C date +"%a %b %d %Y"))
 	@echo "* $(RPM_DATE) $(AUTHOR) - $(1)-1" > /tmp/rpm_changelog_entry.txt
-	$(call write-commits-to-file,/tmp/rpm_commits.txt,$(1))
-	@cat /tmp/rpm_commits.txt >> /tmp/rpm_changelog_entry.txt
+	$(call write-changelog-entries-to-file,/tmp/rpm_changelog_entries.txt,$(1))
+	@cat /tmp/rpm_changelog_entries.txt >> /tmp/rpm_changelog_entry.txt
 	@echo "" >> /tmp/rpm_changelog_entry.txt
 	@echo "" >> /tmp/rpm_changelog_entry.txt
 	@awk '/^%changelog/{print; while((getline line < "/tmp/rpm_changelog_entry.txt") > 0) print line; close("/tmp/rpm_changelog_entry.txt"); next} {print}' trusted-network-gateway.spec > trusted-network-gateway.spec.new && mv trusted-network-gateway.spec.new trusted-network-gateway.spec
-	@rm -f /tmp/rpm_changelog_entry.txt /tmp/rpm_commits.txt
+	@rm -f /tmp/rpm_changelog_entry.txt /tmp/rpm_changelog_entries.txt
 endef
 
 # Main bump version function
@@ -110,6 +117,8 @@ define bump-version-internal
 	$(call get-git-info)
 	$(call determine-last-tag,$(3))
 	@echo "Using last tag: $(LAST_TAG)"
+	@echo "Cutting CHANGELOG.md [Unreleased] into [$(2)]..."
+	$(call cut-changelog,$(2),$(LAST_TAG))
 	@echo "Updating RPM spec version and changelog..."
 	$(call update-rpm-spec,$(2))
 	@echo "Version bump complete. New version: $(2)"
@@ -118,6 +127,7 @@ define bump-version-internal
 	@echo "  - Updated Cargo.lock"
 	@echo "  - Updated APPLICATION/tng/buildspec.yml"
 	@echo "  - Updated tng-python/pyproject.toml"
+	@echo "  - Updated CHANGELOG.md (cut [Unreleased] into [$(2)])"
 	@echo "  - Updated RPM spec version and changelog"
 	@echo ""
 	@echo "If it is ok to commit, run the following commands:"
