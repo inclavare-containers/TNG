@@ -175,6 +175,14 @@ jobs:
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
   push:
+    # Fork PRs cannot publish: GitHub forces a read-only GITHUB_TOKEN for
+    # pull_request events from forks, so the packages:write permission below
+    # is not honored and docker push fails with denied access. Publishing
+    # fork PR images would need pull_request_target plus a PAT, which hands
+    # repo secrets to untrusted code. Same-repo branch PRs and master/tag
+    # pushes keep publishing as before; fork PRs skip this job (the build and
+    # test jobs above still validate the image).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     strategy:
       fail-fast: false
       matrix:
@@ -302,9 +310,16 @@ jobs:
           # docker push's final line is "<tag>: digest: sha256:<64hex> size: <n>"; the only
           # "sha256:" substring in non-tty push output is that manifest digest (layer lines
           # use 12-char IDs, not full sha256:). tail -1 defends against any future layer-digest lines.
+          # Print the log before checking the exit status: set -e would otherwise abort
+          # before the cat, swallowing the registry's error message.
           docker tag "tng:build-${VARIANT}-amd64" "$landing_tag"
-          docker push "$landing_tag" > /tmp/push_amd64.log 2>&1
+          push_status=0
+          docker push "$landing_tag" > /tmp/push_amd64.log 2>&1 || push_status=$?
           cat /tmp/push_amd64.log
+          if [ "$push_status" -ne 0 ]; then
+            echo "ERROR: amd64 push failed for $landing_tag (exit $push_status)" >&2
+            exit 1
+          fi
           D1=$(grep -oE 'sha256:[a-f0-9]+' /tmp/push_amd64.log | tail -n 1)
           if [ -z "$D1" ]; then
             echo "ERROR: could not capture amd64 manifest digest" >&2
@@ -315,8 +330,13 @@ jobs:
           # Push arm64 under the same landing tag (overwrites the tag; amd64 manifest D1
           # remains in the registry blob store, referenced by digest below).
           docker tag "tng:build-${VARIANT}-arm64" "$landing_tag"
-          docker push "$landing_tag" > /tmp/push_arm64.log 2>&1
+          push_status=0
+          docker push "$landing_tag" > /tmp/push_arm64.log 2>&1 || push_status=$?
           cat /tmp/push_arm64.log
+          if [ "$push_status" -ne 0 ]; then
+            echo "ERROR: arm64 push failed for $landing_tag (exit $push_status)" >&2
+            exit 1
+          fi
           D2=$(grep -oE 'sha256:[a-f0-9]+' /tmp/push_arm64.log | tail -n 1)
           if [ -z "$D2" ]; then
             echo "ERROR: could not capture arm64 manifest digest" >&2
