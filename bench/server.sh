@@ -20,6 +20,11 @@ CTR_NAME_NGINX="bench-host-nginx"
 CTR_NAME_STUNNEL="bench-host-stunnel-server"
 CTR_NAME_STUNNEL_HTTP="bench-host-stunnel-http-srv"
 CTR_NAME_HAPROXY="bench-host-haproxy-srv"
+CTR_NAME_NGINX_STREAM="bench-host-nginx-stream-srv"
+CTR_NAME_NGINX_HTTP="bench-host-nginx-http-srv"
+NGINX_STREAM_IPERF_PORT=5214
+NGINX_STREAM_HTTP_PORT=5215
+NGINX_HTTP_PORT=5216
 
 preflight() {
     command -v python3 &>/dev/null || die "python3 not found"
@@ -27,7 +32,7 @@ preflight() {
     [ -x "$TNG_BIN" ] || die "TNG binary not found at $TNG_BIN (build: cargo build --release -p tng)"
     # Clear orphaned tng egress / backend containers from a previous (crashed) run.
     pkill -f "tng launch" 2>/dev/null || true
-    command -v podman &>/dev/null && podman rm -f "$CTR_NAME_IPERF" "$CTR_NAME_NGINX" "$CTR_NAME_STUNNEL" "$CTR_NAME_STUNNEL_HTTP" "$CTR_NAME_HAPROXY" 2>/dev/null || true
+    command -v podman &>/dev/null && podman rm -f "$CTR_NAME_IPERF" "$CTR_NAME_NGINX" "$CTR_NAME_STUNNEL" "$CTR_NAME_STUNNEL_HTTP" "$CTR_NAME_HAPROXY" "$CTR_NAME_NGINX_STREAM" "$CTR_NAME_NGINX_HTTP" 2>/dev/null || true
     ensure_runtime
 }
 
@@ -146,6 +151,76 @@ EOF
         "$HAPROXY_IMAGE" haproxy -f /etc/haproxy/haproxy.cfg -W \
         || die "haproxy server start failed"
     ok "haproxy server on :5213->iperf3 :5212->nginx (TLS, ${HAPROXY_THREADS:-4} threads)"
+
+    # nginx TLS-proxy reference baselines (third independent data point; nginx is
+    # also the HTTP backend, so the L7 mode measures a same-technology proxy chain).
+    # Wiring mirrors stunnel/HAProxy: client forwarder -> server TLS-terminating
+    # proxy -> backend. nginx wants cert and key as separate files (stunnel and
+    # haproxy take the combined pem), so split the bench pem; no new key material.
+    openssl x509 -in "$OUTDIR/stunnel.pem" -out "$OUTDIR/nginx-bench.crt"
+    awk '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/' "$OUTDIR/stunnel.pem" > "$OUTDIR/nginx-bench.key"
+    chmod 644 "$OUTDIR/nginx-bench.crt" "$OUTDIR/nginx-bench.key"
+
+    cat > "$OUTDIR/nginx-stream-server.conf" <<EOF
+worker_processes auto;
+worker_rlimit_nofile 20480;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+events { worker_connections 10240; }
+stream {
+    server {
+        listen ${NGINX_STREAM_IPERF_PORT} ssl;
+        ssl_certificate /etc/nginx/bench.crt;
+        ssl_certificate_key /etc/nginx/bench.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_pass 127.0.0.1:${IPERF_PORT};
+        proxy_timeout 300s;
+    }
+    server {
+        listen ${NGINX_STREAM_HTTP_PORT} ssl;
+        ssl_certificate /etc/nginx/bench.crt;
+        ssl_certificate_key /etc/nginx/bench.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_pass 127.0.0.1:${NGINX_PORT};
+        proxy_timeout 300s;
+    }
+}
+EOF
+
+    # L7 reverse proxy. Upstream keepalive (HTTP/1.1 + cleared Connection header)
+    # keeps Scenario B measuring the proxy itself, not backend connection churn.
+    cat > "$OUTDIR/nginx-http-server.conf" <<EOF
+worker_processes auto;
+worker_rlimit_nofile 20480;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+events { worker_connections 10240; }
+http {
+    access_log off;
+    upstream bench_backend {
+        server 127.0.0.1:${NGINX_PORT};
+        keepalive 1024;
+    }
+    server {
+        listen ${NGINX_HTTP_PORT} ssl;
+        ssl_certificate /etc/nginx/bench.crt;
+        ssl_certificate_key /etc/nginx/bench.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        location / {
+            proxy_pass http://bench_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+}
+EOF
+
+    start_nginx_proxy "$CTR_NAME_NGINX_STREAM" "$OUTDIR/nginx-stream-server.conf" tls \
+        || die "nginx stream proxy server start failed"
+    ok "nginx stream server on :${NGINX_STREAM_IPERF_PORT}->iperf3 :${NGINX_STREAM_HTTP_PORT}->nginx (TLS)"
+    start_nginx_proxy "$CTR_NAME_NGINX_HTTP" "$OUTDIR/nginx-http-server.conf" tls \
+        || die "nginx http proxy server start failed"
+    ok "nginx http server on :${NGINX_HTTP_PORT}->nginx (TLS, upstream keepalive)"
 }
 
 start_egress() {
@@ -180,7 +255,7 @@ server_cleanup() {
     # then the generic sweep for orphans from a crashed run.
     pkill -f "tng launch --config-file $OUTDIR/configs/egress.json" 2>/dev/null || true
     pkill -f "tng launch" 2>/dev/null || true
-    [ -n "${CTR:-}" ] && cleanup_containers "$CTR_NAME_IPERF" "$CTR_NAME_NGINX" "$CTR_NAME_STUNNEL" "$CTR_NAME_STUNNEL_HTTP" "$CTR_NAME_HAPROXY"
+    [ -n "${CTR:-}" ] && cleanup_containers "$CTR_NAME_IPERF" "$CTR_NAME_NGINX" "$CTR_NAME_STUNNEL" "$CTR_NAME_STUNNEL_HTTP" "$CTR_NAME_HAPROXY" "$CTR_NAME_NGINX_STREAM" "$CTR_NAME_NGINX_HTTP"
     log "server cleaned up"
 }
 trap server_cleanup EXIT
@@ -197,7 +272,7 @@ ok "server-side info written to $OUTDIR/server-info.json"
 log "============================================="
 log "  Server ready. Tell the client this IP:"
 log "  $(hostname -I 2>/dev/null | awk '{print $1}')"
-log "  iperf3 raw :${IPERF_PORT} | nginx :${NGINX_PORT} | stunnel iperf3 :5210 | stunnel http :5211 | haproxy :5213/:5212"
+log "  iperf3 raw :${IPERF_PORT} | nginx :${NGINX_PORT} | stunnel iperf3 :5210 | stunnel http :5211 | haproxy :5213/:5212 | nginx stream :${NGINX_STREAM_IPERF_PORT}/${NGINX_STREAM_HTTP_PORT} | nginx http :${NGINX_HTTP_PORT}"
 log "  TNG egress :40001-40005"
 log "  Output dir: $OUTDIR"
 log "  Press Ctrl-C when the client is done."

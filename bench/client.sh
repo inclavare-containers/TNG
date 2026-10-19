@@ -24,6 +24,10 @@ OUTDIR="$(make_outdir "$OUTPUT_DIR_ARG")"
 TNG_BIN="${TNG_BIN:-./target/release/tng}"
 IPERF_PORT=5201
 NGINX_PORT=8080
+# Server-side nginx reference proxy ports (must match bench/server.sh).
+NGINX_STREAM_IPERF_PORT=5214
+NGINX_STREAM_HTTP_PORT=5215
+NGINX_HTTP_PORT=5216
 
 preflight() {
     command -v python3 &>/dev/null || die "python3 not found"
@@ -32,7 +36,7 @@ preflight() {
     # Clear orphaned tng ingress / stunnel clients from a previous (crashed) run, or the
     # new ingress cannot bind 50001-50005 / 5220 / 5221 ("Address already in use").
     pkill -f "tng launch" 2>/dev/null || true
-    command -v podman &>/dev/null && podman rm -f bench-host-stunnel-client bench-host-stunnel-http-cli bench-host-haproxy-cli 2>/dev/null || true
+    command -v podman &>/dev/null && podman rm -f bench-host-stunnel-client bench-host-stunnel-http-cli bench-host-haproxy-cli bench-host-nginx-stream-cli bench-host-nginx-http-cli 2>/dev/null || true
     ensure_runtime
 }
 
@@ -58,7 +62,11 @@ if bad: print('\033[1;33m  ! iperf3 %s < 3.21, pthreads server-side parallelism 
     pull_image mirrors-ssl.aliyuncs.com/library/haproxy:latest docker.io/library/haproxy:latest
     HAPROXY_IMAGE="$RESOLVED_IMAGE"; HAPROXY_SOURCE="$RESOLVED_IMAGE_SOURCE"; HAPROXY_DIGEST="$(image_digest "$HAPROXY_IMAGE")"
     HAPROXY_VERSION="$("$CTR" run --rm "$HAPROXY_IMAGE" haproxy -v 2>&1 | head -1)"
-    NGINX_IMAGE="(server side)" NGINX_VERSION="" NGINX_DIGEST="" NGINX_SOURCE=""
+    # nginx also runs client-side now: the nginx reference forwarders are stream
+    # proxies from the same image (previously "(server side)" only).
+    pull_image mirrors-ssl.aliyuncs.com/library/nginx:stable-alpine lscr.io/linuxserver/nginx:latest
+    NGINX_IMAGE="$RESOLVED_IMAGE"; NGINX_SOURCE="$RESOLVED_IMAGE_SOURCE"; NGINX_DIGEST="$(image_digest "$NGINX_IMAGE")"
+    NGINX_VERSION="$("$CTR" run --rm --network host "$NGINX_IMAGE" nginx -v 2>&1 | grep -i 'nginx version' | head -1 || true)"
     export IPERF3_IMAGE IPERF3_SOURCE IPERF3_VERSION IPERF3_DIGEST WRK_IMAGE WRK_SOURCE WRK_VERSION WRK_DIGEST
     export STUNNEL_IMAGE STUNNEL_SOURCE STUNNEL_VERSION STUNNEL_DIGEST NGINX_IMAGE NGINX_VERSION NGINX_DIGEST NGINX_SOURCE
     export HAPROXY_IMAGE HAPROXY_SOURCE HAPROXY_VERSION HAPROXY_DIGEST
@@ -159,6 +167,57 @@ EOF
         "$HAPROXY_IMAGE" haproxy -f /etc/haproxy/haproxy.cfg -W \
         || die "haproxy client start failed"
     ok "haproxy client on :5223->srv:5213(iperf) :5222->srv:5212(http)"
+
+    # nginx reference forwarders (client side). Like the stunnel/haproxy clients
+    # they accept plain TCP and speak TLS upstream (stream proxy_ssl); no client
+    # cert needed (the server proxies do not verify). 5224/5225 front the
+    # nginx-stream iperf/http server proxies, 5226 fronts the nginx-http L7 proxy.
+    cat > "$OUTDIR/nginx-stream-client.conf" <<EOF
+worker_processes auto;
+worker_rlimit_nofile 20480;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+events { worker_connections 10240; }
+stream {
+    server {
+        listen 5224;
+        proxy_ssl on;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_pass ${SERVER_IP}:${NGINX_STREAM_IPERF_PORT};
+        proxy_timeout 300s;
+    }
+    server {
+        listen 5225;
+        proxy_ssl on;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_pass ${SERVER_IP}:${NGINX_STREAM_HTTP_PORT};
+        proxy_timeout 300s;
+    }
+}
+EOF
+    start_nginx_proxy bench-host-nginx-stream-cli "$OUTDIR/nginx-stream-client.conf" \
+        || die "nginx stream client start failed"
+    ok "nginx stream client on :5224->srv:${NGINX_STREAM_IPERF_PORT}(iperf) :5225->srv:${NGINX_STREAM_HTTP_PORT}(http)"
+
+    cat > "$OUTDIR/nginx-http-client.conf" <<EOF
+worker_processes auto;
+worker_rlimit_nofile 20480;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+events { worker_connections 10240; }
+stream {
+    server {
+        listen 5226;
+        proxy_ssl on;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
+        proxy_pass ${SERVER_IP}:${NGINX_HTTP_PORT};
+        proxy_timeout 300s;
+    }
+}
+EOF
+    start_nginx_proxy bench-host-nginx-http-cli "$OUTDIR/nginx-http-client.conf" \
+        || die "nginx http client start failed"
+    ok "nginx http client on :5226->srv:${NGINX_HTTP_PORT}(http)"
 }
 
 client_cleanup() {
@@ -167,7 +226,7 @@ client_cleanup() {
     # instead, then the generic sweep for orphans from a crashed run.
     pkill -f "tng launch --config-file $OUTDIR/configs/ingress.json" 2>/dev/null || true
     pkill -f "tng launch" 2>/dev/null || true
-    [ -n "${CTR:-}" ] && cleanup_containers bench-host-stunnel-client bench-host-stunnel-http-cli bench-host-haproxy-cli
+    [ -n "${CTR:-}" ] && cleanup_containers bench-host-stunnel-client bench-host-stunnel-http-cli bench-host-haproxy-cli bench-host-nginx-stream-cli bench-host-nginx-http-cli
     log "client cleaned up"
 }
 trap client_cleanup EXIT
@@ -180,6 +239,7 @@ run_all() {
     local ST_HTTP_T="stunnel:5221"
     local HP_T="haproxy:5223"
     local HP_HTTP_T="haproxy:5222"
+    local NG_STREAM_T="nginx:5224"
     local RAW_T="raw:"
     # Server-side sampling targets (host:kind:id) for the http workloads. tng/stunnel
     # id = the server-side listen port; haproxy id is unused (pgrep gathers master+workers).
@@ -188,6 +248,10 @@ run_all() {
     local SRV_OHTTP="${SERVER_IP}:tng:40005"
     local SRV_ST="${SERVER_IP}:stunnel:5211"
     local SRV_HP="${SERVER_IP}:haproxy:srv"
+    # nginx ids = the server-side listen port of the instance being measured; the
+    # kind sums every worker holding that port (kind: tng/stunnel use head -1).
+    local SRV_NG_STREAM="${SERVER_IP}:nginx:5215"
+    local SRV_NG_HTTP="${SERVER_IP}:nginx:5216"
     local _iperf_json='{}' out
     for s in ${streams_list//,/ }; do
         # Every workload cell with a proxy/tunnel process restarts that process
@@ -206,6 +270,9 @@ run_all() {
         fresh_stack_containers "iperf3+haproxy s=$s" "$SERVER_IP" bench-host-haproxy-cli "5222 5223" bench-host-haproxy-srv "5212 5213"
         out=$(run_iperf_median 127.0.0.1 5223 "$s" "iperf3+haproxy" "$HP_T")
         _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+haproxy" "$s" "$out")
+        fresh_stack_containers "iperf3+nginx-stream s=$s" "$SERVER_IP" bench-host-nginx-stream-cli "5224 5225" bench-host-nginx-stream-srv "5214 5215"
+        out=$(run_iperf_median 127.0.0.1 5224 "$s" "iperf3+nginx-stream" "$NG_STREAM_T")
+        _iperf_json=$(json_add_iperf "$_iperf_json" "iperf3+nginx-stream" "$s" "$out")
     done
 
     # The HTTP matrix runs once per scenario: keep-alive (report Scenario B, keys
@@ -234,6 +301,12 @@ run_all() {
             fresh_stack_containers "${prefix}haproxy c=$c" "$SERVER_IP" bench-host-haproxy-cli "5222 5223" bench-host-haproxy-srv "5212 5213"
             out=$(run_wrk_median "http://127.0.0.1:5222/file.bin" "$c" "${prefix}haproxy" "$SRV_HP" "$mode")
             _http_json=$(json_add_http "$_http_json" "${prefix}haproxy" "$c" "$out")
+            fresh_stack_containers "${prefix}nginx-stream c=$c" "$SERVER_IP" bench-host-nginx-stream-cli "5224 5225" bench-host-nginx-stream-srv "5214 5215"
+            out=$(run_wrk_median "http://127.0.0.1:5225/file.bin" "$c" "${prefix}nginx-stream" "$SRV_NG_STREAM" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}nginx-stream" "$c" "$out")
+            fresh_stack_containers "${prefix}nginx-http c=$c" "$SERVER_IP" bench-host-nginx-http-cli 5226 bench-host-nginx-http-srv 5216
+            out=$(run_wrk_median "http://127.0.0.1:5226/file.bin" "$c" "${prefix}nginx-http" "$SRV_NG_HTTP" "$mode")
+            _http_json=$(json_add_http "$_http_json" "${prefix}nginx-http" "$c" "$out")
         done
     done
 
