@@ -654,26 +654,32 @@ impl PeerSharedKeyManager {
         serf: &Serf,
         inner: &PeerSharedKeyManagerInner,
     ) -> Result<(), TngError> {
-        let cks = inner.cluster_key_set.read().await;
+        // The key-set lock is never held across a network await: a hung gossip
+        // send under the read lock blocks the pending writers and starves all
+        // readers, since the RwLock is write-preferring.
+        let event_buf = {
+            let cks = inner.cluster_key_set.read().await;
 
-        let pb_cluster_key_set: pb::ClusterKeySet = (*cks).clone().try_into().map_err(|e| {
-            TngError::KeyUpdateMessageDecodeError(anyhow!(
-                "Failed to convert cluster key set: {}",
-                e
-            ))
-        })?;
+            let pb_cluster_key_set: pb::ClusterKeySet = (*cks).clone().try_into().map_err(|e| {
+                TngError::KeyUpdateMessageDecodeError(anyhow!(
+                    "Failed to convert cluster key set: {}",
+                    e
+                ))
+            })?;
 
-        let event = pb::BroadcastClusterKeySetEvent {
-            cluster_key_set: Some(pb_cluster_key_set),
+            let event = pb::BroadcastClusterKeySetEvent {
+                cluster_key_set: Some(pb_cluster_key_set),
+            };
+
+            let mut event_buf = BytesMut::new();
+            event.encode(&mut event_buf).map_err(|e| {
+                TngError::KeyUpdateMessageDecodeError(anyhow!(
+                    "Failed to encode broadcast event: {}",
+                    e
+                ))
+            })?;
+            event_buf
         };
-
-        let mut event_buf = BytesMut::new();
-        event.encode(&mut event_buf).map_err(|e| {
-            TngError::KeyUpdateMessageDecodeError(anyhow!(
-                "Failed to encode broadcast event: {}",
-                e
-            ))
-        })?;
 
         serf.user_event(SERF_USER_EVENT_BROADCAST_CLUSTER_KEY_SET, event_buf, false)
             .await
@@ -788,15 +794,21 @@ impl PeerSharedKeyManager {
     ) -> Result<()> {
         match query.name().as_str() {
             SERF_QUERY_CLUSTER_KEY_SET => {
-                let cks = inner.cluster_key_set.read().await;
-                let pb_cluster_key_set: pb::ClusterKeySet = (*cks).clone().try_into()?;
+                // The key-set lock is never held across a network await: a hung
+                // respond under the read lock blocks the pending writers and
+                // starves all readers, since the RwLock is write-preferring.
+                let response_buf = {
+                    let cks = inner.cluster_key_set.read().await;
+                    let pb_cluster_key_set: pb::ClusterKeySet = (*cks).clone().try_into()?;
 
-                let response = pb::QueryClusterKeySetResponse {
-                    cluster_key_set: Some(pb_cluster_key_set),
+                    let response = pb::QueryClusterKeySetResponse {
+                        cluster_key_set: Some(pb_cluster_key_set),
+                    };
+
+                    let mut response_buf = BytesMut::new();
+                    response.encode(&mut response_buf)?;
+                    response_buf
                 };
-
-                let mut response_buf = BytesMut::new();
-                response.encode(&mut response_buf)?;
 
                 query.respond(response_buf.into()).await?;
             }
@@ -804,9 +816,14 @@ impl PeerSharedKeyManager {
                 let request = pb::QueryKeyRequest::decode(query.payload().as_ref())?;
                 let public_key = PublicKeyData::new(request.public_key);
 
-                let cks = inner.cluster_key_set.read().await;
-
-                if let Some(key_info) = cks.get_key_by_public_key(&public_key) {
+                // Same invariant as above: serialize under the read lock, drop
+                // it, then respond.
+                let response_buf = {
+                    let cks = inner.cluster_key_set.read().await;
+                    let Some(key_info) = cks.get_key_by_public_key(&public_key) else {
+                        // If not found, don't respond (empty response)
+                        return Ok(());
+                    };
                     let pb_key_info: pb::KeyInfo = key_info.clone().try_into()?;
 
                     let response = pb::QueryKeyResponse {
@@ -815,10 +832,10 @@ impl PeerSharedKeyManager {
 
                     let mut response_buf = BytesMut::new();
                     response.encode(&mut response_buf)?;
+                    response_buf
+                };
 
-                    query.respond(response_buf.into()).await?;
-                }
-                // If not found, don't respond (empty response)
+                query.respond(response_buf.into()).await?;
             }
             _ => {
                 tracing::warn!(query_name = %query.name(), "Ignoring unknown query");
