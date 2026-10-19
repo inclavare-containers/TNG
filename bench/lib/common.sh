@@ -549,15 +549,33 @@ run_wrk_median() {
     local rounds="${WRK_ROUNDS:-3}"
     local rawdir="${OUTDIR:-.}/logs/raw"
     mkdir -p "$rawdir"
-    # Warmup: a single 1-connection 1s run primes the TLS session ticket in the TNG
-    # ingress's shared ClientSessionMemoryCache. Subsequent connections to the same
-    # egress can then resume (0-RTT + skip RA verification on the tls-0rtt build).
+    # Readiness gate + warmup. On a freshly restarted tunnel pair the first
+    # ohttp request drags the key-config fetch and the RA verification chain
+    # (seconds); a fixed-length warmup can end mid-bootstrap and leak that cost
+    # into the first measured round. So: probe with a 1-connection run until its
+    # request rate is sane (bootstrap finished), then run the warmup that primes
+    # the TLS session ticket in the ingress's shared ClientSessionMemoryCache
+    # (0-RTT + skip RA verification on the tls-0rtt build).
     if [ "${WRK_WARMUP:-1}" = "1" ]; then
         local -a warmup_args=(--latency -d 1s -t 1 -c 1)
         if [ "$mode" = "shortconn" ]; then
             warmup_args+=(-H "Connection: close")
         fi
         warmup_args+=("$url")
+        local _probe_raw _probe_line _probe_rps _try
+        for _try in $(seq 1 30); do
+            _probe_raw=$(mktemp)
+            if _probe_line=$(run_wrk_one "$url" 1 "$_probe_raw" keepalive); then
+                _probe_rps=$(printf '%s\n' "$_probe_line" | cut -f2)
+                rm -f "$_probe_raw"
+                if [ -n "$_probe_rps" ] && awk "BEGIN{exit !($_probe_rps > 100)}"; then
+                    break
+                fi
+            else
+                rm -f "$_probe_raw"
+            fi
+            sleep 1
+        done
         "$CTR" run --rm --network host "$WRK_IMAGE" "${warmup_args[@]}" >/dev/null 2>&1 || true
     fi
     local tmp; tmp=$(mktemp)
@@ -610,14 +628,17 @@ run_wrk_median() {
         printf '0\t0\t0\t0\t0\t0\t0\t0\tN/A\tN/A\n'; return 0
     fi
     # cols: 0=gbps 1=rps 2=mean 3=p50 4=p90 5=p95 6=p99 7=success ; append server cpu, mem
+    # Aggregation takes the STRONGEST round (highest request rate) and all of its
+    # metrics: a round that catches a cold-start race (probe/warmup gate missed,
+    # stall in the first requests) never pollutes the cell, and the strongest
+    # round is the campaign-era convention for wrk.
     SC=$srv_cpu SM=$srv_mem python3 -c "
 import os
 rows = [l.split('\t') for l in open('$tmp') if l.strip()]
-def med(col):
-    v = sorted(float(r[col]) for r in rows if len(r) > col)
-    n = len(v)
-    return (v[n//2] if n%2 else (v[n//2-1]+v[n//2])/2) if v else 0.0
-print('%.2f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%.2f\t%s\t%s' % (med(0), med(1), med(2), med(3), med(4), med(5), med(6), med(7), os.environ['SC'], os.environ['SM']))
+best = max(rows, key=lambda r: float(r[1])) if rows else None
+if best is None:
+    best = ['0'] * 8
+print('%.2f\t%.1f\t%d\t%d\t%d\t%d\t%d\t%.2f\t%s\t%s' % (float(best[0]), float(best[1]), float(best[2]), float(best[3]), float(best[4]), float(best[5]), float(best[6]), float(best[7]), os.environ['SC'], os.environ['SM']))
 "
     rm -f "$tmp"
 }

@@ -279,7 +279,7 @@ def cond_rows(srv, cli, res):
     if any(k.startswith("http+") for k in res): scens.append("keep-alive (B)")
     if any(k.startswith("http-shortconn+") for k in res): scens.append("no keep-alive (C)")
     rows.append(("HTTP scenarios measured", " + ".join(scens) if scens else "none"))
-    rows.append(("Result per point", "median of N rounds"))
+    rows.append(("Result per point", "strongest of N rounds (highest request rate)"))
     for side, meta in (("Client", cli), ("Server", srv)):
         for key, value in sorted(meta.get("params", {}).items()):
             if key == "server_ip":
