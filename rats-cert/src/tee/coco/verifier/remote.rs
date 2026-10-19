@@ -103,13 +103,25 @@ mod tests {
     #[cfg(not(wasm))]
     #[tokio::test]
     async fn pinned_roots_do_not_require_certificate_discovery() {
+        verify_pinned_certificates_without_discovery(include_str!("test_cases/simple.as-ca.pem"))
+            .await;
+    }
+
+    #[cfg(not(wasm))]
+    #[tokio::test]
+    async fn pinned_leaf_and_ca_bundle_does_not_require_certificate_discovery() {
+        // The signing leaf precedes its CA, as in the e2e AS setup.
+        verify_pinned_certificates_without_discovery(include_str!(
+            "test_cases/simple.as-chain.pem"
+        ))
+        .await;
+    }
+
+    #[cfg(not(wasm))]
+    async fn verify_pinned_certificates_without_discovery(pem: &str) {
         use std::time::Duration;
 
-        let (_dir, cert_path) = write_pem_to_temp_file(
-            include_str!("test_cases/simple.as-ca.pem"),
-            "simple.as-ca.pem",
-        )
-        .await;
+        let (_dir, cert_path) = write_pem_to_temp_file(pem, "trusted.pem").await;
         // A service may appraise evidence without implementing /certificate.
         // Hold the socket open: an unexpected discovery request must time out.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -146,6 +158,23 @@ mod tests {
             .is_err());
         assert!(
             tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[cfg(not(wasm))]
+    #[rstest::rstest]
+    #[case::empty("")]
+    #[case::malformed_trailing_certificate(concat!(
+        include_str!("test_cases/simple.as-ca.pem"),
+        "\n-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----\n"
+    ))]
+    #[tokio::test]
+    async fn invalid_pinned_certificate_file_is_rejected(#[case] pem: &str) {
+        let (_dir, cert_path) = write_pem_to_temp_file(pem, "invalid.pem").await;
+        assert!(
+            CocoRemoteVerifier::new(&None, &Some(vec![cert_path]), &vec![], false, false)
                 .await
                 .is_err()
         );

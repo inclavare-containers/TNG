@@ -211,10 +211,14 @@ impl JwkAttestationTokenVerifier {
                     JwksGetError::AccessFailed(format!("failed to read certificate {path}: {e:?}"))
                 })?;
 
-                let cert_der = CertificateDer::from_pem_slice(&cert_content)
-                    .with_context(|| format!("Failed to parse PEM certificate {}", path))?;
+                let cert_ders = CertificateDer::pem_slice_iter(&cert_content)
+                    .collect::<Result<Vec<_>, _>>()
+                    .with_context(|| format!("Failed to parse PEM certificate(s) {}", path))?;
+                if cert_ders.is_empty() {
+                    bail!("No PEM certificates found in {}", path);
+                }
 
-                trusted_certs.push(cert_der);
+                trusted_certs.extend(cert_ders);
             }
         }
 
