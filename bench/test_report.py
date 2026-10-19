@@ -31,8 +31,11 @@ def metadata(commit='a' * 40):
 def results():
     data = {}
     for prefix in ('iperf3+', 'http+', 'http-shortconn+'):
-        for mode in ('raw', 'stunnel', 'haproxy', 'rats-tls', 'rats-tls+mux', 'ohttp'):
-            if prefix == 'iperf3+' and mode == 'ohttp':
+        for mode in ('raw', 'stunnel', 'haproxy', 'nginx-stream', 'nginx-http',
+                     'rats-tls', 'rats-tls+mux', 'ohttp'):
+            # iperf3 carries raw TCP only: ohttp is HTTP-framed and nginx-http is
+            # an L7 reverse proxy, so neither is a scenario-A workload.
+            if prefix == 'iperf3+' and mode in ('ohttp', 'nginx-http'):
                 continue
             values = {k: 100 for k in ('throughput', 'cpu_pct', 'mem_gb', 'rps', 'mean_us',
                       'p50_us', 'p90_us', 'p95_us', 'p99_us', 'success_pct', 'srv_cpu_pct', 'srv_mem_mib')}
@@ -218,6 +221,28 @@ class Reports(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('<summary>Full test environment', text)
         self.assertNotIn('| Change class | Count (%) |', text)
+
+    def test_nginx_reference_rows_labeled_and_uncounted(self):
+        p, text = self.run_report(single=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        a = text.split('### Scenario A')[1].split('### Scenario B')[0]
+        b = text.split('### Scenario B')[1].split('### Scenario C')[0]
+        self.assertIn('nginx stream (TLS)', a)
+        # An L7 reverse proxy is meaningless for raw-TCP iperf3, so it must not
+        # appear in Scenario A even though the key registry shares the HTTP list.
+        self.assertNotIn('nginx http (TLS)', a)
+        self.assertIn('nginx stream (TLS)', b)
+        self.assertIn('nginx http (TLS)', b)
+        # Compare mode: reference rows render once with baseline values, unlabeled,
+        # and stay out of the five-class counts (TNG rows keep counting 30).
+        p, text = self.run_report()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('nginx stream (TLS)', text)
+        self.assertIn('nginx http (TLS)', text)
+        self.assertNotIn('nginx stream (TLS)(baseline)', text)
+        self.assertNotIn('nginx http (TLS)(experimental)', text)
+        seg = text.split('### Scenario B')[1]
+        self.assertIn('| **Total** | **30 (100.0%)** |', seg)
 
     def test_invalid_json_fails(self):
         bad = self.path / 'bad.json'
