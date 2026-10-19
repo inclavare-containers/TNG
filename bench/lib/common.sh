@@ -238,6 +238,8 @@ fresh_stack_containers() {
 # Run N rounds, echo median Gbps. Logs each round to stderr (like bench-netns.sh).
 # Sample the client-side tunnel component CPU% every ~2s for <duration>s.
 # target: "tng:<pid>" (host process) | "stunnel:<container>" | "raw:" (N/A).
+# An "nginx:" target sums CPU/RSS across every PID holding the listen port
+# (master + workers), unlike the single-PID kinds.
 # Appends "cpu\tN/A" lines to <outfile>; memory comes from sample_tunnel_mem_peak
 # (1 Hz VmRSS peak under load), not from this loop.
 # CPU % of a process (sums ALL threads) over a 1s window via pidstat (sysstat, preinstalled).
@@ -257,19 +259,29 @@ sample_tunnel() {
     fi
     local end=$(( $(date +%s) + duration ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        local cpu
+        local cpu=""
         # $id is the tunnel process's LISTEN port. Find its host PID via ss, then measure
         # CPU with proc_cpu_pct (ticks, all threads, 1% granularity).
         # Same method for tng and stunnel -> fair comparison. (ps -o times= is 100% steps;
         # podman stats is unreliable for these containers.)
-        local port="$id" pid
-        pid=$(ss -ltnp 2>/dev/null | grep -F ":$port " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$pid" ]; then
-            cpu=$(proc_cpu_pct "$pid")
-            [ -z "$cpu" ] && cpu="N/A"
+        # nginx forks one master plus N workers that all hold the listen socket, so a
+        # single-PID read would miss most of the traffic; sum pidstat across every PID
+        # holding the port (the idle master contributes ~0).
+        local port="$id" pid pids
+        if [ "$kind" = "nginx" ]; then
+            pids=$(ss -ltnp 2>/dev/null | grep -F ":$port " | grep -o "pid=[0-9]*" | cut -d= -f2 | sort -un | paste -sd, -)
+            if [ -n "$pids" ]; then
+                cpu=$(LC_ALL=C pidstat -u -p "$pids" 1 1 2>/dev/null | awk '
+                /^Average:/ && $3 ~ /^[0-9]+$/ { if (NF == 10) cpu += $8 }
+                END { if (cpu > 0) printf "%.1f", cpu }')
+            fi
         else
-            cpu="N/A"
+            pid=$(ss -ltnp 2>/dev/null | grep -F ":$port " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
+            if [ -n "$pid" ]; then
+                cpu=$(proc_cpu_pct "$pid")
+            fi
         fi
+        [ -z "$cpu" ] && cpu="N/A"
         printf '%s\tN/A\n' "$cpu" >> "$outfile"
         sleep 1
     done
@@ -290,7 +302,8 @@ sample_tunnel() {
 # proxy, bench scripts, backend, NLB, and OS cache (only the server-side tunnel
 # component is counted). The same method is used for tng and haproxy so they are
 # directly comparable.
-# kind: tng | stunnel (PID by listen port) | haproxy (pgrep master+workers).
+# kind: tng | stunnel (PID by listen port) | haproxy (pgrep master+workers) |
+# nginx (every PID holding the listen port: master + workers).
 sample_server() {
     local host="$1" kind="$2" id="$3" duration="$4" outfile="$5"
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$host" \
@@ -299,6 +312,8 @@ kind="$1"; id="$2"; duration="$3"
 pids=""
 if [ "$kind" = "haproxy" ]; then
     pids=$(pgrep -d ',' haproxy 2>/dev/null)
+elif [ "$kind" = "nginx" ]; then
+    pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -un | paste -sd, -)
 else
     pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
 fi
@@ -336,6 +351,8 @@ kind="$1"; id="$2"; duration="$3"
 pids=""
 if [ "$kind" = "haproxy" ]; then
     pids=$(pgrep haproxy 2>/dev/null)
+elif [ "$kind" = "nginx" ]; then
+    pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -un)
 else
     pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
 fi
@@ -362,12 +379,16 @@ sample_tunnel_mem_peak() {
     [ "$kind" = "raw" ] && return 0
     local end=$(( $(date +%s) + duration ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        local pid v tot=0
-        pid=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
-        if [ -n "$pid" ]; then
+        local pid v tot=0 pids
+        if [ "$kind" = "nginx" ]; then
+            pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o "pid=[0-9]*" | cut -d= -f2 | sort -un)
+        else
+            pids=$(ss -ltnp 2>/dev/null | grep -F ":$id " | grep -o "pid=[0-9]*" | head -1 | cut -d= -f2)
+        fi
+        for pid in $pids; do
             v=$(awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
             [ -n "$v" ] && tot=$(( tot + v ))
-        fi
+        done
         [ "$tot" -gt 0 ] && printf '%d\n' "$tot" >> "$outfile"
         sleep 1
     done
@@ -797,6 +818,26 @@ write_markdown() {
     local bench_dir
     bench_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     bash "$bench_dir/gen-report.sh" "$OUTDIR/server-info.json" "$OUTDIR/client-info.json" "$1" "$OUTDIR/bench-report.md"
+}
+
+# Launch one nginx TLS-proxy instance from a generated main config (the config
+# replaces the image's /etc/nginx/nginx.conf). With "tls" as $3, mount the
+# bench cert/key under /etc/nginx for ssl_certificate directives (the client
+# forwarders use proxy_ssl and need no cert). `nginx -t` in a throwaway
+# container first so a broken generated config fails before the stack starts.
+start_nginx_proxy() {
+    local name="$1" conf="$2" tls="${3:-}"
+    local -a mounts=(-v "$conf:/etc/nginx/nginx.conf:ro")
+    if [ "$tls" = "tls" ]; then
+        mounts+=(-v "$(dirname "$conf")/nginx-bench.crt:/etc/nginx/bench.crt:ro"
+                  -v "$(dirname "$conf")/nginx-bench.key:/etc/nginx/bench.key:ro")
+    fi
+    local out
+    out=$("$CTR" run --rm --network host --entrypoint nginx "${mounts[@]}" \
+        "$NGINX_IMAGE" -t -c /etc/nginx/nginx.conf 2>&1) || { echo "$out" >&2; return 1; }
+    "$CTR" rm -f "$name" >/dev/null 2>&1 || true
+    "$CTR" run -d --name "$name" --network host "${mounts[@]}" "$NGINX_IMAGE" || {
+        "$CTR" logs --tail 20 "$name" >&2 || true; return 1; }
 }
 
 # Idempotent teardown.
