@@ -30,6 +30,8 @@ bash bench/gen-report.sh --compare base-server-info.json base-client-info.json b
 
 单次报告保留原位置参数（server-info client-info results [output.md]），展示折叠完整数据，不生成前后档位计数表。
 
+参考基线为 raw、stunnel、haproxy 及两个 nginx TLS 代理行：`nginx-stream`（L4 stream 模块，三个场景全部测量）与 `nginx-http`（L7 反向代理，对后端使用 HTTP/1.1 keep-alive，仅测两个 HTTP 场景）。报告中显示为 `nginx stream (TLS)` / `nginx http (TLS)`，对比模式下与 stunnel/haproxy 一样只出现一次、取基线值、不带标注，且不计入五档统计。结果文件键为 `iperf3+nginx-stream`、`http+nginx-stream`、`http+nginx-http` 及对应的 `http-shortconn+` 键。nginx 行的资源采样覆盖持有该代理监听端口的全部进程（master 加全部 worker），共享的 HTTP 后端不计入。
+
 ## 离线验证
 
 ```bash

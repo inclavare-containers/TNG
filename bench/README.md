@@ -45,7 +45,7 @@ bash bench/gen-report.sh --compare \
   <exp-server-info.json> <exp-client-info.json> <exp-results.json> <output.md>
 ```
 
-The single report has one table per scenario (iperf3, HTTP keep-alive, HTTP no-keep-alive), with one row per workload and one column per metric. It documents its own sampling methodology in a note under each table, so this README does not repeat it. The comparison report shows only the environment, condition, and tool entries that differ between the two runs; in each scenario table the reference baselines (raw, stunnel, haproxy) appear once with the baseline values, and each TNG workload row appears twice, labeled with its run: `rats-tls(baseline)`, then the bolded `rats-tls(experimental)` row (markdown has no row-level bold); both rows carry the vs-raw annotation, and every experimental value ends with a direction-aware marker (✅ better than or within ±1% of baseline, ⚠️ worse; throughput/RPS/success higher is better, latency/CPU/memory lower is better). To read a row:
+The single report has one table per scenario (iperf3, HTTP keep-alive, HTTP no-keep-alive), with one row per workload and one column per metric. It documents its own sampling methodology in a note under each table, so this README does not repeat it. The comparison report shows only the environment, condition, and tool entries that differ between the two runs; in each scenario table the reference baselines (raw, stunnel, haproxy, nginx stream, nginx http) appear once with the baseline values, and each TNG workload row appears twice, labeled with its run: `rats-tls(baseline)`, then the bolded `rats-tls(experimental)` row (markdown has no row-level bold); both rows carry the vs-raw annotation, and every experimental value ends with a direction-aware marker (✅ better than or within ±1% of baseline, ⚠️ worse; throughput/RPS/success higher is better, latency/CPU/memory lower is better). To read a row:
 
 - **Throughput (Gbps):** payload bandwidth (iperf3) or HTTP bandwidth (wrk).
 - **RPS:** wrk requests per second (HTTP only).
@@ -80,7 +80,7 @@ By default the run directory is written under `bench/artifacts/` (gitignored), s
 ```
 ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
   server-info.json     # server host env + tools (iperf3/nginx/stunnel/haproxy)
-  client-info.json     # client host env + tools (iperf3/wrk/stunnel/haproxy) + params
+  client-info.json     # client host env + tools (iperf3/wrk/stunnel/haproxy/nginx) + params
   bench-results.json   # workload -> {streams|conns} -> metrics, median of N rounds
   configs/             # generated ingress.json / egress.json
   logs/                # tng launch log
@@ -91,8 +91,8 @@ ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
 
 | Scenario | Workloads | Baselines |
 | --- | --- | --- |
-| iperf3 (TCP throughput) | rats-tls, rats-tls+mux | raw, stunnel, haproxy |
-| HTTP (wrk, 64 KiB body, keep-alive and no keep-alive) | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy |
+| iperf3 (TCP throughput) | rats-tls, rats-tls+mux | raw, stunnel, haproxy, nginx stream |
+| HTTP (wrk, 64 KiB body, keep-alive and no keep-alive) | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy, nginx stream, nginx http |
 
 All TNG paths use `mapping` mode. RA mode adds `attest` (server, via AA) + `verify` (client, builtin AS + hardware_only).
 
@@ -108,7 +108,7 @@ Each TNG tunneled workload pairs an ingress port `5000X` on the client with an e
 | http+rats-tls+mux | rats-tls | true | 40004 | 50004 | nginx :8080 |
 | http+ohttp | ohttp | n/a | 40005 | 50005 | nginx :8080 |
 
-Baselines (no TNG): `iperf3+raw` / `http+raw` hit the backend directly; `iperf3+stunnel` / `http+stunnel` go through a stunnel TLS tunnel (OpenSSL) to isolate the cost of a generic TLS path; `http+haproxy` / `iperf3+haproxy` go through haproxy (TLS, thread-per-core event loop). The stunnel server ports are `:5210` (iperf3) and `:5211` (http); haproxy server ports are `:5213` (iperf3) and `:5212` (http).
+Baselines (no TNG): `iperf3+raw` / `http+raw` hit the backend directly; `iperf3+stunnel` / `http+stunnel` go through a stunnel TLS tunnel (OpenSSL) to isolate the cost of a generic TLS path; `http+haproxy` / `iperf3+haproxy` go through haproxy (TLS, thread-per-core event loop). `iperf3+nginx-stream` / `http+nginx-stream` go through the nginx stream module (L4 TLS proxy), and `http+nginx-http` through the nginx http module (L7 TLS reverse proxy with HTTP/1.1 keepalive to the backend; no iperf3 variant since an L7 proxy is meaningless for raw TCP). The nginx instances run as separate containers in front of the shared HTTP backend, using the same image and the same TLS path layout as stunnel/haproxy (client-side forwarder container -> server-side TLS-terminating proxy -> backend). The stunnel server ports are `:5210` (iperf3) and `:5211` (http); haproxy server ports are `:5213` (iperf3) and `:5212` (http); nginx stream server ports are `:5214` (iperf3) and `:5215` (http); the nginx http server port is `:5216`. Client-side forwarders listen on `:5224`/`:5225` (nginx stream iperf3/http) and `:5226` (nginx http).
 
 ## Container images
 
@@ -122,7 +122,7 @@ Pulled mirror-first (Aliyun mirror), falling back to the primary registry. The r
 | stunnel | `mirrors-ssl.aliyuncs.com/dockurr/stunnel:latest` | `dockurr/stunnel:latest` |
 | haproxy | `mirrors-ssl.aliyuncs.com/library/haproxy:latest` | `docker.io/library/haproxy:latest` |
 
-The server pulls iperf3, nginx, stunnel, haproxy (backends); the client pulls iperf3, wrk, stunnel, haproxy (load generators + TLS baseline clients). A warning (not a failure) is emitted if iperf3 is older than 3.21.
+The server pulls iperf3, nginx, stunnel, haproxy (backends + server-side TLS-terminating reference proxies); the client pulls iperf3, wrk, stunnel, haproxy, nginx (load generators + TLS baseline clients/forwarders). A warning (not a failure) is emitted if iperf3 is older than 3.21.
 
 ## Makefile targets
 

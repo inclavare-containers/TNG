@@ -30,6 +30,8 @@ Compare mode takes `--metrics m1,m2` to restrict every table to the metric colum
 
 Single-run reports retain the original positional arguments (`server-info client-info results [output.md]`) and show collapsed complete data without before/after count tables.
 
+The reference baselines are raw, stunnel, haproxy, and two nginx TLS-proxy rows: `nginx-stream` (L4 stream module, measured in all three scenarios) and `nginx-http` (L7 reverse proxy with HTTP/1.1 keepalive to the backend, measured in the two HTTP scenarios only). They render as workload labels `nginx stream (TLS)` / `nginx http (TLS)`, appear once unlabeled in compare mode, and stay out of the five-class counts, exactly like stunnel and haproxy. Results-file keys are `iperf3+nginx-stream`, `http+nginx-stream`, `http+nginx-http` and the `http-shortconn+` counterparts. Resource sampling for an nginx row covers every process holding that proxy's listen port (master plus all workers); the shared HTTP backend is never included.
+
 ## Offline verification
 
 ```bash

@@ -45,7 +45,7 @@ bash bench/gen-report.sh --compare \
   <exp-server-info.json> <exp-client-info.json> <exp-results.json> <output.md>
 ```
 
-单次报告按场景（iperf3、HTTP keep-alive、HTTP 无 keep-alive）各一张表，每行一个负载、每列一个指标。每张表下方附有采样方法说明，本 README 不再重复。对比报告只列出两次运行之间有差异的环境、条件、工具条目；每个场景表中参考基线（raw、stunnel、haproxy）只出现一次、取基线值，TNG 负载每行出现两次并标注所属运行：上一行 `rats-tls(baseline)` 是基线值，紧邻的下一行是加粗的 `rats-tls(experimental)` 实验值（markdown 没有整行加粗，逐格加粗）；两行都带 vs-raw 百分比注记；实验行的每个数值末尾带方向感知标记（✅ = 优于基线或相差 ±1% 以内，⚠️ = 劣于基线；吞吐/RPS/成功率越高越好，延迟/CPU/内存越低越好）。读取一行：
+单次报告按场景（iperf3、HTTP keep-alive、HTTP 无 keep-alive）各一张表，每行一个负载、每列一个指标。每张表下方附有采样方法说明，本 README 不再重复。对比报告只列出两次运行之间有差异的环境、条件、工具条目；每个场景表中参考基线（raw、stunnel、haproxy、nginx stream、nginx http）只出现一次、取基线值，TNG 负载每行出现两次并标注所属运行：上一行 `rats-tls(baseline)` 是基线值，紧邻的下一行是加粗的 `rats-tls(experimental)` 实验值（markdown 没有整行加粗，逐格加粗）；两行都带 vs-raw 百分比注记；实验行的每个数值末尾带方向感知标记（✅ = 优于基线或相差 ±1% 以内，⚠️ = 劣于基线；吞吐/RPS/成功率越高越好，延迟/CPU/内存越低越好）。读取一行：
 
 - **吞吐 (Gbps)：** 负载带宽（iperf3）或 HTTP 带宽（wrk）。
 - **RPS：** wrk 每秒请求数（仅 HTTP）。
@@ -80,7 +80,7 @@ bash bench/gen-report.sh --compare \
 ```
 ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
   server-info.json     # 服务端主机环境 + 工具（iperf3/nginx/stunnel/haproxy）
-  client-info.json     # 客户端主机环境 + 工具（iperf3/wrk/stunnel/haproxy）+ 参数
+  client-info.json     # 客户端主机环境 + 工具（iperf3/wrk/stunnel/haproxy/nginx）+ 参数
   bench-results.json   # 负载 -> {流数|连接数} -> 指标，N 轮中位数
   configs/             # 生成的 ingress.json / egress.json
   logs/                # tng 启动日志
@@ -91,8 +91,8 @@ ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
 
 | 场景 | TNG 负载 | 基线 |
 | --- | --- | --- |
-| iperf3（TCP 吞吐） | rats-tls, rats-tls+mux | raw, stunnel, haproxy |
-| HTTP（wrk, 64 KiB body，keep-alive 与无 keep-alive 两个场景） | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy |
+| iperf3（TCP 吞吐） | rats-tls, rats-tls+mux | raw, stunnel, haproxy, nginx stream |
+| HTTP（wrk, 64 KiB body，keep-alive 与无 keep-alive 两个场景） | rats-tls, rats-tls+mux, ohttp | raw, stunnel, haproxy, nginx stream, nginx http |
 
 所有 TNG 路径使用 `mapping` 模式。RA 模式在服务端加 `attest`（经 AA），客户端加 `verify`（builtin AS + hardware_only）。
 
@@ -108,7 +108,7 @@ ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
 | http+rats-tls+mux | rats-tls | true | 40004 | 50004 | nginx :8080 |
 | http+ohttp | ohttp | n/a | 40005 | 50005 | nginx :8080 |
 
-基线（无 TNG）：`iperf3+raw` / `http+raw` 直连后端；`iperf3+stunnel` / `http+stunnel` 经 stunnel TLS 隧道（OpenSSL）以隔离通用 TLS 路径成本；`http+haproxy` / `iperf3+haproxy` 经 haproxy（TLS，线程每核事件循环）。stunnel 服务端端口 `:5210`（iperf3）/`:5211`（http）；haproxy 服务端端口 `:5213`（iperf3）/`:5212`（http）。
+基线（无 TNG）：`iperf3+raw` / `http+raw` 直连后端；`iperf3+stunnel` / `http+stunnel` 经 stunnel TLS 隧道（OpenSSL）以隔离通用 TLS 路径成本；`http+haproxy` / `iperf3+haproxy` 经 haproxy（TLS，线程每核事件循环）；`iperf3+nginx-stream` / `http+nginx-stream` 经 nginx stream 模块（L4 TLS 代理），`http+nginx-http` 经 nginx http 模块（L7 TLS 反向代理，对后端使用 HTTP/1.1 keep-alive；raw TCP 的 iperf3 没有 L7 形态，故不设该项）。nginx 代理实例是与 HTTP 后端分离的独立容器，使用同一 nginx 镜像，拓扑与 stunnel/haproxy 完全一致（客户端转发容器 -> 服务端 TLS 终结代理 -> 后端）。stunnel 服务端端口 `:5210`（iperf3）/`:5211`（http）；haproxy 服务端端口 `:5213`（iperf3）/`:5212`（http）；nginx stream 服务端端口 `:5214`（iperf3）/`:5215`（http）；nginx http 服务端端口 `:5216`。客户端转发监听 `:5224`/`:5225`（nginx stream iperf3/http）与 `:5226`（nginx http）。
 
 ## 容器镜像
 
@@ -122,7 +122,7 @@ ${BENCH_LABEL}-YYYYmmdd-HHMMSS/
 | stunnel | `mirrors-ssl.aliyuncs.com/dockurr/stunnel:latest` | `dockurr/stunnel:latest` |
 | haproxy | `mirrors-ssl.aliyuncs.com/library/haproxy:latest` | `docker.io/library/haproxy:latest` |
 
-服务端拉 iperf3/nginx/stunnel/haproxy（后端）；客户端拉 iperf3/wrk/stunnel/haproxy（压测 + TLS 基线客户端）。iperf3 低于 3.21 会告警（不失败）。
+服务端拉 iperf3/nginx/stunnel/haproxy（后端 + 服务端 TLS 终结参考代理）；客户端拉 iperf3/wrk/stunnel/haproxy/nginx（压测 + TLS 基线客户端/转发器）。iperf3 低于 3.21 会告警（不失败）。
 
 ## Makefile 目标
 
