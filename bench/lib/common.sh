@@ -293,13 +293,13 @@ sample_tunnel() {
 # call runs the whole loop remotely, avoiding one-ssh-per-second overhead.
 # host:port lookup uses ss (works for host tng processes and --network host
 # containers). Missing PID -> N/A.
-# Sample a SERVER-side tunnel component's CPU (tng egress / haproxy master+workers
+# Sample the EGRESS (server-side) instance's CPU (tng egress / haproxy master+workers
 # / stunnel-srv) on a remote host during the steady-state round. One
 # `pidstat -u -p <PIDs> 1 <duration>` call covers CPU%; we take the Average row
 # and sum across PIDs. For haproxy, PIDs = pgrep (master + all workers); for
 # tng/stunnel, -p <pid> already sums all threads. CPU% is summed (100 = one
 # logical core). This matches the project convention and EXCLUDES the client
-# proxy, bench scripts, backend, NLB, and OS cache (only the server-side tunnel
+# proxy, bench scripts, backend, NLB, and OS cache (only the egress-side
 # component is counted). The same method is used for tng and haproxy so they are
 # directly comparable.
 # kind: tng | stunnel (PID by listen port) | haproxy (pgrep master+workers) |
@@ -406,7 +406,7 @@ stop_sampler() {
 }
 
 # Peak (max) of a raw 1 Hz VmRSS sample file (KiB per line). Echoed as MiB
-# ("mib", HTTP Server Mem) or GiB ("gib", legacy Tunnel Mem label); N/A if no
+# ("mib", HTTP Egress Mem) or GiB ("gib", legacy Ingress Mem (GB) label); N/A if no
 # numeric samples.
 peak_mem() {
     python3 -c "
@@ -797,8 +797,8 @@ PY
 }
 
 # Merge one wrk result line "gbps\trps\tmean\tp50\tp90\tp95\tp99\tsuccess\tsrv_cpu\tsrv_mem" into the http JSON.
-# srv_cpu = server-side tunnel component CPU% (tng egress or haproxy master+workers),
-# srv_mem = server-side peak RSS in MiB under load. No client-side proxy columns (excluded by convention).
+# srv_cpu = egress instance CPU% (tng egress or haproxy master+workers),
+# srv_mem = egress peak RSS in MiB under load. No client-side proxy columns (excluded by convention).
 json_add_http() {
     python3 - "$@" <<'PY'
 import json, sys

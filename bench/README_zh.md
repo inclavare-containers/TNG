@@ -51,7 +51,7 @@ bash bench/gen-report.sh --compare \
 - **RPS：** wrk 每秒请求数（仅 HTTP）。
 - **Mean / p50 / p90 / p95 / p99：** 请求延迟分位数，单位微秒（仅 HTTP）；p95 与 p99 反映尾部延迟。
 - **成功率：** 无错误完成请求占比（仅 HTTP）。
-- **服务端 CPU % / 内存：** 运行期间服务端隧道进程的 CPU 与内存；`100` 等于一个逻辑核。raw 基线无隧道，显示为 `-`。
+- **Egress CPU % / Egress Mem (MiB)（出口 CPU % / 内存）：** 运行期间被测网关/代理的服务端实例（即出口实例：TNG egress；HAProxy 主进程加工作进程；stunnel 服务端进程）的 CPU 与内存；`100` 等于一个逻辑核。raw 基线无代理，显示为 `-`。iperf 表的 `Ingress CPU %` / `Ingress Mem (GB)`（入口 CPU % / 入口内存）列对入口实例（客户端实例）做同样的采样；HTTP 表的 `Ingress CPU %` 列仅在驱动记录了该值时出现。
 - **Δ vs raw：** 每个 non-raw 值后附相对同并发 raw 基线的百分比变化。吞吐/RPS 负值表示更低，延迟正值表示更慢。
 
 ## 关键环境变量

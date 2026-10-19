@@ -95,7 +95,7 @@ class Reports(unittest.TestCase):
         # Scope counts: 3 modes * 10 metrics = 30; references are separate.
         b = text.split('### Scenario B')[1].split('**Reference/control')[0]
         self.assertIn('| **Total** | **30 (100.0%)** |', b)
-        self.assertIn('| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us)', b)
+        self.assertIn('| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |', b)
         for marker in ('🟢', '⚪', '🟡', '🟠', '🔴'):
             self.assertIn(marker, b)
         self.assertIn('120 (+20%)🟢', b)

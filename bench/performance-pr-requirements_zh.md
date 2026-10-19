@@ -62,7 +62,7 @@ Markdown 结构示例（占位符仅示意，不能作为真实结果发布）�
 
 Main findings: [gains, affected concurrency, resource costs and severe anomalies].
 
-| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Server CPU % | Server Mem (MiB) |
+| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 🟢 Improved | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 | ⚪ Stable | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
@@ -81,7 +81,7 @@ Scope: [paired modes and concurrency]. Parenthesized percentages are vs [raw ref
 </details>
 ```
 
-HTTP 场景后续指标列为 Throughput (Gbps)、RPS、Mean (us)、p50 (us)、p90 (us)、p95 (us)、p99 (us)、Success %、Server CPU %、Server Mem (MiB)；TCP 场景沿用自己的 Throughput (Gbps)、Tunnel CPU %、Tunnel Mem (GB)。以实际大表表头为准。
+HTTP 场景后续指标列为 Throughput (Gbps)、RPS、Mean (us)、p50 (us)、p90 (us)、p95 (us)、p99 (us)、Success %、Ingress CPU %、Egress CPU %、Egress Mem (MiB)；TCP 场景沿用自己的 Throughput (Gbps)、Ingress CPU %、Ingress Mem (GB)。表格资源列中 Egress（出口）指被测网关/代理的服务端实例，Ingress（入口）指其客户端实例。以实际大表表头为准。
 
 计数不衡量指标重要性，不能用大量延迟改善项抵消严重吞吐或可靠性回退；主要发现必须点名关键不利数据。只展示一次的参考行不能证明控制 run 稳定，需要检查基线漂移，必要时附完整控制负载前后对比。
 

@@ -44,7 +44,7 @@ python3 bench/gen-svg.py --compare \
   <exp-server-info.json> <exp-client-info.json> <exp-results.json> --out-dir DIR
 ```
 
-命令输出 scenario_a.svg、scenario_b.svg、scenario_c.svg（另附本地审阅用的 PNG 预览；仓库只收 SVG）。场景 A 的三个面板是 Throughput (Gbps)、Tunnel CPU %、Tunnel Mem (GB)；场景 B、C 的面板是 RPS、p99 (us)、Server CPU %。workload 键名及 N/A/缺失置空的约定与 gen-report.sh 一致；无法解析的数值会直接报错，不会静默变成空缺。图表本身不含身份信息文字，应与记录实测二进制的报告放在一起。bench/svg_renderer.py 是渲染核心（各负载颜色与标记跨场景稳定、横向三面板布局、对比模式曲线变体），可独立渲染已规范化的场景 JSON；bench/gen-svg.py 负责把原始结果适配成该数据格式。
+命令输出 scenario_a.svg、scenario_b.svg、scenario_c.svg（另附本地审阅用的 PNG 预览；仓库只收 SVG）。场景 A 的三个面板是 Throughput (Gbps)、Ingress CPU %、Ingress Mem (GB)；场景 B、C 的面板是 RPS、p95 (us)、Egress CPU %、Egress Mem (MiB)。图上以 p95 取代 p99，且 p95 面板不画 raw：raw 的分位尾部是测量噪声而非代理行为。Egress 指被测网关/代理的服务端实例，Ingress 指其客户端实例，与报告表格同名。workload 键名及 N/A/缺失置空的约定与 gen-report.sh 一致；无法解析的数值会直接报错，不会静默变成空缺。图表本身不含身份信息文字，应与记录实测二进制的报告放在一起。bench/svg_renderer.py 是渲染核心（各负载颜色与标记跨场景稳定、按指标数伸缩的横向面板布局、对比模式曲线变体），可独立渲染已规范化的场景 JSON；bench/gen-svg.py 负责把原始结果适配成该数据格式。
 
 渲染需要 matplotlib>=3.7，这是仅用于本地图表生成的本地开发依赖（不是仓库依赖），在渲染图表的机器上执行 `python3 -m pip install matplotlib` 安装。
 

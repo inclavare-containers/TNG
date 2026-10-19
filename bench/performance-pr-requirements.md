@@ -62,7 +62,7 @@ Example structure (placeholders are illustrative, never publish them as results)
 
 Main findings: [gains, affected concurrency, resource costs and severe anomalies].
 
-| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Server CPU % | Server Mem (MiB) |
+| Change class | Count (%) | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 🟢 Improved | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 | ⚪ Stable | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |

@@ -21,7 +21,7 @@ The current snapshot was measured with the methodology on `master`:
 - Concurrency sweep 1, 8, 16, 32, 64, 128 in every scenario.
 - Each workload/concurrency cell runs against freshly restarted tunnel/proxy processes, so a cell's peak memory is that cell's own cost, not an allocator high-water mark carried over from earlier cells.
 - Each cell reports its strongest round (the highest request rate or throughput among the measured rounds).
-- CPU 100% equals one logical core. Scenario A samples the client-side tunnel process; scenarios B and C sample the server-side proxy component (for TNG the egress process; HAProxy master plus workers; the stunnel server process). The `raw` reference has no proxy process, so its resource cells are structurally uncollected.
+- CPU 100% equals one logical core. In the tables below, `Egress` names the server-side instance of the measured gateway/proxy (TNG egress; HAProxy master plus workers; the stunnel server container) and `Ingress` names its client-side instance (TNG ingress). Scenario A samples the ingress instance; scenarios B and C sample the egress instance. The `raw` reference has no proxy process, so its resource cells are structurally uncollected.
 
 ## Measured snapshot
 
@@ -40,11 +40,11 @@ TNG provides three distinct tunnel configurations and their numbers differ by mu
 
 ### Scenario A - TCP / iperf3 throughput
 
-![Scenario A: TCP throughput, client-side tunnel CPU and tunnel memory versus iperf3 parallel streams](performance/scenario_a.svg)
+![Scenario A: TCP throughput, ingress CPU and ingress memory versus iperf3 parallel streams](performance/scenario_a.svg)
 
 Each non-raw cell carries its percent change against the `raw` baseline at the same concurrency in parentheses. ohttp is not measured in Scenario A.
 
-| Streams | Workload | Throughput (Gbps) | Tunnel CPU % | Tunnel Mem (GB) |
+| Streams | Workload | Throughput (Gbps) | Ingress CPU % | Ingress Mem (GB) |
 | --- | --- | --- | --- | --- |
 | 1 | raw | 15.98 | - | - |
 | 1 | stunnel | 10.82 (-32%) | 68.0 | 0.007 |
@@ -79,11 +79,11 @@ Each non-raw cell carries its percent change against the `raw` baseline at the s
 
 ### Scenario B - HTTP / wrk, 64 KiB body, keep-alive
 
-![Scenario B: RPS, p99 latency and server-side proxy CPU versus concurrent keep-alive connections](performance/scenario_b.svg)
+![Scenario B: RPS, p95 latency, egress CPU and egress memory versus concurrent keep-alive connections](performance/scenario_b.svg)
 
 wrk holds one persistent TCP+TLS connection per client; the attestation cost is amortized over the requests that reuse it.
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 2.34 | 4654 | 223 | 203 | 257 | 377 | 736 | 100.0 | - | - | - |
 | 1 | stunnel | 1.60 (-32%) | 3196 (-31%) | 320 (+43%) | 305 (+50%) | 356 (+39%) | 376 (-0%) | 687 (-7%) | 100.0 (+0%) | - | 24.7 | 6.9 |
@@ -124,11 +124,11 @@ wrk holds one persistent TCP+TLS connection per client; the attestation cost is 
 
 ### Scenario C - HTTP / wrk, 64 KiB body, no keep-alive
 
-![Scenario C: RPS, p99 latency and server-side proxy CPU versus short-lived connections](performance/scenario_c.svg)
+![Scenario C: RPS, p95 latency, egress CPU and egress memory versus short-lived connections](performance/scenario_c.svg)
 
 wrk sends `Connection: close`, so every request pays a fresh TCP connection and a full TLS handshake (plus attestation and verification for the three TNG configurations).
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 1.62 | 3221 | 213 | 212 | 249 | 262 | 290 | 100.0 | - | - | - |
 | 1 | stunnel | 0.25 (-85%) | 489 (-85%) | 1980 (+830%) | 1970 (+829%) | 2090 (+739%) | 2124 (+711%) | 2200 (+659%) | 100.0 (+0%) | - | 46.0 | 6.9 |
@@ -303,7 +303,7 @@ A performance PR regenerates this page and the three charts under [`docs/perform
 **Workloads and run parameters**
 
 - Scenario A measures TCP throughput with iperf3 parallel streams (`-P`). Scenario B measures HTTP/wrk persistent connections; Scenario C sends `Connection: close` for fresh client connections. Actual concurrency, body size, duration, warmup and round counts appear in Test Conditions.
-- Each workload/concurrency point runs the recorded number of rounds. Workload metrics are aggregated as medians of the rounds; CPU samples use the final round and memory samples span every measured round, as described below. Keep-alive and no-keep-alive are separate scenarios, not interchangeable workloads.
+- Each workload/concurrency point runs the recorded number of rounds; the cell takes the strongest round (highest request rate) with all of its metrics, so a round that catches a cold-start race cannot pollute the cell. CPU samples use the final round and memory samples span every measured round, as described below. Keep-alive and no-keep-alive are separate scenarios, not interchangeable workloads.
 
 **HTTP latency and success metrics**
 
@@ -314,8 +314,8 @@ A performance PR regenerates this page and the three charts under [`docs/perform
 
 - CPU columns are one-second pidstat windows averaged over the final measured round. Memory columns are the peak RSS under load: `/proc/<pid>/status` VmRSS, summed over the sampled PID set at 1 Hz in parallel with every measured round, reported as the maximum of those samples. Windowed RSS averages mixed the load ramp into the plateau and were bistable run-to-run; the peak answers how much memory serving the workload needs.
 - Every workload with a proxy or tunnel process (TNG ingress/egress pair, stunnel, HAProxy) is measured on a freshly restarted process set: before each cell's warmup and measured rounds the harness stops that workload's processes, verifies the old PIDs and listen ports are released, relaunches the same binary or container with the same config, and waits for the listening ports to be ready. Samplers find processes by listen port, so they always measure the post-restart PIDs. Each cell's memory peak is therefore that cell's own cost, not allocator high-water carried from earlier cells of the pass. Raw reference rows have no proxy process and nothing to restart.
-- TCP Tunnel CPU/Mem columns sample the client-side tunnel process. The legacy `Tunnel Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).
-- HTTP Server CPU/Mem columns sample the server-side tunnel component (`pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU). TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process. CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.
+- TCP Ingress CPU/Mem columns sample the ingress instance: the client-side instance of the measured gateway/tunnel (TNG ingress for the TNG workloads). The legacy `Ingress Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).
+- HTTP Egress CPU/Mem columns sample the egress instance: the server-side instance of the measured gateway/proxy (TNG egress, HAProxy, or the stunnel server container), via `pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU. HAProxy sums master and workers. CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.
 - The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method; datasets whose driver did not record it render '-' in the column and exclude it from the counts.
 - Raw reference rows have no tunnel process, so their resource fields are structurally uncollected.
 
@@ -334,7 +334,7 @@ A performance PR regenerates this page and the three charts under [`docs/perform
 <details>
 <summary>Full Scenario A results</summary>
 
-| Streams | Workload | Throughput (Gbps) | Tunnel CPU % | Tunnel Mem (GB) |
+| Streams | Workload | Throughput (Gbps) | Ingress CPU % | Ingress Mem (GB) |
 | --- | --- | --- | --- | --- |
 | 1 | raw | 15.98 | - | - |
 | 1 | stunnel | 10.82 (-32%) | 68.0 | 0.007 |
@@ -375,7 +375,7 @@ A performance PR regenerates this page and the three charts under [`docs/perform
 <details>
 <summary>Full scenario results</summary>
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 2.34 | 4654 | 223 | 203 | 257 | 377 | 736 | 100.0 | - | - | - |
 | 1 | stunnel | 1.60 (-32%) | 3196 (-31%) | 320 (+43%) | 305 (+50%) | 356 (+39%) | 376 (-0%) | 687 (-7%) | 100.0 (+0%) | - | 24.7 | 6.9 |
@@ -422,7 +422,7 @@ A performance PR regenerates this page and the three charts under [`docs/perform
 <details>
 <summary>Full scenario results</summary>
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 1.62 | 3221 | 213 | 212 | 249 | 262 | 290 | 100.0 | - | - | - |
 | 1 | stunnel | 0.25 (-85%) | 489 (-85%) | 1980 (+830%) | 1970 (+829%) | 2090 (+739%) | 2124 (+711%) | 2200 (+659%) | 100.0 (+0%) | - | 46.0 | 6.9 |

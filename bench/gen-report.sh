@@ -128,8 +128,8 @@ HTTP_C_WL = ["http-shortconn+" + w.split("+", 1)[1] for w in HTTP_B_WL]
 # "(TLS)" marks the listener the load generator reaches through the forwarder).
 WORKLOAD_LABELS = {"nginx-stream": "nginx stream (TLS)", "nginx-http": "nginx http (TLS)"}
 IPERF_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
-           ("cpu_pct", "Tunnel CPU %", "%.1f", False),
-           ("mem_gb", "Tunnel Mem (GB)", "%.3f", False)]
+           ("cpu_pct", "Ingress CPU %", "%.1f", False),
+           ("mem_gb", "Ingress Mem (GB)", "%.3f", False)]
 HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
           ("rps", "RPS", "%.0f", True),
           ("mean_us", "Mean (us)", "%d", True),
@@ -139,8 +139,8 @@ HTTP_M = [("throughput", "Throughput (Gbps)", "%.2f", True),
           ("p99_us", "p99 (us)", "%d", True),
           ("success_pct", "Success %", "%.1f", True),
           ("cli_cpu_pct", "Ingress CPU %", "%.1f", False),
-          ("srv_cpu_pct", "Server CPU %", "%.1f", False),
-          ("srv_mem_mib", "Server Mem (MiB)", "%.1f", False)]
+          ("srv_cpu_pct", "Egress CPU %", "%.1f", False),
+          ("srv_mem_mib", "Egress Mem (MiB)", "%.1f", False)]
 # TNG workloads get a labeled (baseline) row + a bolded (experimental) row in
 # compare mode; the reference baselines (raw/stunnel/haproxy/nginx) appear once
 # with baseline values, unlabeled.
@@ -427,8 +427,8 @@ METH_BODY = [
     "**Resource sampling and units**", "",
     "- CPU columns are one-second pidstat windows averaged over the final measured round. Memory columns are the peak RSS under load: `/proc/<pid>/status` VmRSS, summed over the sampled PID set at 1 Hz in parallel with every measured round, reported as the maximum of those samples. Windowed RSS averages mixed the load ramp into the plateau and were bistable run-to-run; the peak answers how much memory serving the workload needs.",
     "- Every workload with a proxy or tunnel process (TNG ingress/egress pair, stunnel, HAProxy, nginx) is measured on a freshly restarted process set: before each cell's warmup and measured rounds the harness stops that workload's processes, verifies the old PIDs and listen ports are released, relaunches the same binary or container with the same config, and waits for the listening ports to be ready. Samplers find processes by listen port, so they always measure the post-restart PIDs. Each cell's memory peak is therefore that cell's own cost, not allocator high-water carried from earlier cells of the pass. Raw reference rows have no proxy process and nothing to restart.",
-    "- TCP Tunnel CPU/Mem columns sample the client-side tunnel process. The legacy `Tunnel Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).",
-    "- HTTP Server CPU/Mem columns sample the server-side tunnel component (`pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU). TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process; nginx sums every process holding the proxy's listen port (master + all workers, found via `ss`). CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.",
+    "- TCP Ingress CPU/Mem columns sample the ingress instance: the client-side instance of the measured gateway/tunnel (TNG ingress for the TNG workloads). The legacy `Ingress Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).",
+    "- HTTP Egress CPU/Mem columns sample the egress instance: the server-side instance of the measured gateway/proxy (TNG egress, HAProxy, or the stunnel or nginx server container), via `pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU. HAProxy sums master and workers; nginx sums every process holding the proxy's listen port (master + all workers, found via `ss`). CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.",
     "- The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method; datasets whose driver did not record it render '-' in the column and exclude it from the counts.",
     "- Raw reference rows have no tunnel process, so their resource fields are structurally uncollected.", "",
     "**Comparison and classification**", "",

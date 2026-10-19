@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render normalized benchmark scenarios as horizontal three-panel SVGs.
+"""Render normalized benchmark scenarios as horizontal SVGs, one panel per metric.
 
 Usage: python3 bench/svg_renderer.py <normalized-scenarios.json> --out-dir DIR
 Dependency: matplotlib>=3.7. No raw report parsing and no network access:
@@ -13,7 +13,8 @@ Each scenario:
   title: heading text.
   x: concurrency values, e.g. [1,8,16,32,64,128].
   x_label / subtitle / note: reserved metadata; not rendered.
-  metrics: exactly three {"key": ..., "label": ...} entries.
+  metrics: two to six {"key": ..., "label": ...} entries; the figure width
+    scales with the panel count.
   series: list of {"id": ..., "values": {metric_key: [values...]}}.
 Each value array matches the x order and length. Missing measurements MUST be
 null, never zero: a partially missing series renders with a gap, a completely
@@ -57,8 +58,8 @@ STYLES = _with_compare_variants(SINGLE_STYLES)
 
 
 def validate(s):
-    if len(s['metrics']) != 3:
-        raise ValueError('Exactly three metrics required')
+    if not 2 <= len(s['metrics']) <= 6:
+        raise ValueError('Between two and six metrics required')
     if not s['x'] or len(set(s['x'])) != len(s['x']):
         raise ValueError('x must contain unique concurrency values')
     ids = [v['id'] for v in s['series']]
@@ -88,7 +89,7 @@ def render_scenario(s: dict, out_dir: Path):
         'axes.labelcolor': '#111111', 'xtick.color': '#111111',
         'ytick.color': '#111111', 'savefig.facecolor': 'white',
     })
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.6))
+    fig, axes = plt.subplots(1, len(s['metrics']), figsize=(6.0 * len(s['metrics']), 5.6))
     fig.suptitle(s['title'], fontsize=15)
     for ax, metric in zip(axes, s['metrics']):
         for series in s['series']:

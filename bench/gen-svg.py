@@ -40,11 +40,12 @@ WORKLOADS = ('raw', 'stunnel', 'haproxy', 'rats-tls', 'rats-tls+mux', 'ohttp')
 TNG_WORKLOADS = frozenset({'rats-tls', 'rats-tls+mux', 'ohttp'})
 PROTOCOLS = ('iperf3', 'http', 'http-shortconn')
 A_METRICS = (('throughput', 'Throughput (Gbps)'),
-             ('cpu_pct', 'Tunnel CPU %'),
-             ('mem_gb', 'Tunnel Mem (GB)'))
+             ('cpu_pct', 'Ingress CPU %'),
+             ('mem_gb', 'Ingress Mem (GB)'))
 HTTP_METRICS = (('rps', 'RPS'),
-                ('p99_us', 'p99 (us)'),
-                ('srv_cpu_pct', 'Server CPU %'))
+                ('p95_us', 'p95 (us)'),
+                ('srv_cpu_pct', 'Egress CPU %'),
+                ('srv_mem_mib', 'Egress Mem (MiB)'))
 ALLOWED_KEYS = {f'{p}+{w}' for p in PROTOCOLS for w in WORKLOADS}
 
 
@@ -109,6 +110,11 @@ def build_scenario(sid, title, x_label, protocol, metrics, sources):
     for series_id, points in pts.items():
         values = {}
         for metric_key, _label in metrics:
+            if series_id == 'raw' and metric_key == 'p95_us':
+                # Raw's percentile tail is measurement noise, not proxy behavior;
+                # the report tables keep it, the p95 chart panel does not.
+                values[metric_key] = [None] * len(x)
+                continue
             values[metric_key] = [
                 parse_value(points.get(str(k), {}).get(metric_key), sid, series_id, k, metric_key)
                 for k in x
@@ -121,7 +127,7 @@ def build_scenario(sid, title, x_label, protocol, metrics, sources):
         'x_label': x_label,
         'metrics': [{'key': k, 'label': lb} for k, lb in metrics],
         'series': series,
-        'note': 'Scenario A resources are client-side tunnel; B/C resources are the server-side proxy component. CPU 100% = one logical core. Tunnel Mem is the legacy GB column value (peak VmRSS / 1024^2).',
+        'note': 'Scenario A resources are the client-side ingress instance; B/C resources are the server-side egress instance of the measured gateway/proxy. CPU 100% = one logical core. Ingress Mem (GB) is the legacy GB column value (peak VmRSS / 1024^2). raw is excluded from the p95 panel.',
     }
 
 

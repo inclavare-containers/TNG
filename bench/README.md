@@ -51,7 +51,7 @@ The single report has one table per scenario (iperf3, HTTP keep-alive, HTTP no-k
 - **RPS:** wrk requests per second (HTTP only).
 - **Mean / p50 / p90 / p95 / p99:** request latency percentiles in microseconds (HTTP only); p95 and p99 expose tail latency.
 - **Success %:** share of requests completed without error (HTTP only).
-- **Server CPU % / Mem:** CPU and memory of the server-side tunnel process during the run; `100` equals one logical core. raw baselines have no tunnel, shown as `-`.
+- **Egress CPU % / Egress Mem (MiB):** CPU and memory of the egress instance, the server-side instance of the measured gateway/proxy (TNG egress; HAProxy master plus workers; the stunnel server process) during the run; `100` equals one logical core. raw baselines have no proxy, shown as `-`. The iperf `Ingress CPU %` / `Ingress Mem (GB)` columns sample the same on the ingress (client-side) instance; the HTTP `Ingress CPU %` column appears only when the driver recorded it.
 - **Δ vs raw:** each non-raw value is followed by its percent change versus the raw baseline at the same concurrency. For throughput/RPS, negative means lower; for latency, positive means slower.
 
 ## Key environment variables

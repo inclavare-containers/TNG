@@ -21,7 +21,7 @@
 - 每个场景的并发梯度为 1、8、16、32、64、128。
 - 每个 workload/并发测试点都在全新启动的隧道/代理进程上测量，因此测试点的内存峰值就是该点自身开销，而不是早期测试点遗留的分配器高水位。
 - 每个测试点取最强一轮（多轮中请求率或吞吐最高的一轮）。
-- CPU 100% 等于一个逻辑核。场景 A 采样客户端隧道进程；场景 B、C 采样服务端代理组件（TNG 取 egress 进程；HAProxy 主进程加工作进程求和；stunnel 取服务端进程）。`raw` 参考没有代理进程，其资源列天然缺失。
+- CPU 100% 等于一个逻辑核。下文表格中的 Egress 指被测网关/代理的服务端实例（TNG egress；HAProxy 主进程加工作进程；stunnel 服务端容器），Ingress 指其客户端实例（TNG ingress）。场景 A 采样入口实例；场景 B、C 采样出口实例。`raw` 参考没有代理进程，其资源列天然缺失。
 
 ## 实测快照
 
@@ -40,11 +40,11 @@ TNG 提供三种不同的隧道配置，不同模式的数值相差数倍，因�
 
 ### 场景 A - TCP / iperf3 吞吐
 
-![场景 A：TCP 吞吐、客户端隧道 CPU 与隧道内存随 iperf3 并发流数的变化](performance/scenario_a.svg)
+![场景 A：TCP 吞吐、入口 CPU 与入口内存随 iperf3 并发流数的变化](performance/scenario_a.svg)
 
 每个非 raw 单元格括号内是相对同一并发度下 `raw` 基线的百分比变化。场景 A 未测量 ohttp。
 
-| Streams | Workload | Throughput (Gbps) | Tunnel CPU % | Tunnel Mem (GB) |
+| Streams | Workload | Throughput (Gbps) | Ingress CPU % | Ingress Mem (GB) |
 | --- | --- | --- | --- | --- |
 | 1 | raw | 15.98 | - | - |
 | 1 | stunnel | 10.82 (-32%) | 68.0 | 0.007 |
@@ -79,11 +79,11 @@ TNG 提供三种不同的隧道配置，不同模式的数值相差数倍，因�
 
 ### 场景 B - HTTP / wrk，64 KiB 响应体，keep-alive
 
-![场景 B：RPS、p99 延迟与服务端代理 CPU 随 keep-alive 并发连接数的变化](performance/scenario_b.svg)
+![场景 B：RPS、p95 延迟、出口 CPU 与出口内存随 keep-alive 并发连接数的变化](performance/scenario_b.svg)
 
 wrk 为每个客户端维持一条持久 TCP+TLS 连接，证明开销被复用该连接的请求摊薄。
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 2.34 | 4654 | 223 | 203 | 257 | 377 | 736 | 100.0 | - | - | - |
 | 1 | stunnel | 1.60 (-32%) | 3196 (-31%) | 320 (+43%) | 305 (+50%) | 356 (+39%) | 376 (-0%) | 687 (-7%) | 100.0 (+0%) | - | 24.7 | 6.9 |
@@ -124,11 +124,11 @@ wrk 为每个客户端维持一条持久 TCP+TLS 连接，证明开销被复用�
 
 ### 场景 C - HTTP / wrk，64 KiB 响应体，无 keep-alive
 
-![场景 C：RPS、p99 延迟与服务端代理 CPU 随短连接并发度的变化](performance/scenario_c.svg)
+![场景 C：RPS、p95 延迟、出口 CPU 与出口内存随短连接并发度的变化](performance/scenario_c.svg)
 
 wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完整 TLS 握手（对三种 TNG 配置还包括证明与验证）。
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 1.62 | 3221 | 213 | 212 | 249 | 262 | 290 | 100.0 | - | - | - |
 | 1 | stunnel | 0.25 (-85%) | 489 (-85%) | 1980 (+830%) | 1970 (+829%) | 2090 (+739%) | 2124 (+711%) | 2200 (+659%) | 100.0 (+0%) | - | 46.0 | 6.9 |
@@ -303,7 +303,7 @@ wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完
 **Workloads and run parameters**
 
 - Scenario A measures TCP throughput with iperf3 parallel streams (`-P`). Scenario B measures HTTP/wrk persistent connections; Scenario C sends `Connection: close` for fresh client connections. Actual concurrency, body size, duration, warmup and round counts appear in Test Conditions.
-- Each workload/concurrency point runs the recorded number of rounds. Workload metrics are aggregated as medians of the rounds; CPU samples use the final round and memory samples span every measured round, as described below. Keep-alive and no-keep-alive are separate scenarios, not interchangeable workloads.
+- Each workload/concurrency point runs the recorded number of rounds; the cell takes the strongest round (highest request rate) with all of its metrics, so a round that catches a cold-start race cannot pollute the cell. CPU samples use the final round and memory samples span every measured round, as described below. Keep-alive and no-keep-alive are separate scenarios, not interchangeable workloads.
 
 **HTTP latency and success metrics**
 
@@ -314,8 +314,8 @@ wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完
 
 - CPU columns are one-second pidstat windows averaged over the final measured round. Memory columns are the peak RSS under load: `/proc/<pid>/status` VmRSS, summed over the sampled PID set at 1 Hz in parallel with every measured round, reported as the maximum of those samples. Windowed RSS averages mixed the load ramp into the plateau and were bistable run-to-run; the peak answers how much memory serving the workload needs.
 - Every workload with a proxy or tunnel process (TNG ingress/egress pair, stunnel, HAProxy) is measured on a freshly restarted process set: before each cell's warmup and measured rounds the harness stops that workload's processes, verifies the old PIDs and listen ports are released, relaunches the same binary or container with the same config, and waits for the listening ports to be ready. Samplers find processes by listen port, so they always measure the post-restart PIDs. Each cell's memory peak is therefore that cell's own cost, not allocator high-water carried from earlier cells of the pass. Raw reference rows have no proxy process and nothing to restart.
-- TCP Tunnel CPU/Mem columns sample the client-side tunnel process. The legacy `Tunnel Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).
-- HTTP Server CPU/Mem columns sample the server-side tunnel component (`pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU). TNG uses the egress process; HAProxy sums master and workers; stunnel uses its server process. CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.
+- TCP Ingress CPU/Mem columns sample the ingress instance: the client-side instance of the measured gateway/tunnel (TNG ingress for the TNG workloads). The legacy `Ingress Mem (GB)` label stores the peak VmRSS KiB divided by 1024² (GiB).
+- HTTP Egress CPU/Mem columns sample the egress instance: the server-side instance of the measured gateway/proxy (TNG egress, HAProxy, or the stunnel server container), via `pidstat -u -p <PIDs> 1 <duration>` Average rows for CPU. HAProxy sums master and workers. CPU sums threads/processes (100% = one logical core); the peak RSS sums the same PID set and is converted from KiB to MiB.
 - The HTTP Ingress CPU % column samples the client-side TNG ingress process with the same pidstat method; datasets whose driver did not record it render '-' in the column and exclude it from the counts.
 - Raw reference rows have no tunnel process, so their resource fields are structurally uncollected.
 
@@ -334,7 +334,7 @@ wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完
 <details>
 <summary>Full Scenario A results</summary>
 
-| Streams | Workload | Throughput (Gbps) | Tunnel CPU % | Tunnel Mem (GB) |
+| Streams | Workload | Throughput (Gbps) | Ingress CPU % | Ingress Mem (GB) |
 | --- | --- | --- | --- | --- |
 | 1 | raw | 15.98 | - | - |
 | 1 | stunnel | 10.82 (-32%) | 68.0 | 0.007 |
@@ -375,7 +375,7 @@ wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完
 <details>
 <summary>Full scenario results</summary>
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 2.34 | 4654 | 223 | 203 | 257 | 377 | 736 | 100.0 | - | - | - |
 | 1 | stunnel | 1.60 (-32%) | 3196 (-31%) | 320 (+43%) | 305 (+50%) | 356 (+39%) | 376 (-0%) | 687 (-7%) | 100.0 (+0%) | - | 24.7 | 6.9 |
@@ -422,7 +422,7 @@ wrk 发送 `Connection: close`，每个请求都要支付新建 TCP 连接与完
 <details>
 <summary>Full scenario results</summary>
 
-| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Server CPU % | Server Mem (MiB) |
+| Conns | Workload | Throughput (Gbps) | RPS | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) | Success % | Ingress CPU % | Egress CPU % | Egress Mem (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | raw | 1.62 | 3221 | 213 | 212 | 249 | 262 | 290 | 100.0 | - | - | - |
 | 1 | stunnel | 0.25 (-85%) | 489 (-85%) | 1980 (+830%) | 1970 (+829%) | 2090 (+739%) | 2124 (+711%) | 2200 (+659%) | 100.0 (+0%) | - | 46.0 | 6.9 |
