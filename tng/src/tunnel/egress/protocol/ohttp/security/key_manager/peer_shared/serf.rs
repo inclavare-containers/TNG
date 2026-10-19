@@ -77,7 +77,12 @@ impl PeerSharedKeyManager {
         Self::spawn_cluster_join_tasks(&runtime, &serf, &peer_shared).await?;
 
         // Step 3: Preboot phase - synchronize cluster key set
-        let cluster_key_set = Self::preboot(&serf, peer_shared.rotation_interval).await?;
+        let cluster_key_set = Self::preboot(
+            &serf,
+            peer_shared.rotation_interval,
+            Duration::from_secs(peer_shared.preboot_timeout),
+        )
+        .await?;
 
         // Step 4: Initialize inner state
         // Create shared notify and pass it to ClusterKeySet
@@ -296,14 +301,33 @@ impl PeerSharedKeyManager {
     /// Preboot phase: synchronize cluster key set with existing members.
     ///
     /// This phase is blocking - it waits until we have synchronized with
-    /// the cluster or determined we are the first node.
-    async fn preboot(serf: &Serf, rotation_interval: u64) -> Result<ClusterKeySet, TngError> {
+    /// the cluster or determined we are the first node. Visible peers that
+    /// never answer the key-set query are waited for at most
+    /// `preboot_timeout` seconds; past that budget startup fails with
+    /// [`TngError::SerfPrebootTimeout`] instead of retrying forever.
+    async fn preboot(
+        serf: &Serf,
+        rotation_interval: u64,
+        preboot_timeout: Duration,
+    ) -> Result<ClusterKeySet, TngError> {
         tracing::info!("Starting preboot phase: synchronizing cluster key set");
+
+        let start = tokio::time::Instant::now();
 
         loop {
             let members = serf.members().await;
 
             if members.len() > 1 {
+                // Bound the no-responses retry loop: a member that stays visible
+                // but silent must not wedge startup forever.
+                if start.elapsed() >= preboot_timeout {
+                    return Err(TngError::SerfPrebootTimeout {
+                        timeout_secs: preboot_timeout.as_secs(),
+                        member_count: members.len(),
+                        local_node_id: serf.local_id().to_string(),
+                    });
+                }
+
                 // There are other nodes in the cluster, send query to synchronize
                 tracing::info!(
                     peer_count = members.len() - 1,
@@ -329,31 +353,42 @@ impl PeerSharedKeyManager {
                 let resp_rx = query_response.response_rx();
                 let mut merged_key_set: Option<ClusterKeySet> = None;
 
-                // Wait for all responses until channel closes or timeout
-                while let Ok(response) = resp_rx.recv().await {
-                    if let Ok(pb_response) =
-                        pb::QueryClusterKeySetResponse::decode(response.payload().as_ref())
-                    {
-                        if let Some(pb_cks) = pb_response.cluster_key_set {
-                            if let Ok(remote_key_set) = ClusterKeySet::try_from(pb_cks) {
-                                let remote_keys: Vec<String> = remote_key_set
-                                    .iter_keys()
-                                    .map(|(pk, _)| hex::encode(pk.as_ref()))
-                                    .collect();
-                                tracing::info!(
-                                    peer_node_id = ?response.from(),
-                                    key_count = remote_keys.len(),
-                                    public_key_hex = ?remote_keys,
-                                    "Received cluster key set from peer"
-                                );
+                // Wait for responses until the channel closes or the remaining
+                // preboot budget runs out.
+                loop {
+                    let remaining = preboot_timeout.saturating_sub(start.elapsed());
+                    match tokio::time::timeout(remaining, resp_rx.recv()).await {
+                        Ok(Ok(response)) => {
+                            if let Ok(pb_response) =
+                                pb::QueryClusterKeySetResponse::decode(response.payload().as_ref())
+                            {
+                                if let Some(pb_cks) = pb_response.cluster_key_set {
+                                    if let Ok(remote_key_set) = ClusterKeySet::try_from(pb_cks) {
+                                        let remote_keys: Vec<String> = remote_key_set
+                                            .iter_keys()
+                                            .map(|(pk, _)| hex::encode(pk.as_ref()))
+                                            .collect();
+                                        tracing::info!(
+                                            peer_node_id = ?response.from(),
+                                            key_count = remote_keys.len(),
+                                            public_key_hex = ?remote_keys,
+                                            "Received cluster key set from peer"
+                                        );
 
-                                if let Some(ref mut local) = merged_key_set {
-                                    local.merge(remote_key_set);
-                                } else {
-                                    merged_key_set = Some(remote_key_set);
+                                        if let Some(ref mut local) = merged_key_set {
+                                            local.merge(remote_key_set);
+                                        } else {
+                                            merged_key_set = Some(remote_key_set);
+                                        }
+                                    }
                                 }
                             }
                         }
+                        // `Ok(Err(..))`: channel closed, no more responses will
+                        // come. `Err(..)`: budget spent. Either way this round
+                        // is over; fall through to the no-responses / is-master
+                        // logic, whose loop-top deadline ends preboot entirely.
+                        Ok(Err(_)) | Err(_) => break,
                     }
                 }
 
@@ -1233,6 +1268,7 @@ mod tests {
             peers,
             peers_file: None,
             join_timeout: crate::config::egress::default_join_timeout(),
+            preboot_timeout: crate::config::egress::default_preboot_timeout(),
             ra_args: RaArgsUnchecked {
                 no_ra: true,
                 attest: None,
@@ -1592,6 +1628,64 @@ mod tests {
         })
         .await
         .expect("test_startup_join_deadline_fails_on_dead_peer failed");
+    }
+
+    /// Boundary condition for the preboot deadline: with the budget already
+    /// spent (`preboot_timeout = 0`) and a cluster peer visible, startup must
+    /// fail with `SerfPrebootTimeout` naming the member count and the local
+    /// node id, instead of waiting for a key-set response forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_preboot_deadline_fails_with_spent_budget() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let port_a = portpicker::pick_unused_port().unwrap();
+            let port_b = portpicker::pick_unused_port().unwrap();
+
+            // A is a healthy, fully started cluster member.
+            let args_a = make_peer_shared_args(port_a, vec![], 300);
+            let _manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+
+            // B joins A successfully but enters preboot with zero budget: the
+            // visible member must not be waited on.
+            let mut args_b =
+                make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
+            args_b.preboot_timeout = 0;
+
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                PeerSharedKeyManager::new(runtime.clone(), args_b),
+            )
+            .await
+            .expect("preboot deadline must be honored, not hang");
+
+            let error = match result {
+                Ok(_manager) => {
+                    return Err(anyhow!(
+                        "a spent preboot budget with a visible peer must fail startup"
+                    ))
+                }
+                Err(error) => error,
+            };
+
+            assert!(
+                matches!(
+                    error,
+                    TngError::SerfPrebootTimeout {
+                        member_count: 2,
+                        ..
+                    }
+                ),
+                "expected SerfPrebootTimeout counting both members, got: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("none answered the cluster key-set query"),
+                "error must explain that no visible peer answered, got: {message}"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_preboot_deadline_fails_with_spent_budget failed");
     }
 
     // -----------------------------------------------------------------------

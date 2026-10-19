@@ -1345,6 +1345,7 @@ TNG 自主生成 HPKE 密钥对并自动轮换。
 | `key.peers` | array [string] | — | 初始 peer 节点列表（`IP:port` 或 `domain:port`） |
 | `key.peers_file` | string | 无 | 动态更新节点列表的 JSON 文件路径 |
 | `key.join_timeout` | integer | `300` | 启动时加入初始节点列表的总时限（秒）；在时限内未能加入的初始节点会导致启动失败并报出该节点地址与最后一次加入错误，而不再无限重试 |
+| `key.preboot_timeout` | integer | `60` | 预启动阶段集群密钥集同步的时限（秒）；节点可见但无人应答密钥集查询超过该时限时，启动失败而不再无限重试 |
 | `key.attest` | object | 无 | 节点证明自身身份的配置 |
 | `key.verify` | object | 无 | 验证远程对等节点身份的配置 |
 | `key.no_ra` | boolean | `false` | 禁用节点间远程证明 |

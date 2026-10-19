@@ -143,6 +143,14 @@ pub enum TngError {
         source: anyhow::Error,
     },
 
+    #[cfg(feature = "__egress-common")]
+    #[error("Serf preboot timed out after {timeout_secs}s: {member_count} cluster members visible but none answered the cluster key-set query (local node id {local_node_id})")]
+    SerfPrebootTimeout {
+        timeout_secs: u64,
+        member_count: usize,
+        local_node_id: String,
+    },
+
     #[error("Failed to decode KeyUpdateMessage")]
     KeyUpdateMessageDecodeError(#[source] anyhow::Error),
 
@@ -252,9 +260,9 @@ impl IntoResponse for TngError {
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::StatusPathNotFound => StatusCode::NOT_FOUND,
             #[cfg(feature = "__egress-common")]
-            TngError::SerfCrateError(..) | TngError::SerfJoinTimeout { .. } => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            TngError::SerfCrateError(..)
+            | TngError::SerfJoinTimeout { .. }
+            | TngError::SerfPrebootTimeout { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::KeyUpdateMessageEncodeError(..)
             | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::ClientVerifyServerEvidenceFailed(..)

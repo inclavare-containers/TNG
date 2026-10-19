@@ -286,6 +286,8 @@ flowchart LR
    - When clients request a public key, the server always returns the Active key with the latest `stale_at` and smallest ID, ensuring consistency.
    - On the next key rotation, each node checks its own node ID: the node with a larger ID finds a smaller one exists and stops creating new keys. The smallest-ID node creates and broadcasts the new Pending key. Old keys gradually transition to Stale and are removed upon expiry, naturally converging to a single key.
 
+**Bounds on startup retries**: Joining the initial peer list is retried with exponential backoff under an overall deadline of `join_timeout` seconds (default 300), and the Preboot key-set synchronization is bounded by `preboot_timeout` seconds (default 60). If an initial peer is still unreachable when the join deadline passes, TNG fails startup with an error naming that peer and the last join failure. If peers stay visible but none answers the cluster key-set query within the preboot deadline, TNG fails startup with an error carrying the member count and the local node id. Peers discovered later through `peers_file` updates keep being retried in the background without a deadline.
+
 ### Cluster Scale-In
 
 **When a node leaves**: Upon receiving a `SerfMemberLeave` event (which may indicate the primary node left), `check_and_key_rotation` is triggered immediately. This flow checks for an existing Pending key; if none exists, the node with the smallest ID among the remaining nodes creates a new Pending key and broadcasts it, ensuring key rotation does not stall due to node departure.

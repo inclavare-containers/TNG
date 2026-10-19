@@ -49,6 +49,7 @@ async fn run_impl(opts: super::cli::KeySyncOptions) -> Result<()> {
         peers: opts.peers,
         peers_file: opts.peers_file,
         join_timeout: crate::config::egress::default_join_timeout(),
+        preboot_timeout: crate::config::egress::default_preboot_timeout(),
         ra_args: RaArgsUnchecked {
             no_ra: false,
             attest: Some(attest),

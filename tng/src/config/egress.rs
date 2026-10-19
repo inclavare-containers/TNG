@@ -436,6 +436,7 @@ pub enum KeyArgs {
 ///   ],
 ///   "rotation_interval": 300,
 ///   "join_timeout": 300,
+///   "preboot_timeout": 60,
 ///   "attest": {
 ///     "model": "background_check",
 ///     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -483,6 +484,12 @@ pub struct PeerSharedArgs {
     #[serde(default = "default_join_timeout")]
     pub join_timeout: u64,
 
+    /// Deadline (in seconds) for the preboot cluster key-set synchronization.
+    /// If peers are visible but none answers the key-set query within this
+    /// budget, startup fails instead of retrying forever.
+    #[serde(default = "default_preboot_timeout")]
+    pub preboot_timeout: u64,
+
     /// Define how this node proves its identity when connecting to others, and how to verify
     /// the identity of remote peers.
     #[serde(flatten)]
@@ -503,6 +510,15 @@ pub(crate) const DEFAULT_JOIN_TIMEOUT_SECS: u64 = 300;
 
 pub(crate) fn default_join_timeout() -> u64 {
     DEFAULT_JOIN_TIMEOUT_SECS
+}
+
+// Default preboot key-set synchronization deadline for peer_shared. 60s covers
+// several query/response rounds on a healthy cluster while keeping a wedged
+// startup bounded.
+pub(crate) const DEFAULT_PREBOOT_TIMEOUT_SECS: u64 = 60;
+
+pub(crate) fn default_preboot_timeout() -> u64 {
+    DEFAULT_PREBOOT_TIMEOUT_SECS
 }
 
 fn default_true() -> bool {
