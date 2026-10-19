@@ -36,6 +36,8 @@ SINGLE_STYLES = {
     'raw': ('Raw', '#94a3b8', 'D', '--'),
     'stunnel': ('stunnel', '#ca8a04', 'v', '-'),
     'haproxy': ('HAProxy', '#2563eb', 's', '-'),
+    'nginx-stream': ('nginx stream (TLS)', '#16a34a', 'h', '-'),
+    'nginx-http': ('nginx http (TLS)', '#c2410c', '*', '-'),
     'rats-tls': ('TNG rats-tls', '#008577', 'o', '-'),
     'rats-tls+mux': ('TNG rats-tls+mux', '#8b5cf6', '^', '-'),
     'ohttp': ('TNG ohttp', '#e05275', 'P', '-'),

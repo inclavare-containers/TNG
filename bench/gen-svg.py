@@ -14,9 +14,9 @@ values, mirroring bench/gen-report.sh compare row logic):
 Writes scenario_a.svg, scenario_b.svg, scenario_c.svg (plus PNG previews for
 local inspection; only the SVGs belong in the repository). Workload keys
 follow bench/gen-report.sh conventions: `iperf3+<wl>`, `http+<wl>`,
-`http-shortconn+<wl>` with workloads raw, stunnel, haproxy, rats-tls,
-rats-tls+mux, ohttp. Metric values of "N/A", "-", "" or missing cells render
-as gaps (JSON null); any other value must parse as a finite nonnegative
+`http-shortconn+<wl>` with workloads raw, stunnel, haproxy, nginx-stream,
+nginx-http, rats-tls, rats-tls+mux, ohttp. Metric values of "N/A", "-", "" or
+missing cells render as gaps (JSON null); any other value must parse as a finite nonnegative
 number, otherwise the adapter aborts rather than dropping the series.
 Charts carry no identity text: the caller embeds them next to the report that
 records the binary identity. Requires matplotlib>=3.7 (local dev dependency
@@ -36,7 +36,7 @@ except ImportError:
     raise SystemExit('matplotlib>=3.7 is required for SVG charts: python3 -m pip install matplotlib')
 from svg_renderer import render_scenario
 
-WORKLOADS = ('raw', 'stunnel', 'haproxy', 'rats-tls', 'rats-tls+mux', 'ohttp')
+WORKLOADS = ('raw', 'stunnel', 'haproxy', 'nginx-stream', 'nginx-http', 'rats-tls', 'rats-tls+mux', 'ohttp')
 TNG_WORKLOADS = frozenset({'rats-tls', 'rats-tls+mux', 'ohttp'})
 PROTOCOLS = ('iperf3', 'http', 'http-shortconn')
 A_METRICS = (('throughput', 'Throughput (Gbps)'),
