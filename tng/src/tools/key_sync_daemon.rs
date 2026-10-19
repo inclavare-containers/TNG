@@ -677,6 +677,7 @@ mod tests {
                 port,
                 peers,
                 peers_file: None,
+                join_timeout: crate::config::egress::default_join_timeout(),
                 ra_args: RaArgsUnchecked {
                     no_ra: true,
                     attest: None,
@@ -804,6 +805,7 @@ mod tests {
                 port,
                 peers: vec![],
                 peers_file: None,
+                join_timeout: crate::config::egress::default_join_timeout(),
                 ra_args: RaArgsUnchecked {
                     no_ra: true,
                     attest: None,

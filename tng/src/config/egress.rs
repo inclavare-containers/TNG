@@ -435,6 +435,7 @@ pub enum KeyArgs {
 ///     "tng-service.default.svc.cluster.local:8301"
 ///   ],
 ///   "rotation_interval": 300,
+///   "join_timeout": 300,
 ///   "attest": {
 ///     "model": "background_check",
 ///     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -474,6 +475,14 @@ pub struct PeerSharedArgs {
     #[serde(default = "Default::default")]
     pub peers_file: Option<String>,
 
+    /// Overall deadline (in seconds) for joining the initial peer list at startup.
+    /// A peer that cannot be joined within this budget is a fatal startup error
+    /// naming the peer and the last join failure, instead of retrying forever.
+    /// Peers discovered later via `peers_file` are retried in the background
+    /// without a deadline.
+    #[serde(default = "default_join_timeout")]
+    pub join_timeout: u64,
+
     /// Define how this node proves its identity when connecting to others, and how to verify
     /// the identity of remote peers.
     #[serde(flatten)]
@@ -486,6 +495,14 @@ fn default_peer_host() -> String {
 
 fn default_peer_port() -> u16 {
     8301
+}
+
+// Default startup join deadline for peer_shared. 300s lets the join retry
+// backoff reach its per-attempt cap (300s) once before startup gives up.
+pub(crate) const DEFAULT_JOIN_TIMEOUT_SECS: u64 = 300;
+
+pub(crate) fn default_join_timeout() -> u64 {
+    DEFAULT_JOIN_TIMEOUT_SECS
 }
 
 fn default_true() -> bool {

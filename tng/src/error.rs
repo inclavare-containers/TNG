@@ -133,6 +133,16 @@ pub enum TngError {
     #[error("Error from serf crate")]
     SerfCrateError(#[source] anyhow::Error),
 
+    #[cfg(feature = "__egress-common")]
+    #[error("Failed to join serf peer {peer} within the {timeout_secs}s startup join deadline (retried for {elapsed_secs}s)")]
+    SerfJoinTimeout {
+        peer: String,
+        timeout_secs: u64,
+        elapsed_secs: u64,
+        #[source]
+        source: anyhow::Error,
+    },
+
     #[error("Failed to decode KeyUpdateMessage")]
     KeyUpdateMessageDecodeError(#[source] anyhow::Error),
 
@@ -242,7 +252,9 @@ impl IntoResponse for TngError {
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::StatusPathNotFound => StatusCode::NOT_FOUND,
             #[cfg(feature = "__egress-common")]
-            TngError::SerfCrateError(..) => StatusCode::INTERNAL_SERVER_ERROR,
+            TngError::SerfCrateError(..) | TngError::SerfJoinTimeout { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             TngError::KeyUpdateMessageEncodeError(..)
             | TngError::KeyUpdateMessageDecodeError(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::ClientVerifyServerEvidenceFailed(..)

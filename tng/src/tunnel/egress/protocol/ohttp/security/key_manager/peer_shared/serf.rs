@@ -9,7 +9,7 @@ use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::tunnel::utils::file_watcher::FileWatcher;
 
-use again::RetryPolicy;
+use again::{Condition, RetryPolicy};
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
 use prost::Message;
@@ -161,9 +161,11 @@ impl PeerSharedKeyManager {
 
     /// Handles joining the Serf cluster using both static peers and file-based dynamic peers.
     ///
-    /// Startup blocks until EVERY configured peer has joined (concurrent per-peer
-    /// retries with exponential backoff). A node with no configured peers at all
-    /// (dedicated bootstrap node) skips joining and never blocks.
+    /// Startup blocks until EVERY configured startup peer has joined (concurrent
+    /// per-peer retries with exponential backoff, bounded by `join_timeout` in
+    /// total: a peer still unreachable at the deadline is a fatal startup error).
+    /// A node with no configured peers at all (dedicated bootstrap node) skips
+    /// joining and never blocks.
     async fn spawn_cluster_join_tasks(
         runtime: &TokioRuntime,
         serf: &Arc<SerfGracefulShutdown>,
@@ -181,10 +183,13 @@ impl PeerSharedKeyManager {
             }
         }
 
-        // Join every configured peer, retrying forever with per-peer backoff.
+        // Join every configured startup peer, retrying with per-peer backoff under
+        // one overall deadline shared by all peers.
         // Concurrent so a slow peer does not block joining faster ones; we await
         // ALL of them (A2: all configured peers must join before proceeding).
         if !initial_peers.is_empty() {
+            let join_deadline =
+                tokio::time::Instant::now() + Duration::from_secs(peer_shared.join_timeout);
             let serf_for_tasks = serf.clone();
             let join_results = futures::future::join_all(
                 initial_peers
@@ -193,7 +198,7 @@ impl PeerSharedKeyManager {
                         let serf = serf_for_tasks.clone();
                         let peer = peer.clone();
                         async move {
-                            let res = retry_join_peer(&serf, &peer).await;
+                            let res = retry_join_peer(&serf, &peer, Some(join_deadline)).await;
                             if let Err(e) = &res {
                                 tracing::warn!(?peer, ?e, "join ultimately failed");
                             }
@@ -204,7 +209,6 @@ impl PeerSharedKeyManager {
             )
             .await;
             // A2: any peer that could not ultimately join is a fatal startup error.
-            // (retry_join_peer only returns on Ok, so this is belt-and-suspenders.)
             for r in join_results {
                 r?;
             }
@@ -895,12 +899,12 @@ impl PeerSharedKeyManager {
     /// Join a set of peers after construction.
     ///
     /// Each peer is joined via `retry_join_peer` (exponential backoff until
-    /// success). No `QueryClusterKeySetRequest` is sent — key synchronization
-    /// must happen through subsequent Serf queries.
+    /// success, no deadline). No `QueryClusterKeySetRequest` is sent; key
+    /// synchronization must happen through subsequent Serf queries.
     #[cfg(test)]
     pub(crate) async fn join_peers(&self, peers: &[String]) -> Result<(), TngError> {
         for peer in peers {
-            retry_join_peer(&self.serf, peer).await?;
+            retry_join_peer(&self.serf, peer, None).await?;
         }
         Ok(())
     }
@@ -1022,28 +1026,82 @@ async fn try_join_one_peer(serf: &Serf, peer: &str) -> Result<(), TngError> {
     }
 }
 
-/// Retries joining a single Serf peer forever with exponential backoff.
+/// Stops the join retry policy once the startup deadline has passed.
+///
+/// A concrete `again::Condition` impl rather than a closure: a closure here
+/// hits a higher-ranked lifetime inference failure in `retry_if`'s blanket
+/// `Condition` impl.
+struct JoinDeadlineGate {
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl Condition<TngError> for JoinDeadlineGate {
+    fn is_retryable(&mut self, _error: &TngError) -> bool {
+        match self.deadline {
+            Some(deadline) => tokio::time::Instant::now() < deadline,
+            None => true,
+        }
+    }
+}
+
+/// Retries joining a single Serf peer with exponential backoff.
 ///
 /// Uses the `again` crate: base delay 1s doubling each attempt, full jitter
-/// (delay multiplied by a random factor in (0, 1]), capped at 300s. Retries
-/// indefinitely (`max_retries = usize::MAX`). Blocks the caller until the peer
-/// is joined — callers that must not block should run this in a spawned task.
-async fn retry_join_peer(serf: &Serf, peer: &str) -> Result<(), TngError> {
+/// (delay multiplied by a random factor in (0, 1]), capped at 300s. Blocks the
+/// caller until the peer is joined.
+///
+/// With `deadline == None` the retries are unbounded (the peers-file watcher
+/// path: a runtime-discovered peer may legitimately come up much later). With
+/// `deadline == Some`, the deadline is checked between attempts and, once
+/// passed, gives up with [`TngError::SerfJoinTimeout`] naming the peer and
+/// carrying the last join failure.
+async fn retry_join_peer(
+    serf: &Serf,
+    peer: &str,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<(), TngError> {
     // k8s-style exponential backoff: 1s -> 2s -> 4s -> ... -> 300s (cap), full jitter.
-    // `max_retries = usize::MAX` makes the policy effectively unbounded.
+    // `max_retries = usize::MAX` makes the backoff sequence effectively unbounded; a
+    // startup deadline is enforced through the retry gate, checked when an attempt
+    // fails, instead of through the policy caps.
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_jitter(true)
         .with_max_delay(Duration::from_secs(300))
         .with_max_retries(usize::MAX);
 
-    policy
-        .retry(|| async {
-            try_join_one_peer(serf, peer).await.map_err(|e| {
-                tracing::warn!(?peer, error = ?e, "join attempt failed, will retry after backoff");
-                e
-            })
-        })
+    let start = tokio::time::Instant::now();
+    let last_error = match policy
+        .retry_if(
+            || async {
+                try_join_one_peer(serf, peer).await.map_err(|e| {
+                    tracing::warn!(?peer, error = ?e, "join attempt failed, will retry after backoff");
+                    e
+                })
+            },
+            JoinDeadlineGate { deadline },
+        )
         .await
+    {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+
+    match deadline {
+        Some(deadline) => Err(TngError::SerfJoinTimeout {
+            peer: peer.to_string(),
+            // ceil: `start` is taken after the deadline was computed, so the
+            // raw difference is a hair under the configured budget.
+            timeout_secs: deadline
+                .saturating_duration_since(start)
+                .as_secs_f64()
+                .ceil() as u64,
+            elapsed_secs: start.elapsed().as_secs(),
+            source: anyhow::Error::from(last_error),
+        }),
+        // Unreachable in practice: with no deadline the retry condition never
+        // stops the policy and the backoff sequence never ends.
+        None => Err(last_error),
+    }
 }
 
 /// Spawns background per-peer retry tasks for peers not already being retried.
@@ -1079,7 +1137,9 @@ fn spawn_peer_retry_tasks(
         let in_flight_clone = in_flight.clone();
         let peer_for_task = peer.clone();
         runtime.spawn_supervised_task_current_span(async move {
-            if let Err(e) = retry_join_peer(&serf_clone, &peer_for_task).await {
+            // No deadline: peers discovered at runtime may legitimately appear
+            // late, and this task never blocks startup.
+            if let Err(e) = retry_join_peer(&serf_clone, &peer_for_task, None).await {
                 tracing::warn!(?peer_for_task, ?e, "background join ultimately failed");
             }
             // Clear in-flight entry so a future file change can retry this peer.
@@ -1172,6 +1232,7 @@ mod tests {
             port,
             peers,
             peers_file: None,
+            join_timeout: crate::config::egress::default_join_timeout(),
             ra_args: RaArgsUnchecked {
                 no_ra: true,
                 attest: None,
@@ -1487,6 +1548,50 @@ mod tests {
         })
         .await
         .expect("test_join_serf_cluster_empty_peers failed");
+    }
+
+    /// A dead initial peer (unused port, so every join is refused) must fail
+    /// startup shortly after `join_timeout` instead of retrying forever, with
+    /// the error naming the peer and keeping the last join failure in its chain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_startup_join_deadline_fails_on_dead_peer() {
+        run_test_with_tokio_runtime(async |runtime| {
+            let dead_port = portpicker::pick_unused_port().unwrap();
+            let port = portpicker::pick_unused_port().unwrap();
+            let dead_peer = format!("127.0.0.1:{dead_port}");
+            let mut args = make_peer_shared_args(port, vec![dead_peer.clone()], 300);
+            args.join_timeout = 1;
+
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                PeerSharedKeyManager::new(runtime, args),
+            )
+            .await
+            .expect("startup must honor the join deadline, not hang");
+
+            let error = match result {
+                Ok(_manager) => {
+                    return Err(anyhow!(
+                        "startup with a dead initial peer and join_timeout=1 must fail"
+                    ))
+                }
+                Err(error) => error,
+            };
+
+            let message = error.to_string();
+            assert!(
+                message.contains(&dead_peer),
+                "startup error must name the unreachable peer, got: {message}"
+            );
+            assert!(
+                anyhow::Error::from(error).chain().count() >= 2,
+                "startup error must preserve the last join failure as its source"
+            );
+
+            Ok(())
+        })
+        .await
+        .expect("test_startup_join_deadline_fails_on_dead_peer failed");
     }
 
     // -----------------------------------------------------------------------

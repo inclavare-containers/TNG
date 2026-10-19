@@ -1361,6 +1361,7 @@ Multiple TNG instances share keys through a QUIC-encrypted channel based on the 
 | `key.port` | integer | `8301` | Serf UDP port |
 | `key.peers` | array [string] | — | Initial peer node list (`IP:port` or `domain:port`) |
 | `key.peers_file` | string | None | JSON file path for dynamic peer list updates |
+| `key.join_timeout` | integer | `300` | Overall startup join deadline in seconds; an initial peer not joined within it fails startup with the peer address and the last join error instead of retrying forever |
 | `key.attest` | object | None | Configuration for nodes to prove their identity |
 | `key.verify` | object | None | Configuration for verifying remote peer identity |
 | `key.no_ra` | boolean | `false` | Disable remote attestation between nodes |
