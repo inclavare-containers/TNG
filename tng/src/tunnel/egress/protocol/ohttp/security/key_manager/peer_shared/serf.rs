@@ -1266,6 +1266,7 @@ mod tests {
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
     use anyhow::{anyhow, Result};
     use hex;
+    use serial_test::serial;
     use web_time_compat::{Duration, Instant, InstantExt};
 
     // -----------------------------------------------------------------------
@@ -1585,7 +1586,15 @@ mod tests {
     // Group 2: Basic startup / join tests
     // -----------------------------------------------------------------------
 
+    // Tests that form a real serf cluster serialize under a dedicated
+    // `serf_cluster` serial key. portpicker hands back an unreserved port, so
+    // two concurrent tests can pick the same one and end up joining each
+    // other's cluster, which makes key-state assertions flaky. Serializing
+    // removes the overlap; the dedicated key keeps these tests off the crate's
+    // default serial lane, so unrelated plain-`#[serial]` tests still run
+    // concurrently with them.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_join_serf_cluster_empty_peers() {
         run_test_with_tokio_runtime(async |runtime| {
             let port = portpicker::pick_unused_port().unwrap();
@@ -1607,6 +1616,7 @@ mod tests {
     /// startup shortly after `join_timeout` instead of retrying forever, with
     /// the error naming the peer and keeping the last join failure in its chain.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_startup_join_deadline_fails_on_dead_peer() {
         run_test_with_tokio_runtime(async |runtime| {
             let dead_port = portpicker::pick_unused_port().unwrap();
@@ -1652,6 +1662,7 @@ mod tests {
     /// fail with `SerfPrebootTimeout` naming the member count and the local
     /// node id, instead of waiting for a key-set response forever.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_preboot_deadline_fails_with_spent_budget() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1710,6 +1721,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_node_join_key_sync() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1754,6 +1766,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_retry_join_on_startup() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1821,6 +1834,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_simultaneous_start_convergence() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1853,6 +1867,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_instance_joins_multiple_nodes() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1918,6 +1933,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_key_rotation_with_three_phase() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -1990,6 +2006,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_self_generated_key_refresh_timing() {
         run_test_with_tokio_runtime(async |runtime| {
             let port = portpicker::pick_unused_port().unwrap();
@@ -2037,6 +2054,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_multiple_nodes_star_topology() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_bootstrap = portpicker::pick_unused_port().unwrap();
@@ -2093,6 +2111,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_key_expiry_propagation() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -2153,6 +2172,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_node_leave_triggers_rotation_check() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -2200,6 +2220,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_query_key_fallback() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -2251,6 +2272,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_get_client_visible_key_consistency() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -2303,6 +2325,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_master_election_smallest_id() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -2379,6 +2402,7 @@ mod tests {
     /// rotation_interval is set to 1 hour to prevent key rotation from
     /// interfering with this test.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_split_brain_cross_node_key_query() {
         run_test_with_tokio_runtime(async |runtime| {
             let rotation_interval = 3600; // 1 hour — no rotation during test
@@ -2460,6 +2484,7 @@ mod tests {
     ///
     /// Rotation interval is 1 hour to prevent key rotation from interfering.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_split_brain_cross_node_key_query_deferred_join() {
         run_test_with_tokio_runtime(async |runtime| {
             let rotation_interval = 3600; // 1 hour
@@ -2532,6 +2557,7 @@ mod tests {
     /// multiple active keys and generates a new pending key. After the pending
     /// key activates, the older keys transition to stale, and all nodes converge.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_split_brain_convergence() {
         run_test_with_tokio_runtime(async |runtime| {
             // Use a short rotation interval (2s) so that keys become stale quickly
@@ -2624,6 +2650,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_file_watcher_retries_new_peer() {
         run_test_with_tokio_runtime(async |runtime| {
             use std::io::Write;
@@ -2693,6 +2720,7 @@ mod tests {
     /// Multiple triggers of check_and_key_rotation (e.g., from member leave events
     /// and periodic key watcher) should not result in multiple pending keys.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn test_concurrent_key_rotation_no_duplicate_pending() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();

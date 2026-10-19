@@ -386,6 +386,7 @@ mod tests {
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::ClusterKeySet;
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyStatus;
     use crate::tunnel::ohttp::key_config::KeyConfigExtend;
+    use serial_test::serial;
     use web_time_compat::{Duration, Instant, InstantExt, SystemTime, SystemTimeExt as _};
 
     /// Test-only wrapper: partition then rewrite the three role dirs, the same
@@ -664,6 +665,7 @@ mod tests {
     /// export the same active key, and after a rotation cycle the active key
     /// changes on both. Mirrors the proven serf tests in `serf.rs`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn two_node_export_syncs_and_rotates() {
         run_test_with_tokio_runtime(async |runtime| {
             let port_a = portpicker::pick_unused_port().unwrap();
@@ -793,6 +795,7 @@ mod tests {
     /// re-export observed inside the test's bounded window can only come from
     /// the notify path.
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[serial(serf_cluster)]
     async fn serve_reexports_on_check_notify() {
         run_test_with_tokio_runtime(async |runtime| {
             let port = portpicker::pick_unused_port().unwrap();
