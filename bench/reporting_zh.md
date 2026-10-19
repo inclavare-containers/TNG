@@ -32,6 +32,22 @@ bash bench/gen-report.sh --compare base-server-info.json base-client-info.json b
 
 参考基线为 raw、stunnel、haproxy 及两个 nginx TLS 代理行：`nginx-stream`（L4 stream 模块，三个场景全部测量）与 `nginx-http`（L7 反向代理，对后端使用 HTTP/1.1 keep-alive，仅测两个 HTTP 场景）。报告中显示为 `nginx stream (TLS)` / `nginx http (TLS)`，对比模式下与 stunnel/haproxy 一样只出现一次、取基线值、不带标注，且不计入五档统计。结果文件键为 `iperf3+nginx-stream`、`http+nginx-stream`、`http+nginx-http` 及对应的 `http-shortconn+` 键。nginx 行的资源采样覆盖持有该代理监听端口的全部进程（master 加全部 worker），共享的 HTTP 后端不计入。
 
+## SVG 图表
+
+```bash
+# 单次运行：每个 workload 在三张场景图上各成一条曲线
+python3 bench/gen-svg.py <server-info.json> <client-info.json> <bench-results.json> --out-dir DIR
+
+# 对比：TNG workload 成对出现（baseline/experimental），参考负载只画一条并取基线值
+python3 bench/gen-svg.py --compare \
+  <base-server-info.json> <base-client-info.json> <base-results.json> \
+  <exp-server-info.json> <exp-client-info.json> <exp-results.json> --out-dir DIR
+```
+
+命令输出 scenario_a.svg、scenario_b.svg、scenario_c.svg（另附本地审阅用的 PNG 预览；仓库只收 SVG）。场景 A 的三个面板是 Throughput (Gbps)、Tunnel CPU %、Tunnel Mem (GB)；场景 B、C 的面板是 RPS、p99 (us)、Server CPU %。workload 键名及 N/A/缺失置空的约定与 gen-report.sh 一致；无法解析的数值会直接报错，不会静默变成空缺。图表本身不含身份信息文字，应与记录实测二进制的报告放在一起。bench/svg_renderer.py 是渲染核心（各负载颜色与标记跨场景稳定、横向三面板布局、对比模式曲线变体），可独立渲染已规范化的场景 JSON；bench/gen-svg.py 负责把原始结果适配成该数据格式。
+
+渲染需要 matplotlib>=3.7，这是仅用于本地图表生成的本地开发依赖（不是仓库依赖），在渲染图表的机器上执行 `python3 -m pip install matplotlib` 安装。
+
 ## 离线验证
 
 ```bash

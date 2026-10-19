@@ -116,6 +116,10 @@ When a PR lands multiple separable optimizations (each commit or commit group is
 - The body carries ONLY the compact link lines; every number lives inside the comment reports themselves. No hand-written per-step summary tables, composition statements, or cross-check paragraphs in the body: they duplicate what the comment reports already show.
 - Each per-step report is a separate measurement with its own run identities and binary manifests; never mix its numbers into the main-matrix narrative. Hand-built per-step tables do not satisfy this rule; if the generator cannot yet render ablation arms, extend and verify it against retained input data first, exactly as for the main report.
 
+## docs/performance snapshot regeneration
+
+The final phase of a performance PR regenerates `docs/performance.md`, `docs/performance_zh.md` and the three SVG charts under `docs/performance/`, in the same PR, from the final measured single-run results (the experimental arm of the final matrix). The tables and the embedded report are the single-run output of `bench/gen-report.sh` on that arm's retained inputs; the charts are the single-run output of `bench/gen-svg.py` on the same inputs (see `bench/reporting.md`). The snapshot carries current-version single-run numbers only; before/after comparison tables remain in the PR reports, never on that page.
+
 ## Automated implementation and remaining reviewer checks
 
 `bench/gen-report.sh --compare` now generates the five-class cell markers, exact-header per-metric count tables and Count (%) totals from the same function/data. It also generates the report separator, expanded metadata differences plus collapsed full metadata, segmented/collapsed methodology, expanded scenario findings and compact legends, collapsed complete data, and separate reference/control drift comparisons. No hand-editing or hand-counting is needed. The generated numerical findings identify adverse measurements without inventing causes.

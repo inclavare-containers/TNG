@@ -32,6 +32,22 @@ Single-run reports retain the original positional arguments (`server-info client
 
 The reference baselines are raw, stunnel, haproxy, and two nginx TLS-proxy rows: `nginx-stream` (L4 stream module, measured in all three scenarios) and `nginx-http` (L7 reverse proxy with HTTP/1.1 keepalive to the backend, measured in the two HTTP scenarios only). They render as workload labels `nginx stream (TLS)` / `nginx http (TLS)`, appear once unlabeled in compare mode, and stay out of the five-class counts, exactly like stunnel and haproxy. Results-file keys are `iperf3+nginx-stream`, `http+nginx-stream`, `http+nginx-http` and the `http-shortconn+` counterparts. Resource sampling for an nginx row covers every process holding that proxy's listen port (master plus all workers); the shared HTTP backend is never included.
 
+## SVG charts
+
+```bash
+# Single run: every workload becomes one series on the three scenario charts
+python3 bench/gen-svg.py <server-info.json> <client-info.json> <bench-results.json> --out-dir DIR
+
+# Compare: TNG workloads double as (baseline)/(experimental) pairs, references appear once with baseline values
+python3 bench/gen-svg.py --compare \
+  <base-server-info.json> <base-client-info.json> <base-results.json> \
+  <exp-server-info.json> <exp-client-info.json> <exp-results.json> --out-dir DIR
+```
+
+The commands write `scenario_a.svg`, `scenario_b.svg`, `scenario_c.svg` (plus PNG previews for local review; only the SVGs belong in the repository). Scenario A panels are Throughput (Gbps), Tunnel CPU %, Tunnel Mem (GB); scenario B and C panels are RPS, p99 (us), Server CPU %. Workload keys and the `N/A`/missing-as-gap convention match `gen-report.sh`; an unparseable value aborts instead of silently becoming a gap. Charts carry no identity text: place them beside the report that records the measured binary. `bench/svg_renderer.py` is the rendering core (stable per-workload colors and markers, the horizontal three-panel layout, compare-mode series variants) and can render already-normalized scenario JSON on its own; `bench/gen-svg.py` adapts raw results JSON into that schema.
+
+Rendering requires matplotlib>=3.7, a local dev dependency for SVG generation only (not a repository dependency): install it on the machine that renders charts with `python3 -m pip install matplotlib`.
+
 ## Offline verification
 
 ```bash
