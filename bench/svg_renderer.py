@@ -31,32 +31,35 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
-# Stable visual identity across scenarios, including absent series.
-SINGLE_STYLES = {
-    'raw': ('Raw', '#94a3b8', 'D', '--'),
-    'stunnel': ('stunnel', '#ca8a04', 'v', '-'),
-    'haproxy': ('HAProxy', '#2563eb', 's', '-'),
-    'nginx-stream': ('nginx stream (TLS)', '#16a34a', 'h', '-'),
-    'nginx-http': ('nginx http (TLS)', '#c2410c', '*', '-'),
-    'rats-tls': ('TNG rats-tls', '#008577', 'o', '-'),
-    'rats-tls+mux': ('TNG rats-tls+mux', '#8b5cf6', '^', '-'),
-    'ohttp': ('TNG ohttp', '#e05275', 'P', '-'),
+# Visual hierarchy: the TNG series are the protagonists (thick solid,
+# high-saturation) and every reference baseline is a muted gray with its own
+# dash pattern, so a reader finds the TNG lines instantly and the references
+# stay readable but subordinate. Raw is the softest (upper-bound context).
+STYLE_FIELDS = {
+    'raw':          dict(label='Raw', color='#c8c8c8', marker='D', ls='-', lw=1.8, ms=4, alpha=1.0, zorder=1),
+    'stunnel':      dict(label='stunnel', color='#adadad', marker='v', ls=':', lw=1.2, ms=4, alpha=0.9, zorder=2),
+    'haproxy':      dict(label='HAProxy', color='#8f8f8f', marker='s', ls='-.', lw=1.2, ms=4, alpha=0.9, zorder=2),
+    'nginx-stream': dict(label='nginx stream (TLS)', color='#808080', marker='h', ls='--', lw=1.2, ms=4, alpha=0.9, zorder=2),
+    'nginx-http':   dict(label='nginx http (TLS)', color='#6f6f6f', marker='*', ls=(0, (3, 1, 1, 1)), lw=1.2, ms=4, alpha=0.9, zorder=2),
+    'rats-tls':     dict(label='TNG rats-tls', color='#0072B2', marker='o', ls='-', lw=2.6, ms=7, alpha=1.0, zorder=5),
+    'rats-tls+mux': dict(label='TNG rats-tls+mux', color='#56B4E9', marker='^', ls='-', lw=2.6, ms=7, alpha=1.0, zorder=5),
+    'ohttp':        dict(label='TNG ohttp', color='#D55E00', marker='P', ls='-', lw=2.6, ms=8, alpha=1.0, zorder=5),
 }
-
 
 def _with_compare_variants(styles):
     # Compare mode draws one workload twice: the ':baseline' variant keeps the
-    # color but goes dashed with a hollow marker, the ':experimental' variant
-    # is the single-mode style. Reference workloads never need the pair and
-    # stay on their single style.
+    # color but goes thin and dashed (hollow marker), the ':experimental'
+    # variant is the single-mode style. Reference workloads never need the
+    # pair and stay on their single style.
     out = dict(styles)
-    for wid, (label, color, marker, linestyle) in styles.items():
-        out[f'{wid}:baseline'] = (f'{label} (baseline)', color, marker, '--', 'none')
-        out[f'{wid}:experimental'] = (f'{label} (experimental)', color, marker, linestyle)
+    for wid, st in styles.items():
+        base = dict(st, label=st['label'] + ' (baseline)', ls='--', lw=1.6, ms=5,
+                    fillstyle='none', zorder=st['zorder'] - 1)
+        out[f'{wid}:baseline'] = base
+        out[f'{wid}:experimental'] = dict(st, label=st['label'] + ' (experimental)')
     return out
 
-
-STYLES = _with_compare_variants(SINGLE_STYLES)
+STYLES = _with_compare_variants(STYLE_FIELDS)
 
 
 def validate(s):
@@ -91,31 +94,50 @@ def render_scenario(s: dict, out_dir: Path):
         'axes.labelcolor': '#111111', 'xtick.color': '#111111',
         'ytick.color': '#111111', 'savefig.facecolor': 'white',
     })
-    fig, axes = plt.subplots(1, len(s['metrics']), figsize=(6.0 * len(s['metrics']), 5.6))
+    n = len(s['x'])
+    fig, axes = plt.subplots(1, len(s['metrics']),
+                             figsize=(6.0 * len(s['metrics']) + 2.0, 5.6))
     fig.suptitle(s['title'], fontsize=15)
     for ax, metric in zip(axes, s['metrics']):
+        # Plot every series, then label each line directly at its end point
+        # (color-matched, deconflicted vertically): no legend boxes, the eye
+        # follows the line to its name.
+        plotted = []
         for series in s['series']:
-            label, col, marker, ls = STYLES[series['id']][:4]
-            fill = STYLES[series['id']][4] if len(STYLES[series['id']]) > 4 else 'full'
+            st = STYLES[series['id']]
             vals = series['values'][metric['key']]
             if all(v is None for v in vals):
                 continue
-            ax.plot(range(len(s['x'])),
-                    [float('nan') if v is None else v for v in vals],
-                    color=col, marker=marker, linestyle=ls,
-                    lw=1.5, ms=4.5, fillstyle=fill, label=label)
+            ys = [float('nan') if v is None else v for v in vals]
+            ax.plot(range(n), ys, color=st['color'], marker=st['marker'],
+                    linestyle=st['ls'], lw=st['lw'], ms=st['ms'],
+                    alpha=st['alpha'], zorder=st['zorder'],
+                    fillstyle=st.get('fillstyle', 'full'))
+            last_i = max(i for i, v in enumerate(ys) if v == v)
+            plotted.append((ys[last_i], st['label'], st['color']))
         ax.set_title(metric['label'], fontsize=13, weight='bold')
         ax.set_ylabel(metric['label'])
-        ax.set_xticks(range(len(s['x'])), s['x'])
+        ax.set_xticks(range(n), s['x'])
         ax.set_xlabel('Concurrency')
         ax.set_ylim(bottom=0)
-        ax.margins(x=.04, y=.13)
+        ax.set_xlim(-0.4, n - 1 + 2.6)
+        ax.margins(y=.13)
         ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
         ax.yaxis.set_major_formatter(FuncFormatter(
             lambda v, _: f'{v:,.0f}' if v >= 100 or v.is_integer() else f'{v:g}'))
         ax.grid(axis='y', alpha=.2)
         ax.set_axisbelow(True)
-        ax.legend(fontsize=8, loc='best')
+        # Direct labels at the right edge, pushed apart so they never overlap.
+        y0, y1 = ax.get_ylim()
+        gap = (y1 - y0) * 0.045
+        plotted.sort(key=lambda t: t[0])
+        placed = []
+        for y, label, color in plotted:
+            if placed and y - placed[-1] < gap:
+                y = placed[-1] + gap
+            placed.append(y)
+            ax.text(n - 1 + 0.25, y, label, fontsize=9, color=color,
+                    va='center', ha='left', zorder=6, clip_on=False)
     fig.tight_layout()
     stem = out_dir / f"scenario_{s['id'].lower()}"
     fig.savefig(stem.with_suffix('.svg'), metadata={'Date': None, 'Creator': 'svg_renderer.py'})

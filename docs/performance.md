@@ -25,7 +25,7 @@ The current snapshot was measured with the methodology on `master`:
 
 ## Measured snapshot
 
-Measured binary: tng 2.11.0, ingress and egress both built from source revision `6460428fcb5ce38b3bfdf0c29f4a959b7ecd0a46`, the PR #272 head; its Rust content matches `master` at `e18503bd4758805cf04f7e736802b129531df7cf`.
+Measured binary: tng 2.11.0, ingress and egress both built from source revision `6460428f`.
 
 TNG provides three distinct tunnel configurations and their numbers differ by multiples depending on the mode, so every label below names the configuration explicitly:
 
