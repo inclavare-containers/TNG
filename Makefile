@@ -603,8 +603,9 @@ test-dep-as:
 # rev, and rebuilt only when upstream main moves; point TRUSTEE_AS_CACHE at a
 # persistent directory to reuse it across runs. The target exits once the AS
 # answers /healthz and the test policies are loaded; the server keeps running
-# in the background. Building requires a protoc >= 3.12 (the gRPC codegen
-# passes a flag old protoc does not know).
+# in the background. The trustee gRPC codegen passes a protoc flag that the
+# system protoc on some distros (alinux3's is 3.5) does not know, so the
+# build uses a pinned protoc fetched into the cache dir.
 TRUSTEE_AS_CACHE ?= /tmp/trustee-as
 .PHONY: test-dep-as-upstream
 test-dep-as-upstream:
@@ -621,8 +622,15 @@ test-dep-as-upstream:
 	if [ -x $(TRUSTEE_AS_CACHE)/restful-as ] && [ "$$(cat $(TRUSTEE_AS_CACHE)/rev 2>/dev/null)" = "$$REV" ]; then \
 		echo "Reusing cached restful-as for $$REV"; \
 	else \
+		if [ ! -x $(TRUSTEE_AS_CACHE)/protoc ]; then \
+			curl -sSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip; \
+			rm -rf $(TRUSTEE_AS_CACHE)/protoc-dist; \
+			python3 -c "import zipfile; zipfile.ZipFile('/tmp/protoc.zip').extractall('$(TRUSTEE_AS_CACHE)/protoc-dist')"; \
+			chmod +x $(TRUSTEE_AS_CACHE)/protoc-dist/bin/protoc; \
+			$(TRUSTEE_AS_CACHE)/protoc-dist/bin/protoc --version; \
+		fi; \
 		echo "Building upstream restful-as..."; \
-		(cd /tmp/trustee-upstream && cargo build --release -p attestation-service --bin restful-as --features restful-bin); \
+		(cd /tmp/trustee-upstream && PROTOC=$(TRUSTEE_AS_CACHE)/protoc-dist/bin/protoc cargo build --release -p attestation-service --bin restful-as --features restful-bin); \
 		cp /tmp/trustee-upstream/target/release/restful-as $(TRUSTEE_AS_CACHE)/restful-as; \
 		echo "$$REV" > $(TRUSTEE_AS_CACHE)/rev; \
 	fi; \
