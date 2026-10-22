@@ -23,3 +23,8 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans
+          # Empty on purpose: the action's default arguments are
+          # --all-features, and the all-features graph cannot be checked
+          # (feature unification merges the js-sdk test path into it, see
+          # deny.toml). The policy targets the default-feature graph.
+          arguments: ''
