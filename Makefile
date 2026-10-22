@@ -449,6 +449,10 @@ windows-cross-build: install-windows-build-deps
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
+.PHONY: deny
+deny:
+	cargo deny --log-level error check bans
+
 # Test dependencies: API Server Rest (ASR) + Attestation Agent (blocking)
 # Clones the inclavare-containers community version (main branch) which includes
 # PR #91 features: /info, encoding parameter, /additional-evidence.

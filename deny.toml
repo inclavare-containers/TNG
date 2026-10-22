@@ -1,0 +1,42 @@
+# cargo-deny policy for TNG.
+#
+# Only the [bans] section is enforced (`cargo deny check bans`). The other
+# sections (advisories, licenses, sources) are intentionally left
+# unconfigured; configure them before running `cargo deny check` without an
+# explicit section.
+#
+# The check runs against the default-feature graph, which is exactly the
+# dependency face of shipped artifacts (tng binary, libtng_hook, wasm pkg,
+# python wheel, go SDK). It cannot be run with --all-features: cargo's
+# feature unification merges optional features into one graph, so the
+# webpki-roots crate pulled in by the js-sdk test path below would be
+# indistinguishable from a real violation, and a skip-tree exception would
+# also silence every other path.
+#
+# Known accepted exception: the tng-testsuite `js-sdk` feature (browser SDK
+# e2e tests) pulls chromedriver-manager and thirtyfour, which depend on
+# upstream reqwest 0.12 (the inclavare-containers fork is 0.13 and cannot
+# satisfy ^0.12), whose rustls-tls-webpki-roots feature compiles the Mozilla
+# root bundle into the test binary for the chromedriver download. Test-only;
+# clearing it means vendoring chromedriver in CI or forking
+# chromedriver-manager/thirtyfour's reqwest feature set.
+#
+# Embedded trust material outside cargo-deny's visibility, recorded here as
+# deliberate policy, not accidents:
+#
+# * dcap-qvl embeds Intel's SGX Root CA (src/TrustedRootCA.der, include_bytes)
+#   as the trust anchor for TDX quote certificate chains. Revoking it requires
+#   a new release; dcap-qvl's QuoteVerifier::new() accepts a custom root if
+#   that ever needs to become configurable.
+# * rekor_v1.rs pins Rekor transparency-log public keys. Key pinning is the
+#   correct design for a transparency log, not a packaged-CA risk.
+
+[bans]
+# A root bundle compiled into the binary is frozen: distrusting a revoked CA
+# (the eMudhra incident class) requires shipping a new release. TNG verifies
+# outbound TLS through the platform trust store instead (the reqwest fork
+# defaults to rustls-platform-verifier), so this crate must stay out of
+# every shipped artifact.
+deny = [
+    { crate = "webpki-roots", reason = "frozen Mozilla root bundle; outbound TLS must use the platform trust store" },
+]
