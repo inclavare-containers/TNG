@@ -1,0 +1,11 @@
+{
+    "rvps_config": {
+        "type": "BuiltIn"
+    },
+    "attestation_token_broker": {
+        "signer": {
+            "key_path": "/tmp/as.key",
+            "cert_path": "/tmp/as-full.pem"
+        }
+    }
+}

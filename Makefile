@@ -579,16 +579,7 @@ test-dep-as:
 	killall restful-as 2>/dev/null || true; \
 	if ! command -v jq > /dev/null; then yum install -y jq; fi; \
 	if ! command -v openssl > /dev/null; then yum install -y openssl; fi; \
-	openssl ecparam -genkey -name prime256v1 -out /tmp/as-ca.key; \
-	openssl req -x509 -sha256 -nodes -days 365 -key /tmp/as-ca.key -out /tmp/as-ca.pem -subj "/O=Trustee CA" \
-		-addext keyUsage=critical,cRLSign,keyCertSign,digitalSignature; \
-	openssl ecparam -genkey -name prime256v1 -noout -out /tmp/as.key; \
-	openssl req -new -key /tmp/as.key -out /tmp/as.csr -subj "/CN=Trustee/O=Trustee CA"; \
-	echo '[v3_req]' > /tmp/as-ext.cnf; \
-	echo 'subjectKeyIdentifier = hash' >> /tmp/as-ext.cnf; \
-	openssl x509 -req -in /tmp/as.csr -CA /tmp/as-ca.pem -CAkey /tmp/as-ca.key -CAcreateserial \
-		-out /tmp/as.pem -days 365 -extensions v3_req -extfile /tmp/as-ext.cnf -sha256; \
-	cat /tmp/as.pem /tmp/as-ca.pem > /tmp/as-full.pem; \
+	bash scripts/as-test-certs.sh; \
 	mkdir -p /opt/trustee/attestation-service/policies/opa; \
 	echo 'package policy' > /opt/trustee/attestation-service/policies/opa/default.rego; \
 	echo '' >> /opt/trustee/attestation-service/policies/opa/default.rego; \
@@ -599,6 +590,65 @@ test-dep-as:
 	cat /etc/trustee/as-config.json | jq '.attestation_token_broker.signer.cert_path="/tmp/as-full.pem" | .attestation_token_broker.signer.key_path="/tmp/as.key" | .rvps_config={"type":"BuiltIn","storage":{"type":"LocalJson"}}' > /tmp/config_with_cert.json; \
 	RUST_LOG=debug restful-as --socket 0.0.0.0:8080 --config-file /tmp/config_with_cert.json
 
+
+# Start a restful AS built from mainline confidential-containers/trustee
+# (main branch) on 0.0.0.0:8080, for compatibility unit tests: mainline issues
+# EAR JWT tokens with JWK x5c chains and has no /certificate endpoint, so
+# running the AS-facing unit tests against it catches token-verification
+# drift as upstream evolves (test-dep-as runs the OpenAnolis trustee RPM
+# instead). Uses the same signing chain and /tmp/as-full.pem trust-root
+# layout as test-dep-as, so the e2e CoCo tests work unchanged.
+#
+# The built binary is cached under TRUSTEE_AS_CACHE, stamped with the source
+# rev, and rebuilt only when upstream main moves; point TRUSTEE_AS_CACHE at a
+# persistent directory to reuse it across runs. The target exits once the AS
+# answers /healthz and the test policies are loaded; the server keeps running
+# in the background. Building requires a protoc >= 3.12 (the gRPC codegen
+# passes a flag old protoc does not know).
+TRUSTEE_AS_CACHE ?= /tmp/trustee-as
+.PHONY: test-dep-as-upstream
+test-dep-as-upstream:
+	@set -e; \
+	if [ -d /tmp/trustee-upstream/.git ]; then \
+		git -C /tmp/trustee-upstream fetch origin main && git -C /tmp/trustee-upstream checkout FETCH_HEAD; \
+	else \
+		rm -rf /tmp/trustee-upstream; \
+		git clone --depth 1 https://github.com/confidential-containers/trustee /tmp/trustee-upstream; \
+	fi; \
+	REV=$$(git -C /tmp/trustee-upstream rev-parse HEAD); \
+	echo "Upstream trustee rev: $$REV"; \
+	mkdir -p $(TRUSTEE_AS_CACHE); \
+	if [ -x $(TRUSTEE_AS_CACHE)/restful-as ] && [ "$$(cat $(TRUSTEE_AS_CACHE)/rev 2>/dev/null)" = "$$REV" ]; then \
+		echo "Reusing cached restful-as for $$REV"; \
+	else \
+		echo "Building upstream restful-as..."; \
+		(cd /tmp/trustee-upstream && cargo build --release -p attestation-service --bin restful-as --features restful-bin); \
+		cp /tmp/trustee-upstream/target/release/restful-as $(TRUSTEE_AS_CACHE)/restful-as; \
+		echo "$$REV" > $(TRUSTEE_AS_CACHE)/rev; \
+	fi; \
+	killall restful-as 2>/dev/null || true; \
+	if ! command -v openssl > /dev/null; then yum install -y openssl; fi; \
+	bash scripts/as-test-certs.sh; \
+	RUST_LOG=info nohup $(TRUSTEE_AS_CACHE)/restful-as --socket 0.0.0.0:8080 --config-file ci/upstream-trustee/as-config.json > /tmp/upstream-as.log 2>&1 & \
+	for i in $$(seq 1 30); do \
+		if curl -sf http://127.0.0.1:8080/healthz > /dev/null 2>&1; then \
+			echo "Upstream AS is ready"; \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "ERROR: upstream AS did not become ready"; \
+			cat /tmp/upstream-as.log; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done; \
+	POLICY=$$(base64 -w0 ci/upstream-trustee/default-policy.rego | tr '+/' '-_' | tr -d '='); \
+	for pid in default_cpu default_gpu default_switch default_ppcie; do \
+		curl -sf -X POST http://127.0.0.1:8080/policy -H 'Content-Type: application/json' \
+			-d "{\"policy_id\":\"$$pid\",\"policy\":\"$$POLICY\"}" > /dev/null \
+			|| { echo "ERROR: failed to install policy $$pid"; exit 1; }; \
+	done; \
+	echo "Upstream AS ready with test policies"
 
 # Benchmark (dev, netns-isolated): raw TCP vs stunnel vs TNG
 # Usage: make bench [TNG_BIN=./target/release/tng]

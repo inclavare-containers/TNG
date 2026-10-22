@@ -283,6 +283,109 @@ jobs:
           echo "=== Attestation Service Log ==="
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
+  unit-upstream-as:
+    name: unit upstream AS (alinux3)
+    # Compatibility check: the AS-facing unit tests (the e2e CoCo flows in
+    # rats-cert) run against a restful AS built from mainline
+    # confidential-containers/trustee (main) instead of the OpenAnolis trustee
+    # RPM used by the unit job. Mainline issues EAR JWT tokens with JWK x5c
+    # chains and has no /certificate endpoint, so this catches drift in the
+    # token verification path as upstream evolves. First run after upstream
+    # moves also builds the AS, hence the wider cap than the unit job.
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    container:
+      image: "ghcr.io/inclavare-containers/tng-ci:alinux3"
+      options: --privileged
+    steps:
+      - uses: dtolnay/rust-toolchain@1.89.0
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Isolated from the coverage shards: this job builds plain debug
+          # (non-instrumented) binaries and would thrash their cache.
+          shared-key: unit-upstream-as
+
+      # Clone upfront so the cache key can pin the exact upstream rev; the
+      # make target reuses the existing clone.
+      - name: Clone upstream trustee
+        id: trustee
+        run: |
+          git clone --depth 1 https://github.com/confidential-containers/trustee /tmp/trustee-upstream
+          echo "rev=$(git -C /tmp/trustee-upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache upstream restful-as
+        uses: actions/cache@v4
+        with:
+          path: /tmp/trustee-as
+          key: trustee-restful-as-${{ steps.trustee.outputs.rev }}
+
+      # Same Attestation Agent / ASR pair the unit job starts: the AA is ours,
+      # only the Attestation Service comes from upstream.
+      - name: Run Attestation Agent and ASR
+        run: |
+          nohup make test-dep-aa > /tmp/aa.log 2>&1 &
+          AA_PID=$!
+
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if (echo > /dev/tcp/127.0.0.1/8006) 2>/dev/null; then
+              echo "ASR is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for ASR"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          for i in $(seq 1 300); do
+            if ! kill -0 $AA_PID 2>/dev/null; then
+              echo "Attestation Agent / ASR process exited unexpectedly"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            if [ -S /run/confidential-containers/attestation-agent/attestation-agent.sock ]; then
+              echo "Attestation Agent is ready"
+              break
+            fi
+            if [ $i -eq 300 ]; then
+              echo "Timeout waiting for Attestation Agent"
+              cat /tmp/aa.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Start upstream Attestation Service
+        # Exits once the AS answers /healthz and the test policies are loaded;
+        # the server keeps running in the background.
+        run: make test-dep-as-upstream
+
+      - name: Run unit tests
+        run: cargo test -p rats-cert --lib
+
+      - name: Print background service logs
+        if: always()
+        run: |
+          echo "=== Attestation Agent Log ==="
+          cat /tmp/aa.log 2>/dev/null || echo "(no log file)"
+          echo "=== Upstream Attestation Service Log ==="
+          cat /tmp/upstream-as.log 2>/dev/null || echo "(no log file)"
+
   coverage:
     name: coverage (merge)
     needs: [test, unit]

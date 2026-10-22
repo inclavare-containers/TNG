@@ -156,6 +156,8 @@ Wait until both services are ready before running tests. The e2E CoCo tests (`te
 
 The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service Router) HTTP proxy listening on `127.0.0.1:8006`, which is NOT started by the `make test-dep-*` targets. If ASR is not available, this test will fail with "Connection refused".
 
+`make test-dep-as-upstream` is a variant of `test-dep-as` that starts a restful AS built from **mainline** `confidential-containers/trustee` (main branch, rebuilt when upstream moves, binary cached under `TRUSTEE_AS_CACHE`) instead of the OpenAnolis trustee RPM. It exits once the AS is ready and the test policies are loaded; the server keeps running in the background. The AS-facing unit tests run against it in CI (`unit upstream AS` job in `test.yml`, scope: `cargo test -p rats-cert --lib`) to catch token-verification drift as upstream evolves. Locally the build needs a protoc >= 3.12.
+
 ## Running Integration Tests
 
 - **Always use `make run-test`** to run integration tests. Running individual `cargo test -p tng-testsuite --test <name>` commands manually is fine for debugging, but **do NOT run multiple tests in parallel** — they share iptables rules and network namespaces, so concurrent execution causes conflicts. `make run-test` runs tests sequentially to prevent this.
