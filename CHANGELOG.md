@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The multiplexed rats-tls pool gates new shard handshakes at capacity and cools down failed shards, instead of stacking concurrent handshakes when a single connection saturates.
 - ohttp request throughput: HPKE runs on the aws-lc ohttp backend, request and response seals are fused into the body streams, the backend connection is reused per outer ohttp connection, and relay buffers were widened.
 - Per-connection memory and CPU: forwarding buffers no longer memset a megabyte per connection, and the periodic attest cert fetch and rats-tls cert resolution no longer block the async runtime.
+- When `trusted_certs_paths` is nonempty, the pinned certificates are now the complete set of trust anchors for Attestation Token verification and the AS `/certificate` discovery endpoint is no longer consulted; previously the certificates fetched from the AS were silently merged in. Explicit trust roots now also work against mainline Trustee, which does not implement `/certificate`.
 
 ### Fixed
 
@@ -26,3 +27,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The hook log collector no longer drops queued log datagrams under burst; they are drained with a raw recv.
 - The serf key watcher no longer parks forever on a dropped serf handle; it re-checks the handle on every iteration.
 - tng no longer signals readiness when a service fails before reporting ready (e.g. an ingress port is already occupied); the ready callback now fires only after every service is actually serving.
+- Pinned PEM trust-root files now load every certificate in the bundle (e.g. leaf plus CA) instead of only the first section; empty or malformed bundles are rejected instead of silently producing a partial trust set.
+- Attestation tokens whose JWK `x5c` chain uses standard Base64 encoding (per RFC 7517) now verify; previously only URL-safe Base64 was accepted, which rejected tokens from mainline Trustee.
