@@ -376,7 +376,12 @@ jobs:
         run: make test-dep-as-upstream
 
       - name: Run unit tests
-        run: cargo test -p rats-cert --lib
+        # Only the e2e CoCo flows: they are the tests that talk to the AS.
+        # The SLSA/release-manifest converter tests in the same crate depend
+        # on the OCI registry and provenance tooling that test-dep-as sets
+        # up, which belongs to the unit job's environment, not to this
+        # compatibility check.
+        run: cargo test -p rats-cert --lib tee::coco::tests
 
       - name: Print background service logs
         if: always()
