@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `hardware_strict_with_measurements` builtin attestation policy: the strict hardware posture (TDX non-debug with an event log) plus an explicit measurement list appraised against registered reference values, for user-owned artifacts that need no transparency service. Supports the `"model"` and `"container.image.<repo>"` measurement types shared with `staticReferenceMeasurements`; malformed lists (empty, unsupported types, duplicates) are rejected at load.
+- `staticReferenceMeasurements` transparency_log policy field: measurement types appraised against builtin-AS static reference values instead of the transparency log, for user-owned artifacts the transparency service does not publish. `"model"` checks every `pai/load-model` event against `measurement.model.<model-id>`; `"container.image.<repo>"` checks the pull-image digests of a repo-tail-named image against `measurement.container.image.<repo>`. The static checks AND-gate the measurement verification in both the rekor-v1 and artifact-server policy arms; unsupported types, duplicates, and overlap with published/fallback measurements are rejected at load.
 - `multiplex_max_streams_per_connection` ingress option: shards the multiplexed rats-tls tunnel pool across additional egress connections once a connection reaches its stream cap.
 - `/status/ingress/{id}/rats_tls/pool` status endpoint exposing the live mux tunnel pool state (shards, cooldowns, overflow).
 - `key.join_timeout` option (default 300 s): bounds the startup join of the initial peer list; a peer still unreachable past the deadline fails startup naming that peer and the last join error, instead of retrying forever.

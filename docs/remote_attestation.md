@@ -441,6 +441,36 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 ```
 </details>
 
+<details>
+<summary>Example 3c: pin user-owned measurements</summary>
+
+The `hardware_strict_with_measurements` policy appraises an explicit measurement list against the registered reference values, on the strict hardware posture (TDX must be non-debug and include an event log). Use it for user-owned artifacts that a transparency service does not publish — a user-provided model, user-provided container images — without Scenario 4's transparency log. Measurement types: `"model"` (every `pai/load-model` event must match `measurement.model.<model-id>`) and `"container.image.<repo>"` (every pull-image event whose image reference repo tail equals `<repo>` must match `measurement.container.image.<repo>`; the repo segment is free-form, and a pinned repo without a matching event fails closed). Every configured measurement AND-gates the `executables` trust dimension.
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "hardware_strict_with_measurements",
+            "measurements": ["model", "container.image.model-server"]
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
+                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
+                    }
+                }
+            }
+        ]
+    }
+}
+```
+</details>
+
 **Scenario 4: transparency_log anchoring (advanced)**
 
 Goal: anchor the trusted measurement set to an authenticated Rekor v1 transparency-log entry, and at appraisal compare the actual measurements against the recorded reference. Set `attestation_policy.type` to `"transparency_log"`. Requires `schemaVersion` and one `rekor-v1` service; `publishedMeasurements` is optional (absent → skip the measurement check).
@@ -493,6 +523,53 @@ The `transparency_log` policy anchors the trusted measurement set to an authenti
 
 **When `publishedMeasurements` is absent:** the measurement reconstruction and hash comparison are skipped entirely; only the TDX platform checks run, and the executables trust dimension stays affirming. An explicit empty array (`[]`) is *not* the same: it still runs the check, which always rejects against a real logged reference. Use absence to opt out of measurement binding (e.g. when only platform attestation matters).
 
+**Static reference measurements (`staticReferenceMeasurements`):** measurement types appraised against reference values statically registered with the builtin AS (`reference_values`, RVPS `query_reference_value`) instead of the transparency log. Use it for user-owned artifacts the transparency service does not publish — the user's model and the user-provided container images, typically. Works with the rekor-v1 primary and the artifact-server primary alike. Two types are supported:
+
+- `"model"`: every `alibabacloud.com` `pai/load-model` AAEL event must match the reference value registered under `measurement.model.<model-id>`. The key is selected by the event's own `model-id`, and at least one load-model event must exist — none registered, or no event at all, rejects. The key name follows the upstream trustee default policy (`measurement.model.<model-id>`), so an external Trustee AS can serve the same reference-value name later.
+- `"container.image.<repo>"`: every `kangaroo/pull-image` event whose image reference's repo tail equals `<repo>` must match the digest registered under `measurement.container.image.<repo>`. The `<repo>` segment is free-form: it is the repo tail of the image you are pinning (the last path segment of the reference, registry host, path prefix and tag/digest stripped), so any name works and nothing is special about it; a pinned repo with no matching pull-image event fails closed (reject, not skip). The reference-value name is the trustee-style `measurement.` prefix composed with the manifest measurement type `container.image.<repo>`.
+
+Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) via the `hardware_strict_with_measurements` policy.
+
+</details>
+
+<details>
+<summary>Example: static user-owned measurements alongside the transparency log</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "transparency_log",
+            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 2279770888
+                }
+            ],
+            "staticReferenceMeasurements": ["model", "container.image.model-server"]
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
+                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
+                    }
+                }
+            }
+        ]
+    }
+}
+```
+
+`container.image.model-server` pins the image whose reference ends with repo `model-server` (e.g. `registry.example.com/my/model-server:v3` — the registry host and tag are not part of the match). The model reference value is the root hash a measurement tool computed for the model; the image reference value is the image digest.
+
 </details>
 
 <details>
@@ -507,6 +584,7 @@ The `transparency_log` policy anchors the trusted measurement set to an authenti
 | `services[].logIndex` | — | The Rekor v1 entry index to fetch and authenticate |
 | `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies checkpoint/SET); omit to use the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`, required for other logs |
 | `services[].publisherPublicKeyPem` | — | Optional trusted publisher public key PEM; when set, the DSSE publisher signature is verified at appraisal, binding the entry to this publisher |
+| `staticReferenceMeasurements` | absent (`None`) | Measurement types appraised against statically registered reference values instead of the transparency log: `"model"` or `"container.image.<repo>"`; AND-gates the measurement check (see above) |
 
 </details>
 
@@ -579,6 +657,7 @@ Basic example (Restful):
 | `hardware_only_strict` | Same, but TDX must be non-debug and include an event log | Scenario 1 note |
 | `hardware_with_reference_values` | Trustee comprehensive appraisal against reference values | Scenario 3 |
 | `hardware_strict_with_reference_values` | Same, additionally requires TDX non-debug and event log | Scenario 3 |
+| `hardware_strict_with_measurements` | Strict hardware posture plus an explicit measurement list appraised against registered reference values | Scenario 3 Example 3c |
 | `trust_all` | Affirms every dimension unconditionally (debug/test only) | — |
 | `inline` | Inline base64 rego | Scenario 2 |
 | `path` | rego file path | Scenario 2 |

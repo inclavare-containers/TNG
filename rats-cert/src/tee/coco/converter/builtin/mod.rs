@@ -156,6 +156,20 @@ pub enum PolicyConfig {
     /// tng-bundled template: keeps the hardware-only posture for reference
     /// values, but TDX evidence must be non-debug and include an event log.
     HardwareOnlyStrict,
+    /// tng-bundled template: the `hardware_only_strict` platform posture (TDX
+    /// must be non-debug and include an event log) plus an explicit
+    /// measurement list appraised against the builtin AS's registered
+    /// reference values (RVPS `query_reference_value`), so user-owned
+    /// artifacts (the model, user-provided container images) can be verified
+    /// without a transparency service. Same measurement types and
+    /// reference-value names as the transparency_log policy's
+    /// `staticReferenceMeasurements`. The `strict` infix follows
+    /// `hardware_strict_with_reference_values`: non-debug TDX with an event
+    /// log is required.
+    HardwareStrictWithMeasurements {
+        #[serde(rename = "measurements")]
+        measurements: Vec<String>,
+    },
     /// tng-bundled template: every trustworthiness dimension is affirming
     /// regardless of input. **For development and testing only.**
     TrustAll,
@@ -188,6 +202,20 @@ pub enum PolicyConfig {
         /// when the primary service is an `artifact-server`.
         #[serde(rename = "fallbackServices", default)]
         fallback_services: Option<Vec<TransparencyServiceConfig>>,
+        /// Measurement types verified against statically registered reference
+        /// values (the builtin AS `reference_values` / RVPS
+        /// `query_reference_value`) instead of the transparency service. Used
+        /// for user-owned artifacts the transparency service does not publish:
+        /// `model` (the pai/load-model event, reference name
+        /// `measurement.model.<model-id>`) and `container.image.<repo>`
+        /// (reference name `measurement.container.image.<repo>`, digest
+        /// extraction shared with the published container-image measurements).
+        /// The static checks AND-gate `measurements_verified`: the appraisal
+        /// passes only when the transparency-log manifest check AND every
+        /// static check pass. Must be disjoint from `publishedMeasurements`
+        /// and `fallbackPublishedMeasurements`.
+        #[serde(rename = "staticReferenceMeasurements", default)]
+        static_reference_measurements: Option<Vec<String>>,
     },
     /// Base64 encoded policy content
     Inline { content: String },
@@ -231,6 +259,41 @@ impl PolicyConfig {
             }
             if !seen.insert(t) {
                 anyhow::bail!("duplicate publishedMeasurements type {t}");
+            }
+        }
+
+        // Static reference measurements are appraised against the RVPS instead
+        // of the transparency service, so they must not double up as published
+        // (or fallback-published) measurements and must use a supported type
+        // syntax.
+        let sm = match self {
+            PolicyConfig::TransparencyLog {
+                static_reference_measurements: Some(sm),
+                ..
+            } => sm.as_slice(),
+            _ => &[],
+        };
+        if !sm.is_empty() {
+            let mut seen_static = std::collections::HashSet::new();
+            for t in sm {
+                if !(t == "model" || t.starts_with("container.image.")) {
+                    anyhow::bail!("unsupported staticReferenceMeasurements type {t}");
+                }
+                if !seen_static.insert(t) {
+                    anyhow::bail!("duplicate staticReferenceMeasurements type {t}");
+                }
+                if pm.contains(t) {
+                    anyhow::bail!(
+                        "staticReferenceMeasurements type {t} is also in publishedMeasurements"
+                    );
+                }
+                if let Some(fpm) = fallback_published_measurements.as_deref() {
+                    if fpm.contains(t) {
+                        anyhow::bail!(
+                            "staticReferenceMeasurements type {t} is also in fallbackPublishedMeasurements"
+                        );
+                    }
+                }
             }
         }
 
@@ -675,6 +738,7 @@ impl BuiltinCocoConverter {
                 services,
                 fallback_published_measurements,
                 fallback_services,
+                static_reference_measurements,
             } => {
                 // Validate the full config shape BEFORE dispatching on the
                 // primary service type. This turns every operator-supplied config
@@ -759,6 +823,7 @@ impl BuiltinCocoConverter {
                             published_measurements.as_deref(),
                             dsse_signature,
                             publisher_key,
+                            static_reference_measurements.as_deref(),
                         );
                         tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash + DSSE into Rego");
                         Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
@@ -780,6 +845,7 @@ impl BuiltinCocoConverter {
                             publisher_public_key_pem.as_deref(),
                             fallback_published_measurements.as_deref(),
                             fallback_services.as_deref(),
+                            static_reference_measurements.as_deref(),
                         )?;
                         tracing::info!(policy = %policy, "Transparency_log policy loaded: artifact-server primary, no baked payloadHash");
                         Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
@@ -789,6 +855,10 @@ impl BuiltinCocoConverter {
             #[cfg(not(feature = "crypto-rustcrypto"))]
             PolicyConfig::TransparencyLog { .. } => {
                 Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto)
+            }
+            PolicyConfig::HardwareStrictWithMeasurements { measurements } => {
+                let policy = build_hardware_strict_with_measurements_policy(measurements)?;
+                Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
             }
             PolicyConfig::Inline { content } => {
                 // Decode base64 encoded policy
@@ -1117,12 +1187,188 @@ fn resolve_dsse_signature(dsse_signature: &str) -> anyhow::Result<&str> {
 // `crypto-rustcrypto` feature; with that feature off the loader bails before
 // reaching here, so the function stays dead code in non-crypto builds.
 #[cfg_attr(not(feature = "crypto-rustcrypto"), allow(dead_code))]
+/// Rego block verifying operator-supplied static reference values (the builtin
+/// AS `reference_values` / RVPS `query_reference_value`) for measurement types
+/// the transparency service does not publish: user-owned artifacts such as the
+/// model payload (`model` — the pai/load-model event, reference name
+/// `measurement.model.<model-id>`) and the user-provided worker container
+/// image (`container.image.<repo>`, reference name
+/// `measurement.container.image.<repo>`; digest extraction shared with the
+/// published container-image measurements). Returns an empty string when the
+/// static list is empty so policies without static measurements are
+/// byte-identical to before; the caller AND-gates `static_ok` into
+/// `measurements_verified` only when the block is emitted.
+/// Build the `hardware_strict_with_measurements` builtin policy: the
+/// `hardware_only_strict` platform posture plus the listed measurements
+/// appraised against registered reference values. Without a valid
+/// measurement list this is a config error (an empty list would silently
+/// degrade to plain `hardware_only_strict`).
+fn build_hardware_strict_with_measurements_policy(measurements: &[String]) -> Result<String> {
+    if measurements.is_empty() {
+        return Err(Error::BuiltinPolicyTemplateFailed {
+            detail: "measurements must be non-empty".to_string(),
+        });
+    }
+    let mut seen = std::collections::HashSet::new();
+    for t in measurements {
+        if !(t == "model" || t.starts_with("container.image.")) {
+            return Err(Error::BuiltinPolicyTemplateFailed {
+                detail: format!("unsupported measurements type {t}"),
+            });
+        }
+        if !seen.insert(t) {
+            return Err(Error::BuiltinPolicyTemplateFailed {
+                detail: format!("duplicate measurements type {t}"),
+            });
+        }
+    }
+
+    let static_rules = static_reference_rules(measurements);
+
+    Ok(format!(
+        r#"package policy
+
+import rego.v1
+
+# Hardware platform posture from hardware_only_strict (TDX must be non-debug
+# with an event log; the verifier has already replayed the event log against
+# the quote RTMRs before these claims reach policy evaluation) plus the
+# listed measurements: executables affirms only when every configured
+# measurement matches its registered reference value.
+default executables := 97
+default configuration := 2
+default file_system := 2
+default hardware := 97
+
+hardware := 2 if {{
+	input.tdx.quote.header.tee_type == "81000000"
+	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
+	tdx_debug_disabled
+	tdx_eventlog_present
+}}
+
+hardware := 2 if {{
+	input.csv.version in ["1", "2"]
+}}
+
+hardware := 2 if {{
+	input.tpm
+}}
+
+hardware := 2 if {{
+	input.system
+}}
+
+# td_attributes is serialized as lowercase hex. The debug bit is bit 0 of the
+# first byte, so the low nibble of the first byte must be even.
+tdx_debug_disabled if {{
+	regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes)
+}}
+
+tdx_eventlog_present if {{
+	count(input.tdx.uefi_event_logs) > 0
+}}
+
+{static_rules}
+# The measurements are read from the TDX event log, so executables affirms
+# only on TDX evidence with every measurement check passing.
+executables := 2 if {{
+	input.tdx
+	static_ok
+}}
+"#
+    ))
+}
+
+fn static_reference_rules(static_measurements: &[String]) -> String {
+    if static_measurements.is_empty() {
+        return String::new();
+    }
+    // Same type-sort as the published-measurements bakes: keep the baked
+    // literal deterministic regardless of operator-supplied config order.
+    let mut sorted: Vec<String> = static_measurements.to_vec();
+    sorted.sort();
+    let sm = format!(
+        "[{}]",
+        sorted
+            .iter()
+            .map(|t| format!("{t:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    format!(
+        r#"# baked: measurement types verified against statically registered
+# reference values (RVPS query_reference_value) instead of the transparency
+# service — user-owned artifacts the transparency service does not publish.
+# "model" checks every pai/load-model event (at least one must exist) against
+# measurement.model.<model-id>; "container.image.<repo>" extracts the repo
+# tail of the pull-image references and requires every matching event to
+# match measurement.container.image.<repo>. Both fail closed: a missing event
+# or an unregistered reference name leaves the rule undefined → static_ok
+# undefined.
+static_measurements := {sm}
+
+static_measurement_ok("model") if {{
+	model_events := [e |
+		some e in input.tdx.uefi_event_logs
+		e.type_name == "EV_EVENT_TAG"
+		e.details.unicode_name == "AAEL"
+		e.details.data.domain == "alibabacloud.com"
+		e.details.data.operation == "pai/load-model"
+	]
+	count(model_events) > 0
+	every e in model_events {{
+		key := sprintf("measurement.model.%s", [e.details.data.content["model-id"]])
+		e.details.data.content["hash"] in query_reference_value(key)
+	}}
+}}
+
+# The container-image extraction is self-contained (repo tail of the
+# pull-image reference; every matching event must match the registered
+# digest, and at least one must exist) so the block embeds into any policy
+# without depending on the transparency templates' actual_measurement.
+static_measurement_ok(t) if {{
+	startswith(t, "container.image.")
+	key := sprintf("measurement.%s", [t])
+	repo := replace(t, "container.image.", "")
+	events := [e |
+		some e in input.tdx.uefi_event_logs
+		e.type_name == "EV_EVENT_TAG"
+		e.details.unicode_name == "AAEL"
+		e.details.data.domain == "alibabacloud.com"
+		e.details.data.operation == "kangaroo/pull-image"
+		image_repo_name(e.details.data.content.reference) == repo
+	]
+	count(events) > 0
+	every e in events {{
+		e.details.data.content.digest in query_reference_value(key)
+	}}
+}}
+
+image_repo_name(ref) := name if {{
+	segs := split(ref, "/")
+	last := segs[count(segs) - 1]
+	name := split(split(last, "@")[0], ":")[0]
+}}
+
+static_ok if {{
+	every t in static_measurements {{
+		static_measurement_ok(t)
+	}}
+}}
+
+"#
+    )
+}
+
 fn build_transparency_log_policy(
     payload_hash: &str,
     schema_version: &str,
     published_measurements: Option<&[String]>,
     dsse_signature: &str,
     publisher_key: &str,
+    static_reference_measurements: Option<&[String]>,
 ) -> String {
     // The DSSE publisher-signature check is always emitted (DSSE verification is
     // mandatory; no payloadHash-only fallback). The signature + publisher
@@ -1242,6 +1488,16 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
                 .map(|t| format!("{t:?}"))
                 .collect();
             let pm = format!("[{}]", items.join(", "));
+            // Static-reference block + the AND-gate line for
+            // measurements_verified. Empty (no static list) keeps the
+            // generated policy byte-identical to the pre-static form.
+            let static_rules =
+                static_reference_rules(static_reference_measurements.unwrap_or_default());
+            let static_gate = if static_rules.is_empty() {
+                String::new()
+            } else {
+                "    static_ok\n".to_string()
+            };
 
             format!(
                 r#"package policy
@@ -1376,13 +1632,16 @@ reconstructed_manifest := {{
     "measurements": [{{"type": t, "value": actual_measurement(t)}} | some t in published_measurements],
     "schemaVersion": schema_version,
 }}
-
+{static_rules}
 # tng.sha256 returns lowercase hex (== payloadHash format). When a publisher
 # key is baked, tng.verify_dsse_signature additionally binds the entry to the
-# trusted publisher (fails closed → false → executables 97 → reject).
+# trusted publisher (fails closed → false → executables 97 → reject). When
+# staticReferenceMeasurements is configured, the emitted static-reference gate
+# is AND-ed in as an extra body line: user-owned measurements must ALSO match
+# their statically registered reference values.
 measurements_verified if {{
     tng.sha256(json.marshal(reconstructed_manifest)) == payload_hash
-{dsse_verify_line}}}
+{dsse_verify_line}{static_gate}}}
 
 # executables: 2 only if measurements verified
 executables := 2 if {{
@@ -1437,6 +1696,8 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
                 pm = pm,
                 dsse_literals = dsse_literals,
                 dsse_verify_line = dsse_verify_line,
+                static_rules = static_rules,
+                static_gate = static_gate,
             )
         }
     }
@@ -1463,6 +1724,7 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
 /// a Rego parse/eval error); with no fallback `measurements_verified` depends
 /// solely on `primary_ok`.
 #[cfg(feature = "crypto-rustcrypto")]
+#[allow(clippy::too_many_arguments)] // config knobs map 1:1 onto the JSON fields
 fn build_artifact_server_policy(
     schema_version: &str,
     published_measurements: Option<&[String]>,
@@ -1471,6 +1733,7 @@ fn build_artifact_server_policy(
     publisher_public_key_pem: Option<&str>,
     fallback_published_measurements: Option<&[String]>,
     fallback_services: Option<&[TransparencyServiceConfig]>,
+    static_reference_measurements: Option<&[String]>,
 ) -> Result<String> {
     // Sort the measurement types before baking. The publisher's `payloadHash`
     // is computed over the type-sorted manifest (sorted by measurement `Type`
@@ -1556,11 +1819,24 @@ fallback_ok if {
     // when fallback is configured. With no fallback, `fallback_ok` is undefined
     // and referencing it would be a Rego error; `measurements_verified` then
     // depends solely on `primary_ok`.
-    let measurements_verified_lines = if fallback_rules.is_empty() {
-        "measurements_verified if { primary_ok }\n".to_string()
+    //
+    // Carry #2 (static references): when staticReferenceMeasurements is
+    // configured, `static_ok` is AND-gated into every measurements_verified
+    // rule — the transparency-service resolution AND the user-owned static
+    // measurements must both pass. Without static measurements the emitted
+    // lines are byte-identical to the pre-static form.
+    let static_rules = static_reference_rules(static_reference_measurements.unwrap_or_default());
+    let static_gate = if static_rules.is_empty() {
+        ""
     } else {
-        "measurements_verified if { primary_ok }\nmeasurements_verified if { fallback_ok }\n"
-            .to_string()
+        "; static_ok"
+    };
+    let measurements_verified_lines = if fallback_rules.is_empty() {
+        format!("measurements_verified if {{ primary_ok{static_gate} }}\n")
+    } else {
+        format!(
+            "measurements_verified if {{ primary_ok{static_gate} }}\nmeasurements_verified if {{ fallback_ok{static_gate} }}\n"
+        )
     };
 
     let rego = format!(
@@ -1688,7 +1964,7 @@ full_manifest := {{
 primary_ok if {{
     tng.resolve_artifact_server([artifact_server_url, json.marshal(full_manifest), json.marshal(log_services), publisher_key]) == true
 }}{fallback_rules}
-
+{static_rules}
 {measurements_verified_lines}
 executables := 2 if {{ measurements_verified }}
 
@@ -1723,6 +1999,7 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
         publisher_key_lit = publisher_key_lit,
         fallback_lit = fallback_lit,
         fallback_rules = fallback_rules,
+        static_rules = static_rules,
         // `measurements_verified_lines` is interpolated on its own template line
         // where the literal already supplies the trailing newline (the line break
         // before `executables := 2 if {{ ... }}`), so its own trailing `\n` is
@@ -2678,6 +2955,43 @@ default file_system := 2"#,
     /// Evaluate a bundled rego policy against `input` and return the four AR4SI
     /// trust-vector values as (executables, hardware, configuration, file_system).
     async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
+        eval_policy_vector_with_rvs(policy, input, &[]).await
+    }
+
+    /// Same as [`eval_policy_vector`], but first registers each `(name, value)`
+    /// pair as a sample reference value in the in-memory RVPS so policies that
+    /// call `query_reference_value` resolve against real data.
+    async fn eval_policy_vector_with_rvs(
+        policy: &str,
+        input: &str,
+        rvs: &[(&str, &str)],
+    ) -> (i8, i8, i8, i8) {
+        use attestation_service::rvps::RvpsApi as _;
+        use base64::Engine as _;
+
+        let rvps = attestation_service::rvps::builtin::BuiltinRvps::new(
+            reference_value_provider_service::config::Config {
+                storage: reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
+                    reference_value_provider_service::storage::in_memory::Config {},
+                ),
+            },
+        )
+        .expect("create in-memory RVPS for policy test");
+        for (name, value) in rvs {
+            let provenance = serde_json::json!({ *name: [ *value ] });
+            let payload_b64 = base64::engine::general_purpose::STANDARD
+                .encode(serde_json::to_vec(&provenance).expect("serialize provenance"));
+            let message = serde_json::json!({
+                "version": "0.1.0",
+                "type": "sample",
+                "payload": payload_b64,
+            })
+            .to_string();
+            rvps.verify_and_extract(&message)
+                .await
+                .expect("register sample reference value");
+        }
+
         let engine = attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
             policy,
             DEFAULT_POLICY_ID,
@@ -2703,21 +3017,12 @@ default file_system := 2"#,
             "configuration".to_string(),
             "file_system".to_string(),
         ];
-        // The upstream `PolicyEngine::evaluate` now resolves Rego
+        // The upstream `PolicyEngine::evaluate` resolves Rego
         // `query_reference_value(...)` calls through a `ReferenceValueResolver`
-        // (backed by an `RvpsApi` implementor). None of these policy templates
-        // query reference values, so an empty in-memory RVPS resolver suffices.
+        // (backed by the `RvpsApi` implementor above, preloaded with the test's
+        // sample reference values).
         let resolver = Arc::new(attestation_service::rvps::ReferenceValueResolver::new(
-            Arc::new(
-                attestation_service::rvps::builtin::BuiltinRvps::new(
-                    reference_value_provider_service::config::Config {
-                        storage: reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
-                            reference_value_provider_service::storage::in_memory::Config {},
-                        ),
-                    },
-                )
-                .expect("create in-memory RVPS for policy test"),
-            ) as Arc<dyn attestation_service::rvps::RvpsApi>,
+            Arc::new(rvps) as Arc<dyn attestation_service::rvps::RvpsApi>,
         ));
         let result = engine
             .evaluate(input, DEFAULT_POLICY_ID, rules, resolver)
@@ -2971,8 +3276,14 @@ default file_system := 2"#,
     async fn transparency_log_rego_affirms_when_published_measurements_absent() {
         let payload_hash = "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8";
         let (dsse_sig, publisher_key) = fixture_dsse();
-        let policy =
-            build_transparency_log_policy(payload_hash, "1.0.0", None, &dsse_sig, &publisher_key);
+        let policy = build_transparency_log_policy(
+            payload_hash,
+            "1.0.0",
+            None,
+            &dsse_sig,
+            &publisher_key,
+            None,
+        );
 
         // Valid TDX platform input (non-debug, canonical Intel vendor_id, event
         // log present). No AAEL image event is needed: with publishedMeasurements
@@ -3007,8 +3318,14 @@ default file_system := 2"#,
     async fn transparency_log_rego_skips_measurements_when_absent() {
         let payload_hash = "0000000000000000000000000000000000000000000000000000000000000000";
         let (dsse_sig, publisher_key) = fixture_dsse();
-        let policy =
-            build_transparency_log_policy(payload_hash, "1.0.0", None, &dsse_sig, &publisher_key);
+        let policy = build_transparency_log_policy(
+            payload_hash,
+            "1.0.0",
+            None,
+            &dsse_sig,
+            &publisher_key,
+            None,
+        );
 
         // No AAEL event at all — under a Some([...]) policy this would drop the
         // measurement and mismatch the (deliberately wrong) payloadHash → 97.
@@ -3036,6 +3353,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Matching input: AAEL kangaroo/pull-image event for cmaas-runtime with the exact digest.
@@ -3126,6 +3444,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -3140,6 +3459,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-WRONG".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3167,6 +3487,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -3182,6 +3503,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3209,6 +3531,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&correct_policy, &ok).await,
@@ -3224,6 +3547,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3280,6 +3604,7 @@ default file_system := 2"#,
             ]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&sorted_policy, &ok).await,
@@ -3298,6 +3623,7 @@ default file_system := 2"#,
             ]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&reversed_policy, &ok).await,
@@ -3317,6 +3643,7 @@ default file_system := 2"#,
             ]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -3359,6 +3686,7 @@ default file_system := 2"#,
             Some(&["tdx.td-shim".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Matching input: mr_td in the quote body matches the logged manifest.
@@ -3422,6 +3750,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Matching input: the td_payload firmware-blob2 event carries the
@@ -3476,6 +3805,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Exact descriptor "td_payload" + 32 MiB blob → match → affirm.
@@ -3532,6 +3862,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // 32 MiB → affirm.
@@ -3598,6 +3929,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Helper: a td_payload firmware-blob2 event with the given base64 event
@@ -3692,6 +4024,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // td_payload firmware-blob2 event with a given RTMR register index.
@@ -3776,6 +4109,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         let quote_header = serde_json::json!({
@@ -3932,6 +4266,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Real PAI log → Rego extracts the real kernel → manifest matches → affirm.
@@ -3961,6 +4296,7 @@ default file_system := 2"#,
             Some(&["tdx.kernel".to_string()]),
             &bad_dsse_sig,
             &bad_publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&bad_policy, &ok_input).await,
@@ -4048,6 +4384,7 @@ default file_system := 2"#,
             Some(&[measurement_type.to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Real PAI log → Rego resolves repo `busybox` + real digest → manifest
@@ -4079,6 +4416,7 @@ default file_system := 2"#,
             Some(&[measurement_type.to_string()]),
             &bad_dsse_sig,
             &bad_publisher_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&bad_policy, &ok_input).await,
@@ -4121,6 +4459,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
 
         // Single matching AAEL event → affirm.
@@ -4193,6 +4532,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         let ok = matching_cmaas_input(good_digest);
         assert_eq!(
@@ -4271,6 +4611,7 @@ default file_system := 2"#,
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_signature,
             &publisher_key,
+            None,
         );
 
         // Matching input: AAEL kangaroo/pull-image event for cmaas-runtime with
@@ -4311,6 +4652,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_signature,
             bogus_pem,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -4365,6 +4707,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_signature,
             builtin_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
@@ -4382,6 +4725,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             Some(&["container.image.cmaas-runtime".to_string()]),
             &bogus_sig,
             builtin_key,
+            None,
         );
         assert_eq!(
             eval_policy_vector(&wrong_policy, &ok).await,
@@ -4455,6 +4799,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             Some(&["container.image.cmaas-runtime".to_string()]),
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert!(
             policy.contains("tng.verify_dsse_signature("),
@@ -4477,6 +4822,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             None,
             &dsse_sig,
             &publisher_key,
+            None,
         );
         assert!(
             none_policy.contains("dsse_signature := "),
@@ -5486,6 +5832,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             None,
             Some(&["tdx.td-shim".to_string()]),
             Some(&bad_fallback),
+            None,
         )
         .unwrap_err();
         match err {
@@ -5516,6 +5863,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             None,
             Some(&["tdx.td-shim".to_string()]),
             Some(&empty_fallback),
+            None,
         )
         .unwrap_err();
         match err {
@@ -5525,5 +5873,411 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             ),
             _ => panic!("wrong error variant: {err:?}"),
         }
+    }
+    // --- staticReferenceMeasurements tests -----------------------------------
+
+    /// E2E: a `model` static measurement AND-gates the rekor-path appraisal.
+    /// The manifest (published measurements) verifies against the baked
+    /// payloadHash, and the model check passes only when the eventlog carries a
+    /// pai/load-model event whose hash matches the registered reference value.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_static_model_reference_affirms_and_rejects() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let model_hash = "9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875";
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+            Some(&["model".to_string()]),
+        );
+
+        let load_model_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"pai/load-model","content":{"model-id":"Qwen/Qwen3.8-27B","hash":"9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"}}}}"#;
+        let base_input = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}},{load_model_event}]}}}}"#
+        );
+
+        // Registered RV matches the event -> manifest AND model both pass.
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &base_input,
+                &[("measurement.model.Qwen/Qwen3.8-27B", model_hash)]
+            )
+            .await,
+            (2, 2, 2, 2),
+            "matching static model reference must affirm"
+        );
+
+        // Registered RV does not match -> static gate fails closed.
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &base_input,
+                &[("measurement.model.Qwen/Qwen3.8-27B", "deadbeef")]
+            )
+            .await,
+            (97, 2, 2, 2),
+            "mismatched static model reference must reject"
+        );
+
+        // No reference registered at all -> query returns null -> reject.
+        assert_eq!(
+            eval_policy_vector(&policy, &base_input).await,
+            (97, 2, 2, 2),
+            "unregistered static model reference must reject"
+        );
+
+        // No pai/load-model event in the eventlog -> count == 0 -> reject.
+        let no_model_event = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &no_model_event,
+                &[("measurement.model.Qwen/Qwen3.8-27B", model_hash)]
+            )
+            .await,
+            (97, 2, 2, 2),
+            "missing pai/load-model event must reject (fail-closed)"
+        );
+    }
+
+    /// E2E: a `container.image.<repo>` static measurement compares the
+    /// pull-image digest against the registered reference value instead of the
+    /// transparency service.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_static_container_image_reference_affirms_and_rejects() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let worker0_digest =
+            "sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+            Some(&["container.image.worker0".to_string()]),
+        );
+
+        let pull_image_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{"reference":"registry.example.com/pai-eas/worker0:v1","digest":"sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"}}}}"#;
+        let input = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}},{pull_image_event}]}}}}"#
+        );
+
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &input,
+                &[("measurement.container.image.worker0", worker0_digest)]
+            )
+            .await,
+            (2, 2, 2, 2),
+            "matching static container-image reference must affirm"
+        );
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &input,
+                &[(
+                    "measurement.container.image.worker0",
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                )]
+            )
+            .await,
+            (97, 2, 2, 2),
+            "mismatched static container-image reference must reject"
+        );
+    }
+
+    /// The repo segment of a `container.image.<repo>` static type is
+    /// free-form: it is matched against the repo tail of the pull-image
+    /// references in the eventlog, so ANY name works (nothing special about
+    /// worker0/vllm-style names). A repo with no matching event fails closed.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_static_container_image_arbitrary_repo_name() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let aaa_digest = "sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b";
+
+        let manifest = serde_json::json!({
+            "schemaVersion": "1.0.0",
+            "measurements": [{"type": "tdx.kernel", "value": kernel}]
+        });
+        let payload_hash = {
+            let mut h = sha2::Sha256::new();
+            sha2::Digest::update(&mut h, jcs_compact(&manifest).as_bytes());
+            hex::encode(sha2::Digest::finalize(h))
+        };
+        let (dsse_sig, publisher_key) = sign_dsse_for_manifest(&manifest);
+        let policy = build_transparency_log_policy(
+            &payload_hash,
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+            Some(&["container.image.aaa".to_string()]),
+        );
+
+        // The image reference's repo tail is "aaa" (registry host and path are
+        // irrelevant); the RV is registered under measurement.container.image.aaa.
+        let pull_image_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{"reference":"registry.example.com/team/aaa:latest","digest":"sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"}}}}"#;
+        let input = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}},{pull_image_event}]}}}}"#
+        );
+
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &input,
+                &[("measurement.container.image.aaa", aaa_digest)]
+            )
+            .await,
+            (2, 2, 2, 2),
+            "an arbitrary repo name pins its image exactly like any other name"
+        );
+        // No event with repo tail "aaa" (only the kernel event present) →
+        // actual_measurement("container.image.aaa") is undefined → fail closed.
+        let no_event = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{{"type_name":"EV_EFI_PLATFORM_FIRMWARE_BLOB2","details":{{"string":"td_payload"}},"event":{event_32mib:?},"digests":[{{"alg":"SHA-384","digest":{kernel:?}}}],"index":2}}]}}}}"#
+        );
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &no_event,
+                &[("measurement.container.image.aaa", aaa_digest)]
+            )
+            .await,
+            (97, 2, 2, 2),
+            "a pinned repo with no pull-image event must reject (fail-closed)"
+        );
+    }
+
+    /// The `hardware_strict_with_measurements` builtin policy: strict
+    /// hardware posture plus the listed measurements appraised against
+    /// reference values, no transparency service.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn hardware_static_measurements_policy_appraises() {
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let model_hash = "9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875";
+        let image_digest =
+            "sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b";
+
+        let policy = build_hardware_strict_with_measurements_policy(&[
+            "model".to_string(),
+            "container.image.model-server".to_string(),
+        ])
+        .expect("build policy");
+
+        let load_model_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"pai/load-model","content":{"model-id":"Qwen/Qwen3.8-27B","hash":"9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"}}}}"#;
+        let pull_image_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{"reference":"registry.example.com/my/model-server:v3","digest":"sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"}}}}"#;
+        let input = format!(
+            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{load_model_event},{pull_image_event}]}}}}"#
+        );
+        let rvs = &[
+            ("measurement.model.Qwen/Qwen3.8-27B", model_hash),
+            ("measurement.container.image.model-server", image_digest),
+        ];
+
+        assert_eq!(
+            eval_policy_vector_with_rvs(&policy, &input, rvs).await,
+            (2, 2, 2, 2),
+            "matching static measurements must affirm"
+        );
+        assert_eq!(
+            eval_policy_vector_with_rvs(
+                &policy,
+                &input,
+                &[("measurement.model.Qwen/Qwen3.8-27B", "deadbeef")]
+            )
+            .await,
+            (97, 2, 2, 2),
+            "mismatched static measurements must reject"
+        );
+        assert_eq!(
+            eval_policy_vector_with_rvs(&policy, &input, &[]).await,
+            (97, 2, 2, 2),
+            "unregistered reference values must reject"
+        );
+
+        // Debug-enabled TD: bit 0 of the FIRST td_attributes byte set (the
+        // low nibble of the first byte turns odd) degrades hardware per the
+        // hardware_only_strict posture.
+        let debug_input = input.replace("\"0000001000000000\"", "\"0100001000000000\"");
+        assert_eq!(
+            eval_policy_vector_with_rvs(&policy, &debug_input, rvs).await,
+            (2, 97, 2, 2),
+            "debug-enabled TDX must degrade hardware (strict posture)"
+        );
+    }
+
+    /// build_hardware_strict_with_measurements_policy rejects malformed configs.
+    #[test]
+    fn hardware_strict_with_measurements_policy_rejects_bad_configs() {
+        for (types, expect) in [
+            (vec![], "non-empty"),
+            (vec!["gpu".to_string()], "unsupported"),
+            (vec!["model".to_string(), "model".to_string()], "duplicate"),
+        ] {
+            let err = build_hardware_strict_with_measurements_policy(&types)
+                .expect_err("must reject")
+                .to_string();
+            assert!(err.contains(expect), "expected {expect} in: {err}");
+        }
+    }
+
+    /// Without staticReferenceMeasurements the generated policies carry no
+    /// static rules at all (backward compatible, byte-identical gating).
+    #[test]
+    fn transparency_log_policies_without_static_references_have_no_static_rules() {
+        let (dsse_sig, publisher_key) = fixture_dsse();
+        let rekor = build_transparency_log_policy(
+            "deadbeef",
+            "1.0.0",
+            Some(&["tdx.kernel".to_string()]),
+            &dsse_sig,
+            &publisher_key,
+            None,
+        );
+        assert!(!rekor.contains("static_ok"));
+        assert!(!rekor.contains("static_measurements"));
+        assert!(rekor.contains("measurements_verified if {"));
+
+        let artifact = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "http://artifact.example.com/",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.example.com".to_string(),
+            }],
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("build artifact-server policy");
+        assert!(!artifact.contains("static_ok"));
+        assert!(artifact.contains("measurements_verified if { primary_ok }"));
+    }
+
+    /// With staticReferenceMeasurements the artifact-server policy AND-gates
+    /// static_ok into every measurements_verified rule.
+    #[test]
+    fn artifact_server_policy_static_reference_rules_are_emitted() {
+        let policy = build_artifact_server_policy(
+            "1.0.0",
+            Some(&["tdx.td-shim".to_string()]),
+            "http://artifact.example.com/",
+            &[ArtifactLogService {
+                type_: "rekor-v1".to_string(),
+                url: "https://rekor.example.com".to_string(),
+            }],
+            None,
+            None,
+            None,
+            Some(&["model".to_string(), "container.image.worker0".to_string()]),
+        )
+        .expect("build artifact-server policy");
+        assert!(policy.contains("measurements_verified if { primary_ok; static_ok }"));
+        assert!(policy.contains("static_measurement_ok(\"model\")"));
+        assert!(policy.contains("static_measurement_ok(t)"));
+        assert!(policy.contains("query_reference_value"));
+        // Baked list is type-sorted regardless of config order.
+        let static_idx = policy
+            .find("static_measurements := ")
+            .expect("static_measurements literal");
+        let literal = &policy[static_idx..static_idx + 120];
+        let model_pos = literal.find("\"model\"").expect("model in literal");
+        let worker_pos = literal
+            .find("\"container.image.worker0\"")
+            .expect("worker0 in literal");
+        // "container.image.worker0" sorts before "model" (c < m).
+        assert!(worker_pos < model_pos, "static list must be sorted");
+    }
+
+    /// validate_transparency_config rejects malformed staticReferenceMeasurements.
+    #[test]
+    fn validate_transparency_config_rejects_bad_static_reference_measurements() {
+        let base = |static_json: &str| {
+            format!(
+                r#"{{
+                    "type": "transparency_log",
+                    "publishedMeasurements": ["tdx.td-shim"],
+                    "services": [{{"type": "rekor-v1", "logUrl": "https://rekor.example.com", "logIndex": 1}}],
+                    "staticReferenceMeasurements": {static_json}
+                }}"#
+            )
+        };
+
+        let parse = |s: String| serde_json::from_str::<PolicyConfig>(&s).expect("parse");
+
+        let unsupported = parse(base(r#"["gpu"]"#));
+        assert!(unsupported
+            .validate_transparency_config()
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported staticReferenceMeasurements type"));
+
+        let duplicate = parse(base(r#"["model", "model"]"#));
+        assert!(duplicate
+            .validate_transparency_config()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate staticReferenceMeasurements"));
+
+        // container.image.cmaas-runtime is a valid static type AND a valid
+        // published type; listing it in both must trip the overlap check.
+        let overlapping = parse(
+            r#"{
+                "type": "transparency_log",
+                "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+                "services": [{"type": "rekor-v1", "logUrl": "https://rekor.example.com", "logIndex": 1}],
+                "staticReferenceMeasurements": ["container.image.cmaas-runtime"]
+            }"#
+            .to_string(),
+        );
+        assert!(overlapping
+            .validate_transparency_config()
+            .unwrap_err()
+            .to_string()
+            .contains("is also in publishedMeasurements"));
+
+        // A valid static list parses and validates clean.
+        let ok = parse(base(r#"["model", "container.image.worker0"]"#));
+        assert!(ok.validate_transparency_config().is_ok());
     }
 }

@@ -441,6 +441,36 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 ```
 </details>
 
+<details>
+<summary>示例 3c：钉住用户侧度量</summary>
+
+`hardware_strict_with_measurements` 策略把一份显式度量清单与注册的参考值比对，平台姿态取 strict（TDX 非 debug 且包含 eventlog）。用于透明日志不发布的用户侧产物——用户自己的模型、用户提供的容器镜像——不需要场景 4 的透明日志。度量类型：`"model"`（每条 `pai/load-model` 事件都须匹配 `measurement.model.<model-id>`）和 `"container.image.<repo>"`（镜像 reference 的 repo 尾段等于 `<repo>` 的每条 pull-image 事件都须匹配 `measurement.container.image.<repo>`；repo 段自由命名，钉了没有对应事件的 repo 会 fail-closed）。每个配置的度量共同 AND 门控 `executables` 信任维度。
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "hardware_strict_with_measurements",
+            "measurements": ["model", "container.image.model-server"]
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
+                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
+                    }
+                }
+            }
+        ]
+    }
+}
+```
+</details>
+
 **场景 4：transparency_log 锚定（高级）**
 
 目标：把可信度量集锚定到一个经过认证的 Rekor v1 透明日志条目，appraisal 时将实际度量值与记录的参考比对。设 `attestation_policy.type` 为 `"transparency_log"`。需要 `schemaVersion` 与一个 `rekor-v1` service；`publishedMeasurements` 可选（缺省则跳过度量检查）。
@@ -493,6 +523,53 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **`publishedMeasurements` 缺省时：** 度量重建与哈希比对被整体跳过，仅执行 TDX 平台检查，executables 信任维度保持 affirming。显式空数组（`[]`）**并不等同**于缺省：它仍会执行检查，而对真实日志参考必然拒绝。当仅需平台证明、不需要度量绑定时，用缺省来跳过度量检查。
 
+**静态参考值度量（`staticReferenceMeasurements`）：** 不走透明日志、而是与内置 AS 静态注册的参考值（`reference_values`，RVPS `query_reference_value`）比对的度量类型。用于透明日志不发布的用户侧产物——典型如用户自己的模型和用户提供的容器镜像。rekor-v1 与 artifact-server 两种 primary 均可搭配使用。支持两种类型：
+
+- `"model"`：每条 `alibabacloud.com` `pai/load-model` AAEL 事件都须与以 `measurement.model.<model-id>` 注册的参考值匹配。key 由事件自身的 `model-id` 决定，且至少要存在一条 load-model 事件——参考值未注册或事件缺失都会拒绝。key 命名沿用 upstream trustee 默认策略（`measurement.model.<model-id>`），将来外部 Trustee AS 可以用同名参考值无缝接替。
+- `"container.image.<repo>"`：镜像 reference 的 repo 尾段等于 `<repo>` 的每条 `kangaroo/pull-image` 事件，都须与以 `measurement.container.image.<repo>` 注册的 digest 匹配。`<repo>` 段是自由命名：它就是你所钉镜像 reference 的 repo 尾段（路径最后一段，registry 主机、路径前缀、tag/digest 都剥掉），任何名字都行、没有任何名字有特殊地位；钉了没有对应 pull-image 事件的 repo 会 fail-closed（拒绝而非跳过）。参考值名是 trustee 风格的 `measurement.` 前缀加上 manifest 度量类型 `container.image.<repo>` 组合而成。
+
+每个静态检查与透明日志检查共同 AND 门控 `measurements_verified`（与 primary 解析、以及配置时的 fallback 解析一起）：透明日志检查与全部静态检查都通过才通过，否则评定拒绝。`staticReferenceMeasurements` 不得与 `publishedMeasurements` / `fallbackPublishedMeasurements` 重复；加载期校验会拒绝不支持的类型、重复项和重叠。同一套校验也可通过 `hardware_strict_with_measurements` 策略独立使用（不需要透明日志服务）。
+
+</details>
+
+<details>
+<summary>示例：静态用户侧度量与透明日志并存</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "transparency_log",
+            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 2279770888
+                }
+            ],
+            "staticReferenceMeasurements": ["model", "container.image.model-server"]
+        },
+        "reference_values": [
+            {
+                "type": "sample",
+                "payload": {
+                    "type": "inline",
+                    "content": {
+                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
+                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
+                    }
+                }
+            }
+        ]
+    }
+}
+```
+
+`container.image.model-server` 钉的是 reference 以 repo `model-server` 结尾的镜像（如 `registry.example.com/my/model-server:v3`——registry 主机与 tag 不参与匹配）。模型的参考值是度量工具为模型算出的 root hash；镜像的参考值是镜像 digest。
+
 </details>
 
 <details>
@@ -507,6 +584,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `services[].logIndex` | — | 要拉取并认证的 Rekor v1 条目索引 |
 | `services[].rekorPublicKeyPem` | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）；省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥，其他日志必须提供 |
 | `services[].publisherPublicKeyPem` | — | 可选的可信 publisher 公钥 PEM；设置后 appraisal 时校验 DSSE 发布者签名，将条目绑定到此 publisher |
+| `staticReferenceMeasurements` | 缺省（`None`） | 不走透明日志、与静态注册参考值比对的度量类型：`"model"` 或 `"container.image.<repo>"`；与度量检查 AND 门控（详见上） |
 
 </details>
 
@@ -579,6 +657,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `hardware_only_strict` | 同上，但要求 TDX 非 debug 且包含 eventlog | 场景 1 注 |
 | `hardware_with_reference_values` | 基于 trustee 的完整参考值度量 | 场景 3 |
 | `hardware_strict_with_reference_values` | 同上，额外要求 TDX 非 debug 且包含 eventlog | 场景 3 |
+| `hardware_strict_with_measurements` | strict 平台姿态 + 显式度量清单对照注册参考值 | 场景 3 示例 3c |
 | `trust_all` | 全部维度恒通过（仅调试/测试） | — |
 | `inline` | 内联 base64 rego | 场景 2 |
 | `path` | rego 文件路径 | 场景 2 |
