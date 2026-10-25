@@ -31,3 +31,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - tng no longer signals readiness when a service fails before reporting ready (e.g. an ingress port is already occupied); the ready callback now fires only after every service is actually serving.
 - Pinned PEM trust-root files now load every certificate in the bundle (e.g. leaf plus CA) instead of only the first section; empty or malformed bundles are rejected instead of silently producing a partial trust set.
 - Attestation tokens whose JWK `x5c` chain uses standard Base64 encoding (per RFC 7517) now verify; previously only URL-safe Base64 was accepted, which rejected tokens from mainline Trustee.
+- A measurement revoked by the transparency-log artifact server now denies attestation instead of being rescued by the rekor fallback: the append-only rekor entry of a revoked manifest still authenticates, so the previous behavior let the fallback bypass the revocation.

@@ -1709,11 +1709,19 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
 /// It bakes NO payloadHash: at appraisal the Rego reconstructs the manifest
 /// from the actual TDX measurement values (`actual_measurement`), then calls
 /// `tng.resolve_artifact_server(url, json.marshal(full_manifest), json.marshal(log_services))`
-/// as the primary verification path. When a fallback is configured, it also
+/// as the primary verification path. The host-await returns a tri-state
+/// string: `"ok"` (resolved + authenticated, incl. cache hits), `"deny"`
+/// (the artifact server explicitly revoked the measurement: hard deny), and
+/// `"fail"` (any other failure). When a fallback is configured, it also
 /// defines `fallback_manifest` + `fallback_ok`; the `fallback_ok` rule body is
-/// `not primary_ok; tng.fetch_rekor_on_demand(...)`, so regorus's left-to-right
-/// body short-circuit must skip the fallback network call when `primary_ok` is
-/// true (verified by `branch_b_does_not_call_fallback_when_primary_ok`).
+/// `primary_status == "fail"; tng.fetch_rekor_on_demand(...)`, so regorus's
+/// left-to-right body short-circuit must skip the fallback network call when
+/// the primary returns `"ok"` (verified by
+/// `branch_b_does_not_call_fallback_when_primary_ok`), and a `"deny"`
+/// (revocation) must NOT reach the fallback at all — the append-only rekor
+/// entry of a revoked manifest still authenticates, so falling back there
+/// would bypass the revocation (verified by
+/// `branch_b_revoked_denies_without_fallback`).
 ///
 /// The header + `actual_measurement`/`image_repo_name` reconstruction + the
 /// hardware scoring block are copied verbatim from the existing rekor-v1
@@ -1799,14 +1807,23 @@ fn build_artifact_server_policy(
                     "\nfallback_published_measurements := {fpm_lit}\nfallback_log_url := {:?}\nfallback_log_index := {}\n",
                     first.0, first.1
                 ),
-                // `not primary_ok` short-circuits the body before the
-                // `tng.fetch_rekor_on_demand` call when primary_ok is true.
-                // The 4th arg threads the publisher key (empty → built-in) so
-                // the on-demand fallback also runs mandatory DSSE verification.
+                // `primary_status == "fail"` gates the fallback: the
+                // primary host-await returns the tri-state "ok" / "deny" /
+                // "fail". Only "fail" (unreachable / not-found / auth
+                // failure) may fall back; "deny" (the artifact server
+                // explicitly revoked the measurement) must NOT, because the
+                // append-only rekor entry of a revoked manifest is immutable
+                // and would still fully authenticate, bypassing the
+                // revocation. `"fail" == "ok"` is false, so this also
+                // short-circuits the `tng.fetch_rekor_on_demand` call when
+                // the primary succeeds (regorus left-to-right body
+                // evaluation). The 4th arg threads the publisher key (empty
+                // → built-in) so the on-demand fallback also runs mandatory
+                // DSSE verification.
                 r#"
 fallback_manifest := {"measurements": [{"type": t, "value": actual_measurement(t)} | some t in fallback_published_measurements], "schemaVersion": schema_version}
 fallback_ok if {
-    not primary_ok
+    primary_status == "fail"
     tng.fetch_rekor_on_demand([fallback_log_url, fallback_log_index, json.marshal(fallback_manifest), publisher_key]) == true
 }
 "#,
@@ -1961,9 +1978,9 @@ full_manifest := {{
     "schemaVersion": schema_version,
 }}
 
-primary_ok if {{
-    tng.resolve_artifact_server([artifact_server_url, json.marshal(full_manifest), json.marshal(log_services), publisher_key]) == true
-}}{fallback_rules}
+primary_status := tng.resolve_artifact_server([artifact_server_url, json.marshal(full_manifest), json.marshal(log_services), publisher_key])
+primary_ok if {{ primary_status == "ok" }}
+{fallback_rules}
 {static_rules}
 {measurements_verified_lines}
 executables := 2 if {{ measurements_verified }}
@@ -5371,6 +5388,15 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             "rego must define primary_ok\n{rego}"
         );
         assert!(
+            rego.contains("primary_status := tng.resolve_artifact_server"),
+            "rego must bind primary_status to the tri-state host-await\n{rego}"
+        );
+        assert!(
+            rego.contains(r#"primary_status == "fail""#),
+            "rego must gate the rekor fallback on primary_status == \"fail\" \
+             (a revoked \"deny\" must not reach the fallback)\n{rego}"
+        );
+        assert!(
             rego.contains("fallback_ok"),
             "rego must define fallback_ok (fallback configured)\n{rego}"
         );
@@ -5744,6 +5770,58 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             let vec = eval_policy_vector(&policy, &input).await;
             assert_eq!(vec.0, 97, "both-fail must deny executables (got {vec:?})");
         }
+    }
+
+    /// Revocation hard-deny at the policy level: the artifact-server mock
+    /// answers `measurement_revoked`; the rekor fallback mock serves a fully
+    /// valid fixture entry (expect(0): it must never be consulted, and a hit
+    /// would pass `fallback_ok` — the append-only rekor entry of a revoked
+    /// manifest still authenticates — bypassing the revocation).
+    /// `executables` stays at the contraindicated default (97).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn branch_b_revoked_denies_without_fallback() {
+        let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        artifact_server::invalidate_host_await_caches_for_test();
+        let as_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(403).set_body_string(
+                    serde_json::json!({
+                        "error_code": "measurement_revoked",
+                        "error_message": "the measurement was revoked",
+                        "request_id": "test-req-3"
+                    })
+                    .to_string(),
+                ),
+            )
+            .mount(&as_server)
+            .await;
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .and(wiremock::matchers::query_param(
+                "logIndex",
+                log_index.to_string(),
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(0) // the revoked primary must NEVER reach the fallback
+            .mount(&rekor_server)
+            .await;
+        let policy =
+            build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                .await;
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 97,
+            "a revoked measurement must deny executables without consulting the rekor fallback (got {vec:?})"
+        );
+        rekor_server.verify().await;
     }
 
     /// Config parity: the exact artifact-server + fallback example from the

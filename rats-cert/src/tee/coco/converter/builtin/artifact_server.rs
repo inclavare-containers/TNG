@@ -237,15 +237,15 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 const DSSE_PAYLOAD_TYPE: &str = "application/vnd.alibabacloud.confidential-computing.release+json";
 
 /// Process-global cache for `tng.resolve_artifact_server`: successes only,
-/// keyed by `(manifest_hash, canonical_log_services)`. Failures are never
-/// cached (re-try every failed appraisal, then Rego falls back to
-/// `tng.fetch_rekor_on_demand`).
+/// keyed by `(manifest_hash, canonical_log_services)`. Failures and
+/// revocations are never cached (re-try every failed appraisal, then Rego
+/// falls back to `tng.fetch_rekor_on_demand`).
 #[cfg(feature = "crypto-rustcrypto")]
 static RESOLVE_CACHE: Lazy<Cache<([u8; 32], String), ()>> =
     Lazy::new(|| Cache::builder().max_capacity(1024).build());
 
 /// `tng.resolve_artifact_server(artifact_server_url, manifest_json,
-/// log_services_json, publisher_key_pem?) -> bool`.
+/// log_services_json, publisher_key_pem?) -> "ok" | "deny" | "fail"`.
 ///
 /// Primary artifact-server path. Resolve the manifest via the Artifact Server
 /// `POST /api/v1/transparency/resolve` (upstream `artifact_resolve_sdk::Client`,
@@ -254,32 +254,43 @@ static RESOLVE_CACHE: Lazy<Cache<([u8; 32], String), ()>> =
 /// DSSE publisher signature over `sha256(DSSEPAE(canonical manifest))` with the
 /// response `entry_verifier` key (or the configured/built-in publisher key when
 /// the response omits both verifiers), and verify each
-/// entry's authenticated `payloadHash == sha256(JCS(manifest))`. On success
-/// returns `Ok(Bool(true))` and caches the result keyed by
-/// `(manifest_hash, canonical_log_services)`; on ANY failure returns
-/// `Ok(Bool(false))` (not cached) so the Rego caller falls back to
-/// `tng.fetch_rekor_on_demand`.
+/// entry's authenticated `payloadHash == sha256(JCS(manifest))`.
+///
+/// Returns a tri-state string so the Rego policy can tell an explicit
+/// revocation apart from an ordinary failure:
+/// - `"ok"`: resolve succeeded and every entry authenticated (or a cached
+///   prior success). Cached keyed by
+///   `(manifest_hash, canonical_log_services)`.
+/// - `"deny"`: the artifact server answered `measurement_revoked`. A hard
+///   denial: the rekor fallback MUST NOT run for it, because the append-only
+///   rekor log still carries the revoked manifest's (immutable, fully
+///   authentic) entry, so the fallback would pass and bypass the revocation.
+///   Never cached: the revocation state is the server's to change.
+/// - `"fail"`: any other failure (bad args, HTTP, decode, key resolution,
+///   auth, manifest mismatch, `measurement_not_found`, ...). The Rego caller
+///   falls back to `tng.fetch_rekor_on_demand`. Never cached.
 ///
 /// The optional 4th arg is a configured publisher PEM (from the
 /// `ArtifactServer` `publisherPublicKeyPem` config); empty/absent falls back to
 /// the built-in publisher key when the response omits the publisher key.
 ///
-/// Fail-closed / clean-deny: ALL failures (bad args, HTTP, decode, key
-/// resolution, auth, manifest mismatch) return `Ok(Bool(false))`, never `Err`.
+/// Fail-closed / clean-deny: ALL outcomes (including bad args, HTTP, decode,
+/// key resolution, auth, manifest mismatch) return `Ok(String)`, never `Err`.
 /// An `Err` would abort the entire policy evaluation (verified via the
 /// in-tree `evaluate_with_regovm_propagates_async_builtin_error` test),
 /// breaking the fail-closed fallback contract. This mirrors the established
-/// `fetch_rekor_on_demand` pattern (Option + `unwrap_or(false)`).
+/// `fetch_rekor_on_demand` pattern (Option + `unwrap_or`).
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
     use regorus::Value;
 
     Arc::new(move |argument: regorus::Value| {
         Box::pin(async move {
-            // All failures map to a clean `false` (clean-deny, never `Err`).
-            // `inner` returns `Option<bool>`: `Some(true)` on a successful
-            // resolve+authenticate+compare, `None` on any failure. `.unwrap_or(false)`
-            // then yields the clean deny.
+            // All failures map to a clean `"fail"` string (clean-deny, never
+            // `Err`). `inner` returns `Option<&'static str>`: `"ok"` on a
+            // successful resolve+authenticate+compare, `"deny"` on an
+            // explicit server-side revocation, `None` on any other failure.
+            // `.unwrap_or("fail")` then yields the clean deny.
             let inner = || async {
                 let arr = argument.as_array().ok()?;
                 if !(arr.len() == 3 || arr.len() == 4) {
@@ -303,9 +314,9 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                 // Decode the hex sha256 to a 32-byte array for the cache key. A
                 // non-32-byte hash (e.g. a malformed manifest that produced a
                 // non-sha256 digest) is reported via tracing and maps to
-                // `None`→`Ok(Bool(false))` (clean-deny), the `inner` closure
-                // returns `Option<bool>`, so the `return None` below keeps the
-                // `Ok(Bool(false))` contract intact (never `Err`).
+                // `None`→`Ok("fail")` (clean-deny), the `inner` closure
+                // returns `Option<&'static str>`, so the `return None` below
+                // keeps the `Ok(String)` contract intact (never `Err`).
                 let expected_bytes: [u8; 32] = match hex::decode(&expected) {
                     Ok(b) => match b.as_slice().try_into() {
                         Ok(arr) => arr,
@@ -333,10 +344,10 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                     .await
                     .is_some()
                 {
-                    return Some(true);
+                    return Some("ok");
                 }
 
-                let ok = resolve_and_authenticate(
+                match resolve_and_authenticate(
                     &url,
                     &manifest_json,
                     &log_services_json,
@@ -344,15 +355,20 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                     configured_publisher_pem,
                 )
                 .await
-                .is_ok();
-                if ok {
-                    RESOLVE_CACHE.insert((expected_bytes, ls_canon), ()).await;
-                    Some(true)
-                } else {
-                    None
+                {
+                    Ok(ResolveStatus::Verified) => {
+                        RESOLVE_CACHE.insert((expected_bytes, ls_canon), ()).await;
+                        Some("ok")
+                    }
+                    // Explicit revocation: report the hard denial so the Rego
+                    // fallback gate (`primary_status == "fail"`) does not
+                    // fire. Never cached: the revocation state is the
+                    // server's to change.
+                    Ok(ResolveStatus::Revoked) => Some("deny"),
+                    Err(_) => None,
                 }
             };
-            Ok(Value::Bool(inner().await.unwrap_or(false)))
+            Ok(Value::from(inner().await.unwrap_or("fail")))
         })
     })
 }
@@ -378,7 +394,18 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
 /// `configured_publisher_pem` is the optional `ArtifactServer` config override;
 /// empty/None falls back to the built-in publisher key.
 ///
-/// Any error → `Err` (mapped to `false` by the caller, never cached).
+/// Returns `Ok(ResolveStatus::Revoked)` (distinct from any error) when the
+/// artifact server answers `measurement_revoked`, so the caller reports a
+/// hard denial instead of an ordinary failure. Any error → `Err` (mapped to
+/// `"fail"` by the caller, never cached).
+#[cfg(feature = "crypto-rustcrypto")]
+enum ResolveStatus {
+    /// Resolve status `"resolved"` and every returned entry authenticated.
+    Verified,
+    /// The artifact server answered `measurement_revoked`.
+    Revoked,
+}
+
 #[cfg(feature = "crypto-rustcrypto")]
 async fn resolve_and_authenticate(
     url: &str,
@@ -386,7 +413,7 @@ async fn resolve_and_authenticate(
     log_services_json: &str,
     expected_hash: &str,
     configured_publisher_pem: Option<&str>,
-) -> Result<()> {
+) -> Result<ResolveStatus> {
     let manifest: artifact_resolve_sdk::ReleaseManifest = serde_json::from_str(manifest_json)?;
     let log_services: Vec<artifact_resolve_sdk::LogService> =
         serde_json::from_str(log_services_json)?;
@@ -409,9 +436,15 @@ async fn resolve_and_authenticate(
         })
         .collect();
     let req = artifact_resolve_sdk::ResolveRequest::new(manifest).with_log_services(log_services);
-    let resp = artifact_resolve_sdk::Client::new(url)?
-        .resolve(&req)
-        .await?;
+    let resp = match artifact_resolve_sdk::Client::new(url)?.resolve(&req).await {
+        Ok(resp) => resp,
+        // An explicit revocation is a hard denial, not an ordinary failure:
+        // the caller reports "deny" so the rekor fallback does not fire (the
+        // append-only rekor entry of a revoked manifest is immutable and
+        // would still fully authenticate).
+        Err(err) if err.is_measurement_revoked() => return Ok(ResolveStatus::Revoked),
+        Err(err) => return Err(err.into()),
+    };
     if resp.status != "resolved" {
         anyhow::bail!(
             "artifact-server resolve status {:?} != resolved",
@@ -526,7 +559,7 @@ async fn resolve_and_authenticate(
             remaining
         );
     }
-    Ok(())
+    Ok(ResolveStatus::Verified)
 }
 
 /// Verify the DSSE publisher signature carried in a Rekor v1 entry body
@@ -1028,7 +1061,7 @@ mod tests {
             regorus::Value::from(ls.as_str()),
         ]);
         let r = invoke_extension(&hv, arg).await;
-        assert_eq!(r, regorus::Value::Bool(true));
+        assert_eq!(r, regorus::Value::from("ok"));
     }
 
     /// Fail-closed fallback on network failure: a dead port → any error →
@@ -1052,7 +1085,7 @@ mod tests {
             "host-await must return Ok(Bool(false)) on network error, got Err: {:?}",
             result.err()
         );
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// payloadHash mismatch: the mock returns a valid (authentic) entry but the
@@ -1090,7 +1123,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Request-binding (dedup): the mock returns TWO copies of the same valid
@@ -1146,7 +1179,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Negative: the response supplies a WRONG `entry_verifier.content` (a
@@ -1188,7 +1221,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Negative: the response supplies a WRONG `log_verifier.public_key_pem`
@@ -1228,7 +1261,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
     /// mock returns only one (the fixture sigstore entry). After the loop
     /// `remaining` still contains the uncovered openanolis service → reject
@@ -1267,7 +1300,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Cache hit: after a successful resolve, a second call with the same
@@ -1308,11 +1341,96 @@ mod tests {
         ]);
         // first call hits the mock → success → cached.
         let r1 = invoke_extension(&hv, arg.clone()).await;
-        assert_eq!(r1, regorus::Value::Bool(true));
+        assert_eq!(r1, regorus::Value::from("ok"));
         // second call must NOT hit the mock (expect(1) would panic on a 2nd)
         // served from cache.
         let r2 = invoke_extension(&hv, arg).await;
-        assert_eq!(r2, regorus::Value::Bool(true));
+        assert_eq!(r2, regorus::Value::from("ok"));
+    }
+
+    /// `measurement_revoked` from the artifact server is a hard denial
+    /// (`"deny"`, no rekor fallback) and is never cached: both calls hit the
+    /// mock (`expect(2)`), the second would be served from the cache if a
+    /// revocation were cached like a success.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_deny_on_revoked() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
+        let body = serde_json::json!({
+            "error_code": "measurement_revoked",
+            "error_message": "the measurement was revoked",
+            "request_id": "test-req-1"
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(403).set_body_string(body))
+            .expect(2) // both calls must hit the network: revocations are not cached
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg.clone()).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(
+            result.unwrap(),
+            regorus::Value::from("deny"),
+            "an explicit server-side revocation is a hard denial"
+        );
+        // Second call re-asks the artifact server: the revocation state is
+        // the server's to change, so it must not be cached.
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(result.unwrap(), regorus::Value::from("deny"));
+    }
+
+    /// `measurement_not_found` is an ordinary failure (`"fail"`, rekor
+    /// fallback allowed), NOT a hard denial: only an explicit revocation
+    /// denies. Pins the deny/fail boundary.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_fail_on_measurement_not_found() {
+        RESOLVE_CACHE.invalidate_all();
+        let server = MockServer::start().await;
+        let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
+        let body = serde_json::json!({
+            "error_code": "measurement_not_found",
+            "error_message": "no published release matches the manifest",
+            "request_id": "test-req-2"
+        })
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(404).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg = regorus::Value::from(vec![
+            regorus::Value::from(server.uri().as_str()),
+            regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(ls.as_str()),
+        ]);
+        let hv = hv.clone();
+        let result: Result<regorus::Value, _> = hv(arg).await;
+        assert!(result.is_ok(), "got Err: {:?}", result.err());
+        assert_eq!(
+            result.unwrap(),
+            regorus::Value::from("fail"),
+            "not-found is an ordinary failure, not a hard denial"
+        );
     }
 
     /// Line 90: `fetch_rekor_on_demand` returns `Ok(Bool(false))` (clean-deny)
@@ -1338,7 +1456,7 @@ mod tests {
             regorus::Value::from("{}"), // only 2 args, not 3
         ]);
         let r = invoke_extension(&hv, arg).await;
-        assert_eq!(r, regorus::Value::Bool(false));
+        assert_eq!(r, regorus::Value::from("fail"));
     }
 
     /// Lines 152-154: `resolve_rekor_key` bails when the entry's logID
@@ -1409,7 +1527,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Line 363: resolve returns zero log entries → `Ok(Bool(false))`.
@@ -1442,7 +1560,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Line 371: log entry type != "rekor-v1" → `Ok(Bool(false))`.
@@ -1481,7 +1599,7 @@ mod tests {
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
         assert!(result.is_ok(), "got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), regorus::Value::Bool(false));
+        assert_eq!(result.unwrap(), regorus::Value::from("fail"));
     }
 
     /// Present-but-empty response verifiers must be REJECTED (fail-closed):
@@ -1526,7 +1644,7 @@ mod tests {
         assert!(result.is_ok(), "got Err: {:?}", result.err());
         assert_eq!(
             result.unwrap(),
-            regorus::Value::Bool(false),
+            regorus::Value::from("fail"),
             "present-but-empty verifiers must reject, not fall back to the built-in key"
         );
     }
@@ -1576,7 +1694,7 @@ mod tests {
         assert!(result.is_ok(), "got Err: {:?}", result.err());
         assert_eq!(
             result.unwrap(),
-            regorus::Value::Bool(false),
+            regorus::Value::from("fail"),
             "mixed verifiers (one present, one absent) must reject"
         );
     }
@@ -1633,7 +1751,7 @@ mod tests {
         assert!(result.is_ok(), "got Err: {:?}", result.err());
         assert_eq!(
             result.unwrap(),
-            regorus::Value::Bool(false),
+            regorus::Value::from("fail"),
             "present-but-wrong-type entry_verifier must reject even when log_verifier is absent"
         );
     }
@@ -1676,6 +1794,6 @@ mod tests {
             regorus::Value::from(ls.as_str()),
         ]);
         let r = invoke_extension(&hv, arg).await;
-        assert_eq!(r, regorus::Value::Bool(true));
+        assert_eq!(r, regorus::Value::from("ok"));
     }
 }
