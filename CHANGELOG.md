@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-10-25
+
 ### Added
 
 - `hardware_strict_with_measurements` builtin attestation policy: the strict hardware posture (TDX non-debug with an event log) plus an explicit measurement list appraised against registered reference values, for user-owned artifacts that need no transparency service. Supports the `"model"` and `"container.image.<repo>"` measurement types shared with `staticReferenceMeasurements`; malformed lists (empty, unsupported types, duplicates) are rejected at load.
@@ -33,3 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attestation tokens whose JWK `x5c` chain uses standard Base64 encoding (per RFC 7517) now verify; previously only URL-safe Base64 was accepted, which rejected tokens from mainline Trustee.
 - A measurement revoked by the transparency-log artifact server now denies attestation instead of being rescued by the rekor fallback: the append-only rekor entry of a revoked manifest still authenticates, so the previous behavior let the fallback bypass the revocation.
 - Transparency-log resolve successes are cached per artifact-server URL and expire after 5 minutes, so a revocation published after a successful appraisal takes effect without a restart, and a cached success cannot satisfy a policy that points at a different artifact server.
+
+[Unreleased]: https://github.com/inclavare-containers/TNG/compare/v2.12.0...HEAD
+[2.12.0]: https://github.com/inclavare-containers/TNG/compare/v2.11.0...v2.12.0
