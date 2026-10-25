@@ -237,12 +237,31 @@ fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 const DSSE_PAYLOAD_TYPE: &str = "application/vnd.alibabacloud.confidential-computing.release+json";
 
 /// Process-global cache for `tng.resolve_artifact_server`: successes only,
-/// keyed by `(manifest_hash, canonical_log_services)`. Failures and
-/// revocations are never cached (re-try every failed appraisal, then Rego
-/// falls back to `tng.fetch_rekor_on_demand`).
+/// keyed by `(artifact_server_url, manifest_hash, canonical_log_services)`.
+/// Failures and revocations are never cached (re-try every failed appraisal,
+/// then Rego falls back to `tng.fetch_rekor_on_demand`).
+///
+/// The URL is part of the key: the cache is process-global and outlives
+/// policy reloads, so a success cached under one artifact-server URL must not
+/// satisfy a later policy pointing at a different server.
+///
+/// The TTL bounds how long a cached success keeps passing appraisals after
+/// the artifact server revokes the measurement. Without it, a revocation
+/// stays invisible until capacity eviction or process restart.
 #[cfg(feature = "crypto-rustcrypto")]
-static RESOLVE_CACHE: Lazy<Cache<([u8; 32], String), ()>> =
-    Lazy::new(|| Cache::builder().max_capacity(1024).build());
+const RESOLVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// `(artifact_server_url, manifest sha256 bytes, canonical log_services JSON)`.
+#[cfg(feature = "crypto-rustcrypto")]
+type ResolveCacheKey = (String, [u8; 32], String);
+
+#[cfg(feature = "crypto-rustcrypto")]
+static RESOLVE_CACHE: Lazy<Cache<ResolveCacheKey, ()>> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(1024)
+        .time_to_live(RESOLVE_CACHE_TTL)
+        .build()
+});
 
 /// `tng.resolve_artifact_server(artifact_server_url, manifest_json,
 /// log_services_json, publisher_key_pem?) -> "ok" | "deny" | "fail"`.
@@ -259,8 +278,8 @@ static RESOLVE_CACHE: Lazy<Cache<([u8; 32], String), ()>> =
 /// Returns a tri-state string so the Rego policy can tell an explicit
 /// revocation apart from an ordinary failure:
 /// - `"ok"`: resolve succeeded and every entry authenticated (or a cached
-///   prior success). Cached keyed by
-///   `(manifest_hash, canonical_log_services)`.
+///   prior success). Cached keyed by `(artifact_server_url, manifest_hash,
+///   canonical_log_services)` with a TTL (see `RESOLVE_CACHE`).
 /// - `"deny"`: the artifact server answered `measurement_revoked`. A hard
 ///   denial: the rekor fallback MUST NOT run for it, because the append-only
 ///   rekor log still carries the revoked manifest's (immutable, fully
@@ -340,7 +359,7 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                 let ls_canon = canonicalize_log_services(&log_services_json).ok()?;
 
                 if RESOLVE_CACHE
-                    .get(&(expected_bytes, ls_canon.clone()))
+                    .get(&(url.clone(), expected_bytes, ls_canon.clone()))
                     .await
                     .is_some()
                 {
@@ -357,7 +376,9 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                 .await
                 {
                     Ok(ResolveStatus::Verified) => {
-                        RESOLVE_CACHE.insert((expected_bytes, ls_canon), ()).await;
+                        RESOLVE_CACHE
+                            .insert((url, expected_bytes, ls_canon), ())
+                            .await;
                         Some("ok")
                     }
                     // Explicit revocation: report the hard denial so the Rego
@@ -1431,6 +1452,58 @@ mod tests {
             regorus::Value::from("fail"),
             "not-found is an ordinary failure, not a hard denial"
         );
+    }
+
+    /// The resolve cache key includes the artifact-server URL: a success
+    /// cached under URL A must not satisfy a call against URL B (the cache is
+    /// process-global and outlives policy reloads that point at a different
+    /// server). Server B's mock requires exactly one hit; a URL-less cache
+    /// key would serve the second call from the cache and starve it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn resolve_artifact_server_cache_key_includes_url() {
+        RESOLVE_CACHE.invalidate_all();
+        let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
+        let body = resolve_response_body(
+            &manifest,
+            &log_entry,
+            &entry_url,
+            LOG_ENTRY_PUB_KEY_PEM,
+            SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+        );
+        let server_a = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .expect(1)
+            .mount(&server_a)
+            .await;
+        let server_b = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1) // MUST be hit: the cached A-success must not satisfy B
+            .mount(&server_b)
+            .await;
+
+        let hv = resolve_artifact_server_host_await();
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
+        let arg_for = |uri: &str| {
+            regorus::Value::from(vec![
+                regorus::Value::from(uri),
+                regorus::Value::from(manifest_json.as_str()),
+                regorus::Value::from(ls.as_str()),
+            ])
+        };
+        let r_a = invoke_extension(&hv, arg_for(&server_a.uri())).await;
+        assert_eq!(r_a, regorus::Value::from("ok"));
+        let r_b = invoke_extension(&hv, arg_for(&server_b.uri())).await;
+        assert_eq!(r_b, regorus::Value::from("ok"));
+        // Verify the expect counts here rather than at mock teardown, so a
+        // starved mock fails the test at the assertion site.
+        server_b.verify().await;
+        server_a.verify().await;
     }
 
     /// Line 90: `fetch_rekor_on_demand` returns `Ok(Bool(false))` (clean-deny)

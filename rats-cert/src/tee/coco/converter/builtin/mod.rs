@@ -5669,9 +5669,9 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     ///
     /// Each scenario clears the process-global host-await caches
     /// (`invalidate_host_await_caches_for_test`) so a prior scenario's cached
-    /// success/failure cannot short-circuit the next (the resolve cache key is
-    /// `(manifest_hash, canonical_log_services)`, shared across (a) and (b)
-    /// despite different artifact-server URLs).
+    /// success/failure cannot short-circuit the next (the resolve cache key
+    /// includes the artifact-server URL, but defensive invalidation keeps the
+    /// scenarios independent regardless of mock URL reuse).
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     #[serial]
