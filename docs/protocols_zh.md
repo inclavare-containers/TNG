@@ -2,7 +2,7 @@
 
 本文面向开发者与希望深入理解 TNG 的读者，描述两个 TNG 端点之间建立互信并交换加密流量的协议细节：握手如何与远程证明结合、双方交换哪些消息、以及外层 HTTP 的线格式。配置字段与部署方法不在本文范围内：配置参考见[参数手册](configuration.md)，远程证明的配置细节见[远程证明配置](remote_attestation.md)，整体概念见[核心概念与工作流程](architecture.md)。
 
-本文当前覆盖 **ohttp 隧道**；rats-tls 的握手细节将在后续修订中补充到同一文档。
+本文覆盖 TNG 的两条隧道协议：**ohttp**（按 HTTP 请求加密）与 **rats-tls**（按 TCP 连接加密，TNG 的默认协议）。两章共用一套形式化记号（见[时间点与消息记号](#时间点与消息记号)）。
 
 术语约定：本文用 **TNG Ingress**（隧道入口，业务流量进入的一端）与 **TNG Egress**（隧道出口，业务流量发出的一端）称呼两个端点。在一次单向证明中，被证明的一端是 RFC 9334 意义上的 Attester，验证的一端是 Verifier（其 Relying Party 角色由 TNG 自己充当）。
 
@@ -21,6 +21,8 @@
 | HPKE | RFC 9180 混合公钥加密，ohttp 封装的密码学基础 |
 | KeyConfig | RFC 9458 定义的 HPKE 公钥配置，egress 分发给 ingress 用于加密 |
 | 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求的封装](#加密请求的封装)） |
+| DICE 证书 (DiceCert) | 被证明端自签的 X.509 证书，自定义扩展携带 RA 证明材料，随 TLS 握手出示（见[DICE 证书](#dice-证书证明材料的载体)） |
+| ALPN | TLS 应用层协议协商，TNG 用它在 `rats-tls`（非多路复用）与 `h2`（多路复用）间选择数据面 |
 
 ## OHTTP 隧道协议
 
@@ -330,9 +332,9 @@ egress 侧的验证有两层，缺一不可：
 ```mermaid
 sequenceDiagram
     autonumber
-    participant V as AS (Verifier)
     participant AT as TNG Ingress (Attester)
     participant RP as TNG Egress (Relying Party)
+    participant V as AS (Verifier)
     Note right of AT: 生成 X25519 密钥对 (skS, pkS)
     Note over AT,RP: egress 在此仅充当 AS 的转发器（保持无状态）
     alt 1. 经 egress 转发获取挑战值
@@ -367,8 +369,8 @@ egress 配置为护照模型时这两个转发接口返回错误。转发请求/
 ```mermaid
 sequenceDiagram
     autonumber
-    participant V as AS (Verifier)
     participant I as TNG Ingress
+    participant V as AS (Verifier)
     participant E as TNG Egress
     Note over I,E: ingress 与 egress 均配置 attest + verify，模型各自独立选择
     Note over V,I: Server 验 Client：ingress 持有<br/>Attestation Result{..., pkS} | pkS
@@ -427,3 +429,292 @@ ohttp 数据面出错时，egress 返回 JSON 体 `{"code": "<机器可读错误
 | 500 / 502 / 504 | 内部错误 / 上游不可达 / 上游超时 |
 
 客户端证明不通过（`verify` 侧校验令牌失败）同样落入上述 JSON 错误通道返回。
+
+## RATS-TLS 隧道协议
+
+### 角色与协议分层
+
+rats-tls 隧道以**TCP 连接**为加密粒度：非多路复用模式下，每条被捕获的客户端连接对应 ingress 与 egress 之间一条独立的 TLS 1.3 会话（ingress 恒为 TLS client，egress 恒为 TLS server）。与 ohttp 把 RA 材料放进 HTTP 载荷不同，rats-tls 把证明材料装进 TLS 握手中的 **X.509 证书**：被证明端生成 ECDSA P-256 密钥对和一张自签的 DICE 证书，证明材料作为证书自定义扩展随 `Certificate` 消息发出，`CertificateVerify` 的私钥签名把这份材料与握手中的活连接绑定。
+
+线协议本身是**未改动的标准 TLS 1.3**：没有自定义握手消息、没有 supplemental data、没有 RA 专用 TLS 扩展。TNG 对 rustls 的改动只有放宽单条握手消息与证书的大小上限（TEE 证据加事件日志会让证书超过上游 64 KiB 的防 DoS 上限，配合 RFC 8879 证书压缩使用）。RA 校验发生在**握手完成之后、任何业务数据转发之前**：rustls 层的证书校验器在握手期间恒返回通过，真正的评估由 TNG 在握手后执行，失败即直接断开连接。数据面形态由 ALPN 协商决定：`rats-tls`（非多路复用）或 `h2`（多路复用，见[多路复用与非多路复用](#多路复用与非多路复用)）。
+
+先看一张不含远程证明的总览图（记号沿用[时间点与消息记号](#时间点与消息记号)一节）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as App（明文）
+    participant I as TNG Ingress（TLS client）
+    participant E as TNG Egress（TLS server）
+    participant S as Server（明文）
+    Note over I,E: 每条客户端 TCP 连接对应一条 TLS 1.3 会话<br/>（ALPN: rats-tls）
+    I->>E: TCP 连接
+    I->>E: ClientHello
+    E->>I: ServerHello / Certificate{DummyCert} /<br/>CertificateVerify / Finished
+    I->>E: Finished
+    loop 连接生命周期内双向转发
+        C->>I: 业务数据（明文）
+        Note right of I: time(OP2_r)
+        I->>E: Enc(业务数据)
+        E->>S: 业务数据（明文）
+        S->>E: 业务数据（明文）
+        E-->>I: Enc(业务数据)
+        I-->>C: 业务数据（明文）
+    end
+    Note over I,E: 有会话票据时：PSK 恢复 + 0-RTT 早期数据（见新鲜度一节）
+```
+
+no_ra 模式下两端使用随二进制内置的固定自签 DummyCert（运行时生成于构建期），提供加密与完整性但不提供任何身份或 RA 保证，仅用于调试，不应在生产环境使用。图中 `Enc(x)` 即 TLS 记录层加密后的 `x`。
+
+### 握手消息流与方向组合
+
+握手消息序是完全标准的 TLS 1.3 流程（ClientHello → ServerHello → EncryptedExtensions → [CertificateRequest] → Certificate → CertificateVerify → Finished → [客户端 Certificate → CertificateVerify → Finished]），启用 RFC 8879 证书压缩。RA 相关的差异只体现在**谁出示带证明材料的证书、谁发送 CertificateRequest、谁在握手后校验**：
+
+| 方向组合 | ingress 配置 | egress 配置 | CertificateRequest | egress 出示证书 | ingress 出示证书 | 握手后校验方 |
+|---|---|---|---|---|---|---|
+| 单向（Client 验 Server） | `verify` | `attest` | 无 | DiceCert | 空证书 | ingress |
+| 反向单向（Server 验 Client） | `attest` | `verify` | 有 | DummyCert | DiceCert | egress |
+| 双向 | `attest` + `verify` | `attest` + `verify` | 有 | DiceCert | DiceCert | 双方各自 |
+| no_ra（调试） | `no_ra` | `no_ra` | 无 | DummyCert | 空证书 | 无 |
+
+配置组合不匹配会在 TLS 握手内部失败：例如 egress 为 `verify`（要求客户端证书）而 ingress 未配置 `attest`（出示空证书），rustls 直接以 `NoCertificatesPresented` 拒绝。反向单向里 egress 不做 RA、出示 DummyCert，同时以 CertificateRequest 强制要求 ingress 的 DiceCert。
+
+### DICE 证书：证明材料的载体
+
+DICE 证书是 rats-tls 中 RA 材料的唯一载体，其生成与绑定机制（记号同 ohttp 各节）：
+
+1. 被证明端生成 P-256 密钥对，计算公钥的 SHA-256 作为 `PubKeyHash` 放入 Claims（报告数据区声明）。护照模型在此步之后先走 AA→AS 管线换取 Attestation Result，Claims 同样被 TEE 度量绑定。
+2. AA 以该 Claims 采集 Evidence，`Evidence{hash(PubKeyHash)}`，约定与 ohttp 一节相同：TEE 报告数据区绑定的是整个 Claims 规范 JSON 的哈希，明文随行。
+3. 证明材料以带 tag 的 CBOR 序列化（背调装 AA 的 Evidence，护照装 AS 的令牌），作为自签证书的自定义扩展（OID 2.23.133.5.4.9，TCG DICE Tagged Evidence）写入。
+4. 证书为自签、CN 固定、有效期 6 小时（护照模型取与令牌 `exp` 的较小者），启用压缩以控制握手体积。私钥不出被证明端。
+
+验证端在握手后的校验流程：
+
+1. 检查证书**自签签名**（无外部 PKI 链，信任锚是 TEE 度量而非证书链）。
+2. 解析扩展，取出证明材料与随行 Claims，重算证书公钥哈希得到期望的 `PubKeyHash`。
+3. 背调模型：将 Evidence 连同 Claims 同步提交 AS 换取令牌；护照模型：材料本身就是 AS 令牌，无 AS 往返。
+4. 验证令牌：签名信任链（AS 证书/JWK）、`exp`、Claims 覆盖 `{PubKeyHash}`（子集校验，同 ohttp）。通过后结论按证书哈希缓存 60 秒。
+
+与 ohttp 的 `pkS`/`skS` 双层结构完全同构，这是「验过的连接」的密码学含义：
+
+- **令牌层**：Attestation Result 的 Claims 覆盖 `{PubKeyHash}`，证明「这个公钥出自可信环境」。
+- **密码层**：TLS `CertificateVerify` 由证书私钥签名，握手验证成功即密码学证明对方持有与 `PubKeyHash` 配对的私钥。
+
+令牌绑定公钥哈希、握手证明私钥持有，二者把「可信环境」与「这条 TLS 连接」绑死，无法拆开伪造。
+
+### 多路复用与非多路复用
+
+| 维度 | 非多路复用（默认） | 多路复用 |
+|---|---|---|
+| ALPN | `rats-tls` | `h2` |
+| 连接模型 | 一条客户端连接 = 一条 TLS 会话 | 一条外层 TLS 会话承载全部流量，每条客户端连接是其中一条 HTTP/2 CONNECT 流 |
+| RA | 每条会话各自出示证书并校验 | 外层握手一次出示证书并校验，CONNECT 响应携带校验结果 |
+| 会话恢复 | PSK 票据 + 0-RTT 早期数据 | 单条长连接，无 0-RTT |
+| 吞吐特征 | 每连接独立密码学，天然并行 | 流量共享一条连接的密码学能力（见参数手册的容量说明） |
+
+多路复用需要 ingress 与 egress 的 `multiplex` 开关一致，否则 ALPN 协商失败；RA 全部由外层握手承载，内层 CONNECT 流不再有证明材料。ingress 侧的连接池按目标端点分片（`multiplex_max_connections`），每分片有并发流上限（`multiplex_max_streams_per_connection`），达到上限后开新分片，这些是吞吐调优参数，语义见[参数手册](configuration.md#transport-layer-common-configuration)。
+
+### RA 模型在 rats-tls 中的形态
+
+背调与护照两模型同样适用于 rats-tls，且**在线格式上不可区分**：TLS 消息流、证书结构、扩展 OID 完全相同，区别只在证书扩展里装的是 AA 的 Evidence 还是 AS 的令牌，以及 AS 被调用的时机（验证端在握手后调用，或被证明端在握手前调用）。模型对比沿用[RA 模型选择](#ra-模型选择)一节的表格。两点 rats-tls 特有约束：attest 侧与 verify 侧的 `model` 必须一致；builtin AS 仅可用于背调模型的 verify 侧（护照 attest + builtin 组合被拒绝）。
+
+### Client 验 Server
+
+#### 背调模型（默认）
+
+egress 在握手前备好装着 Evidence 的 DiceCert，ingress 在握手后请 AS 验证：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant V as AS (Verifier)
+    participant I as TNG Ingress (Relying Party)
+    participant E as TNG Egress (Attester)
+    participant AA as AA
+    Note right of E: 生成 P-256 密钥对，<br/>Claims{PubKeyHash} = hash(证书公钥)
+    alt 1. egress 备好证明材料（按 refresh_interval 刷新，默认 600s）
+        E->>AA: 采集 Evidence
+        Note right of E: time(EG_a)：Evidence{hash(PubKeyHash)}，<br/>装入 DiceCert 扩展（OID 2.23.133.5.4.9）
+    end
+    alt 2. TLS 1.3 握手（ALPN: rats-tls）
+        I->>E: ClientHello
+        E->>I: ServerHello / Certificate{DiceCert{Evidence{hash(PubKeyHash)}}} /<br/>CertificateVerify / Finished
+        I->>E: Finished
+        Note right of I: TLS 层不校验证明结果，<br/>校验在握手后进行
+    end
+    alt 3. 握手后验证（转发数据前）
+        I->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>I: Attestation Result{time(RG_v), time(RX_v),<br/>Claims 覆盖 {PubKeyHash}}
+        Note right of I: time(RA_r)：验签 + exp + Claims 覆盖检查，<br/>失败 → 断开连接（无 TLS alert）
+    end
+    alt 4. 数据转发
+        Note right of I: time(OP2_r)
+        I->>E: Enc(业务数据)
+        E-->>I: Enc(业务数据)
+    end
+```
+
+若 ingress 配置了 `as_type: "builtin"`，第 3 步的 AS 角色在 ingress 进程内完成，无网络往返。
+
+#### 护照模型
+
+egress 提前换好令牌装入证书，ingress 握手后只验令牌，无 AS 往返：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant I as TNG Ingress (Relying Party)
+    participant E as TNG Egress (Attester)
+    participant V as AS (Verifier)
+    participant AA as AA
+    Note right of E: 生成 P-256 密钥对，<br/>Claims{PubKeyHash} = hash(证书公钥)
+    alt 1. egress 提前换取 Attestation Result（按 refresh_interval 刷新）
+        E->>AA: 采集 Evidence
+        Note right of E: time(EG_a)：Evidence{hash(PubKeyHash)}
+        E->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>E: Attestation Result{time(RG_v), time(RX_v),<br/>Claims 覆盖 {PubKeyHash}}
+        Note right of E: 令牌装入 DiceCert 扩展
+    end
+    alt 2. TLS 1.3 握手（ALPN: rats-tls）
+        I->>E: ClientHello
+        E->>I: ServerHello /<br/>Certificate{DiceCert{Attestation Result{time(RG_v), time(RX_v), PubKeyHash}}} /<br/>CertificateVerify / Finished
+        I->>E: Finished
+    end
+    alt 3. 握手后验证（无 AS 往返）
+        Note right of I: time(RA_r)：验令牌（签名 + exp +<br/>Claims 覆盖 {PubKeyHash}），失败 → 断开连接
+    end
+    alt 4. 数据转发
+        Note right of I: time(OP2_r)
+        I->>E: Enc(业务数据)
+        E-->>I: Enc(业务数据)
+    end
+```
+
+### Server 验 Client
+
+#### 护照模型
+
+ingress 提前换好令牌装入自己的 DiceCert，egress 在握手中强制索取客户端证书并在握手后验证：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AA as AA
+    participant V as AS (Verifier)
+    participant I as TNG Ingress (Attester)
+    participant E as TNG Egress (Relying Party)
+    Note right of I: 生成 P-256 密钥对，<br/>Claims{PubKeyHash} = hash(证书公钥)
+    alt 1. ingress 提前换取 Attestation Result
+        I->>AA: 采集 Evidence
+        Note right of I: time(EG_a)：Evidence{hash(PubKeyHash)}
+        I->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>I: Attestation Result{time(RG_v), time(RX_v),<br/>Claims 覆盖 {PubKeyHash}}
+        Note right of I: 令牌装入 DiceCert 扩展
+    end
+    alt 2. TLS 1.3 握手（egress 出示 DummyCert 并索取客户端证书）
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DummyCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert{Attestation Result{time(RG_v), time(RX_v), PubKeyHash}}} /<br/>CertificateVerify / Finished
+        Note right of E: CertificateVerify 由 DiceCert 私钥签名，<br/>证明持有与 PubKeyHash 配对的私钥
+    end
+    alt 3. 握手后验证（转发数据前）
+        Note right of E: time(RA_r)：验令牌（签名 + exp +<br/>Claims 覆盖 {PubKeyHash}），失败 → 断开连接
+    end
+    alt 4. 数据转发
+        Note right of E: time(OP2_r)
+        E-->>I: Enc(业务数据)
+        I-->>E: Enc(业务数据)
+    end
+```
+
+#### 背调模型
+
+流程与护照模型同形，区别在两处：ingress 装入证书的是 AA 的 Evidence（非令牌）；egress 在握手后把 Evidence 连同 Claims 提交 AS 换取令牌再验证（AS 必须能被 egress 访问）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AA as AA
+    participant I as TNG Ingress (Attester)
+    participant E as TNG Egress (Relying Party)
+    participant V as AS (Verifier)
+    Note right of I: 生成 P-256 密钥对，<br/>Claims{PubKeyHash} = hash(证书公钥)
+    alt 1. ingress 备好证明材料（按 refresh_interval 刷新）
+        I->>AA: 采集 Evidence
+        Note right of I: time(EG_a)：Evidence{hash(PubKeyHash)}，<br/>装入 DiceCert 扩展
+    end
+    alt 2. TLS 1.3 握手（egress 出示 DummyCert 并索取客户端证书）
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DummyCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert{Evidence{hash(PubKeyHash)}}} /<br/>CertificateVerify / Finished
+        Note right of E: CertificateVerify 由 DiceCert 私钥签名，<br/>证明持有与 PubKeyHash 配对的私钥
+    end
+    alt 3. 握手后验证（转发数据前）
+        E->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>E: Attestation Result{time(RG_v), time(RX_v),<br/>Claims 覆盖 {PubKeyHash}}
+        Note right of E: time(RA_r)：验签 + exp + Claims 覆盖检查，<br/>失败 → 断开连接
+    end
+    alt 4. 数据转发
+        Note right of E: time(OP2_r)
+        E-->>I: Enc(业务数据)
+        I-->>E: Enc(业务数据)
+    end
+```
+
+与 ohttp 的背调转发变体不同，这里**没有**「经对端转发」的变体：rats-tls 是连接级协议，ingress 与 egress 直接建连，不存在无状态集群下「不知道会连到哪个 egress」的问题。
+
+### 双向验证
+
+两个方向叠加：egress 出示 DiceCert，同时以 CertificateRequest 索取 ingress 的 DiceCert，双方各自在握手后校验对端：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant I as TNG Ingress
+    participant V as AS (Verifier)
+    participant E as TNG Egress
+    Note over I,E: 双方均配置 attest + verify，模型一致（背调或护照）
+    Note over V,I: Server 验 Client：ingress 的 DiceCert 装有<br/>自己的证明材料
+    Note over V,E: Client 验 Server：egress 的 DiceCert 装有<br/>自己的证明材料
+    alt 1. 双方各自备好证明材料（护照或背调）
+        Note over I: time(EG_a)
+        Note over E: time(EG_a)
+    end
+    alt 2. TLS 1.3 握手（双向证书）
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DiceCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert} / CertificateVerify / Finished
+    end
+    alt 3. 双方各自在握手后校验（转发数据前）
+        Note over I: time(RA_r)：验证 egress 的 DiceCert
+        Note over E: time(RA_r)：验证 ingress 的 DiceCert
+    end
+    alt 4. 数据转发
+        Note over I: time(OP2_r)
+        I->>E: Enc(业务数据)
+        E-->>I: Enc(业务数据)
+    end
+```
+
+### 新鲜度与会话恢复
+
+rats-tls 路径**没有逐握手的挑战值**（`time(NS_v)` / `time(NX_v)` 不出现：AS 的 challenge 接口只用于 ohttp 背调流程），新鲜度由一组时间窗口叠加保证：
+
+| 机制 | 周期 / 语义 |
+|---|---|
+| 证明材料刷新 | attest 侧 `refresh_interval`（默认 600 秒，0 = 每次握手重新生成） |
+| 验证结论缓存 | verify 侧 60 秒（同一证书一分钟内不重复评估） |
+| 令牌有效期 | AS 令牌的 `exp` |
+| 证书有效期 | 6 小时（护照模型取与令牌 `exp` 的较小者） |
+
+会话恢复（PSK）与 0-RTT 的信任**继承自原完整握手**：恢复的连接不再重新执行 RA 校验，`AttestationState::Resumed` 直接信任 PSK 所绑定的那次校验。有会话票据的客户端可在握手完成前携带最多 64 KiB 早期数据（egress 接受上限 128 KiB，被拒的 0-RTT 自动按 1-RTT 重放）。与 ohttp 的挑战 JWT 相比，这里没有逐握手的新鲜度源，代价是证明材料存在最长一个刷新周期的陈旧窗口，收益是恢复连接零额外往返。
+
+### 握手失败与错误行为
+
+- **RA 校验失败**：TLS 层不产生 alert；连接在握手完成后、数据转发前被直接断开，对端观察到的是连接关闭或 TCP 复位，而非 TLS 错误。
+- **配置组合不匹配**：在 TLS 握手内部失败，例如 egress 为 `verify` 而 ingress 无 `attest`（空客户端证书）时 rustls 以 `NoCertificatesPresented` 拒绝。
+- **UDP 隧道路径（QUIC）例外**：该路径的证书校验器在握手内同步执行，失败映射为 TLS 层的证书无效错误。

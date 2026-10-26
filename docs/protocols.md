@@ -2,7 +2,7 @@
 
 This document is for developers and anyone who wants to understand TNG in depth. It describes how two TNG endpoints establish mutual trust and exchange encrypted traffic: how the handshake combines with remote attestation, which messages the parties exchange, and the wire format of the outer HTTP layer. Configuration fields and deployment are out of scope: see the [Parameter Manual](configuration.md) for configuration, [Remote Attestation](remote_attestation.md) for RA configuration details, and [Core Concepts and Workflow](architecture.md) for the conceptual overview.
 
-This document currently covers the **ohttp tunnel**; the rats-tls handshake will be added to the same document in a later revision.
+This document covers both of TNG's tunnel protocols: **ohttp** (per-HTTP-request encryption) and **rats-tls** (per-TCP-connection encryption, TNG's default protocol). The two chapters share one formal notation (see [Timestamp and Message Notation](#timestamp-and-message-notation)).
 
 Terminology: this document calls the two endpoints **TNG Ingress** (the tunnel entry, where business traffic enters) and **TNG Egress** (the tunnel exit, where business traffic leaves). In a one-directional attestation, the proven side is the RFC 9334 Attester and the verifying side is the Verifier (whose Relying Party role is played by TNG itself).
 
@@ -21,6 +21,8 @@ Terminology: this document calls the two endpoints **TNG Ingress** (the tunnel e
 | HPKE | RFC 9180 Hybrid Public-Key Encryption, the cryptographic basis of the ohttp encapsulation |
 | KeyConfig | The HPKE public-key configuration defined by RFC 9458 that the egress distributes to the ingress for encryption |
 | Metadata frame | A custom metadata blob TNG prepends to the ohttp ciphertext (see [Encapsulating the encrypted request](#encapsulating-the-encrypted-request)) |
+| DICE certificate (DiceCert) | A self-signed X.509 certificate the proven side generates, carrying the RA material in a custom extension and presented during the TLS handshake (see [DICE certificate](#dice-certificate-the-carrier-of-the-attested-material)) |
+| ALPN | TLS Application-Layer Protocol Negotiation; TNG uses it to select the data plane between `rats-tls` (non-multiplexed) and `h2` (multiplexed) |
 
 ## OHTTP Tunnel Protocol
 
@@ -330,9 +332,9 @@ A strict background-check model would have the egress go to the AS itself after 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant V as AS (Verifier)
     participant AT as TNG Ingress (Attester)
     participant RP as TNG Egress (Relying Party)
+    participant V as AS (Verifier)
     Note right of AT: Generate an X25519 key pair (skS, pkS)
     Note over AT,RP: The egress is only a forwarder to the AS here (stays stateless)
     alt 1. Fetch the challenge via the egress
@@ -367,8 +369,8 @@ The two directions produce complementary artifacts: client-verifies-server yield
 ```mermaid
 sequenceDiagram
     autonumber
-    participant V as AS (Verifier)
     participant I as TNG Ingress
+    participant V as AS (Verifier)
     participant E as TNG Egress
     Note over I,E: Both ingress and egress configure attest + verify, models are chosen independently
     Note over V,I: Server verifies client: the ingress holds<br/>Attestation Result{..., pkS} | pkS
@@ -427,3 +429,292 @@ On data-plane errors the egress returns a JSON body `{"code": "<machine-readable
 | 500 / 502 / 504 | Internal error / upstream unreachable / upstream timeout |
 
 A failed client attestation (the verify side's token check failing) flows through the same JSON error channel.
+
+## RATS-TLS Tunnel Protocol
+
+### Roles and Protocol Layering
+
+The rats-tls tunnel encrypts at the granularity of a **TCP connection**: in non-multiplexed mode, every captured client connection maps to one independent TLS 1.3 session between the ingress and the egress (the ingress is always the TLS client, the egress always the TLS server). Where ohttp carries the RA material in the HTTP payload, rats-tls carries it inside the **X.509 certificate** of the TLS handshake: the proven side generates an ECDSA P-256 key pair and a self-signed DICE certificate, puts the RA material into a custom certificate extension that travels in the `Certificate` message, and the `CertificateVerify` signature over that private key binds the material to the live connection of the handshake.
+
+The wire protocol itself is **unmodified standard TLS 1.3**: no custom handshake messages, no supplemental data, no RA-specific TLS extension. TNG's only change to rustls is raising the per-message and certificate size caps (TEE evidence plus the event log pushes the certificate past the upstream 64 KiB DoS limits, in combination with RFC 8879 certificate compression). RA verification happens **after the handshake completes and before any business data is forwarded**: the rustls-level certificate verifiers unconditionally pass during the handshake, the real appraisal is done by TNG afterwards, and a failure simply drops the connection. The data-plane shape is decided by ALPN: `rats-tls` (non-multiplexed) or `h2` (multiplexed, see [Multiplexed and Non-Multiplexed](#multiplexed-and-non-multiplexed)).
+
+Start with an overview diagram without remote attestation (notation follows [Timestamp and Message Notation](#timestamp-and-message-notation)):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as App (plaintext)
+    participant I as TNG Ingress (TLS client)
+    participant E as TNG Egress (TLS server)
+    participant S as Server (plaintext)
+    Note over I,E: Every client TCP connection maps to one TLS 1.3 session<br/>(ALPN: rats-tls)
+    I->>E: TCP connect
+    I->>E: ClientHello
+    E->>I: ServerHello / Certificate{DummyCert} /<br/>CertificateVerify / Finished
+    I->>E: Finished
+    loop Bidirectional forwarding for the connection lifetime
+        C->>I: business data (plaintext)
+        Note right of I: time(OP2_r)
+        I->>E: Enc(business data)
+        E->>S: business data (plaintext)
+        S->>E: business data (plaintext)
+        E-->>I: Enc(business data)
+        I-->>C: business data (plaintext)
+    end
+    Note over I,E: With a session ticket: PSK resumption + 0-RTT early data (see freshness section)
+```
+
+In no_ra mode both ends use a fixed self-signed DummyCert built into the binary, which provides encryption and integrity but no identity or RA guarantees at all. It is for debugging only and should not be used in production. `Enc(x)` in the diagrams is `x` after TLS record-layer encryption.
+
+### Handshake Message Flow and Direction Combinations
+
+The message order is a completely standard TLS 1.3 flow (ClientHello → ServerHello → EncryptedExtensions → [CertificateRequest] → Certificate → CertificateVerify → Finished → [client Certificate → CertificateVerify → Finished]) with RFC 8879 certificate compression enabled. The RA-relevant differences only show up in **who presents a certificate carrying RA material, who sends the CertificateRequest, and who verifies after the handshake**:
+
+| Direction | Ingress config | Egress config | CertificateRequest | Egress presents | Ingress presents | Post-handshake verifier |
+|---|---|---|---|---|---|---|
+| Unidirectional (client verifies server) | `verify` | `attest` | no | DiceCert | empty certificate | ingress |
+| Reverse unidirectional (server verifies client) | `attest` | `verify` | yes | DummyCert | DiceCert | egress |
+| Bidirectional | `attest` + `verify` | `attest` + `verify` | yes | DiceCert | DiceCert | both sides |
+| no_ra (debugging) | `no_ra` | `no_ra` | no | DummyCert | empty certificate | none |
+
+Mismatched combinations fail inside the TLS handshake itself: for example a `verify` egress (which demands a client certificate) facing an ingress without `attest` (which presents an empty certificate) is rejected by rustls with `NoCertificatesPresented`. In the reverse-unidirectional row the egress does no RA, presents the DummyCert, and uses CertificateRequest to demand the ingress's DiceCert.
+
+### DICE Certificate: The Carrier of the Attested Material
+
+The DICE certificate is the sole carrier of RA material in rats-tls. Its generation and binding mechanism (same notation as the ohttp sections):
+
+1. The proven side generates a P-256 key pair and puts the SHA-256 of the public key, as `PubKeyHash`, into the Claims (report-data claims). In the passport model the AA→AS pipeline then runs up front to obtain the Attestation Result, with the same Claims measured into the TEE report.
+2. The AA collects the Evidence with those Claims, `Evidence{hash(PubKeyHash)}`, same convention as in the ohttp section: the TEE report data binds the hash of the whole canonical-JSON Claims, with the plaintext traveling alongside.
+3. The material is serialized as tagged CBOR (raw AA Evidence in the background-check model, the AS token in the passport model) and written into the self-signed certificate's custom extension (OID 2.23.133.5.4.9, TCG DICE Tagged Evidence).
+4. The certificate is self-signed with a fixed CN and a 6-hour validity (the passport model takes the minimum with the token's `exp`), compressed to control the handshake size. The private key never leaves the proven side.
+
+The verifier's post-handshake check:
+
+1. Verify the certificate's **self-signature** (there is no external PKI chain; the trust anchor is the TEE measurement, not a certificate chain).
+2. Parse the extension, extract the material and the accompanying Claims, and recompute the expected `PubKeyHash` from the certificate's public key.
+3. Background-check model: submit the Evidence with the Claims to the AS synchronously for a token; passport model: the material is already the AS token, no AS round trip.
+4. Verify the token: signature trust chain (AS certificate/JWK), `exp`, Claims covering `{PubKeyHash}` (the same subset check as ohttp). A pass is cached by certificate hash for 60 seconds.
+
+This is exactly isomorphic to ohttp's `pkS`/`skS` two-layer structure, and it is what "a verified connection" cryptographically means:
+
+- **Token layer**: the Attestation Result's Claims cover `{PubKeyHash}`, proving "this public key comes from a trusted environment".
+- **Cryptographic layer**: the TLS `CertificateVerify` is signed by the certificate's private key; verifying it is the cryptographic proof that the peer holds the private key matching `PubKeyHash`.
+
+The token binds the public-key hash, the handshake proves private-key possession, and together they tie "the trusted environment" to "this TLS connection", not forgeable separately.
+
+### Multiplexed and Non-Multiplexed
+
+| Dimension | Non-multiplexed (default) | Multiplexed |
+|---|---|---|
+| ALPN | `rats-tls` | `h2` |
+| Connection model | one client connection = one TLS session | one outer TLS session carries all traffic; each client connection is one HTTP/2 CONNECT stream on it |
+| RA | each session presents and verifies its own certificate | the outer handshake presents and verifies once; the CONNECT response carries the verdict |
+| Session resumption | PSK tickets + 0-RTT early data | a single long-lived connection, no 0-RTT |
+| Throughput profile | independent crypto per connection, naturally parallel | all traffic shares one connection's crypto capacity (see the capacity notes in the parameter manual) |
+
+Multiplexing requires the ingress and egress `multiplex` flags to agree, otherwise ALPN negotiation fails; all RA is carried by the outer handshake, and the inner CONNECT streams carry no attested material. The ingress-side pool shards per destination endpoint (`multiplex_max_connections`) with a per-shard concurrent-stream cap (`multiplex_max_streams_per_connection`), opening a new shard at the cap; these are throughput knobs whose semantics live in the [Parameter Manual](configuration.md#transport-layer-common-configuration).
+
+### The RA Models in rats-tls
+
+Both the background-check and passport models apply to rats-tls, and they are **indistinguishable on the wire**: the TLS message flow, the certificate structure, and the extension OID are identical; the difference is only what the certificate extension carries (the AA's Evidence or the AS's token) and when the AS is called (by the verifying side after the handshake, or by the proven side before it). The model comparison table in [Choosing an RA Model](#choosing-an-ra-model) carries over. Two rats-tls-specific constraints: the `model` on the attest side and the verify side must match, and the builtin AS is only usable on the verify side of the background-check model (a passport attest + builtin combination is rejected).
+
+### Client Verifies Server
+
+#### Background-Check Model (Default)
+
+The egress prepares a DiceCert carrying Evidence before the handshake; the ingress has the AS verify it after the handshake:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant V as AS (Verifier)
+    participant I as TNG Ingress (Relying Party)
+    participant E as TNG Egress (Attester)
+    participant AA as AA
+    Note right of E: Generate a P-256 key pair,<br/>Claims{PubKeyHash} = hash(cert public key)
+    alt 1. The egress prepares the material (refreshed per refresh_interval, default 600s)
+        E->>AA: collect Evidence
+        Note right of E: time(EG_a): Evidence{hash(PubKeyHash)},<br/>placed into the DiceCert extension (OID 2.23.133.5.4.9)
+    end
+    alt 2. TLS 1.3 handshake (ALPN: rats-tls)
+        I->>E: ClientHello
+        E->>I: ServerHello / Certificate{DiceCert{Evidence{hash(PubKeyHash)}}} /<br/>CertificateVerify / Finished
+        I->>E: Finished
+        Note right of I: The TLS layer does not appraise,<br/>verification happens after the handshake
+    end
+    alt 3. Post-handshake verification (before forwarding data)
+        I->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>I: Attestation Result{time(RG_v), time(RX_v),<br/>Claims covers {PubKeyHash}}
+        Note right of I: time(RA_r): signature + exp + Claims-coverage check,<br/>failure → drop the connection (no TLS alert)
+    end
+    alt 4. Data forwarding
+        Note right of I: time(OP2_r)
+        I->>E: Enc(business data)
+        E-->>I: Enc(business data)
+    end
+```
+
+If the ingress has `as_type: "builtin"` configured, the AS role in step 3 runs inside the ingress process with no network round trip.
+
+#### Passport Model
+
+The egress obtains the token up front and bakes it into the certificate; the ingress verifies the token after the handshake with no AS round trip:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant I as TNG Ingress (Relying Party)
+    participant E as TNG Egress (Attester)
+    participant V as AS (Verifier)
+    participant AA as AA
+    Note right of E: Generate a P-256 key pair,<br/>Claims{PubKeyHash} = hash(cert public key)
+    alt 1. The egress obtains the Attestation Result up front (refreshed per refresh_interval)
+        E->>AA: collect Evidence
+        Note right of E: time(EG_a): Evidence{hash(PubKeyHash)}
+        E->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>E: Attestation Result{time(RG_v), time(RX_v),<br/>Claims covers {PubKeyHash}}
+        Note right of E: the token goes into the DiceCert extension
+    end
+    alt 2. TLS 1.3 handshake (ALPN: rats-tls)
+        I->>E: ClientHello
+        E->>I: ServerHello /<br/>Certificate{DiceCert{Attestation Result{time(RG_v), time(RX_v), PubKeyHash}}} /<br/>CertificateVerify / Finished
+        I->>E: Finished
+    end
+    alt 3. Post-handshake verification (no AS round trip)
+        Note right of I: time(RA_r): verify the token (signature + exp +<br/>Claims covers {PubKeyHash}), failure → drop the connection
+    end
+    alt 4. Data forwarding
+        Note right of I: time(OP2_r)
+        I->>E: Enc(business data)
+        E-->>I: Enc(business data)
+    end
+```
+
+### Server Verifies Client
+
+#### Passport Model
+
+The ingress obtains the token up front and bakes it into its own DiceCert; the egress demands the client certificate during the handshake and verifies it afterwards:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AA as AA
+    participant V as AS (Verifier)
+    participant I as TNG Ingress (Attester)
+    participant E as TNG Egress (Relying Party)
+    Note right of I: Generate a P-256 key pair,<br/>Claims{PubKeyHash} = hash(cert public key)
+    alt 1. The ingress obtains the Attestation Result up front
+        I->>AA: collect Evidence
+        Note right of I: time(EG_a): Evidence{hash(PubKeyHash)}
+        I->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>I: Attestation Result{time(RG_v), time(RX_v),<br/>Claims covers {PubKeyHash}}
+        Note right of I: the token goes into the DiceCert extension
+    end
+    alt 2. TLS 1.3 handshake (egress presents the DummyCert and demands the client certificate)
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DummyCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert{Attestation Result{time(RG_v), time(RX_v), PubKeyHash}}} /<br/>CertificateVerify / Finished
+        Note right of E: CertificateVerify is signed by the DiceCert private key,<br/>proving possession of the key matching PubKeyHash
+    end
+    alt 3. Post-handshake verification (before forwarding data)
+        Note right of E: time(RA_r): verify the token (signature + exp +<br/>Claims covers {PubKeyHash}), failure → drop the connection
+    end
+    alt 4. Data forwarding
+        Note right of E: time(OP2_r)
+        E-->>I: Enc(business data)
+        I-->>E: Enc(business data)
+    end
+```
+
+#### Background-Check Model
+
+The flow has the same shape as the passport model, with two differences: the ingress bakes the AA's Evidence (not a token) into the certificate, and the egress submits the Evidence with the Claims to the AS for a token after the handshake (the AS must be reachable from the egress):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AA as AA
+    participant I as TNG Ingress (Attester)
+    participant E as TNG Egress (Relying Party)
+    participant V as AS (Verifier)
+    Note right of I: Generate a P-256 key pair,<br/>Claims{PubKeyHash} = hash(cert public key)
+    alt 1. The ingress prepares the material (refreshed per refresh_interval)
+        I->>AA: collect Evidence
+        Note right of I: time(EG_a): Evidence{hash(PubKeyHash)},<br/>placed into the DiceCert extension
+    end
+    alt 2. TLS 1.3 handshake (egress presents the DummyCert and demands the client certificate)
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DummyCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert{Evidence{hash(PubKeyHash)}}} /<br/>CertificateVerify / Finished
+        Note right of E: CertificateVerify is signed by the DiceCert private key,<br/>proving possession of the key matching PubKeyHash
+    end
+    alt 3. Post-handshake verification (before forwarding data)
+        E->>V: Evidence | Claims{PubKeyHash}
+        Note right of V: time(RG_v)
+        V-->>E: Attestation Result{time(RG_v), time(RX_v),<br/>Claims covers {PubKeyHash}}
+        Note right of E: time(RA_r): signature + exp + Claims-coverage check,<br/>failure → drop the connection
+    end
+    alt 4. Data forwarding
+        Note right of E: time(OP2_r)
+        E-->>I: Enc(business data)
+        I-->>E: Enc(business data)
+    end
+```
+
+Unlike ohttp's background-check forwarding variant, there is **no** "forwarded via the peer" variant here: rats-tls is a connection-level protocol where the ingress connects to the egress directly, so the stateless-cluster problem of "not knowing which egress you will land on" does not exist.
+
+### Bidirectional Verification
+
+The two directions stack: the egress presents a DiceCert while demanding the ingress's DiceCert via CertificateRequest, and both sides verify the peer's certificate after the handshake:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant I as TNG Ingress
+    participant V as AS (Verifier)
+    participant E as TNG Egress
+    Note over I,E: Both sides configure attest + verify, with matching models (background-check or passport)
+    Note over V,I: Server verifies client: the ingress's DiceCert carries<br/>its own attested material
+    Note over V,E: Client verifies server: the egress's DiceCert carries<br/>its own attested material
+    alt 1. Both sides prepare their material (passport or background-check)
+        Note over I: time(EG_a)
+        Note over E: time(EG_a)
+    end
+    alt 2. TLS 1.3 handshake (mutual certificates)
+        I->>E: ClientHello
+        E->>I: ServerHello / CertificateRequest /<br/>Certificate{DiceCert} / CertificateVerify / Finished
+        I->>E: Certificate{DiceCert} / CertificateVerify / Finished
+    end
+    alt 3. Both sides verify after the handshake (before forwarding data)
+        Note over I: time(RA_r): verify the egress's DiceCert
+        Note over E: time(RA_r): verify the ingress's DiceCert
+    end
+    alt 4. Data forwarding
+        Note over I: time(OP2_r)
+        I->>E: Enc(business data)
+        E-->>I: Enc(business data)
+    end
+```
+
+### Freshness and Session Resumption
+
+The rats-tls path has **no per-handshake challenge** (`time(NS_v)` / `time(NX_v)` never appear: the AS's challenge interface is only used by the ohttp background-check flow). Freshness is instead a stack of time windows:
+
+| Mechanism | Period / meaning |
+|---|---|
+| Material refresh | attest-side `refresh_interval` (default 600 seconds, 0 = regenerate on every handshake) |
+| Verdict cache | verify-side 60 seconds (the same certificate is not re-appraised within a minute) |
+| Token validity | the AS token's `exp` |
+| Certificate validity | 6 hours (the passport model takes the minimum with the token's `exp`) |
+
+The trust of a resumed (PSK) or 0-RTT session is **inherited from the original full handshake**: a resumed connection does not re-run the RA appraisal; the Resumed state trusts the PSK binding to the original verification. A client holding a session ticket may send up to 64 KiB of early data before the handshake completes (the egress accepts up to 128 KiB; rejected 0-RTT is automatically replayed as 1-RTT). Compared with ohttp's challenge JWT there is no per-handshake freshness source here; the cost is a staleness window of at most one refresh interval on the material, and the gain is zero extra round trips on resumed connections.
+
+### Handshake Failure and Error Behavior
+
+- **RA verification failure**: no alert at the TLS layer; the connection is dropped after the handshake and before any data is forwarded, and the peer observes a closed connection or TCP reset rather than a TLS error.
+- **Mismatched configurations**: fail inside the TLS handshake, for example a `verify` egress facing an ingress without `attest` (empty client certificate) is rejected by rustls with `NoCertificatesPresented`.
+- **The UDP tunnel path (QUIC) is the exception**: its certificate verifiers run synchronously inside the handshake, and a failure surfaces as a TLS-level invalid-certificate error.
