@@ -1094,6 +1094,8 @@ OHTTP (Oblivious HTTP) is a network protocol extension designed to enhance priva
 
 By default, TNG uses the rats-tls protocol for TCP stream-level encryption, which is suitable for most scenarios. To enable OHTTP, configure `ohttp` in Ingress and `ohttp` in Egress respectively.
 
+For the wire-level protocol between ingress and egress under OHTTP, including how the handshake combines with remote attestation, see [Tunnel Protocols and Remote Attestation Handshake](protocols.md).
+
 > [!WARNING]  
 > If OHTTP is enabled, the inner protected business traffic must be HTTP traffic, not ordinary TCP traffic.
 

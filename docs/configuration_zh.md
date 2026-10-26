@@ -1094,6 +1094,8 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 
 在默认情况下，TNG使用rats-tls协议提供TCP流级别的加密保护，这适用于大多数情况。如果需要启用该特性，可以通过分别在Ingress中配置`ohttp`和在Egress中配置`ohttp`来实现切换为OHTTP协议。
 
+关于 OHTTP 下 ingress 与 egress 之间的线级协议，以及握手如何与远程证明结合，参见[隧道协议与远程证明握手](protocols_zh.md)。
+
 > [!WARNING]  
 > 如果启用OHTTP特性，则要求内层被保护的业务必须是http流量，而不能是普通的tcp流量。
 
