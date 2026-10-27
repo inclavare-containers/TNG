@@ -211,7 +211,7 @@ create-tarball:
 	# protos/ at the exact rev pinned in Cargo.lock from cargo's trustee git db into
 	# the vendor dir, so ../protos/ resolves from the vendored crate dir. (Non-vendored
 	# builds work because the full git checkout keeps protos/ as a sibling.)
-	@TRUSTEE_REV=$$(sed -n 's|.*trustee/?rev=\([a-f0-9]\{40\}\).*|\1|p' Cargo.lock | head -1); \
+	@TRUSTEE_REV=$$(sed -n 's|.*trustee/*?rev=\([a-f0-9]\{40\}\).*|\1|p' Cargo.lock | head -1); \
 	PROTOS_OK=0; \
 	for db in $${CARGO_HOME:-$$HOME/.cargo}/git/db/trustee-*; do \
 		[ -d "$$db" ] || continue; \
