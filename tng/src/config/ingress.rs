@@ -434,6 +434,11 @@ pub enum PathDefault {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct OHttpArgs {
+    /// Optional enrolled X25519 public key (64 hex characters). Checked after
+    /// attestation and before any request body is encrypted or forwarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_server_public_key: Option<String>,
+
     #[serde(default)]
     pub path_rewrites: Vec<PathRewrite>,
 

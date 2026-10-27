@@ -82,6 +82,7 @@ pub struct OHttpClient {
 }
 
 pub struct OHttpClientInner {
+    expected_server_public_key: Option<Vec<u8>>,
     ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     #[cfg(unix)]
@@ -156,7 +157,20 @@ impl OHttpClient {
         runtime: TokioRuntime,
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+        expected_server_public_key: Option<String>,
     ) -> Result<Self> {
+        let expected_server_public_key = expected_server_public_key
+            .map(|pin| {
+                let bytes = hex::decode(pin).context("Invalid enrolled OHTTP public key")?;
+                if bytes.len() != 32 {
+                    anyhow::bail!("Enrolled OHTTP public key must contain 32 bytes");
+                }
+                if ra_context.verify_context().is_none() {
+                    anyhow::bail!("An OHTTP instance pin requires attestation");
+                }
+                Ok::<_, anyhow::Error>(bytes)
+            })
+            .transpose()?;
         // Parsed once per client, not per forwarded request. The error keeps
         // the context text the per-request parse produced before; the caller
         // in `security/mod.rs` maps it to `CreateOHttpClientFailed` as always.
@@ -183,6 +197,7 @@ impl OHttpClient {
         };
 
         let inner = Arc::new(OHttpClientInner {
+            expected_server_public_key,
             ra_context,
             #[cfg(unix)]
             rng: tokio::sync::Mutex::new(ChaCha12Rng::from_os_rng()),
@@ -326,6 +341,11 @@ impl OHttpClientInner {
                 .decode(server_key_config.encoded_key_config_list)?
                 .as_ref(),
         )?;
+
+        if let Some(expected) = &self.expected_server_public_key {
+            check_server_key_pin(expected, &server_key_config_list)
+                .map_err(TngError::ClientRequestKeyConfigFailed)?;
+        }
 
         // Fixed inputs (client auth + the selected first key config's public
         // key), so the outer-POST metadata frame is built once per generation
@@ -1143,5 +1163,48 @@ mod tests {
             msg.contains("no attestation_info"),
             "expected 'no attestation_info' error, got: {msg}"
         );
+    }
+}
+
+/// Only the first configuration is selected for requests. Check that exact
+/// key, never any key advertised alongside it. Verification precedes sealing.
+fn check_server_key_pin(expected: &[u8], configurations: &[KeyConfig]) -> Result<()> {
+    let selected = configurations
+        .first()
+        .context("Missing enrolled OHTTP server key")?;
+    if selected.public_key()?.as_ref() != expected {
+        anyhow::bail!("OHTTP instance public key changed; explicit re-enrollment required");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod instance_pin_tests {
+    use super::*;
+    #[test]
+    fn pin_checks_the_selected_key_and_rejects_an_identical_copy() {
+        let first = KeyConfig::new(
+            1,
+            ohttp::hpke::Kem::X25519Sha256,
+            vec![ohttp::SymmetricSuite::new(
+                ohttp::hpke::Kdf::HkdfSha256,
+                ohttp::hpke::Aead::Aes128Gcm,
+            )],
+        )
+        .unwrap();
+        let copy = KeyConfig::new(
+            2,
+            ohttp::hpke::Kem::X25519Sha256,
+            vec![ohttp::SymmetricSuite::new(
+                ohttp::hpke::Kdf::HkdfSha256,
+                ohttp::hpke::Aead::Aes128Gcm,
+            )],
+        )
+        .unwrap();
+        let pin = first.public_key().unwrap().as_ref().to_vec();
+        assert!(check_server_key_pin(&pin, &[first.clone()]).is_ok());
+        assert!(check_server_key_pin(&pin, &[copy.clone(), first]).is_err());
+        assert!(check_server_key_pin(&pin, &[copy]).is_err());
+        assert!(check_server_key_pin(&pin, &[]).is_err());
     }
 }

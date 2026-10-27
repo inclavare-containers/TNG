@@ -25,12 +25,14 @@ struct AttestationInfo {
     as_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ita_jwks_addr: Option<String>,
+    server_public_key: Option<String>,
     attestation_result: AttestationResult,
 }
 
 pub(super) fn attach_attestation_info(
     web_response: web_sys::Response,
     attestation_result: AttestationResult,
+    server_public_key: Option<String>,
     ra_args: &RaArgs,
 ) -> Result<web_sys::Response, JsValue> {
     let mut attest_info = AttestationInfo {
@@ -39,6 +41,7 @@ pub(super) fn attach_attestation_info(
         as_provider: None,
         ita_jwks_addr: None,
         attestation_result,
+        server_public_key,
     };
 
     let verify_args = match ra_args {

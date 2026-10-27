@@ -196,3 +196,31 @@ When the browser needs to use the TNG SDK cross-origin to access encrypted backe
 ## Running the Example Code
 
 The `example/` directory contains an example page that uses the TNG SDK to send encrypted requests. See [example/README.md](example/README.md) for full end-to-end deployment steps.
+## SEV-SNP and instance enrollment
+
+The SDK enables `builtin-as-snp-rust` alongside the TDX Rust backend. SNP
+certificate and report verification run inside WASM using the embedded CoCo
+Attestation Service; no external verifier service is required. The attester
+must include its AMD-signed VCEK/VLEK certificate with its evidence.
+
+Use an independently trusted release policy that requires the expected launch
+measurement, signed HOST_DATA/native workload-policy hash, disabled debug and
+migration, and a TCB floor. `hardware_only` is insufficient for workload
+verification. A policy supplied by the server being checked is not an approval.
+
+After a non-sensitive verified request, `response.attest_info.server_public_key`
+contains the attested X25519 transport key. Persist it as the enrolled instance
+and set `ohttp.expected_server_public_key` on every later request. A changed
+key is rejected after attestation and before any application body is sealed or
+sent. A rotating server key therefore requires explicit re-enrollment; a
+server can use its guest-private file key manager when stable enrollment is
+needed. Do not silently discard a saved pin.
+
+The SDK provides the attested transport, not HTML loading. A trusted loader
+must fetch the UI and all executable assets through this channel and execute
+those verified bytes, instead of navigating to an ordinary server page.
+
+WASM builds use the pinned toolchain's LLVM archiver. macOS's native archive
+indexer does not index WASM C objects correctly; a successful Rust link alone
+can otherwise leave unresolved crypto imports. `make wasm-build-release`
+installs and selects the matching `llvm-tools` component.

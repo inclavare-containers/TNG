@@ -168,6 +168,7 @@ fn build_ohttp_http_client() -> Result<reqwest::Client> {
 }
 
 pub struct OHttpSecurityLayer {
+    expected_server_public_key: Option<String>,
     ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     ohttp_clients: OhttpClientCache,
@@ -243,6 +244,7 @@ impl OHttpSecurityLayer {
         );
 
         Ok(Self {
+            expected_server_public_key: ohttp_args.expected_server_public_key.clone(),
             ra_context,
             http_client: Arc::new(http_client),
             ohttp_clients,
@@ -253,6 +255,23 @@ impl OHttpSecurityLayer {
             passthrough_request_headers,
             passthrough_response_headers,
         })
+    }
+
+    /// Verified transport key for browser enrollment. No application request is
+    /// sent by this operation; the same client/key cache forwards the request.
+    pub async fn verified_server_public_key(
+        &self,
+        endpoint: &TngEndpoint,
+        request: &axum::extract::Request,
+    ) -> Result<Option<String>, TngError> {
+        let outer_path = outer_path(&self.path_rewrite_group, self.path_default, request);
+        let client = self
+            .get_or_create_ohttp_client(endpoint, &outer_path)
+            .await?;
+        Ok(client
+            .server_status()
+            .await
+            .and_then(|status| status.server_public_key))
     }
 
     /// Derive the URL scheme for the outer OHTTP POST from the scheme of the URL
@@ -351,6 +370,7 @@ impl OHttpSecurityLayer {
                         self.runtime.clone(),
                         self.passthrough_request_headers.clone(),
                         self.passthrough_response_headers.clone(),
+                        self.expected_server_public_key.clone(),
                     )
                     .await
                     .map_err(TngError::CreateOHttpClientFailed)?,
