@@ -569,7 +569,7 @@ checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/mateo-moon/trustee?rev=087ad5e33245374677538522980dc89975de9125#087ad5e33245374677538522980dc89975de9125"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -2446,7 +2446,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/mateo-moon/trustee?rev=087ad5e33245374677538522980dc89975de9125#087ad5e33245374677538522980dc89975de9125"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -4128,7 +4128,7 @@ dependencies = [
 [[package]]
 name = "key-value-storage"
 version = "0.1.0"
-source = "git+https://github.com/mateo-moon/trustee?rev=087ad5e33245374677538522980dc89975de9125#087ad5e33245374677538522980dc89975de9125"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "async-trait",
  "derivative",
@@ -6427,7 +6427,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/mateo-moon/trustee?rev=087ad5e33245374677538522980dc89975de9125#087ad5e33245374677538522980dc89975de9125"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9147,7 +9147,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/mateo-moon/trustee?rev=087ad5e33245374677538522980dc89975de9125#087ad5e33245374677538522980dc89975de9125"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "asn1-rs",
