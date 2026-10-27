@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/protocols.md` / `docs/protocols_zh.md`: developer-facing reference for the tunnel protocols and their remote-attestation handshake, covering the ohttp tunnel's outer request routing, key-config distribution, request encapsulation, and the background-check and passport attestation flows for both directions, with sequence diagrams in a formal RFC 9334-style notation.
 - RATS-TLS chapter in `docs/protocols.md` / `docs/protocols_zh.md`: the standard-TLS-1.3 handshake with RA material carried in the self-signed DICE certificate, the four direction combinations, multiplexed versus non-multiplexed data planes, the freshness and session-resumption model, and handshake failure behavior, in the same notation as the ohttp chapter.
+- `trusted-network-gateway-<version>-1.el7.x86_64.rpm` release asset built on a glibc 2.17 (manylinux2014) baseline: it installs on any RPM-based distro with glibc 2.17 or newer, including AnolisOS 7.9, alongside the existing an8 package.
 
 ### Changed
 

@@ -237,6 +237,158 @@ jobs:
           echo "=== Attestation Service Log ==="
           cat /tmp/as.log 2>/dev/null || echo "(no log file)"
 
+  build-rpm-el7:
+    name: Build RPM (glibc 2.17 baseline)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download build input
+        uses: actions/download-artifact@v8
+        with:
+          name: build-input
+          path: build-input
+
+      - name: Resolve cache key from vendored tarball
+        run: |
+          TARBALL=$(ls build-input/trusted-network-gateway-*-vendored-source.tar.gz)
+          echo "tarball_hash=$(sha256sum "$TARBALL" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      # Compile cache: exact key per tarball, prefix fallback so a changed
+      # tarball reuses most objects incrementally. Without this the ~15 min
+      # cold rustc build lands on the workflow critical path; with it warm
+      # runs compile in a few minutes and the build -> el7 -> smoke chain
+      # stays shorter than the existing build -> test chain.
+      - name: Restore compile cache
+        uses: actions/cache@v4
+        with:
+          path: el7-build-cache
+          key: el7-rpm-v1-${{ env.tarball_hash }}
+          restore-keys: el7-rpm-v1-
+
+      # manylinux2014 (CentOS 7 + devtoolset-10) is the industry-standard
+      # glibc 2.17 buildroot, matching the manylinux_2_17 baseline the Python
+      # wheels carry. The build runs via `docker run` instead of a job-level
+      # `container:` because node20+ actions cannot execute inside a glibc
+      # 2.17 container (node itself needs glibc >= 2.28).
+      - name: Build RPM in manylinux2014 buildroot
+        run: |
+          set -euxo pipefail
+          mkdir -p rpms el7-build-cache
+          docker run --rm \
+            -v "$PWD/build-input:/work:ro" \
+            -v "$PWD/rpms:/out" \
+            -v "$PWD/el7-build-cache:/cache" \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -euxo pipefail -c '
+            TARBALL=$(ls /work/trusted-network-gateway-*-vendored-source.tar.gz)
+            VERSION=${TARBALL##*/trusted-network-gateway-}
+            VERSION=${VERSION%-vendored-source.tar.gz}
+
+            # llvm-toolset provides clang: .cargo/config.toml forces CC=clang
+            # for aws-lc-sys because devtoolset-10 gcc (10.2.1) trips the
+            # aws-lc-sys compiler-bug detection (GCC bug 95189).
+            yum install -y rpm-build llvm-toolset-7.0-clang unzip
+            export PATH="/opt/rh/llvm-toolset-7.0/root/usr/bin:/usr/local/bin:$PATH"
+            export LD_LIBRARY_PATH="/opt/rh/llvm-toolset-7.0/root/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+            # Pinned protoc matching the Makefile trustee-build pin; the
+            # EPEL package is too old for prost.
+            curl -sSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+            unzip -oq /tmp/protoc.zip -d /usr/local
+
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain 1.89.0 --profile minimal
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rustc --version
+
+            # Shared across runs via the mounted host cache: the vendored
+            # build is offline, so this only skips recompiling unchanged
+            # crates.
+            export CARGO_TARGET_DIR=/cache/target
+
+            mkdir -p /tmp/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+            cp "$TARBALL" "/tmp/rpmbuild/SOURCES/trusted-network-gateway-${VERSION}-vendored-source.tar.gz"
+            tar -xzf "/tmp/rpmbuild/SOURCES/trusted-network-gateway-${VERSION}-vendored-source.tar.gz" -C /tmp/rpmbuild/SPECS --strip-components=2 "trusted-network-gateway-${VERSION}/src/trusted-network-gateway.spec"
+
+            # rpm 4.11 predates weak dependencies: an unknown Recommends tag
+            # is a parse error that aborts rpmbuild, not a warning. Drop the
+            # line here; the an8/GuanFu build keeps it because its rpm 4.14
+            # understands and records weak deps.
+            sed -i "/^Recommends:/d" /tmp/rpmbuild/SPECS/trusted-network-gateway.spec
+
+            # CARGO_TARGET_DIR redirects build products out of the extracted
+            # tree for caching, but the spec installs libtng_hook.so from the
+            # default src/target location; point that at the same cache dir.
+            # The pattern swaps the whole path token, not just its tail, so
+            # the builddir prefix from the spec does not end up glued in
+            # front. Note: no apostrophes in these comments; the entire
+            # script is wrapped in single quotes on the runner side.
+            sed -i "s|[^ ]*src/target/release/libtng_hook\.so|${CARGO_TARGET_DIR}/release/libtng_hook.so|" /tmp/rpmbuild/SPECS/trusted-network-gateway.spec
+
+            # BuildRequires mirror the an8 buildspec environment; this job
+            # installs the real build tools directly, so skip the check.
+            rpmbuild --define "_topdir /tmp/rpmbuild" -ba /tmp/rpmbuild/SPECS/trusted-network-gateway.spec --nodeps --define "with_rustup 1"
+
+            cp /tmp/rpmbuild/RPMS/x86_64/trusted-network-gateway-*.rpm /out/
+            '
+
+      # The container runs as root and leaves root-owned files in the cache
+      # volume; widen permissions so the runner-side cache upload can read them.
+      - name: Fix cache ownership
+        run: sudo chmod -R a+rwX el7-build-cache
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpm-el7
+          path: rpms/trusted-network-gateway-*.el7.x86_64.rpm
+          if-no-files-found: error
+
+  smoke-rpm-el7:
+    name: Smoke test RPM (AnolisOS 7.9)
+    runs-on: ubuntu-latest
+    needs: build-rpm-el7
+    steps:
+      - name: Download RPM
+        uses: actions/download-artifact@v8
+        with:
+          name: rpm-el7
+          path: rpm-el7
+
+      # Native rpm -Uvh on the oldest supported platform: real dependency
+      # resolution against glibc 2.17, not --nodeps.
+      - name: Install and run on AnolisOS 7.9
+        run: |
+          set -euxo pipefail
+          docker run --rm -v "$PWD/rpm-el7:/rpms:ro" \
+            docker.io/openanolis/anolisos:7.9-x86_64 \
+            bash -euxo pipefail -c '
+            yum install -y iptables iproute openssl
+            rpm -Uvh /rpms/trusted-network-gateway-*.el7.x86_64.rpm
+            tng --version
+            ls /usr/lib/tng/libtng_hook.so
+            '
+
+  release-rpm-el7:
+    name: Attach glibc 2.17 RPM to release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - smoke-rpm-el7
+      - release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download RPM
+        uses: actions/download-artifact@v8
+        with:
+          name: rpm-el7
+          path: rpm-el7
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rpm-el7/*.rpm
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: 
