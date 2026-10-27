@@ -1,4 +1,6 @@
 pub mod client;
+#[cfg(all(test, not(wasm)))]
+mod enrollment_tests;
 mod path_rewrite;
 
 use std::{collections::HashMap, sync::Arc};
@@ -239,6 +241,11 @@ impl OHttpSecurityLayer {
         endpoint: &TngEndpoint,
         request: &axum::extract::Request,
     ) -> Result<Option<String>, TngError> {
+        if self.ra_context.verify_context().is_none() {
+            return Err(TngError::CreateOHttpClientFailed(anyhow::anyhow!(
+                "OHTTP enrollment requires attestation verification"
+            )));
+        }
         let client = self
             .get_or_create_ohttp_client(self.construct_base_url(endpoint, request))
             .await?;
