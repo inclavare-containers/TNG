@@ -83,15 +83,29 @@ mod tests {
             // Current native CoCo emits the sev 7 JSON schema. It must verify
             // through the same WASM backend, not only the older wire schema.
             use sev_modern::parser::ByteParser;
-            let modern = sev_modern::firmware::guest::AttestationReport::from_bytes(report_bytes).unwrap();
+            let modern =
+                sev_modern::firmware::guest::AttestationReport::from_bytes(report_bytes).unwrap();
             let modern_evidence = serde_json::json!({ "attestation_report": modern,
                 "cert_chain": evidence["cert_chain"].clone() });
-            verifier.evaluate(modern_evidence.clone(), &ReportData::Value(&report.report_data),
-                &InitDataHash::Value(&report.host_data)).await.unwrap();
+            verifier
+                .evaluate(
+                    modern_evidence.clone(),
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::Value(&report.host_data),
+                )
+                .await
+                .unwrap();
             let mut altered = modern_evidence;
-            altered["attestation_report"]["host_data"][0] = serde_json::json!(report.host_data[0] ^ 1);
-            assert!(verifier.evaluate(altered, &ReportData::Value(&report.report_data),
-                &InitDataHash::NotProvided).await.is_err());
+            altered["attestation_report"]["host_data"][0] =
+                serde_json::json!(report.host_data[0] ^ 1);
+            assert!(verifier
+                .evaluate(
+                    altered,
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::NotProvided
+                )
+                .await
+                .is_err());
             let mut wrong = report.host_data;
             wrong[0] ^= 1;
             assert!(verifier

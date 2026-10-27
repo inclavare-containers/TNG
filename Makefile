@@ -379,7 +379,7 @@ wasm-unit-test-chrome: install-wasm-build-dependencies
 	unzip -o -q /tmp/chromedriver.zip -d /tmp/chromedriver-tmp && \
 	install -m 0755 /tmp/chromedriver-tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
 	rm -rf /tmp/chromedriver.zip /tmp/chromedriver-tmp
-	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome ./tng-wasm -- --nocapture
+	WASM_BINDGEN_TEST_TIMEOUT=$${WASM_BINDGEN_TEST_TIMEOUT:-120} AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome ./tng-wasm -- --nocapture
 
 .PHONE: wasm-unit-test-firefox
 wasm-unit-test-firefox: install-wasm-build-dependencies

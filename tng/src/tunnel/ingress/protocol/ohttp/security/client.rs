@@ -1202,7 +1202,7 @@ mod instance_pin_tests {
         )
         .unwrap();
         let pin = first.public_key().unwrap().as_ref().to_vec();
-        assert!(check_server_key_pin(&pin, &[first.clone()]).is_ok());
+        assert!(check_server_key_pin(&pin, std::slice::from_ref(&first)).is_ok());
         assert!(check_server_key_pin(&pin, &[copy.clone(), first]).is_err());
         assert!(check_server_key_pin(&pin, &[copy]).is_err());
         assert!(check_server_key_pin(&pin, &[]).is_err());
