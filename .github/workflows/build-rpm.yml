@@ -82,7 +82,7 @@ jobs:
       - name: Upload build input artifact
         uses: actions/upload-artifact@v7
         with:
-          name: build-input
+          name: rpm-sources
           if-no-files-found: error
           path: |
             ./trusted-network-gateway-*-vendored-source.tar.gz
@@ -96,7 +96,7 @@ jobs:
       - name: Upload build output artifact
         uses: actions/upload-artifact@v7
         with:
-          name: build-output
+          name: rpm-an8
           if-no-files-found: error
           path: |
             /tmp/rpmbuild/SRPMS/trusted-network-gateway-*.an8.src.rpm
@@ -131,7 +131,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
-          name: build-output
+          name: rpm-an8
           path: ./
           merge-multiple: false
 
@@ -245,12 +245,12 @@ jobs:
       - name: Download build input
         uses: actions/download-artifact@v8
         with:
-          name: build-input
-          path: build-input
+          name: rpm-sources
+          path: rpm-sources
 
       - name: Resolve cache key from vendored tarball
         run: |
-          TARBALL=$(ls build-input/trusted-network-gateway-*-vendored-source.tar.gz)
+          TARBALL=$(ls rpm-sources/trusted-network-gateway-*-vendored-source.tar.gz)
           echo "tarball_hash=$(sha256sum "$TARBALL" | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       # Compile cache: exact key per tarball, prefix fallback so a changed
@@ -275,7 +275,7 @@ jobs:
           set -euxo pipefail
           mkdir -p rpms el7-build-cache
           docker run --rm \
-            -v "$PWD/build-input:/work:ro" \
+            -v "$PWD/rpm-sources:/work:ro" \
             -v "$PWD/rpms:/out" \
             -v "$PWD/el7-build-cache:/cache" \
             quay.io/pypa/manylinux2014_x86_64 \
@@ -400,8 +400,8 @@ jobs:
       id-token: write
     uses: 1570005763/GuanFu/.github/workflows/release.yml@v1
     with:
-      input_artifact: build-input
-      output_artifact: build-output
+      input_artifact: rpm-sources
+      output_artifact: rpm-an8
       release_slsa_provenance: true
       provenance_name: "${{ needs.build.outputs.rpm_name_an8 }}.intoto.jsonl"
       rpm_detail_provenance: true
