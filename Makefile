@@ -318,14 +318,16 @@ image-mirror:
 	fi
 
 
+WASM_TOOLCHAIN := nightly-2025-07-07
+WASM_HOST := $(shell rustc +$(WASM_TOOLCHAIN) -vV | sed -n 's/^host: //p')
+WASM_LLVM_AR := $(shell rustc +$(WASM_TOOLCHAIN) --print sysroot)/lib/rustlib/$(WASM_HOST)/bin/llvm-ar
+
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \
 		cargo +nightly-2025-07-07 install wasm-pack@0.14.0 --locked ; \
 	fi
-	if ! rustup component list --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu | grep rust-src | grep installed >/dev/null; then \
-		rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu ; \
-	fi
+	rustup component add rust-src llvm-tools --toolchain $(WASM_TOOLCHAIN)
 
 define WASM_PATCH_PACKAGE_JSON =
 	@echo "Patching package.json ..."
@@ -337,12 +339,12 @@ endef
 
 .PHONE: wasm-build-release
 wasm-build-release: install-wasm-build-dependencies
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-build-debug
 wasm-build-debug: install-wasm-build-dependencies
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-pack-release
@@ -378,12 +380,12 @@ wasm-unit-test-chrome: install-wasm-build-dependencies
 	unzip -o -q /tmp/chromedriver.zip -d /tmp/chromedriver-tmp && \
 	install -m 0755 /tmp/chromedriver-tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
 	rm -rf /tmp/chromedriver.zip /tmp/chromedriver-tmp
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
 .PHONE: wasm-unit-test-firefox
 wasm-unit-test-firefox: install-wasm-build-dependencies
 	if ! command -v firefox; then yum install -y firefox ; fi
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
 
 .PHONE: wasm-integration-test
 wasm-integration-test: wasm-build-debug install-test-deps

@@ -569,7 +569,7 @@ checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=87e8c9aa04aa08a367a6327be56a7a1fb0800cb4#87e8c9aa04aa08a367a6327be56a7a1fb0800cb4"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -2419,6 +2419,25 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "eventlog"
+version = "0.1.0"
+source = "git+https://github.com/mateo-moon/trustee?rev=87e8c9aa04aa08a367a6327be56a7a1fb0800cb4#87e8c9aa04aa08a367a6327be56a7a1fb0800cb4"
+dependencies = [
+ "anyhow",
+ "base64 0.21.7",
+ "byteorder",
+ "hex",
+ "log",
+ "scroll 0.12.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shadow-rs 0.19.0",
+ "sm3",
+ "tonic-build 0.12.3",
 ]
 
 [[package]]
@@ -5171,6 +5190,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "p384"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2",
+]
+
+[[package]]
 name = "parity-scale-codec"
 version = "3.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6229,7 +6260,7 @@ dependencies = [
  "ciborium",
  "const-oid",
  "ctor",
- "eventlog",
+ "eventlog 0.1.0 (git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63)",
  "flatten-json-object",
  "futures",
  "hex",
@@ -6380,7 +6411,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=87e8c9aa04aa08a367a6327be56a7a1fb0800cb4#87e8c9aa04aa08a367a6327be56a7a1fb0800cb4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8208,6 +8239,7 @@ version = "2.12.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bincode",
  "bytes",
  "cfg_aliases",
  "console_error_panic_hook",
@@ -8220,11 +8252,13 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "js-sys",
+ "kbs-types",
  "rats-cert",
  "reqwest 0.13.5",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sev",
  "tng",
  "tokio",
  "tokio-graceful",
@@ -8234,6 +8268,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "tracing-wasm",
+ "verifier",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -9073,7 +9108,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=87e8c9aa04aa08a367a6327be56a7a1fb0800cb4#87e8c9aa04aa08a367a6327be56a7a1fb0800cb4"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -9087,7 +9122,7 @@ dependencies = [
  "codicon",
  "csv-rs",
  "dcap-qvl",
- "eventlog",
+ "eventlog 0.1.0 (git+https://github.com/mateo-moon/trustee?rev=87e8c9aa04aa08a367a6327be56a7a1fb0800cb4)",
  "eventlog-rs",
  "futures",
  "getrandom 0.2.17",
@@ -9098,9 +9133,12 @@ dependencies = [
  "log",
  "openssl",
  "openssl-sys",
+ "p384",
+ "pem",
  "quick-xml",
  "regex",
  "reqwest 0.13.5",
+ "rsa",
  "scroll 0.11.0",
  "serde",
  "serde_json",
@@ -9117,6 +9155,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "web-time",
+ "x509-cert",
  "x509-parser",
 ]
 
