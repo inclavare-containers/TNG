@@ -2989,6 +2989,7 @@ default file_system := 2"#,
 
         let rvps = attestation_service::rvps::builtin::BuiltinRvps::new(
             reference_value_provider_service::config::Config {
+                storage_backend: None,
                 storage: reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
                     reference_value_provider_service::storage::in_memory::Config {},
                 ),
