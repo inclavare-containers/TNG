@@ -7,12 +7,22 @@ on:
         required: true
         type: string
         description: compile target
+      glibc:
+        required: false
+        type: string
+        default: ''
+        description: glibc baseline pinned for -linux-gnu targets (e.g. 2.17); empty = zig default
   workflow_call:
     inputs:
       target:
         required: true
         type: string
         description: compile target
+      glibc:
+        required: false
+        type: string
+        default: ''
+        description: glibc baseline pinned for -linux-gnu targets (e.g. 2.17); empty = zig default
 
 jobs:
   build:
@@ -60,7 +70,15 @@ jobs:
           # target the build runner's SDK version instead.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(inputs.target, 'apple') && '11.0' || '' }}
         run: |
-          ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/ --cfg tokio_unstable"' || 'RUSTFLAGS="--cfg tokio_unstable"'  }} cargo ${{ env.build-tool }} --target ${{ inputs.target }} --release
+          # Append the glibc version pin (e.g. x86_64-unknown-linux-gnu.2.17)
+          # so zig links against that version's headers and stubs; without it
+          # zig falls back to its default target and the binary silently
+          # requires a newer glibc than the release claims to support.
+          TARGET="${{ inputs.target }}"
+          if [[ -n "${{ inputs.glibc }}" && "$TARGET" == *"-linux-gnu" ]]; then
+            TARGET="${TARGET}.${{ inputs.glibc }}"
+          fi
+          ${{ contains( inputs.target, 'apple' ) && 'RUSTFLAGS="-L native=/usr/lib/ --cfg tokio_unstable"' || 'RUSTFLAGS="--cfg tokio_unstable"'  }} cargo ${{ env.build-tool }} --target "$TARGET" --release
       - name: Get binary path
         if: ${{ runner.os != 'Windows' }}
         run: |
@@ -73,7 +91,11 @@ jobs:
       - name: Build libtng_hook.so (Linux only)
         if: contains( inputs.target, 'linux' )
         run: |
-          cargo zigbuild --target ${{ inputs.target }} --release -p tng-hook-cdylib
+          TARGET="${{ inputs.target }}"
+          if [[ -n "${{ inputs.glibc }}" && "$TARGET" == *"-linux-gnu" ]]; then
+            TARGET="${TARGET}.${{ inputs.glibc }}"
+          fi
+          cargo zigbuild --target "$TARGET" --release -p tng-hook-cdylib
 
       - name: Stage artifacts with system path layout
         # Non-Windows targets get the system usr/ layout. Note: windows-gnu is

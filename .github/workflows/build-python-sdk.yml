@@ -64,7 +64,11 @@ jobs:
       - name: Build tng binary (Linux)
         if: runner.os == 'Linux' && matrix.target != 'x86_64-pc-windows-gnu'
         run: |
-          cargo zigbuild -p tng --release --target ${{ matrix.target }}
+          # The .2.17 suffix pins the glibc baseline to match the
+          # manylinux_2_17 wheel tag; without it zig links against its
+          # default glibc and the bundled binary silently requires 2.29,
+          # breaking installs on every system between 2.17 and 2.28.
+          cargo zigbuild -p tng --release --target ${{ matrix.target }}.2.17
           mkdir -p tng-python/bin/scripts
           cp target/${{ matrix.target }}/release/tng tng-python/bin/scripts/tng
           chmod +x tng-python/bin/scripts/tng

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/protocols.md` / `docs/protocols_zh.md`: developer-facing reference for the tunnel protocols and their remote-attestation handshake, covering the ohttp tunnel's outer request routing, key-config distribution, request encapsulation, and the background-check and passport attestation flows for both directions, with sequence diagrams in a formal RFC 9334-style notation.
 - RATS-TLS chapter in `docs/protocols.md` / `docs/protocols_zh.md`: the standard-TLS-1.3 handshake with RA material carried in the self-signed DICE certificate, the four direction combinations, multiplexed versus non-multiplexed data planes, the freshness and session-resumption model, and handshake failure behavior, in the same notation as the ohttp chapter.
 
+### Changed
+
+- Linux binary release tarballs are now built against the glibc 2.17 baseline, so they run on distributions from 2014 onward instead of requiring glibc 2.29.
+
+### Fixed
+
+- Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
+
 ## [2.12.0] - 2026-10-25
 
 ### Added
