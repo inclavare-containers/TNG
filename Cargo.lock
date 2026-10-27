@@ -2462,25 +2462,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eventlog"
-version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
-dependencies = [
- "anyhow",
- "base64 0.21.7",
- "byteorder",
- "hex",
- "log",
- "scroll 0.12.0",
- "serde",
- "serde_json",
- "sha2",
- "shadow-rs 0.19.0",
- "sm3",
- "tonic-build 0.12.3",
-]
-
-[[package]]
 name = "eventlog-rs"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6281,7 +6262,7 @@ dependencies = [
  "ciborium",
  "const-oid",
  "ctor",
- "eventlog 0.1.0 (git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63)",
+ "eventlog",
  "flatten-json-object",
  "futures",
  "hex",
@@ -9175,7 +9156,7 @@ dependencies = [
  "codicon",
  "csv-rs",
  "dcap-qvl",
- "eventlog 0.1.0 (git+https://github.com/mateo-moon/trustee?rev=6bad75697f0ca47399f73a79fde945284966a34c)",
+ "eventlog",
  "eventlog-rs",
  "futures",
  "getrandom 0.2.17",
