@@ -58,7 +58,18 @@ impl HeaderPassthroughSpec {
         src: &http::HeaderMap,
         protected: &HashSet<&str>,
     ) -> Vec<(http::HeaderName, http::HeaderValue)> {
-        let mut out = Vec::new();
+        // An empty allowlist can match nothing, so skip the whole-map scan.
+        // This is the default configuration and runs per request in each
+        // passthrough direction on both ingress and egress.
+        if matches!(self, HeaderPassthroughSpec::List(names) if names.is_empty()) {
+            return Vec::new();
+        }
+        // `All` copies every non-protected header, so `src.len()` bounds the
+        // result size; `List` matches a small allowlist and grows lazily.
+        let mut out = match self {
+            HeaderPassthroughSpec::All(_) => Vec::with_capacity(src.len()),
+            HeaderPassthroughSpec::List(_) => Vec::new(),
+        };
         for (name, value) in src.iter() {
             if self.should_passthrough(name, protected) {
                 out.push((name.clone(), value.clone()));
@@ -206,6 +217,46 @@ mod tests {
         // Both values of the multi-valued header are preserved in source order.
         let values: Vec<&str> = out.iter().map(|(_, v)| v.to_str().unwrap()).collect();
         assert_eq!(values, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn collect_empty_list_returns_nothing() {
+        // The default spec: nothing may pass, whatever the source map holds.
+        let protected = super::protected_ohttp_headers();
+        let spec = HeaderPassthroughSpec::default();
+        let mut src = http::HeaderMap::new();
+        src.insert("origin", "https://app.example".parse().unwrap());
+        src.insert(http::header::CONTENT_TYPE, "text/plain".parse().unwrap());
+        assert!(spec.collect_passthrough_headers(&src, protected).is_empty());
+    }
+
+    #[test]
+    fn collect_list_selects_only_allowed_non_protected() {
+        let protected = super::protected_ohttp_headers();
+        let spec: HeaderPassthroughSpec =
+            serde_json::from_str(r#"["origin","content-type","x-none"]"#).unwrap();
+        let mut src = http::HeaderMap::new();
+        src.insert("origin", "https://app.example".parse().unwrap());
+        // Listed but protected: never copied.
+        src.insert(http::header::CONTENT_TYPE, "text/plain".parse().unwrap());
+        src.insert("x-other", "1".parse().unwrap());
+        let out = spec.collect_passthrough_headers(&src, protected);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.as_str(), "origin");
+    }
+
+    #[test]
+    fn collect_all_copies_non_protected_only() {
+        let protected = super::protected_ohttp_headers();
+        let spec = HeaderPassthroughSpec::All(All);
+        let mut src = http::HeaderMap::new();
+        src.insert("origin", "https://app.example".parse().unwrap());
+        src.insert(http::header::CONTENT_TYPE, "text/plain".parse().unwrap());
+        src.insert(http::header::HOST, "egress.example".parse().unwrap());
+        let out = spec.collect_passthrough_headers(&src, protected);
+        // `origin` passes; protected headers do not.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.as_str(), "origin");
     }
 
     #[test]
