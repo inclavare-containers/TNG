@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::response::IntoResponse;
 
-use crate::tunnel::ohttp::timing::{EgressLatency, Timer};
+use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters, Timer};
 use crate::tunnel::upstream::{ConnectedUpstream, UpstreamConnector};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
 use crate::{error::TngError, AttestationResult, TokioIo, TokioRuntime};
@@ -71,6 +71,7 @@ type PreconnectDial =
 pub(crate) struct PreconnectGuard {
     runtime: TokioRuntime,
     preconnect: Arc<tokio::sync::Mutex<Option<PreconnectDial>>>,
+    counters: Arc<PreconnectCounters>,
 }
 
 impl Drop for PreconnectGuard {
@@ -86,6 +87,7 @@ impl Drop for PreconnectGuard {
         }
         let runtime = self.runtime.clone();
         let preconnect = Arc::clone(&self.preconnect);
+        let counters = Arc::clone(&self.counters);
         runtime.spawn_supervised_task_current_span(async move {
             // Reap a dial nobody consumed. A dial that completed fine is
             // marked finished before the socket closes: an unused
@@ -95,6 +97,7 @@ impl Drop for PreconnectGuard {
             let Some(handle) = preconnect.lock().await.take() else {
                 return;
             };
+            counters.record_abandoned();
             if let Ok(SupervisedTaskResult::Finished(Ok(connected))) = handle.await {
                 let (_stream, active_cx) = connected.into_parts();
                 active_cx.mark_finished_successfully();
@@ -125,6 +128,10 @@ pub struct TngStreamContext {
     /// `BackendSlot` assumption that today's ingress legs carry a single
     /// in-flight request per outer connection.
     pub(crate) preconnect: Arc<tokio::sync::Mutex<Option<PreconnectDial>>>,
+    /// Lifecycle counters for the preconnect slots above, served at
+    /// `.../ohttp/preconnect` for diagnosing whether pre-dials are declined,
+    /// started but late, or reaped.
+    pub(crate) preconnect_counters: Arc<PreconnectCounters>,
     /// Shared with the API handler; records the backend-wait segments of
     /// every forwarded request.
     pub(crate) latency: Arc<EgressLatency>,
@@ -153,6 +160,7 @@ impl TngStreamContext {
             .try_lock()
             .map_or(true, |slot| slot.is_some());
         if warm {
+            self.preconnect_counters.record_declined_warm();
             return None;
         }
         let mut pending = self.preconnect.try_lock().ok()?;
@@ -168,9 +176,11 @@ impl TngStreamContext {
             connector.connect(true, false).await
         }));
         drop(pending);
+        self.preconnect_counters.record_started();
         Some(PreconnectGuard {
             runtime: self.runtime.clone(),
             preconnect: Arc::clone(&self.preconnect),
+            counters: Arc::clone(&self.preconnect_counters),
         })
     }
 
@@ -180,7 +190,11 @@ impl TngStreamContext {
         if attested {
             return None;
         }
-        self.preconnect.lock().await.take()
+        let handle = self.preconnect.lock().await.take();
+        if handle.is_some() {
+            self.preconnect_counters.record_reaped();
+        }
+        handle
     }
 
     /// Forwards the decrypted inner request to the backend. `attestation_result`
@@ -364,6 +378,7 @@ mod tests {
             peer_addr: None,
             backend: Arc::default(),
             preconnect: Arc::default(),
+            preconnect_counters: Arc::new(PreconnectCounters::default()),
             latency: Arc::new(EgressLatency::new()),
         }
     }
@@ -868,6 +883,68 @@ mod tests {
             assert_eq!(status, 200);
             assert_eq!(conns.load(Ordering::SeqCst), 2);
             assert_eq!(rec.counter_u64("cx_total"), 2);
+            Ok(())
+        })
+        .await
+    }
+
+    async fn wait_counter(ctx: &TngStreamContext, key: &str, expected: u64) -> bool {
+        for _ in 0..100 {
+            if ctx.preconnect_counters.snapshot()[key] == serde_json::json!(expected) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        ctx.preconnect_counters.snapshot()[key] == serde_json::json!(expected)
+    }
+
+    /// The counters track each preconnect outcome: a started dial that its
+    /// request reaps, a warm-slot decline, and a guard dropped without
+    /// forwarding abandoning its dial.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn preconnect_counters_track_dial_lifecycle() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (_streams, _requests, port) = spawn_fake_upstream(None).await;
+            let ctx = make_context(runtime.clone(), port);
+
+            let snap = ctx.preconnect_counters.snapshot();
+            assert_eq!(snap["preconnect_started"], 0);
+            assert_eq!(snap["preconnect_declined_warm"], 0);
+            assert_eq!(snap["preconnect_reaped"], 0);
+            assert_eq!(snap["preconnect_abandoned"], 0);
+
+            let _preconnect = ctx.start_preconnect().expect("cold slot pre-dials");
+            assert_eq!(ctx.preconnect_counters.snapshot()["preconnect_started"], 1);
+
+            let (status, _body) = get(&ctx).await;
+            assert_eq!(status, 200);
+            let snap = ctx.preconnect_counters.snapshot();
+            assert_eq!(
+                snap["preconnect_reaped"], 1,
+                "forward_request consumed the dial"
+            );
+            assert_eq!(snap["preconnect_abandoned"], 0);
+
+            // The pool is warm now: the next peek declines.
+            assert!(ctx.start_preconnect().is_none());
+            assert_eq!(
+                ctx.preconnect_counters.snapshot()["preconnect_declined_warm"],
+                1,
+                "a warm slot decline is counted"
+            );
+
+            // A second context: a guard dropped without forwarding abandons
+            // its dial (the teardown runs on its own task).
+            let ctx2 = make_context(runtime, port);
+            let preconnect = ctx2.start_preconnect().expect("cold slot pre-dials");
+            drop(preconnect);
+            assert!(
+                wait_counter(&ctx2, "preconnect_abandoned", 1).await,
+                "the abandoned dial is counted: {:?}",
+                ctx2.preconnect_counters.snapshot()
+            );
+            assert_eq!(ctx2.preconnect_counters.snapshot()["preconnect_started"], 1);
+            assert_eq!(ctx2.preconnect_counters.snapshot()["preconnect_reaped"], 0);
             Ok(())
         })
         .await

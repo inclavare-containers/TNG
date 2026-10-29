@@ -164,6 +164,59 @@ impl Histogram {
     }
 }
 
+/// Lifecycle counters for backend preconnects, served at
+/// `.../ohttp/preconnect`. The latency histograms alone cannot separate the
+/// outcomes of a pre-dial on a saturated runtime: a `backend_redial` wait is
+/// the same whether the preconnect was declined at the peek, started but not
+/// yet finished at reap time, or never started. Each event is one relaxed
+/// atomic increment: zero allocation, safe from any path.
+///
+/// The accounting identity is
+/// `started = reaped + abandoned + at most one still pending`: a dial that is
+/// started always ends up reaped by its request's `forward_request` or torn
+/// down by the guard of the request that started it.
+#[derive(Default)]
+pub(crate) struct PreconnectCounters {
+    started: AtomicU64,
+    declined_warm: AtomicU64,
+    reaped: AtomicU64,
+    abandoned: AtomicU64,
+}
+
+impl PreconnectCounters {
+    /// A preconnect was declined because the backend slot peek found a
+    /// pooled connection present or a concurrent forward holding the slot.
+    pub(crate) fn record_declined_warm(&self) {
+        self.declined_warm.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A preconnect dial task was spawned.
+    pub(crate) fn record_started(&self) {
+        self.started.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The cold path of `forward_request` took the pending dial from the
+    /// slot (whatever verdict the dial later produced).
+    pub(crate) fn record_reaped(&self) {
+        self.reaped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A dial nobody reaped was taken from the slot by the teardown guard
+    /// of the request that started it.
+    pub(crate) fn record_abandoned(&self) {
+        self.abandoned.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "preconnect_started": self.started.load(Ordering::Relaxed),
+            "preconnect_declined_warm": self.declined_warm.load(Ordering::Relaxed),
+            "preconnect_reaped": self.reaped.load(Ordering::Relaxed),
+            "preconnect_abandoned": self.abandoned.load(Ordering::Relaxed),
+        })
+    }
+}
+
 /// A segment start point. `Timer::start()` reads the clock only when timing
 /// is enabled; every `record` path takes `Option<Duration>` so a disabled
 /// run costs one relaxed load per start and no clock reads.
@@ -503,6 +556,30 @@ mod tests {
         }
         assert_eq!(ingress["phases"].as_object().unwrap().len(), 13);
         assert_eq!(egress["phases"].as_object().unwrap().len(), 15);
+    }
+
+    #[test]
+    fn preconnect_counters_snapshot_tracks_events() {
+        let counters = PreconnectCounters::default();
+        let snap = counters.snapshot();
+        for key in [
+            "preconnect_started",
+            "preconnect_declined_warm",
+            "preconnect_reaped",
+            "preconnect_abandoned",
+        ] {
+            assert_eq!(snap[key], 0, "{key} starts at zero");
+        }
+        counters.record_started();
+        counters.record_started();
+        counters.record_declined_warm();
+        counters.record_reaped();
+        counters.record_abandoned();
+        let snap = counters.snapshot();
+        assert_eq!(snap["preconnect_started"], 2);
+        assert_eq!(snap["preconnect_declined_warm"], 1);
+        assert_eq!(snap["preconnect_reaped"], 1);
+        assert_eq!(snap["preconnect_abandoned"], 1);
     }
 
     #[tokio::test]
