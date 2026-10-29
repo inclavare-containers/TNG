@@ -48,6 +48,30 @@ fn fallback_outer_path(path_default: PathDefault, original_path: &str) -> String
     }
 }
 
+/// Outer-POST path for `original_path`: apply the first matching path rewrite,
+/// else fall back per `path_default`. Shared by the request path (rewrites the
+/// inner request's path) and `verify_endpoint` (rewrites the path of the URL
+/// the caller asked to verify, so a standalone verification POSTs to the same
+/// outer URL a real request would).
+fn outer_path(
+    rewrite_group: &PathRewriteGroup,
+    path_default: PathDefault,
+    original_path: &str,
+) -> String {
+    // When no path_rewrite rule matches (path_rewrites unset/empty or
+    // no regex hit), fall back according to `path_default`: `/` (Root,
+    // the historical default) or the inner request's original path.
+    let mut rewrited_path = rewrite_group
+        .rewrite(original_path)
+        .unwrap_or_else(|| fallback_outer_path(path_default, original_path));
+
+    if !rewrited_path.starts_with('/') {
+        rewrited_path.insert(0, '/');
+    }
+
+    rewrited_path
+}
+
 /// Root status response for /status/.../ohttp/keys.
 #[derive(Serialize)]
 #[cfg_attr(wasm, allow(dead_code))]
@@ -267,6 +291,30 @@ impl OHttpSecurityLayer {
         })
     }
 
+    /// Force the key-config handshake against `endpoint` and return its
+    /// attestation result, WITHOUT sending any inner HTTP request. This is the
+    /// standalone verification entry point for SDK callers (e.g. a demo UI
+    /// panel) that need the remote's attestation info without a business
+    /// request. `original_path` is the path of the URL the caller wants
+    /// verified; it goes through the same rewrite/path_default logic as a real
+    /// request so both hit the same outer POST URL.
+    ///
+    /// Returns `None` in NoRa mode (no verification configured).
+    pub async fn verify_endpoint(
+        &self,
+        endpoint: &TngEndpoint,
+        original_path: &str,
+    ) -> Result<Option<AttestationResult>, TngError> {
+        let base_url = format!(
+            "{}://{}{}",
+            self.scheme,
+            endpoint.http_authority(),
+            outer_path(&self.path_rewrite_group, self.path_default, original_path)
+        );
+        let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
+        ohttp_client.attestation_result().await
+    }
+
     /// Outer-POST URL as a plain string: it is the cache key for the
     /// per-endpoint `OHttpClient`, and the client parses it into a `Url`
     /// once at creation. Parsing per request (and hashing/cloning the parsed
@@ -278,19 +326,8 @@ impl OHttpSecurityLayer {
         endpoint: &TngEndpoint,
         request: &axum::extract::Request,
     ) -> String {
-        let old_uri = request.uri();
-        let original_path = old_uri.path();
-        // When no path_rewrite rule matches (path_rewrites unset/empty or
-        // no regex hit), fall back according to `path_default`: `/` (Root,
-        // the historical default) or the inner request's original path.
-        let mut rewrited_path = self
-            .path_rewrite_group
-            .rewrite(original_path)
-            .unwrap_or_else(|| fallback_outer_path(self.path_default, original_path));
-
-        if !rewrited_path.starts_with('/') {
-            rewrited_path.insert(0, '/');
-        }
+        let original_path = request.uri().path();
+        let rewrited_path = outer_path(&self.path_rewrite_group, self.path_default, original_path);
 
         tracing::debug!(original_path, rewrited_path, "path is rewrited");
 
@@ -375,7 +412,7 @@ impl StatusProvider for OHttpSecurityLayer {
 #[cfg(test)]
 mod tests {
     use super::client::ServerStatusEntry;
-    use super::{fallback_outer_path, ServersStatus};
+    use super::{fallback_outer_path, outer_path, PathRewriteGroup, ServersStatus};
     use crate::config::ingress::{OHttpArgs, PathDefault};
     use anyhow::Result;
 
@@ -433,6 +470,38 @@ mod tests {
             fallback_outer_path(PathDefault::Original, "/foo/bar"),
             "/foo/bar"
         );
+    }
+
+    // The outer POST path for a standalone verify call must match what a real
+    // request through the same URL would produce: rewrites apply, then the
+    // path_default fallback.
+    #[test]
+    fn test_outer_path_rewrites_and_fallback() -> Result<()> {
+        let rewrites: Vec<crate::config::ingress::PathRewrite> =
+            serde_json::from_str(r#"[{"match_regex": "^/v1(.*)$", "substitution": "/api$1"}]"#)?;
+        let group = PathRewriteGroup::new(&rewrites)?;
+
+        // Rewrite hits: /v1/... -> /api/...
+        assert_eq!(
+            outer_path(&group, PathDefault::Root, "/v1/chat/completions"),
+            "/api/chat/completions"
+        );
+        // No rewrite hit, Root default: outer path collapses to "/".
+        assert_eq!(outer_path(&group, PathDefault::Root, "/other"), "/");
+        // No rewrite hit, Original default: keep the original path.
+        assert_eq!(
+            outer_path(&group, PathDefault::Original, "/other"),
+            "/other"
+        );
+
+        // No rewrites configured at all: Root default -> "/".
+        let empty = PathRewriteGroup::new(&[])?;
+        assert_eq!(outer_path(&empty, PathDefault::Root, "/v1/chat"), "/");
+        assert_eq!(
+            outer_path(&empty, PathDefault::Original, "/v1/chat"),
+            "/v1/chat"
+        );
+        Ok(())
     }
 
     // scheme_from_tls is native-only (#[cfg(not(wasm))]); gate this test to match.

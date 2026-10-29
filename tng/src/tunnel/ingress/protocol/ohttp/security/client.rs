@@ -210,6 +210,20 @@ impl OHttpClient {
 }
 
 impl OHttpClient {
+    /// The attestation result captured when this client's key config was
+    /// established; `None` when no RA is configured (NoRa). Key-store creation
+    /// is driven by `OHttpSecurityLayer::verify_endpoint`, which creates the
+    /// client first; calling this on a fresh client forces the same
+    /// `get_latest()` path `forward_request` uses.
+    pub async fn attestation_result(&self) -> Result<Option<AttestationResult>, TngError> {
+        Ok(self
+            .key_store_value
+            .get_latest()
+            .await?
+            .server_attestation_result
+            .clone())
+    }
+
     pub async fn forward_request(
         &self,
         request: axum::extract::Request,
