@@ -120,7 +120,7 @@ impl ConnectedUpstream {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::fmt;
@@ -180,14 +180,14 @@ mod tests {
 
     /// The cx counters of a freshly created `ServiceMetrics`, read back
     /// through the in-process reader.
-    struct Recorder {
+    pub(crate) struct Recorder {
         reader: SharedReader,
         #[allow(dead_code)] // keeps the meter provider (and pipeline) alive
         provider: SdkMeterProvider,
     }
 
     impl Recorder {
-        fn new() -> (ServiceMetrics, Self) {
+        pub(crate) fn new() -> (ServiceMetrics, Self) {
             let reader = SharedReader::new();
             let provider = SdkMeterProvider::builder()
                 .with_reader(reader.clone())
@@ -199,7 +199,7 @@ mod tests {
             )
         }
 
-        fn counter_u64(&self, name: &str) -> u64 {
+        pub(crate) fn counter_u64(&self, name: &str) -> u64 {
             let mut rm = ResourceMetrics::default();
             self.reader.collect(&mut rm).unwrap();
             let mut values = rm
@@ -217,7 +217,7 @@ mod tests {
             values.pop().unwrap()
         }
 
-        fn counter_i64(&self, name: &str) -> i64 {
+        pub(crate) fn counter_i64(&self, name: &str) -> i64 {
             let mut rm = ResourceMetrics::default();
             self.reader.collect(&mut rm).unwrap();
             let mut values = rm

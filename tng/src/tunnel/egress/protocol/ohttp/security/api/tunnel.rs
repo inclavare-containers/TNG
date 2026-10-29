@@ -73,6 +73,15 @@ impl OhttpServerApi {
         let metadata = read_metadata_block(&mut reader).await?;
         self.latency.metadata_wait.record(metadata_timer.elapsed());
 
+        // The request has now cleared the envelope gates (content type and
+        // metadata block), so start the backend dial before decapsulating:
+        // the TCP connect then overlaps the HPKE open, the client
+        // attestation check and the bhttp decode below instead of running
+        // serially after them. The cold path of `forward_request` reaps the
+        // dial; if this request dies first, dropping the guard closes it
+        // off quietly.
+        let _preconnect = context.start_preconnect();
+
         // Decapsulate stage: open the sealed inner request and open the
         // response seal bound to this request's HPKE context.
         let (mut request, response_seal, sealed_sink) =
