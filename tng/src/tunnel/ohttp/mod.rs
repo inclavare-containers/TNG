@@ -1,5 +1,9 @@
 pub mod key_config;
 pub mod protocol;
+// Egress is never linked on wasm and part of the ingress timing lives only
+// in native paths, so the wasm build would flag the unused halves.
+#[cfg_attr(wasm, allow(dead_code))]
+pub(crate) mod timing;
 
 #[cfg(not(wasm))]
 pub(crate) mod seal_stream;

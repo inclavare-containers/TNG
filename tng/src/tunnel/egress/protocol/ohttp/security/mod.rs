@@ -55,6 +55,7 @@ impl OHttpSecurityLayer {
                 sender,
                 peer_addr: peer,
                 backend: Arc::default(),
+                latency: self.ohttp_server.latency(),
             };
             let app = self
                 .ohttp_server

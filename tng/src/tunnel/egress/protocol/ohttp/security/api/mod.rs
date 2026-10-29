@@ -21,6 +21,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::KeyConfigResponse;
+use crate::tunnel::ohttp::timing::EgressLatency;
 use crate::tunnel::ra_context::RaContext;
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::MaybeCached;
@@ -58,6 +59,8 @@ pub struct OhttpServerApi {
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Whether to inject X-Real-IP / X-Forwarded-For from the direct peer.
     forward_client_ip: bool,
+    /// Per-phase request latency histograms, served at `.../ohttp/latency`.
+    pub(crate) latency: Arc<EgressLatency>,
 }
 
 impl OhttpServerApi {
@@ -71,6 +74,7 @@ impl OhttpServerApi {
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         forward_client_ip: bool,
+        latency: Arc<EgressLatency>,
     ) -> Result<Self, TngError> {
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
@@ -93,6 +97,7 @@ impl OhttpServerApi {
             passthrough_request_headers,
             passthrough_response_headers,
             forward_client_ip,
+            latency,
         })
     }
 }
@@ -100,6 +105,19 @@ impl OhttpServerApi {
 #[async_trait]
 impl StatusProvider for OhttpServerApi {
     async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
-        self.key_manager.query_status(path).await
+        match path {
+            ["latency"] => Ok(StatusQueryResult::Value(self.latency.snapshot())),
+            // The key manager owns the rest of the tree; `latency` is a
+            // sibling added at this level, so advertise it alongside
+            // whatever children the key manager reports.
+            [] => match self.key_manager.query_status(&[]).await? {
+                StatusQueryResult::Subtree(mut children) => {
+                    children.push(std::borrow::Cow::Borrowed("latency"));
+                    Ok(StatusQueryResult::Subtree(children))
+                }
+                other => Ok(other),
+            },
+            _ => self.key_manager.query_status(path).await,
+        }
     }
 }
