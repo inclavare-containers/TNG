@@ -19,7 +19,10 @@ use crate::tunnel::upstream::UpstreamConnector;
 use crate::tunnel::utils;
 use crate::{service::RegistedService, CommonStreamTrait};
 
-use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
+use super::stream_manager::{
+    trusted::{ProtocolStreamDecoderOutput, TrustedStreamManager},
+    StreamManager,
+};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
@@ -132,9 +135,7 @@ impl EgressFlow {
             dst,
             listener_addr: _,
             egress_mode: _,
-            // Egress processes multiple upstream connections per accepted downstream.
-            // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
-            mut access_accepted,
+            access_accepted,
             encrypted,
         } = accepted_stream;
 
@@ -148,6 +149,19 @@ impl EgressFlow {
         runtime.spawn_supervised_task_with_span(span, async move {
             tracing::debug!("Start serving new connection from client");
 
+            // One connector per outer connection. It owns the accept-time
+            // resolved upstream endpoint, the access-log state (cloned per
+            // backend leg), and the cx accounting shared by every leg —
+            // whether the leg is forwarded by the loop below or, for ohttp,
+            // dialed directly by the request handlers behind the decoder.
+            let connector = Arc::new(UpstreamConnector::new(
+                dst,
+                metrics,
+                access_accepted,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                transport_so_mark,
+            ));
+
             if !encrypted {
                 // Transport-level direct forward: determined at accept time by the
                 // egress mode's host/ifname filter (HookEgress::encrypted checks whether
@@ -155,18 +169,7 @@ impl EgressFlow {
                 // When the IP doesn't match any rule, the entire connection bypasses
                 // the trusted stream manager — no OHTTP/RATS-TLS processing happens.
                 // This is a per-connection decision, made once when the TCP accept occurs.
-                if let Err(error) = forward_to_upstream(
-                    &metrics,
-                    access_accepted,
-                    dst,
-                    stream,
-                    false,
-                    false,
-                    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-                    transport_so_mark,
-                )
-                .await
-                {
+                if let Err(error) = forward_to_upstream(&connector, stream, false, false).await {
                     tracing::error!(?error, "Failed to forward stream");
                 }
                 return;
@@ -174,10 +177,16 @@ impl EgressFlow {
 
             // Existing trusted stream path
             let mut pending = match trusted_stream_manager
-                .consume_stream(stream, Some(src))
+                .consume_stream(stream, Some(src), connector.clone())
                 .await
             {
-                Ok(pending) => pending,
+                Ok(ProtocolStreamDecoderOutput::ByteStreams(pending)) => pending,
+                Ok(ProtocolStreamDecoderOutput::SelfForwarded) => {
+                    // The decoder's protocol (ohttp) forwards decrypted
+                    // requests to the backend itself through the connector;
+                    // the flow must not spawn copy tasks for them.
+                    return;
+                }
                 Err(error) => {
                     tracing::error!(?error, "Failed to consume stream from client");
                     return;
@@ -195,9 +204,7 @@ impl EgressFlow {
 
                 // Spawn a task to handle the connection
                 runtime_cloned.spawn_supervised_task_current_span({
-                    let dst = dst.clone();
-                    let access_accepted = access_accepted.clone_for_multiplexing();
-                    let metrics = metrics.clone();
+                    let connector = connector.clone();
 
                     async move {
                         // Protocol-level direct forward: determined by TransportLayer
@@ -220,21 +227,8 @@ impl EgressFlow {
                         let attested = next_stream.attestation_state().is_attested();
                         let downstream = next_stream.into_stream();
 
-                        if let Err(error) = forward_to_upstream(
-                            &metrics,
-                            access_accepted,
-                            dst,
-                            downstream,
-                            encrypted,
-                            attested,
-                            #[cfg(any(
-                                target_os = "android",
-                                target_os = "fuchsia",
-                                target_os = "linux"
-                            ))]
-                            transport_so_mark,
-                        )
-                        .await
+                        if let Err(error) =
+                            forward_to_upstream(&connector, downstream, encrypted, attested).await
                         {
                             tracing::error!(?error, "Failed to forward stream");
                         }
@@ -247,31 +241,19 @@ impl EgressFlow {
 
 /// Common upstream-connect-and-forward logic used by both direct and encrypted paths.
 ///
-/// Dials the upstream through an `UpstreamConnector` (which owns the cx
-/// accounting and the access-log state machine), forwards the streams, and
-/// marks the connection successful once the forward finishes.
+/// Dials the upstream through the outer connection's `UpstreamConnector`
+/// (which owns the cx accounting and the access-log state machine), forwards
+/// the streams, and marks the connection successful once the forward finishes.
 async fn forward_to_upstream(
-    metrics: &ServiceMetrics,
-    access_accepted: AccessAccepted,
-    dst: Arc<TngEndpoint>,
+    connector: &UpstreamConnector,
     downstream: Box<dyn CommonStreamTrait>,
     encrypted: bool,
     attested: bool,
-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-    transport_so_mark: Option<u32>,
 ) -> Result<()> {
-    let connector = UpstreamConnector::new(
-        dst,
-        metrics.clone(),
-        access_accepted,
-        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-        transport_so_mark,
-    );
-
     let upstream = connector.connect(encrypted, attested).await?;
     let (upstream, active_cx) = upstream.into_parts();
 
-    let downstream = metrics.new_wrapped_stream(downstream);
+    let downstream = connector.metrics().new_wrapped_stream(downstream);
 
     utils::forward::normal::forward_stream(upstream, downstream).await;
 

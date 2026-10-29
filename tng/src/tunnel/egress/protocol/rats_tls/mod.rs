@@ -6,9 +6,13 @@ use crate::{
     tunnel::{
         egress::{
             protocol::rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
-            stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+            stream_manager::{
+                trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+                NextStream,
+            },
         },
         ra_context::RaContext,
+        upstream::UpstreamConnector,
     },
     CommonStreamTrait, TokioRuntime,
 };
@@ -46,8 +50,10 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
         _peer: Option<std::net::SocketAddr>,
+        _connector: Arc<UpstreamConnector>,
     ) -> Result<ProtocolStreamDecoderOutput> {
-        // rats_tls does raw byte forwarding; peer is unused.
+        // rats_tls does raw byte forwarding; the flow dials the upstream, so
+        // neither the peer address nor the connector is used here.
         let (tls_stream, attestation_state) = self.security_layer.handshake(input).await?;
 
         // Check negotiated ALPN protocol
@@ -70,18 +76,25 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
                     .await;
                 });
 
-            Ok(stream! {
-                while let Some(value) = receiver.recv().await {
-                    yield Ok(value);
+            Ok(ProtocolStreamDecoderOutput::ByteStreams(
+                stream! {
+                    while let Some((stream, att)) = receiver.recv().await {
+                        yield Ok(NextStream::Secured(stream, att));
+                    }
                 }
-            }
-            .boxed())
+                .boxed(),
+            ))
         } else {
             // Direct TLS mode (multiplex=false): return TLS stream directly
-            Ok(stream! {
-                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_state));
-            }
-            .boxed())
+            Ok(ProtocolStreamDecoderOutput::ByteStreams(
+                stream! {
+                    yield Ok(NextStream::Secured(
+                        Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>,
+                        attestation_state,
+                    ));
+                }
+                .boxed(),
+            ))
         }
     }
 }

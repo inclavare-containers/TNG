@@ -111,6 +111,25 @@ impl ServiceMetrics {
             rx: PendingCounter::new(self.rx_bytes_total.clone()),
         }
     }
+
+    /// Wraps a backend-facing stream for a protocol that forwards to the
+    /// upstream itself instead of handing the leg back to the flow (ohttp).
+    /// On the backend socket the proxy writes requests and reads responses,
+    /// the reverse of the tunnel-facing wrap above, so the counters are
+    /// crossed here: `tx_bytes_total` keeps accumulating response bytes and
+    /// `rx_bytes_total` request bytes, whatever the leg's orientation.
+    pub fn new_wrapped_backend_stream<
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+    >(
+        &self,
+        stream: T,
+    ) -> StreamWithCounter<T> {
+        StreamWithCounter {
+            inner: stream,
+            tx: PendingCounter::new(self.rx_bytes_total.clone()),
+            rx: PendingCounter::new(self.tx_bytes_total.clone()),
+        }
+    }
 }
 
 pub struct ActiveConnectionCounter {

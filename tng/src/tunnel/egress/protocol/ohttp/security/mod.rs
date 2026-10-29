@@ -13,8 +13,9 @@ use crate::{
     tunnel::{
         egress::protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
         ra_context::RaContext,
+        upstream::UpstreamConnector,
     },
-    AttestationResult, CommonStreamTrait, TokioRuntime,
+    CommonStreamTrait, TokioRuntime,
 };
 
 mod api;
@@ -43,16 +44,13 @@ impl OHttpSecurityLayer {
     pub async fn handle_stream(
         &self,
         stream: impl CommonStreamTrait,
-        sender: tokio::sync::mpsc::UnboundedSender<(
-            Box<dyn CommonStreamTrait + Sync>,
-            Option<AttestationResult>,
-        )>,
+        connector: Arc<UpstreamConnector>,
         peer: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         async {
             let state = TngStreamContext {
                 runtime: self.runtime.clone(),
-                sender,
+                connector,
                 peer_addr: peer,
                 backend: Arc::default(),
                 latency: self.ohttp_server.latency(),

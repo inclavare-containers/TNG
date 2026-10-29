@@ -9,14 +9,13 @@ use crate::{
             stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
         },
         ra_context::RaContext,
+        upstream::UpstreamConnector,
     },
-    AttestationState, CommonStreamTrait, TokioRuntime,
+    CommonStreamTrait, TokioRuntime,
 };
 
 use anyhow::Result;
-use async_stream::stream;
 use async_trait::async_trait;
-use futures::StreamExt;
 
 pub mod security;
 
@@ -46,31 +45,20 @@ impl ProtocolStreamDecoder for OHttpStreamDecoder {
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
+        connector: Arc<UpstreamConnector>,
     ) -> Result<ProtocolStreamDecoderOutput> {
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-
         // Should be spawned as background task
         let security_layer = self.security_layer.clone();
         self.runtime.spawn_supervised_task(async move {
-            if let Err(error) = security_layer.handle_stream(input, sender, peer).await {
+            if let Err(error) = security_layer.handle_stream(input, connector, peer).await {
                 tracing::error!(?error, "Failed to handle OHTTP stream")
             }
         });
 
-        // Boundary between the ohttp attestation-token module (which keeps its
-        // own `Option<AttestationResult>` token type) and the tunnel-stream
-        // carrier (`AttestationState`). ohttp never resumes, so it only maps
-        // Some -> Fresh, None -> Unattested.
-        Ok(stream! {
-            while let Some((stream, att_opt)) = receiver.recv().await {
-                let state = match att_opt {
-                    Some(ar) => AttestationState::Fresh(ar),
-                    None => AttestationState::Unattested,
-                };
-                yield Ok((stream, state)); // TODO: replace the handle_stream above with return stream directly and pass error here
-            }
-        }
-        .boxed())
+        // The decrypted requests are forwarded to the backend by the request
+        // handlers themselves (dialing through `connector`), so this
+        // connection yields no byte streams for the flow to forward.
+        Ok(ProtocolStreamDecoderOutput::SelfForwarded)
     }
 }
 

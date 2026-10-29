@@ -82,7 +82,7 @@ pub enum TngError {
     ClientGenerateClientKeyFailed(#[source] anyhow::Error),
 
     #[error("Failed to connect to upstream")]
-    ConnectUpstreamFailed,
+    ConnectUpstreamFailed(#[source] anyhow::Error),
 
     #[error("Failed to construct http response")]
     ConstructHttpResponseFailed(#[source] http::Error),
@@ -211,7 +211,7 @@ impl IntoResponse for TngError {
             TngError::ConstructHttpResponseFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
 
             // Not Found / Upstream issues
-            TngError::ConnectUpstreamFailed => StatusCode::BAD_GATEWAY,
+            TngError::ConnectUpstreamFailed(..) => StatusCode::BAD_GATEWAY,
 
             // Timeouts / Network failures
             #[cfg(not(wasm))]

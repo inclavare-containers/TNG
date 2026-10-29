@@ -60,6 +60,13 @@ impl UpstreamConnector {
         }
     }
 
+    /// The service counters for this outer connection. Self-forwarding
+    /// protocols wrap their backend streams with these so byte totals stay
+    /// on the same service the flow legs would have used.
+    pub(crate) fn metrics(&self) -> &ServiceMetrics {
+        &self.metrics
+    }
+
     /// Dials one backend connection, transitioning the access log through
     /// `Routed` to `Established`. A failed dial counts `cx_failed` (the
     /// guard drops unmarked) and the dropped `Routed` state logs its ERROR

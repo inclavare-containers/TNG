@@ -3,7 +3,8 @@ use std::sync::Arc;
 use axum::response::IntoResponse;
 
 use crate::tunnel::ohttp::timing::{EgressLatency, Timer};
-use crate::{error::TngError, AttestationResult, CommonStreamTrait, TokioIo, TokioRuntime};
+use crate::tunnel::upstream::UpstreamConnector;
+use crate::{error::TngError, AttestationResult, TokioIo, TokioRuntime};
 
 type DynSendBody =
     std::pin::Pin<Box<dyn http_body::Body<Data = bytes::Bytes, Error = axum::BoxError> + Send>>;
@@ -38,10 +39,6 @@ impl http_body::Body for SendBoxBody {
 
 type PooledSendRequest = hyper::client::conn::http1::SendRequest<SendBoxBody>;
 
-/// One decoded ohttp stream handed to the egress flow loop, together with the
-/// per-connection attestation result (if any).
-type DecodedStream = (Box<dyn CommonStreamTrait + Sync>, Option<AttestationResult>);
-
 /// One keep-alive backend connection, reused across the requests that arrive
 /// on the same outer OHTTP connection. A single slot suffices: the mutex
 /// serializes sends, the hyper connection pairs responses FIFO, and today's
@@ -59,14 +56,18 @@ pub(crate) struct BackendSlot {
 #[derive(Clone)]
 pub struct TngStreamContext {
     pub runtime: TokioRuntime,
-    pub sender: tokio::sync::mpsc::UnboundedSender<DecodedStream>,
+    /// Upstream dialing for this outer connection: the endpoint the egress
+    /// capture mode resolved at accept time, the mode's `SO_MARK`, and the
+    /// service accounting. Backend connections are dialed directly here;
+    /// the flow no longer sees them.
+    pub connector: Arc<UpstreamConnector>,
     /// Direct TCP peer of the OHTTP POST (the relay in the relay topology).
     /// Used to inject X-Real-IP / X-Forwarded-For on the inner request.
     pub peer_addr: Option<std::net::SocketAddr>,
     /// Shared by every request handler cloned from this connection's context.
     /// When the outer connection ends and the last clone drops, the pooled
     /// `SendRequest` is dropped, which tears down the backend connection and
-    /// its copy task.
+    /// its hyper driver task.
     pub(crate) backend: Arc<BackendSlot>,
     /// Shared with the API handler; records the backend-wait segments of
     /// every forwarded request.
@@ -128,23 +129,37 @@ impl TngStreamContext {
             *slot = None;
         }
 
-        let (s1, s2) = tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
-
-        self.sender
-            .send((Box::new(s2), attestation_result))
-            .map_err(|_| TngError::ConnectUpstreamFailed)?;
+        // Cold slot: dial the backend directly. A failure to reach the
+        // backend surfaces here, before the request is dispatched.
+        // `backend_redial` covers the whole fresh-connection setup: the
+        // dial plus the HTTP handshake.
+        let redial_timer = Timer::start();
+        let connected = self
+            .connector
+            .connect(true, attestation_result.is_some())
+            .await
+            .map_err(TngError::ConnectUpstreamFailed)?;
+        let (stream, active_cx) = connected.into_parts();
+        let stream = self.connector.metrics().new_wrapped_backend_stream(stream);
 
         // TODO: support send both http1 and http2 payload
-        let redial_timer = Timer::start();
-        let (mut send_request, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s1))
-            .await
-            .map_err(TngError::HttpPlainTextForwardError)?;
+        let handshake = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await;
+        let (mut send_request, conn) = match handshake {
+            Ok(pair) => pair,
+            Err(error) => {
+                // The dial succeeded, so a connection that dies at the HTTP
+                // layer is a teardown, not a failed connect.
+                active_cx.mark_finished_successfully();
+                return Err(TngError::HttpPlainTextForwardError(error));
+            }
+        };
         self.latency.backend_redial.record(redial_timer.elapsed());
 
         self.runtime.spawn_supervised_task_current_span(async move {
             if let Err(error) = conn.await {
                 tracing::error!(?error, "The HTTP connection with upstream is broken");
             }
+            active_cx.mark_finished_successfully();
         });
 
         tracing::debug!("Forwarding HTTP request to upstream now");
@@ -165,48 +180,62 @@ impl TngStreamContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use std::net::Ipv4Addr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use http_body_util::Full;
+    use indexmap::IndexMap;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+    use super::*;
+
+    use crate::observability::metric::simple_exporter::noop::NoopMeterProvider;
     use crate::tests::run_test_with_tokio_runtime;
+    use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
+    use crate::tunnel::endpoint::TngEndpoint;
+    use crate::tunnel::service_metrics::{ServiceMetrics, ServiceMetricsCreator};
 
-    type Receiver = tokio::sync::mpsc::UnboundedReceiver<DecodedStream>;
-
-    fn make_context(runtime: TokioRuntime) -> (TngStreamContext, Receiver) {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        (
-            TngStreamContext {
-                runtime,
-                sender,
-                peer_addr: None,
-                backend: Arc::default(),
-                latency: Arc::new(EgressLatency::new()),
-            },
-            receiver,
-        )
+    fn test_metrics() -> ServiceMetrics {
+        ServiceMetricsCreator::new_creator(Arc::new(NoopMeterProvider::new()))
+            .new_service_metrics(IndexMap::new())
     }
 
-    /// Acts as the backend: each stream received on the mpsc carries raw
-    /// HTTP/1 bytes; reply one tiny `200` per request head. Returns counters
-    /// for streams served and requests answered.
+    fn make_context(runtime: TokioRuntime, port: u16) -> TngStreamContext {
+        let connector = UpstreamConnector::new(
+            Arc::new(TngEndpoint::from_ipv4(Ipv4Addr::LOCALHOST, port)),
+            test_metrics(),
+            AccessAccepted::new_egress(
+                "127.0.0.1:54321".parse().unwrap(),
+                "127.0.0.1:8080".parse().unwrap(),
+                EgressAccessMode::Netfilter,
+            ),
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            None,
+        );
+        TngStreamContext {
+            runtime,
+            connector: Arc::new(connector),
+            peer_addr: None,
+            backend: Arc::default(),
+            latency: Arc::new(EgressLatency::new()),
+        }
+    }
+
+    /// Acts as the backend on a real TCP listener: every accepted connection
+    /// carries raw HTTP/1 bytes; reply one tiny `200` per request head.
+    /// Returns counters for connections served and requests answered, plus
+    /// the listener port.
     #[allow(clippy::disallowed_methods)] // fake backend lives on the bare test runtime
-    fn spawn_fake_upstream(
-        mut receiver: Receiver,
+    async fn spawn_fake_upstream(
         close_first_stream_after: Option<usize>,
-    ) -> (
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        tokio::task::JoinHandle<()>,
-    ) {
+    ) -> (Arc<AtomicUsize>, Arc<AtomicUsize>, u16) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
         let streams = Arc::new(AtomicUsize::new(0));
         let requests = Arc::new(AtomicUsize::new(0));
         let (s, r) = (streams.clone(), requests.clone());
-        let handle = tokio::spawn(async move {
-            while let Some((stream, _att)) = receiver.recv().await {
+        tokio::spawn(async move {
+            while let Ok((stream, _addr)) = listener.accept().await {
                 s.fetch_add(1, Ordering::SeqCst);
                 let r = r.clone();
                 let cap = close_first_stream_after;
@@ -241,7 +270,7 @@ mod tests {
                 });
             }
         });
-        (streams, requests, handle)
+        (streams, requests, port)
     }
 
     async fn try_get(
@@ -271,8 +300,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn backend_connection_is_reused_across_requests() -> anyhow::Result<()> {
         run_test_with_tokio_runtime(async |runtime| {
-            let (ctx, receiver) = make_context(runtime);
-            let (streams, requests, _fake) = spawn_fake_upstream(receiver, None);
+            let (streams, requests, port) = spawn_fake_upstream(None).await;
+            let ctx = make_context(runtime, port);
 
             for _ in 0..3 {
                 let (status, body) = get(&ctx).await;
@@ -290,15 +319,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn dead_backend_connection_is_redialled_transparently() -> anyhow::Result<()> {
         run_test_with_tokio_runtime(async |runtime| {
-            let (ctx, receiver) = make_context(runtime);
-            // Backend closes the connection after answering one request,
-            // like a keep-alive idle timeout between requests.
-            let (streams, requests, _fake) = spawn_fake_upstream(receiver, Some(1));
+            let (streams, requests, port) = spawn_fake_upstream(Some(1)).await;
+            let ctx = make_context(runtime, port);
 
             let (status, _) = get(&ctx).await;
             assert_eq!(status, 200);
-            // Give the fake backend time to drop the stream and the driver
-            // task to observe the closed connection.
+            // Give the fake backend time to drop the connection and the
+            // driver task to observe the closed connection.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             let (status, _) = get(&ctx).await;
@@ -314,8 +341,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn request_body_streams_through_send_box_body() -> anyhow::Result<()> {
         run_test_with_tokio_runtime(async |runtime| {
-            let (ctx, receiver) = make_context(runtime);
-            let (_streams, _requests, _fake) = spawn_fake_upstream(receiver, None);
+            let (_streams, _requests, port) = spawn_fake_upstream(None).await;
+            let ctx = make_context(runtime, port);
 
             let body = Full::new(bytes::Bytes::from_static(b"payload=1"));
             let req = http::Request::builder()
@@ -338,12 +365,14 @@ mod tests {
     /// `ready()` answers Ok and the send is what fails. Later connections
     /// answer every request. Returns a counter of connections served.
     #[allow(clippy::disallowed_methods)] // fake backend lives on the bare test runtime
-    fn spawn_hangup_racing_close(mut receiver: Receiver) -> Arc<AtomicUsize> {
+    async fn spawn_hangup_racing_close() -> (Arc<AtomicUsize>, u16) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
         let streams = Arc::new(AtomicUsize::new(0));
         let s = streams.clone();
         tokio::spawn(async move {
             let mut racing_conn = true;
-            while let Some((stream, _att)) = receiver.recv().await {
+            while let Ok((stream, _addr)) = listener.accept().await {
                 s.fetch_add(1, Ordering::SeqCst);
                 let race_close = std::mem::replace(&mut racing_conn, false);
                 tokio::spawn(async move {
@@ -384,7 +413,7 @@ mod tests {
                 });
             }
         });
-        streams
+        (streams, port)
     }
 
     /// Integration repro in miniature: after an aborted response the pooled
@@ -394,8 +423,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn failed_send_evicts_pooled_connection() -> anyhow::Result<()> {
         run_test_with_tokio_runtime(async |runtime| {
-            let (ctx, receiver) = make_context(runtime);
-            let streams = spawn_hangup_racing_close(receiver);
+            let (streams, port) = spawn_hangup_racing_close().await;
+            let ctx = make_context(runtime, port);
 
             let (status, _) = get(&ctx).await;
             assert_eq!(status, 200, "first request on a fresh connection");
@@ -428,12 +457,13 @@ mod tests {
     #[allow(clippy::disallowed_methods)] // fake backend lives on the bare test runtime
     async fn failed_first_send_does_not_pool_connection() -> anyhow::Result<()> {
         run_test_with_tokio_runtime(async |runtime| {
-            let (ctx, mut receiver) = make_context(runtime);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
             let streams = Arc::new(AtomicUsize::new(0));
             let s = streams.clone();
             tokio::spawn(async move {
                 let mut first_conn = true;
-                while let Some((stream, _att)) = receiver.recv().await {
+                while let Ok((stream, _addr)) = listener.accept().await {
                     s.fetch_add(1, Ordering::SeqCst);
                     let hang_up = std::mem::replace(&mut first_conn, false);
                     tokio::spawn(async move {
@@ -462,6 +492,7 @@ mod tests {
                     });
                 }
             });
+            let ctx = make_context(runtime, port);
 
             assert!(
                 try_get(&ctx).await.is_err(),
