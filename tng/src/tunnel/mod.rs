@@ -15,4 +15,6 @@ pub(crate) mod service_metrics;
 pub(crate) mod stream;
 #[cfg(not(wasm))]
 pub(crate) mod udp;
+#[cfg(not(wasm))]
+pub(crate) mod upstream;
 pub(crate) mod utils;
