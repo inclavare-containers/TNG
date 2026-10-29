@@ -27,6 +27,11 @@ TNG_EGRESS_LISTEN=40000
 TNG_INGRESS_LISTEN=50000
 
 TNG_MULTIPLEX="${TNG_MULTIPLEX:-false}"  # "false" = raw-TLS (no H2), "true" = H2 CONNECT multiplex
+
+# iperf3 traffic direction. `up` (default; client→server, read sum_sent) is the
+# upload rate; `down` (server→client via `iperf3 -R`, read sum_received) is the
+# client's download rate. Unset = up.
+IPERF_DIR="${IPERF_DIR:-up}"
 BENCH_TMP=""
 
 ###############################################################################
@@ -39,23 +44,34 @@ fail() { echo -e "\033[1;31m  ✗\033[0m $*" >&2; }
 c_ns() { ip netns exec "$1" "${@:2}"; }
 
 kill_ns_bg() {
-    # Kill background stunnel/tng processes in a namespace
+    # Kill background stunnel/tng processes in a namespace.
+    # Use exact-name (`pkill -x`) matches against the process *comm*, never a
+    # `-f` full-cmdline pattern: the `ip netns exec … pkill -f <pat>` wrapper's
+    # own cmdline contains <pat>, so `pkill -f` would match and SIGTERM its own
+    # `ip netns exec` parent (observed as exit 144 mid-bench).
     local ns="$1"
-    ip netns exec "$ns" pkill -f "stunnel.*/tmp/tng-bench" 2>/dev/null || true
-    ip netns exec "$ns" pkill -f "tng launch --config-file /tmp/tng-bench" 2>/dev/null || true
+    ip netns exec "$ns" pkill -x stunnel4 2>/dev/null || true
+    ip netns exec "$ns" pkill -x stunnel 2>/dev/null || true
+    ip netns exec "$ns" pkill -x tng 2>/dev/null || true
     sleep 0.5
 }
 
-# Run one round of iperf3 and extract sender bandwidth in Gbps
+# Run one round of iperf3 and extract bandwidth in Gbps.
+# IPERF_DIR=up (default, client→server, read sum_sent) | down (server→client via
+# `-R`, read sum_received, the client's download rate).
 run_iperf_one() {
     local host="$1" port="$2" ns="$3" streams="${4:-1}"
+    local dir="${IPERF_DIR:-up}"
+    local rev_flag=""
+    local field="sum_sent"
+    [ "$dir" = "down" ] && { rev_flag="-R"; field="sum_received"; }
     local json_output
-    json_output=$(ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -P "$streams" -J 2>/dev/null) || return 1
+    json_output=$(ip netns exec "$ns" iperf3 -c "$host" -p "$port" -t "$IPERF_DURATION" -P "$streams" ${rev_flag:+"$rev_flag"} -J 2>/dev/null) || return 1
     echo "$json_output" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    bits = d['end']['sum_sent']['bits_per_second']
+    bits = d['end']['${field}']['bits_per_second']
     print(f'{bits / 1e9:.2f}')
 except (KeyError, json.JSONDecodeError):
     sys.exit(1)
