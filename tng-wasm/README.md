@@ -8,6 +8,8 @@ The TNG Client JavaScript SDK provides client functionality for use in browser e
 
 A live demo of the TNG JavaScript SDK integrated into a web page is hosted on GitHub Pages: <https://inclavare-containers.github.io/TNG/>
 
+The site has two pages: an API playground (general HTTP requests and LLM inference through the tunnel) and a chat demo with a remote-verification panel that shows the attested endpoint's EAR appraisal results. The chat page uses the SDK's `verify()` API to check the remote's attestation without sending a business request.
+
 ## Getting the SDK
 
 You can obtain the TNG SDK in two ways:
