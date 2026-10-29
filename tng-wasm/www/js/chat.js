@@ -9,6 +9,7 @@ import {
   commitField,
 } from "./settings.js";
 import { buildChatRequestBody } from "./chat-logic.js";
+import { decodeJwtClaims, summarizeClaims, tierLabel } from "./claims-view.js";
 
 // SDK is imported from ./tng_wasm.js (copied into www/ at assemble time by CI
 // or by `make www-demo`), same dynamic-import pattern as app.js.
@@ -69,7 +70,9 @@ async function initSdk() {
   }
   updateInitBadge();
   updateSendState();
-  if (sdkReady) maybeAutoVerify();
+  // Covers the failed path too: the panel badge then reads "waiting" instead
+  // of staying blank.
+  maybeAutoVerify();
 }
 
 function updateSendState() {
@@ -187,17 +190,187 @@ function initChat() {
   document.getElementById("tng-config-wrap").addEventListener("change", updateSendState);
 }
 
-// ---------- verification panel (stubs) ----------
-// The panel task fills these in: render the EAR claim summary from the last
-// response, re-label panel texts on language switch, and re-verify on boot.
-function refreshPanelFromResponse() {}
-function renderPanelI18n() {}
-function maybeAutoVerify() {}
+// ---------- verification panel ----------
+// The panel has four sources of state: waiting (settings incomplete),
+// verifying, a VerificationInfo from tng_verify, or an error. Per-message
+// responses refresh it from res.attest_info (raw token string), decoded
+// locally with the same claims-view helpers.
+let verifyInFlight = false;
+let panelState = "waiting";
+// Last claims rendered into the verifier list; kept so a language switch can
+// re-render the baked-in label texts (verifier prefix, tier chips).
+let panelClaims = null;
+
+function panelBadgeKey(state) {
+  return {
+    waiting: "panel.status.waiting",
+    verifying: "panel.status.verifying",
+    verified: "panel.status.verified",
+    failed: "panel.status.failed",
+    nora: "panel.status.nora",
+  }[state] || "panel.status.waiting";
+}
+
+function setPanelState(state) {
+  panelState = state;
+  const badge = document.getElementById("verify-badge");
+  if (!badge) return;
+  badge.textContent = t(panelBadgeKey(state));
+  // Reuse the three visual classes styles.css already defines (init badge):
+  // verified is green, failed is red, every other state stays neutral.
+  badge.className =
+    "badge " +
+    (state === "verified" ? "badge-ready" : state === "failed" ? "badge-failed" : "badge-waiting");
+}
+
+function fmtTime(epochSeconds) {
+  if (typeof epochSeconds !== "number") return "";
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+function chatUrl() {
+  return (
+    document.getElementById("chat-base-url").value.trim().replace(/\/+$/, "") +
+    "/v1/chat/completions"
+  );
+}
+
+function canVerify() {
+  return (
+    sdkReady &&
+    isFormValid() &&
+    document.getElementById("chat-base-url").value.trim() !== ""
+  );
+}
+
+function maybeAutoVerify() {
+  if (canVerify()) runVerify();
+  else setPanelState("waiting");
+}
+
+async function runVerify() {
+  if (verifyInFlight || !canVerify()) return;
+  verifyInFlight = true;
+  setPanelState("verifying");
+  document.getElementById("verify-error").hidden = true;
+  try {
+    const info = await tng_verify(chatUrl(), buildTngConfig());
+    renderPanel(info);
+  } catch (err) {
+    renderPanelError(err);
+  } finally {
+    verifyInFlight = false;
+  }
+}
+
+function renderPanelError(err) {
+  setPanelState("failed");
+  const box = document.getElementById("verify-error");
+  box.hidden = false;
+  box.textContent = err?.message || String(err);
+  // Clear the last appraisal so a failed verify leaves no stale claims or
+  // verifier chips under the error badge.
+  renderVerifiers(null);
+  document.getElementById("verify-claims").textContent = "";
+}
+
+function renderPanel(info) {
+  setPanelState(info.verified ? "verified" : "nora");
+
+  document.getElementById("verify-time").textContent = info.verified
+    ? new Date().toLocaleString()
+    : "";
+  document.getElementById("verify-endpoint").textContent = info.endpoint || "";
+
+  // AS summary: provider label plus address when present. NoRa leaves both
+  // unset; the row stays blank rather than claiming a built-in AS that the
+  // config never used (a real builtin AS reports its provider label).
+  const asBits = [];
+  if (info.as_provider) asBits.push(info.as_provider === "ita" ? "ITA" : "CoCo");
+  if (info.as_addr) asBits.push(info.as_addr);
+  if (info.policy_ids && info.policy_ids.length) asBits.push(info.policy_ids.join(", "));
+  document.getElementById("verify-as").textContent = asBits.join(" · ");
+
+  document.getElementById("verify-exp").textContent = fmtTime(info.exp);
+
+  renderVerifiers(info.claims);
+  // claims absent but token present means the wasm-side payload decode failed;
+  // show the raw token rather than nothing.
+  document.getElementById("verify-claims").textContent = info.claims
+    ? JSON.stringify(info.claims, null, 2)
+    : info.token || "";
+}
+
+function renderVerifiers(claims) {
+  panelClaims = claims || null;
+  const ul = document.getElementById("verify-verifiers");
+  ul.textContent = "";
+  if (!claims) return;
+  const summary = summarizeClaims(claims);
+  for (const v of summary.verifiers) {
+    const li = document.createElement("li");
+    const meta = document.createElement("div");
+    meta.className = "verifier-meta";
+    const idEl = document.createElement("span");
+    idEl.textContent = `${t("panel.verifier")}: ${v.id}`;
+    const statusEl = document.createElement("span");
+    // ear.status may be a non-tier verdict string (e.g. "expired"); show it as-is.
+    statusEl.textContent = v.earStatus || "";
+    meta.append(idEl, statusEl);
+    li.append(meta);
+    for (const tw of v.trustworthiness) {
+      const tier = tierLabel(tw.value);
+      const chip = document.createElement("span");
+      chip.className = "tier tier-" + (tier || "none");
+      chip.textContent = `${tw.dimension}: ${t("panel.trust." + (tier || "none"))}`;
+      li.append(chip);
+    }
+    if (v.policyId) {
+      const p = document.createElement("div");
+      p.textContent = v.policyId;
+      li.append(p);
+    }
+    ul.appendChild(li);
+  }
+}
+
+// Refresh the panel from a chat response's attest_info: the token string is
+// decoded locally; the endpoint/AS/exp fields keep the current values.
+function refreshPanelFromResponse(res) {
+  const token = res?.attest_info?.attestation_result;
+  if (typeof token !== "string" || !token) {
+    setPanelState("nora");
+    return;
+  }
+  const claims = decodeJwtClaims(token);
+  setPanelState("verified");
+  document.getElementById("verify-time").textContent = new Date().toLocaleString();
+  renderVerifiers(claims);
+  document.getElementById("verify-claims").textContent = claims
+    ? JSON.stringify(claims, null, 2)
+    : token;
+}
+
+// Re-label the panel after a language switch from the tracked state: the
+// badge plus the verifier list, whose labels were baked in at render time.
+function renderPanelI18n() {
+  setPanelState(panelState);
+  renderVerifiers(panelClaims);
+}
+
+function initPanel() {
+  document.getElementById("reverify-btn").addEventListener("click", runVerify);
+  // Re-run verification when the endpoint changes (blur) and when settings
+  // validity flips (e.g. AS provider switch invalidates the old result).
+  document.getElementById("chat-base-url").addEventListener("blur", maybeAutoVerify);
+  document.getElementById("tng-config-wrap").addEventListener("change", maybeAutoVerify);
+}
 
 // ---------- boot ----------
 function boot() {
   initI18n();
   initChat();
+  initPanel();
   // Restore persisted values before the settings card runs its provider-switch
   // field-clear, so a stale ITA-prefilled as_addr cannot survive into a CoCo
   // config at boot (same order as app.js).
