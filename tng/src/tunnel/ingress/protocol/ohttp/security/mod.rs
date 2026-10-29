@@ -1,7 +1,7 @@
 pub mod client;
 mod path_rewrite;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 #[cfg(not(wasm))]
 use crate::status::{StatusProvider, StatusQueryResult};
@@ -29,23 +29,48 @@ use http::HeaderValue;
 use serde::Serialize;
 use tokio::sync::{OnceCell, RwLock};
 
-/// Cached OHTTP client per outer-POST URL string, lazily initialized on
-/// first use. Keyed by the plain URL string so a keep-alive request does not
-/// have to parse a `Url` just to look the entry up; `OHttpClient::new` parses
-/// it once. Two equivalent-but-differently-spelled paths therefore get two
-/// entries (the parsed-`Url` key used to canonicalize); the bounded cost is an
-/// extra client creation (one key-config fetch), never a routing difference:
-/// each client posts the parsed, normalized URL.
-type OhttpClientCache = RwLock<HashMap<String, Arc<OnceCell<Arc<OHttpClient>>>>>;
+/// Cached OHTTP client per (endpoint, outer-POST path), lazily initialized
+/// on first use. The steady-state lookup borrows both parts -- hashing the
+/// endpoint and the request path directly -- instead of building the
+/// concatenated URL string per request; the concatenation now happens once
+/// per client creation, and `OHttpClient::new` parses it into a `Url` there.
+/// Two equivalent-but-differently-spelled paths get two entries (as with the
+/// previous plain-URL-string key), and the same `host:port` configured once
+/// as an IPv4 and once as a domain gets two entries because the endpoint
+/// types differ; the bounded cost is an extra client creation (one key-config
+/// fetch), never a routing difference: each client posts its own URL.
+type OhttpClientCache =
+    RwLock<HashMap<TngEndpoint, HashMap<String, Arc<OnceCell<Arc<OHttpClient>>>>>>;
 
-/// Compute the outer OHTTP POST path used when no `path_rewrites` rule matches
-/// (or `path_rewrites` is unset/empty). The caller is responsible for ensuring
-/// the result starts with `/` (see `construct_base_url`).
-fn fallback_outer_path(path_default: PathDefault, original_path: &str) -> String {
-    match path_default {
-        PathDefault::Root => "/".to_string(),
-        PathDefault::Original => original_path.to_string(),
+/// Outer-POST path: the `path_rewrites` result when a rule matches, otherwise
+/// `path_default` (`/` for Root, the request's original path for Original).
+/// The returned `Cow` borrows the request path whenever possible so a
+/// keep-alive request does not copy it; the owned variants are only built by
+/// a rewrite hit or when the path needs a leading `/` prepended.
+fn outer_path<'a>(
+    path_rewrite_group: &PathRewriteGroup,
+    path_default: PathDefault,
+    request: &'a axum::extract::Request,
+) -> Cow<'a, str> {
+    let original_path = request.uri().path();
+    // When no path_rewrite rule matches (path_rewrites unset/empty or
+    // no regex hit), fall back according to `path_default`: `/` (Root,
+    // the historical default) or the inner request's original path.
+    let mut rewrited_path = path_rewrite_group.rewrite(original_path).map_or_else(
+        || match path_default {
+            PathDefault::Root => Cow::Borrowed("/"),
+            PathDefault::Original => Cow::Borrowed(original_path),
+        },
+        Cow::Owned,
+    );
+
+    if !rewrited_path.starts_with('/') {
+        rewrited_path = Cow::Owned(format!("/{rewrited_path}"));
     }
+
+    tracing::debug!(original_path, rewrited_path = ?rewrited_path, "path is rewrited");
+
+    rewrited_path
 }
 
 /// Root status response for /status/.../ohttp/keys.
@@ -254,9 +279,11 @@ impl OHttpSecurityLayer {
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
         async {
-            let base_url = self.construct_base_url(endpoint, &request);
+            let outer_path = outer_path(&self.path_rewrite_group, self.path_default, &request);
 
-            let ohttp_client = self.get_or_create_ohttp_client(base_url).await?;
+            let ohttp_client = self
+                .get_or_create_ohttp_client(endpoint, &outer_path)
+                .await?;
 
             ohttp_client.forward_request(request).await
         }
@@ -267,79 +294,70 @@ impl OHttpSecurityLayer {
         })
     }
 
-    /// Outer-POST URL as a plain string: it is the cache key for the
-    /// per-endpoint `OHttpClient`, and the client parses it into a `Url`
-    /// once at creation. Parsing per request (and hashing/cloning the parsed
-    /// `Url` for the cache lookup) showed up in the keep-alive profile; the
-    /// parsed-URL error path moved into `OHttpClient::new`, same
-    /// `CreateOHttpClientFailed` variant and `Not a valid URL` context.
-    fn construct_base_url(
-        &self,
-        endpoint: &TngEndpoint,
-        request: &axum::extract::Request,
-    ) -> String {
-        let old_uri = request.uri();
-        let original_path = old_uri.path();
-        // When no path_rewrite rule matches (path_rewrites unset/empty or
-        // no regex hit), fall back according to `path_default`: `/` (Root,
-        // the historical default) or the inner request's original path.
-        let mut rewrited_path = self
-            .path_rewrite_group
-            .rewrite(original_path)
-            .unwrap_or_else(|| fallback_outer_path(self.path_default, original_path));
-
-        if !rewrited_path.starts_with('/') {
-            rewrited_path.insert(0, '/');
-        }
-
-        tracing::debug!(original_path, rewrited_path, "path is rewrited");
-
-        format!(
-            "{}://{}{rewrited_path}",
-            self.scheme,
-            endpoint.http_authority()
-        )
-    }
-
+    /// Look up the cached client for `(endpoint, outer_path)`, creating it on
+    /// first use. The hit path borrows the endpoint and the path as keys and
+    /// never builds the outer-POST URL string; the URL (`scheme://host:port`
+    /// plus path, normalized by the client's one-time `Url` parse) is
+    /// concatenated only in the cold path, replacing the per-request parse
+    /// that showed up in the keep-alive profile.
     async fn get_or_create_ohttp_client(
         &self,
-        base_url: String,
+        endpoint: &TngEndpoint,
+        outer_path: &str,
     ) -> Result<Arc<OHttpClient>, TngError> {
         // Try to read the ohttp client entry.
-        let cell = {
+        let entry = {
             let read = self.ohttp_clients.read().await;
-            read.get(&base_url).cloned()
+            read.get(endpoint)
+                .and_then(|clients| clients.get(outer_path))
+                .cloned()
         };
 
         // If no entry exists, create one with uninitialized value.
-        let cell = match cell {
-            Some(cell) => cell,
-            _ => self
-                .ohttp_clients
-                .write()
-                .await
-                .entry(base_url.clone())
-                .or_default()
-                .clone(),
+        let entry = match entry {
+            Some(entry) => entry,
+            _ => {
+                let mut write = self.ohttp_clients.write().await;
+                write
+                    .entry(endpoint.clone())
+                    .or_default()
+                    .entry(outer_path.to_owned())
+                    .or_default()
+                    .clone()
+            }
         };
 
+        // Steady state: the cell is already initialized; hand out the client
+        // without touching the cold-path URL construction below.
+        if let Some(client) = entry.get() {
+            return Ok(client.clone());
+        }
+
+        let base_url = format!(
+            "{}://{}{}",
+            self.scheme,
+            endpoint.http_authority(),
+            outer_path
+        );
+
         // read from the cell
-        cell.get_or_try_init(|| async {
-            Ok(Arc::new(
-                OHttpClient::new(
-                    self.ra_context.clone(),
-                    self.http_client.clone(),
-                    base_url,
-                    self.runtime.clone(),
-                    self.passthrough_request_headers.clone(),
-                    self.passthrough_response_headers.clone(),
-                )
-                .await
-                .map_err(TngError::CreateOHttpClientFailed)?,
-            ))
-        })
-        .await
-        .cloned()
+        entry
+            .get_or_try_init(|| async {
+                Ok(Arc::new(
+                    OHttpClient::new(
+                        self.ra_context.clone(),
+                        self.http_client.clone(),
+                        base_url,
+                        self.runtime.clone(),
+                        self.passthrough_request_headers.clone(),
+                        self.passthrough_response_headers.clone(),
+                    )
+                    .await
+                    .map_err(TngError::CreateOHttpClientFailed)?,
+                ))
+            })
+            .await
+            .cloned()
     }
 }
 
@@ -351,11 +369,14 @@ impl StatusProvider for OHttpSecurityLayer {
             [] => Ok(StatusQueryResult::Subtree(vec!["keys".into()])),
             ["keys"] => {
                 let map = self.ohttp_clients.read().await;
-                let mut servers = Vec::with_capacity(map.len());
-                for cell in map.values() {
-                    if let Some(client) = cell.get() {
-                        if let Some(entry) = client.server_status().await {
-                            servers.push(entry);
+                let mut servers =
+                    Vec::with_capacity(map.values().map(|clients| clients.len()).sum());
+                for clients in map.values() {
+                    for cell in clients.values() {
+                        if let Some(client) = cell.get() {
+                            if let Some(entry) = client.server_status().await {
+                                servers.push(entry);
+                            }
                         }
                     }
                 }
@@ -375,9 +396,86 @@ impl StatusProvider for OHttpSecurityLayer {
 #[cfg(test)]
 mod tests {
     use super::client::ServerStatusEntry;
-    use super::{fallback_outer_path, ServersStatus};
-    use crate::config::ingress::{OHttpArgs, PathDefault};
+    use super::{outer_path, ServersStatus};
+    use crate::config::ingress::{OHttpArgs, PathDefault, PathRewrite};
+    use crate::tunnel::ingress::protocol::ohttp::security::PathRewriteGroup;
     use anyhow::Result;
+
+    fn request_with_path(path: &str) -> axum::extract::Request {
+        let mut request = axum::extract::Request::new(axum::body::Body::empty());
+        *request.uri_mut() = path.parse().expect("valid uri path");
+        request
+    }
+
+    #[test]
+    fn outer_path_root_falls_back_to_slash() {
+        let rewrites = PathRewriteGroup::new(&[]).expect("empty group");
+        let request = request_with_path("/foo/bar");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Root, &request).as_ref(),
+            "/"
+        );
+    }
+
+    #[test]
+    fn outer_path_original_falls_back_to_request_path() {
+        let rewrites = PathRewriteGroup::new(&[]).expect("empty group");
+        let request = request_with_path("/foo/bar");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Original, &request).as_ref(),
+            "/foo/bar"
+        );
+    }
+
+    #[test]
+    fn outer_path_prepends_missing_leading_slash() {
+        // A rewrite substitution that lacks the leading '/' gets one.
+        let rules = [PathRewrite {
+            match_regex: "^/foo$".to_string(),
+            substitution: "fooslash".to_string(),
+        }];
+        let rewrites = PathRewriteGroup::new(&rules).expect("group builds");
+        let request = request_with_path("/foo");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Root, &request).as_ref(),
+            "/fooslash"
+        );
+        // An already-absolute substitution is left untouched.
+        let rules = [PathRewrite {
+            match_regex: "^/foo$".to_string(),
+            substitution: "/fooslash".to_string(),
+        }];
+        let rewrites = PathRewriteGroup::new(&rules).expect("group builds");
+        let request = request_with_path("/foo");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Root, &request).as_ref(),
+            "/fooslash"
+        );
+    }
+
+    #[test]
+    fn outer_path_rewrite_hit_wins_over_default() {
+        let rules = [PathRewrite {
+            match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_string(),
+            substitution: "/foo/bar/$1".to_string(),
+        }];
+        let rewrites = PathRewriteGroup::new(&rules).expect("group builds");
+        let request = request_with_path("/foo/bar/user/id123/info");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Root, &request).as_ref(),
+            "/foo/bar/user"
+        );
+        // A non-matching path keeps the default behavior.
+        let request = request_with_path("/other");
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Root, &request).as_ref(),
+            "/"
+        );
+        assert_eq!(
+            outer_path(&rewrites, PathDefault::Original, &request).as_ref(),
+            "/other"
+        );
+    }
 
     #[test]
     fn test_servers_status_collection() {
@@ -411,28 +509,6 @@ mod tests {
         let value = serde_json::to_value(&status).unwrap();
         let servers = value["servers"].as_array().unwrap();
         assert!(servers.is_empty());
-    }
-
-    #[test]
-    fn test_fallback_outer_path_root() {
-        assert_eq!(fallback_outer_path(PathDefault::Root, "/foo/bar"), "/");
-    }
-
-    #[test]
-    fn test_fallback_outer_path_root_ignores_original() {
-        // Root always yields "/" regardless of the original path.
-        assert_eq!(
-            fallback_outer_path(PathDefault::Root, "/deeply/nested/path"),
-            "/"
-        );
-    }
-
-    #[test]
-    fn test_fallback_outer_path_original() {
-        assert_eq!(
-            fallback_outer_path(PathDefault::Original, "/foo/bar"),
-            "/foo/bar"
-        );
     }
 
     // scheme_from_tls is native-only (#[cfg(not(wasm))]); gate this test to match.
