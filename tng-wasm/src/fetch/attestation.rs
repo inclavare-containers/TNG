@@ -17,29 +17,20 @@ use super::to_js_error;
 /// (`api_key`, `as_headers`, `trusted_certs_paths`, …) are intentionally
 /// omitted.  The explicit match arms ensure a compile error when a new
 /// provider variant is added, forcing a review of which fields to expose.
-#[derive(Serialize)]
-struct AttestationInfo {
-    as_addr: Option<String>,
-    policy_ids: Option<Vec<String>>,
+#[derive(Serialize, Default)]
+pub(super) struct RaSummary {
+    pub as_addr: Option<String>,
+    pub policy_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    as_provider: Option<String>,
+    pub as_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ita_jwks_addr: Option<String>,
-    attestation_result: AttestationResult,
+    pub ita_jwks_addr: Option<String>,
 }
 
-pub(super) fn attach_attestation_info(
-    web_response: web_sys::Response,
-    attestation_result: AttestationResult,
-    ra_args: &RaArgs,
-) -> Result<web_sys::Response, JsValue> {
-    let mut attest_info = AttestationInfo {
-        as_addr: None,
-        policy_ids: None,
-        as_provider: None,
-        ita_jwks_addr: None,
-        attestation_result,
-    };
+/// Extract the RA-config summary for `ra_args`. Shared by the fetch response's
+/// `attest_info` and the standalone `verify()` export.
+pub(super) fn ra_summary(ra_args: &RaArgs) -> RaSummary {
+    let mut summary = RaSummary::default();
 
     let verify_args = match ra_args {
         RaArgs::VerifyOnly(v) => Some(v),
@@ -52,7 +43,7 @@ pub(super) fn attach_attestation_info(
         match verify_args {
             VerifyArgs::Passport { verifier } => match verifier {
                 VerifierArgs::Coco(coco) => {
-                    attest_info.as_provider = Some("coco".into());
+                    summary.as_provider = Some("coco".into());
                     match coco {
                         CocoVerifierArgs::Restful {
                             as_addr,
@@ -64,8 +55,8 @@ pub(super) fn attach_attestation_info(
                             policy_ids,
                             ..
                         } => {
-                            attest_info.as_addr = as_addr.clone();
-                            attest_info.policy_ids = Some(policy_ids.clone());
+                            summary.as_addr = as_addr.clone();
+                            summary.policy_ids = Some(policy_ids.clone());
                         }
                         CocoVerifierArgs::Builtin { .. } => {
                             // Nothing to do
@@ -73,9 +64,9 @@ pub(super) fn attach_attestation_info(
                     }
                 }
                 VerifierArgs::Ita(ita) => {
-                    attest_info.as_provider = Some("ita".into());
-                    attest_info.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
-                    attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    summary.as_provider = Some("ita".into());
+                    summary.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
+                    summary.policy_ids = Some(ita.policy_ids.clone());
                 }
             },
             VerifyArgs::BackgroundCheck {
@@ -83,7 +74,7 @@ pub(super) fn attach_attestation_info(
                 verifier,
             } => match converter {
                 ConverterArgs::Coco(coco) => {
-                    attest_info.as_provider = Some("coco".into());
+                    summary.as_provider = Some("coco".into());
                     match coco {
                         CocoConverterArgs::Restful {
                             as_addr,
@@ -95,8 +86,8 @@ pub(super) fn attach_attestation_info(
                             policy_ids,
                             ..
                         } => {
-                            attest_info.as_addr = Some(as_addr.clone());
-                            attest_info.policy_ids = Some(policy_ids.clone());
+                            summary.as_addr = Some(as_addr.clone());
+                            summary.policy_ids = Some(policy_ids.clone());
                         }
                         CocoConverterArgs::Builtin { .. } => {
                             // Nothing to do
@@ -104,16 +95,36 @@ pub(super) fn attach_attestation_info(
                     }
                 }
                 ConverterArgs::Ita(ita) => {
-                    attest_info.as_provider = Some("ita".into());
-                    attest_info.as_addr = Some(ita.as_addr.clone());
-                    attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    summary.as_provider = Some("ita".into());
+                    summary.as_addr = Some(ita.as_addr.clone());
+                    summary.policy_ids = Some(ita.policy_ids.clone());
                     if let VerifierArgs::Ita(v) = verifier {
-                        attest_info.ita_jwks_addr = Some(v.ita_jwks_addr.clone());
+                        summary.ita_jwks_addr = Some(v.ita_jwks_addr.clone());
                     }
                 }
             },
         }
     }
+
+    summary
+}
+
+#[derive(Serialize)]
+struct AttestationInfo {
+    #[serde(flatten)]
+    summary: RaSummary,
+    attestation_result: AttestationResult,
+}
+
+pub(super) fn attach_attestation_info(
+    web_response: web_sys::Response,
+    attestation_result: AttestationResult,
+    ra_args: &RaArgs,
+) -> Result<web_sys::Response, JsValue> {
+    let attest_info = AttestationInfo {
+        summary: ra_summary(ra_args),
+        attestation_result,
+    };
 
     // Create a JavaScript object
     let attest_info_obj = JsValue::from_serde(&attest_info)
