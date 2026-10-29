@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::{
     config::egress::{DirectForwardRules, OHttpArgs},
     tunnel::{
-        stream::CommonStreamTrait,
+        stream::{CommonStreamTrait, FirstByteReadTimeoutStream},
         utils::{
             http_inspector::{HttpRequestInspector, InspectionResult},
             runtime::TokioRuntime,
@@ -13,11 +13,9 @@ use crate::{
 
 use anyhow::{bail, Context as _, Result};
 use direct_forward::DirectForwardTrafficDetector;
-use timeout::FirstByteReadTimeoutStream;
 use tracing::Instrument;
 
 mod direct_forward;
-mod timeout;
 
 /// Timeout before we receive first byte from peer, This is essential to make it fasts fail quickly when a none tng client is connected to tng server unexpectedly.
 const TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -88,24 +86,24 @@ impl TransportLayer {
             {
                 // First, we need to detect if it is a HTTP connection or a HTTP/2 connection.
                 let InspectionResult {
-                    unmodified_stream,
+                    inspected_stream,
                     result,
                 } = HttpRequestInspector::inspect_stream(in_stream).await;
                 let request_info =
                     result.context("Failed during inspecting http request from downstream")?;
 
-                let unmodified_stream =
-                    Box::new(unmodified_stream) as Box<dyn CommonStreamTrait + Sync>;
+                let inspected_stream =
+                    Box::new(inspected_stream) as Box<dyn CommonStreamTrait + Sync>;
 
                 // If it should be forwarded directly, we just do that.
                 if direct_forward_traffic_detector.should_forward_directly(&request_info) {
                     // Bypass the security layer and wrapping layer, forward the stream to upstream directly.
                     tracing::debug!("Forwarding directly");
-                    MaybeDirectlyForward::DirectlyForward(unmodified_stream)
+                    MaybeDirectlyForward::DirectlyForward(inspected_stream)
                 } else {
                     tracing::debug!("Try to decode as TNG traffic");
                     // If not, we try to treat it as tng traffic, it is determined by the configuration of transport layer.
-                    MaybeDirectlyForward::ContinueAsTngTraffic(unmodified_stream)
+                    MaybeDirectlyForward::ContinueAsTngTraffic(inspected_stream)
                 }
             } else {
                 // Treat it as a valid tng traffic and try to decode from it.

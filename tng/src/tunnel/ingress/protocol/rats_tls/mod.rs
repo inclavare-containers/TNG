@@ -103,7 +103,7 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
                 Box::new(ContextualStream::new(tls_stream, "ingress-rats-tls-direct"));
             Ok((
                 Box::pin(async move {
-                    let _: () = utils::forward::forward_stream(upstream, downstream).await;
+                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
                     Ok(())
                 }),
                 attestation_state,
@@ -115,7 +115,7 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
                 self.connect(endpoint.clone()).await?;
             Ok((
                 Box::pin(async move {
-                    let _: () = utils::forward::forward_stream(upstream, downstream).await;
+                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
                     Ok(())
                 }),
                 attestation_state,

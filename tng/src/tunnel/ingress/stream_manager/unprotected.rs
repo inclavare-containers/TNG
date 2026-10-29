@@ -58,7 +58,7 @@ impl StreamManager for UnprotectedStreamManager {
 
         Ok((
             Box::pin(async {
-                let _: () = utils::forward::forward_stream(upstream, downstream).await;
+                let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
                 Ok(())
             }) as Pin<Box<_>>,
             AttestationState::Unattested,
