@@ -285,6 +285,15 @@ pub async fn log_request(
     req: Request,
     next: Next,
 ) -> Result<Response, (axum::http::StatusCode, String)> {
+    // When the level of this access line is filtered out, skip the per-request
+    // bookkeeping too (the method/uri clones, the timer, the content-length
+    // parse). The `tracing` macros defer argument formatting when disabled,
+    // but these values are built unconditionally beforehand because the
+    // request is moved into `next.run` and the line needs them afterwards.
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return Ok(next.run(req).await);
+    }
+
     let method = req.method().clone();
     let uri = req.uri().clone();
     let version = req.version();
