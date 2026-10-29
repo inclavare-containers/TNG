@@ -17,7 +17,7 @@ use crate::{
         },
         ra_context::RaContext,
     },
-    TokioRuntime,
+    AttestationState, CommonStreamTrait, TokioRuntime,
 };
 
 use anyhow::Result;
@@ -47,22 +47,23 @@ impl RatsTlsStreamDecoder {
             multiplex: rats_tls.multiplex,
         })
     }
-}
 
-#[async_trait]
-impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
-    async fn decode_stream(
+    /// Route a multiplexed (h2-configured) TLS stream: check the negotiated
+    /// ALPN, spawn the HTTP/2 server on `h2`, otherwise fall back to direct
+    /// TLS forwarding (a peer that ignores ALPN gets raw forwarding instead
+    /// of a broken h2 server).
+    fn decode_mux<T: CommonStreamTrait + Sync>(
         &self,
-        input: TngTransportStream,
-        _peer: Option<std::net::SocketAddr>,
-    ) -> Result<ProtocolStreamDecoderOutput> {
-        // rats_tls does raw byte forwarding; peer is unused.
-        tracing::debug!("Start to estabilish rats-tls connection");
+        tls_stream: crate::tunnel::utils::rustls::early_data_prefix::EarlyDataPrefixStream<
+            tokio_rustls::server::TlsStream<T>,
+        >,
+        attestation_state: AttestationState,
+    ) -> ProtocolStreamDecoderOutput {
+        let (_, tls_session) = tls_stream.inner().get_ref();
+        let negotiated_alpn = tls_session.alpn_protocol();
+        tracing::debug!(?negotiated_alpn, "ALPN negotiated on egress TLS handshake");
 
-        let output = if self.multiplex {
-            let (tls_stream, attestation_state) =
-                self.security_layer.handshake_rustls(input).await?;
-
+        if negotiated_alpn == Some(b"h2") {
             // H2 mode (multiplex=true): spawn HTTP/2 server and yield streams from it
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             let _runtime = self.runtime.clone();
@@ -83,6 +84,39 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
                 }
             }
             .boxed()
+        } else {
+            // Direct TLS mode fallback: return TLS stream directly
+            stream! {
+                yield Ok((DecodedStream::Opaque(Box::new(tls_stream)), attestation_state));
+            }
+            .boxed()
+        }
+    }
+}
+
+#[async_trait]
+impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
+    async fn decode_stream(
+        &self,
+        input: TngTransportStream,
+        _peer: Option<std::net::SocketAddr>,
+    ) -> Result<ProtocolStreamDecoderOutput> {
+        // rats_tls does raw byte forwarding; peer is unused.
+        tracing::debug!("Start to estabilish rats-tls connection");
+
+        let output = if self.multiplex {
+            match input {
+                TngTransportStream::Inspected(stream) => {
+                    let (tls_stream, attestation_state) =
+                        self.security_layer.handshake(stream).await?;
+                    self.decode_mux(tls_stream, attestation_state)
+                }
+                TngTransportStream::Uninspected(stream) => {
+                    let (tls_stream, attestation_state) =
+                        self.security_layer.handshake(stream).await?;
+                    self.decode_mux(tls_stream, attestation_state)
+                }
+            }
         } else {
             // Direct TLS mode (multiplex=false): return TLS stream directly
             #[cfg(target_os = "linux")]

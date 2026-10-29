@@ -30,13 +30,12 @@ futures = {workspace = true}
 getrandom = {workspace = true}
 h2 = {workspace = true}
 hex = {workspace = true}
+humantime-serde = {workspace = true}
 hpke = {workspace = true}
 http = {workspace = true}
 http-body = {workspace = true}
 http-body-util = {workspace = true}
 httparse = {workspace = true}
-hyper = {workspace = true}
-hyper-util = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
 libc = "0.2"

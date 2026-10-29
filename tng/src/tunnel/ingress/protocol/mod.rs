@@ -9,13 +9,13 @@ use anyhow::Result;
 
 #[cfg(not(wasm))]
 use crate::status::StatusProvider;
-use crate::AttestationState;
 #[cfg(not(wasm))]
 use crate::tunnel::endpoint::TngEndpoint;
 #[cfg(not(wasm))]
 use crate::tunnel::ingress::flow::IncomingStream;
 #[cfg(not(wasm))]
 use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::AttestationState;
 #[cfg(not(wasm))]
 use async_trait::async_trait;
 

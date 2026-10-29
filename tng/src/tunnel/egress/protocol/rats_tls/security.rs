@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
 use crate::tunnel::utils::rustls::TlsOutcome;
+use crate::AttestationState;
 use crate::{
     config::egress::RatsTlsArgs,
     tunnel::{
@@ -14,7 +15,6 @@ use crate::{
         },
     },
 };
-use crate::AttestationState;
 use anyhow::Result;
 
 pub(super) struct RatsTlsSecurityLayer {
@@ -101,6 +101,27 @@ impl RatsTlsSecurityLayer {
                 .await
             }
         }
+    }
+
+    /// Generic server handshake returning the concrete (early-data-preserving)
+    /// stream, so the caller can read the negotiated ALPN off the rustls
+    /// session before deciding the h2-vs-direct routing.
+    #[tracing::instrument(skip_all, name = "security", level = "info")]
+    pub async fn handshake<T: CommonStreamTrait + std::marker::Sync>(
+        &self,
+        stream: T,
+    ) -> Result<(
+        crate::tunnel::utils::rustls::early_data_prefix::EarlyDataPrefixStream<
+            tokio_rustls::server::TlsStream<T>,
+        >,
+        AttestationState,
+    )> {
+        let tls_server_config = self.prepare_tls_config().await?;
+
+        let (tls_stream, attestation_state) =
+            tls_server_config.handshake_with_stream(stream).await?;
+
+        Ok((tls_stream, attestation_state))
     }
 
     #[tracing::instrument(skip_all, name = "security", level = "info")]

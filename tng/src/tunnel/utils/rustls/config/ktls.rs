@@ -56,11 +56,12 @@ use anyhow::{Context as _, Result};
 use tokio::net::TcpStream;
 
 use crate::config::ktls::{EnvCheckedKtls, FallbackDecision, KtlsConnUnavailable, Side};
-use crate::tunnel::attestation_result::AttestationResult;
+use crate::tunnel::attestation_result::AttestationState;
 use crate::tunnel::endpoint::EndpointAddr;
 use crate::tunnel::stream::PreludedStream;
 use crate::tunnel::stream::{CommonStreamTrait, FirstByteReadTimeoutStream};
 use crate::tunnel::utils::forward::ktls_splice::{KtlsSpliceStream, Session};
+use crate::tunnel::utils::rustls::early_data_prefix::EarlyDataPrefixStream;
 use crate::tunnel::utils::rustls::TlsOutcome;
 use ktls_core::TlsSession;
 
@@ -115,7 +116,7 @@ pub trait KtlsHandshakeConfig {
     async fn handshake_with_stream<IO: StreamForKtls>(
         self,
         corked: ktls::CorkStream<IO>,
-    ) -> Result<(KtlsTlsStream<IO>, Option<AttestationResult>)>;
+    ) -> Result<(KtlsTlsStream<IO>, AttestationState)>;
 }
 
 /// Client-side kTLS handshake config.
@@ -144,12 +145,12 @@ impl<'a> KtlsHandshakeConfig for KtlsClientHandshakeConfig<'a> {
     async fn handshake_with_stream<IO: StreamForKtls>(
         self,
         corked: ktls::CorkStream<IO>,
-    ) -> Result<(KtlsTlsStream<IO>, Option<AttestationResult>)> {
-        let (tls_stream, attestation_result) = self
+    ) -> Result<(KtlsTlsStream<IO>, AttestationState)> {
+        let (tls_stream, attestation_state) = self
             .config
             .handshake_with_stream(self.server_name, corked)
             .await?;
-        Ok((KtlsTlsStream::Client(tls_stream), attestation_result))
+        Ok((KtlsTlsStream::Client(tls_stream), attestation_state))
     }
 }
 
@@ -175,9 +176,23 @@ impl KtlsHandshakeConfig for KtlsServerHandshakeConfig {
     async fn handshake_with_stream<IO: StreamForKtls>(
         self,
         corked: ktls::CorkStream<IO>,
-    ) -> Result<(KtlsTlsStream<IO>, Option<AttestationResult>)> {
-        let (tls_stream, attestation_result) = self.config.handshake_with_stream(corked).await?;
-        Ok((KtlsTlsStream::Server(tls_stream), attestation_result))
+    ) -> Result<(KtlsTlsStream<IO>, AttestationState)> {
+        let (stream, attestation_state) = self.config.handshake_with_stream(corked).await?;
+        // The server handshake returns the stream wrapped so accepted 0-RTT
+        // early data is replayed to the reader. The kTLS install path needs
+        // the raw `TlsStream`, so split the wrapper here and carry the drained
+        // early-data bytes alongside (folded into the kTLS `Context` buffer on
+        // install, re-wrapped on the rustls fallback). The TNG ingress kTLS
+        // client performs a plain 1-RTT handshake (no early data), so the
+        // prefix is empty in the normal wiring.
+        let (early_data, tls_stream) = stream.into_parts();
+        Ok((
+            KtlsTlsStream::Server {
+                stream: tls_stream,
+                early_data,
+            },
+            attestation_state,
+        ))
     }
 }
 
@@ -193,7 +208,12 @@ impl KtlsHandshakeConfig for KtlsServerHandshakeConfig {
 /// mirrored across the client and server fns.
 pub enum KtlsTlsStream<IO: StreamForKtls> {
     Client(tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>),
-    Server(tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>),
+    Server {
+        stream: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
+        /// 0-RTT early data drained at accept; see
+        /// [`KtlsServerHandshakeConfig::handshake_with_stream`].
+        early_data: Vec<u8>,
+    },
 }
 
 impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
@@ -201,7 +221,7 @@ impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
     fn negotiated_cipher_suite(&self) -> Option<rustls::SupportedCipherSuite> {
         match self {
             Self::Client(s) => s.get_ref().1.negotiated_cipher_suite(),
-            Self::Server(s) => s.get_ref().1.negotiated_cipher_suite(),
+            Self::Server { stream, .. } => stream.get_ref().1.negotiated_cipher_suite(),
         }
     }
 
@@ -212,7 +232,11 @@ impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
     fn into_rustls_fallback(self) -> Box<dyn CommonStreamTrait + Sync> {
         match self {
             Self::Client(s) => Box::new(s),
-            Self::Server(s) => Box::new(s),
+            // Re-wrap so the drained early data keeps flowing to the reader,
+            // exactly like the plain rustls data plane.
+            Self::Server { stream, early_data } => {
+                Box::new(EarlyDataPrefixStream::new(early_data, stream))
+            }
         }
     }
 
@@ -222,7 +246,9 @@ impl<IO: StreamForKtls + 'static> KtlsTlsStream<IO> {
     async fn config_ktls(self) -> Result<KtlsSpliceStream> {
         Ok(match self {
             Self::Client(s) => StreamForKtls::config_ktls_client(s).await?,
-            Self::Server(s) => StreamForKtls::config_ktls_server(s).await?,
+            Self::Server { stream, early_data } => {
+                StreamForKtls::config_ktls_server(stream, early_data).await?
+            }
         })
     }
 }
@@ -237,6 +263,7 @@ pub trait StreamForKtls:
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
+        early_data: Vec<u8>,
     ) -> Result<KtlsSpliceStream>;
 }
 
@@ -342,6 +369,7 @@ async fn cork_drain<S: Corkable>(stream: &mut S) -> Result<Option<Vec<u8>>> {
 /// `setup_ulp` + `setup_tls_params` -> `Context::new` -> `KtlsSpliceStream`.
 async fn install_ktls_client<IO>(
     mut this: tokio_rustls::client::TlsStream<ktls::CorkStream<IO>>,
+    _early_data: Vec<u8>,
     make_session: fn(&rustls::ClientConnection) -> Session,
 ) -> Result<(IO, Session, Option<Vec<u8>>)>
 where
@@ -359,9 +387,13 @@ where
 }
 
 /// Inline hanyu-ktls setup for the server side (replaces the official
-/// `ktls::config_ktls_server`). See [`install_ktls_client`].
+/// `ktls::config_ktls_server`). See [`install_ktls_client`]. `early_data` is
+/// 0-RTT early data drained at accept; it arrived on the wire before anything
+/// the cork-drain reads, so it is prepended to the drained bytes to keep the
+/// delivery order.
 async fn install_ktls_server<IO>(
     mut this: tokio_rustls::server::TlsStream<ktls::CorkStream<IO>>,
+    early_data: Vec<u8>,
     make_session: fn(&rustls::ServerConnection) -> Session,
 ) -> Result<(IO, Session, Option<Vec<u8>>)>
 where
@@ -375,6 +407,15 @@ where
     let session = make_session(&conn);
     let io = cork_io.io;
     setup_ktls_keys!(io, conn, session);
+    let drained = match (early_data.is_empty(), drained) {
+        (false, Some(mut drained)) => {
+            let mut early = early_data;
+            early.append(&mut drained);
+            Some(early)
+        }
+        (false, None) => Some(early_data),
+        (true, drained) => drained,
+    };
     Ok((io, session, drained))
 }
 
@@ -383,15 +424,18 @@ impl StreamForKtls for TcpStream {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        let (io, session, drained) = install_ktls_client(this, Session::new_client).await?;
+        let (io, session, drained) =
+            install_ktls_client(this, Vec::new(), Session::new_client).await?;
         let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
         Ok(KtlsSpliceStream::new(io, ctx))
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
+        early_data: Vec<u8>,
     ) -> Result<KtlsSpliceStream> {
-        let (io, session, drained) = install_ktls_server(this, Session::new_server).await?;
+        let (io, session, drained) =
+            install_ktls_server(this, early_data, Session::new_server).await?;
         let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
         Ok(KtlsSpliceStream::new(io, ctx))
     }
@@ -403,7 +447,7 @@ impl StreamForKtls for TcpStream {
 /// bytes folded into the `Context` buffer. The two side methods differ only
 /// in which `Session` constructor is used, passed here as `$session_fn`.
 macro_rules! preluded_config_ktls_body {
-    ($this:ident, $install_ktls:path, $session_fn:path) => {{
+    ($this:ident, $early_data:expr, $install_ktls:path, $session_fn:path) => {{
         // 1. drain Tcp stream until prelude is empty, save the drained bytes on stack.
         //
         // The prelude is the over-read buffered in the `prelude` field of the
@@ -455,7 +499,7 @@ macro_rules! preluded_config_ktls_body {
         };
 
         // 2. call the install_ktls_* function.
-        let (io, session, drained_part2) = $install_ktls(this, $session_fn).await?;
+        let (io, session, drained_part2) = $install_ktls(this, $early_data, $session_fn).await?;
 
         // 3. concatenate the prelude-drained bytes (received first) with the
         //    cork-drained bytes (received after), preserving wire order.
@@ -479,13 +523,14 @@ impl StreamForKtls for PreludedStream<TcpStream> {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        preluded_config_ktls_body!(this, install_ktls_client, Session::new_client)
+        preluded_config_ktls_body!(this, Vec::new(), install_ktls_client, Session::new_client)
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
+        early_data: Vec<u8>,
     ) -> Result<KtlsSpliceStream> {
-        preluded_config_ktls_body!(this, install_ktls_server, Session::new_server)
+        preluded_config_ktls_body!(this, early_data, install_ktls_server, Session::new_server)
     }
 }
 
@@ -505,15 +550,18 @@ impl StreamForKtls for FirstByteReadTimeoutStream<TcpStream> {
     async fn config_ktls_client(
         this: tokio_rustls::client::TlsStream<ktls::CorkStream<Self>>,
     ) -> Result<KtlsSpliceStream> {
-        let (io, session, drained) = install_ktls_client(this, Session::new_client).await?;
+        let (io, session, drained) =
+            install_ktls_client(this, Vec::new(), Session::new_client).await?;
         let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
         Ok(KtlsSpliceStream::new(io.assume_first_byte_completed(), ctx))
     }
 
     async fn config_ktls_server(
         this: tokio_rustls::server::TlsStream<ktls::CorkStream<Self>>,
+        early_data: Vec<u8>,
     ) -> Result<KtlsSpliceStream> {
-        let (io, session, drained) = install_ktls_server(this, Session::new_server).await?;
+        let (io, session, drained) =
+            install_ktls_server(this, early_data, Session::new_server).await?;
         let ctx = ktls_core::Context::new(session, drained.map(ktls_core::Buffer::from));
         Ok(KtlsSpliceStream::new(io.assume_first_byte_completed(), ctx))
     }
@@ -550,12 +598,12 @@ pub async fn handshake_ktls<IO: StreamForKtls + 'static, C: KtlsHandshakeConfig>
     config: C,
     tcp: IO,
     ktls: EnvCheckedKtls,
-) -> Result<(TlsOutcome, Option<AttestationResult>)> {
+) -> Result<(TlsOutcome, AttestationState)> {
     let side = config.side();
     // 1. CorkStream-wrap BEFORE the tokio_rustls handshake (config_ktls_*
     //    requires `TlsStream<CorkStream<IO>>`).
     let corked = ktls::CorkStream::new(tcp);
-    let (tls_stream, attestation_result) = config.handshake_with_stream(corked).await?;
+    let (tls_stream, attestation_state) = config.handshake_with_stream(corked).await?;
 
     // 2. Feasibility: read the negotiated cipher from the rustls
     //    Connection and probe the cached kernel kTLS support set.
@@ -581,7 +629,7 @@ pub async fn handshake_ktls<IO: StreamForKtls + 'static, C: KtlsHandshakeConfig>
             FallbackDecision::FallBack => {
                 return Ok((
                     TlsOutcome::Rustls(tls_stream.into_rustls_fallback()),
-                    attestation_result,
+                    attestation_state,
                 ));
             }
             FallbackDecision::Bail(error) => return Err(error),
@@ -598,5 +646,5 @@ pub async fn handshake_ktls<IO: StreamForKtls + 'static, C: KtlsHandshakeConfig>
     tracing::info!(
         "kTLS ({side}): installed in-kernel; forwarding via KtlsSpliceStream (kernel AEAD)"
     );
-    Ok((TlsOutcome::Ktls(ktls_stream), attestation_result))
+    Ok((TlsOutcome::Ktls(ktls_stream), attestation_state))
 }

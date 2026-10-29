@@ -115,16 +115,17 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
                     let (mut tls_stream, verifier_opt, local_addr) =
                         self.security_layer.connect_0rtt(endpoint).await?;
                     // Wrap before priming so the early-data chunk is also counted.
-                    let mut opaque = Box::new(metrics.new_wrapped_stream(opaque))
-                        as Box<dyn CommonStreamTrait>;
+                    let mut opaque =
+                        Box::new(metrics.new_wrapped_stream(opaque)) as Box<dyn CommonStreamTrait>;
                     security::prime_0rtt(&mut tls_stream, &mut opaque).await?;
                     let handshake_kind = tls_stream.get_mut().1.handshake_kind();
-                    let attestation_state = crate::tunnel::utils::rustls::ra::common::classify_attestation(
-                        verifier_opt.as_ref().map(|v| v.lazy_verifier()),
-                        handshake_kind,
-                        tls_stream.get_mut().1.peer_certificates(),
-                    )
-                    .await?;
+                    let attestation_state =
+                        crate::tunnel::utils::rustls::ra::common::classify_attestation(
+                            verifier_opt.as_ref().map(|v| v.lazy_verifier()),
+                            handshake_kind,
+                            tls_stream.get_mut().1.peer_certificates(),
+                        )
+                        .await?;
                     let upstream = ContextualStream::new(tls_stream, "ingress-rats-tls-direct");
                     let task: ForwardTask = Box::pin(async move {
                         let _: () = utils::forward::normal::forward_stream(upstream, opaque).await;

@@ -586,7 +586,7 @@ mod tests {
 
         // Round-trip: unset omits the field entirely.
         let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
-        assert!(serde_json::to_value(&args)?
+        assert!(serde_json::to_value(args)?
             .get("multiplex_max_streams_per_connection")
             .is_none());
         Ok(())
@@ -609,7 +609,7 @@ mod tests {
 
         // Round-trip: unset omits the field entirely.
         let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
-        assert!(serde_json::to_value(&args)?
+        assert!(serde_json::to_value(args)?
             .get("multiplex_max_connections")
             .is_none());
         Ok(())
@@ -1326,7 +1326,7 @@ mod tests {
         assert_eq!(args.tls, None);
         assert!(args.tls_ca_certs.is_empty());
         // round-trip: default-off fields must NOT be serialized
-        let rt = serde_json::to_value(&args)?;
+        let rt = serde_json::to_value(args)?;
         assert!(rt.get("tls").is_none());
         assert!(rt.get("tls_ca_certs").is_none());
         Ok(())
@@ -1343,7 +1343,7 @@ mod tests {
             args.tls_ca_certs,
             vec!["/etc/tng/ca.pem", "/etc/tng/extra.pem"]
         );
-        let rt = serde_json::to_value(&args)?;
+        let rt = serde_json::to_value(args)?;
         assert_eq!(rt["tls"], true);
         assert_eq!(rt["tls_ca_certs"][0], "/etc/tng/ca.pem");
         // Some(false) is not skipped (only None is), but stays false:

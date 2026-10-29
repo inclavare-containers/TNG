@@ -12,9 +12,7 @@ use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
 use crate::tunnel::ra_context::RaContext;
 use crate::tunnel::service_metrics::ServiceMetrics;
-use crate::{
-    config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime, AttestationState,
-};
+use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime};
 
 use super::{StreamManager, StreamManagerOutput};
 

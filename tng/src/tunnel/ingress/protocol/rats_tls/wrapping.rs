@@ -116,6 +116,7 @@ impl RatsTlsWrappingLayer {
             .await
             .context("Failed to establish TCP connection for rats-tls")?
             .into_inner();
+        let local_addr = tcp_stream.local_addr().ok();
         let (tls_stream, verifier_opt) = tls_client_config
             .connect_early(endpoint.addr(), tcp_stream)
             .await?;

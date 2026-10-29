@@ -4,8 +4,8 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     tunnel::{
-        attestation_result::AttestationState, endpoint::TngEndpoint,
-        ingress::flow::IncomingStream, service_metrics::ServiceMetrics, utils,
+        attestation_result::AttestationState, endpoint::TngEndpoint, ingress::flow::IncomingStream,
+        service_metrics::ServiceMetrics, utils,
     },
     ContextualStream,
 };
