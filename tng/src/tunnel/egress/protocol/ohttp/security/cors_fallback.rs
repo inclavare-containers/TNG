@@ -91,10 +91,13 @@ where
         let add_acao = should_add_acao(req.method(), req.headers());
 
         let mut inner = self.inner.clone();
-        let ctx = self.state.clone();
+        // Only the forwarded-preflight branch below uses the stream context;
+        // cloning it unconditionally would refcount-bump the runtime, sender,
+        // and backend slot on every tunnel POST.
+        let ctx = is_preflight.then(|| self.state.clone());
 
         Box::pin(async move {
-            if is_preflight {
+            if let Some(ctx) = ctx {
                 // Forward the bare preflight OPTIONS to the backend as plaintext.
                 // The egress forwarding path reaches the backend exactly as it
                 // does for the decrypted inner request; the preflight's path is
