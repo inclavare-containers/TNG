@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::response::IntoResponse;
+use futures::future::Either;
 
 use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters, Timer};
 use crate::tunnel::upstream::{ConnectedUpstream, UpstreamConnector};
@@ -39,6 +40,185 @@ impl http_body::Body for SendBoxBody {
 }
 
 type PooledSendRequest = hyper::client::conn::http1::SendRequest<SendBoxBody>;
+
+/// How much request-body data the cold path may buffer while it waits for
+/// the backend dial and the HTTP handshake. 128 KiB matches the relay pipe
+/// the duplex bridge used before it was removed: bodies up to that size are
+/// fully buffered, so the backend leg starts with the whole payload ready to
+/// write; larger bodies keep streaming after the prefix. The buffer lives on
+/// the handler task and is freed once hyper has written it to the backend.
+const PREFIX_CAP: usize = 128 * 1024;
+
+/// What a [`PrefixPull`] produced: the frames consumed from the body so far,
+/// a captured stream error, and the body to continue from (`None` when the
+/// body already ended).
+struct Pulled {
+    frames: Vec<http_body::Frame<bytes::Bytes>>,
+    error: Option<axum::BoxError>,
+    rest: Option<DynSendBody>,
+}
+
+/// Drains up to [`PREFIX_CAP`] bytes of the request body into memory. The
+/// cold path of `forward_request` runs it concurrently with the backend dial
+/// on the handler task, so the decode-chain work (pulling the sealed bytes
+/// through the bhttp/HPKE body stream) overlaps the connect wait instead of
+/// serializing behind it. It ends when the body ends, errors, or the buffer
+/// cap is reached; each of those states is recorded so `JoinedBody` can
+/// replay the exact frame sequence a live stream would have produced.
+struct PrefixPull {
+    body: Option<DynSendBody>,
+    frames: Vec<http_body::Frame<bytes::Bytes>>,
+    buffered: usize,
+    error: Option<axum::BoxError>,
+    ended: bool,
+}
+
+impl PrefixPull {
+    fn new(body: DynSendBody) -> Self {
+        Self {
+            body: Some(body),
+            frames: Vec::new(),
+            buffered: 0,
+            error: None,
+            ended: false,
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.ended || self.error.is_some() || self.buffered >= PREFIX_CAP
+    }
+
+    /// Take the pull state out. Also used when the dial completes first: the
+    /// frames buffered so far stay valid, the rest of the body keeps
+    /// streaming live through the joined body.
+    fn finish(&mut self) -> Pulled {
+        let rest = if self.ended { None } else { self.body.take() };
+        Pulled {
+            frames: std::mem::take(&mut self.frames),
+            error: self.error.take(),
+            rest,
+        }
+    }
+}
+
+impl std::future::Future for PrefixPull {
+    type Output = Pulled;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Pulled> {
+        let this = self.as_mut().get_mut();
+        loop {
+            if this.finished() {
+                return std::task::Poll::Ready(this.finish());
+            }
+            // Poll through a borrow that ends at the statement so the
+            // handlers below can touch `this` again. `finish()` is the only
+            // thing that clears the body, and `finished()` covers that case,
+            // so the `None` arm cannot arise.
+            let poll = match this.body.as_mut() {
+                Some(body) => body.as_mut().poll_frame(cx),
+                None => std::task::Poll::Ready(None),
+            };
+            match poll {
+                std::task::Poll::Ready(Some(Ok(frame))) => {
+                    if let Some(data) = frame.data_ref() {
+                        this.buffered += data.len();
+                    }
+                    this.frames.push(frame);
+                }
+                std::task::Poll::Ready(Some(Err(error))) => {
+                    this.error = Some(error);
+                }
+                std::task::Poll::Ready(None) => this.ended = true,
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+    }
+}
+
+/// The body `forward_request` hands hyper on the cold path: the frames the
+/// [`PrefixPull`] already consumed, replayed in order, followed by whatever
+/// the original body still produces (or the stream error the pull captured,
+/// surfaced at send time so a body that breaks mid-prefix keeps today's
+/// error visibility: the request head and the prefix reach the backend
+/// before the failure appears on the wire).
+struct JoinedBody {
+    prefix: std::vec::IntoIter<http_body::Frame<bytes::Bytes>>,
+    /// Data bytes still sitting in `prefix`, tracked so `size_hint` stays
+    /// truthful while frames are handed out (`Frame` is not `Clone`, so the
+    /// iterator cannot be rescanned).
+    prefix_bytes: u64,
+    error: Option<axum::BoxError>,
+    rest: Option<DynSendBody>,
+}
+
+impl From<Pulled> for JoinedBody {
+    fn from(pulled: Pulled) -> Self {
+        let prefix_bytes = pulled
+            .frames
+            .iter()
+            .filter_map(|frame| frame.data_ref())
+            .map(|data| data.len() as u64)
+            .sum();
+        Self {
+            prefix: pulled.frames.into_iter(),
+            prefix_bytes,
+            error: pulled.error,
+            rest: pulled.rest,
+        }
+    }
+}
+
+impl http_body::Body for JoinedBody {
+    type Data = bytes::Bytes;
+    type Error = axum::BoxError;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        if let Some(frame) = this.prefix.next() {
+            if let Some(data) = frame.data_ref() {
+                this.prefix_bytes -= data.len() as u64;
+            }
+            return std::task::Poll::Ready(Some(Ok(frame)));
+        }
+        if let Some(error) = this.error.take() {
+            return std::task::Poll::Ready(Some(Err(error)));
+        }
+        match this.rest.as_mut() {
+            Some(body) => body.as_mut().poll_frame(cx),
+            None => std::task::Poll::Ready(None),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.prefix.len() == 0
+            && self.error.is_none()
+            && match &self.rest {
+                Some(body) => body.is_end_stream(),
+                None => true,
+            }
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        let mut hint = http_body::SizeHint::new();
+        match self.rest.as_ref() {
+            Some(body) => {
+                let rest = body.size_hint();
+                hint.set_lower(self.prefix_bytes + rest.lower());
+                if let Some(upper) = rest.upper() {
+                    hint.set_upper(self.prefix_bytes + upper);
+                }
+            }
+            None => hint.set_exact(self.prefix_bytes),
+        }
+        hint
+    }
+}
 
 /// One keep-alive backend connection, reused across the requests that arrive
 /// on the same outer OHTTP connection. A single slot suffices: the mutex
@@ -216,7 +396,6 @@ impl TngStreamContext {
 
         use http_body_util::BodyExt as _;
         let req = req.map(|body| -> DynSendBody { Box::pin(body.map_err(Into::into)) });
-        let req = req.map(SendBoxBody);
 
         let lock_timer = Timer::start();
         let mut slot = self.backend.send_request.lock().await;
@@ -234,7 +413,7 @@ impl TngStreamContext {
             self.latency.backend_ready.record(ready_timer.elapsed());
             if is_ready {
                 let send_timer = Timer::start();
-                let response = send_request.send_request(req).await;
+                let response = send_request.send_request(req.map(SendBoxBody)).await;
                 self.latency.backend_send.record(send_timer.elapsed());
                 if response.is_err() {
                     // `ready()` can answer Ok while the connection is dying
@@ -251,13 +430,55 @@ impl TngStreamContext {
             *slot = None;
         }
 
-        // Cold slot: reap the dial this request's pipeline pre-started when
-        // there is one, else dial directly. A failure to reach the backend
-        // surfaces here, before the request is dispatched.
-        // `backend_redial` covers the whole fresh-connection setup: the
-        // dial plus the HTTP handshake.
+        // Cold slot. Two futures run concurrently on this task: the backend
+        // dial plus HTTP handshake, and the [`PrefixPull`] of the request
+        // body. The body pump is what hid the dial wait in the removed
+        // duplex-bridge design, and the starved dial task does not get
+        // faster by being awaited sooner; what the overlap buys is that a
+        // saturated runtime cannot hold up the decode-chain work behind the
+        // dial's scheduling. The pull runs on this handler task (no spawn),
+        // so its polls are guaranteed whenever the task runs, and by the
+        // time the handshake completes the body prefix is already buffered
+        // and the send starts with the payload in hand.
+        let attested = attestation_result.is_some();
+        let (head, body) = req.into_parts();
+        let mut dial = std::pin::pin!(self.dial_backend(attested));
+        let mut pull = PrefixPull::new(body);
+        let outcome = tokio::select! {
+            result = &mut dial => Either::Left(result),
+            pulled = &mut pull => Either::Right(pulled),
+        };
+        let (mut send_request, pulled) = match outcome {
+            Either::Left(result) => (result?, pull.finish()),
+            Either::Right(pulled) => (dial.await?, pulled),
+        };
+
+        let req = http::Request::from_parts(head, SendBoxBody(Box::pin(JoinedBody::from(pulled))));
+
+        tracing::debug!("Forwarding HTTP request to upstream now");
+        let send_timer = Timer::start();
+        let response = send_request.send_request(req).await;
+        self.latency.backend_send_fresh.record(send_timer.elapsed());
+        // Pool only on success: a handle whose very first send failed must
+        // not be the connection a later request inherits.
+        if response.is_ok() {
+            *slot = Some(send_request);
+        }
+
+        response
+            .map(axum::response::Response::into_response)
+            .map_err(TngError::HttpPlainTextForwardError)
+    }
+
+    /// Cold-path backend setup: reap the dial this request's pipeline
+    /// pre-started when there is one, else dial directly, then bring the
+    /// connection up to a pooled `SendRequest`. A failure to reach the
+    /// backend surfaces here, before the request is dispatched.
+    /// `backend_redial` covers the whole fresh-connection setup: the dial
+    /// plus the HTTP handshake.
+    async fn dial_backend(&self, attested: bool) -> Result<PooledSendRequest, TngError> {
         let redial_timer = Timer::start();
-        let connected = match self.take_preconnect(attestation_result.is_some()).await {
+        let connected = match self.take_preconnect(attested).await {
             Some(handle) => match handle.await {
                 Ok(SupervisedTaskResult::Finished(Ok(connected))) => connected,
                 // The dial itself was refused: report it exactly like an
@@ -276,14 +497,14 @@ impl TngStreamContext {
                         "ohttp egress: preconnect unavailable, dialling the backend inline"
                     );
                     self.connector
-                        .connect(true, attestation_result.is_some())
+                        .connect(true, attested)
                         .await
                         .map_err(TngError::ConnectUpstreamFailed)?
                 }
             },
             None => self
                 .connector
-                .connect(true, attestation_result.is_some())
+                .connect(true, attested)
                 .await
                 .map_err(TngError::ConnectUpstreamFailed)?,
         };
@@ -292,7 +513,7 @@ impl TngStreamContext {
 
         // TODO: support send both http1 and http2 payload
         let handshake = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await;
-        let (mut send_request, conn) = match handshake {
+        let (send_request, conn) = match handshake {
             Ok(pair) => pair,
             Err(error) => {
                 // The dial succeeded, so a connection that dies at the HTTP
@@ -310,19 +531,7 @@ impl TngStreamContext {
             active_cx.mark_finished_successfully();
         });
 
-        tracing::debug!("Forwarding HTTP request to upstream now");
-        let send_timer = Timer::start();
-        let response = send_request.send_request(req).await;
-        self.latency.backend_send_fresh.record(send_timer.elapsed());
-        // Pool only on success: a handle whose very first send failed must
-        // not be the connection a later request inherits.
-        if response.is_ok() {
-            *slot = Some(send_request);
-        }
-
-        response
-            .map(axum::response::Response::into_response)
-            .map_err(TngError::HttpPlainTextForwardError)
+        Ok(send_request)
     }
 }
 
@@ -331,6 +540,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use http_body::Body as _;
     use http_body_util::Full;
     use indexmap::IndexMap;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -888,6 +1098,570 @@ mod tests {
         .await
     }
 
+    // ---------- prefix-overlap tests ----------
+
+    use std::sync::atomic::AtomicBool;
+
+    /// A scripted body: hands out the given data chunks one frame per poll,
+    /// then optionally one error frame, then ends. Counts polls and records
+    /// when the script ran out, so tests can observe whether (and how far)
+    /// the prefix pull consumed the body.
+    struct ScriptedBody {
+        chunks: std::vec::IntoIter<bytes::Bytes>,
+        then_error: bool,
+        error_fired: bool,
+        polls: Arc<AtomicUsize>,
+        drained: Arc<AtomicBool>,
+    }
+
+    impl ScriptedBody {
+        fn scripted(chunks: Vec<bytes::Bytes>) -> (Self, Arc<AtomicUsize>, Arc<AtomicBool>) {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let drained = Arc::new(AtomicBool::new(false));
+            (
+                Self {
+                    chunks: chunks.into_iter(),
+                    then_error: false,
+                    error_fired: false,
+                    polls: Arc::clone(&polls),
+                    drained: Arc::clone(&drained),
+                },
+                polls,
+                drained,
+            )
+        }
+
+        fn failing(chunks: Vec<bytes::Bytes>) -> Self {
+            Self {
+                chunks: chunks.into_iter(),
+                then_error: true,
+                error_fired: false,
+                polls: Arc::new(AtomicUsize::new(0)),
+                drained: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl http_body::Body for ScriptedBody {
+        type Data = bytes::Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            let this = self.get_mut();
+            this.polls.fetch_add(1, Ordering::SeqCst);
+            if let Some(chunk) = this.chunks.next() {
+                return std::task::Poll::Ready(Some(Ok(http_body::Frame::data(chunk))));
+            }
+            if this.then_error && !this.error_fired {
+                this.error_fired = true;
+                return std::task::Poll::Ready(Some(Err(std::io::Error::other(
+                    "scripted body failure",
+                ))));
+            }
+            this.drained.store(true, Ordering::SeqCst);
+            std::task::Poll::Ready(None)
+        }
+    }
+
+    fn test_bytes(prefix: u8, len: usize) -> bytes::Bytes {
+        let mut v = Vec::with_capacity(len);
+        for i in 0..len {
+            v.push(prefix.wrapping_add((i % 251) as u8));
+        }
+        bytes::Bytes::from(v)
+    }
+
+    /// A fake backend that answers each HTTP/1 request with an echo of the
+    /// body it read: parses the request head, reads exactly the declared
+    /// `content-length` bytes, then replies `200` with those bytes as the
+    /// response body. Counts connections and completed requests.
+    #[allow(clippy::disallowed_methods)] // fake backend lives on the bare test runtime
+    async fn spawn_echo_upstream() -> (Arc<AtomicUsize>, Arc<AtomicUsize>, u16) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let streams = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let (s, r) = (streams.clone(), requests.clone());
+        tokio::spawn(async move {
+            while let Ok((stream, _addr)) = listener.accept().await {
+                s.fetch_add(1, Ordering::SeqCst);
+                let r = r.clone();
+                tokio::spawn(async move {
+                    let mut stream = stream;
+                    // Keep-alive: serve requests on this connection until it
+                    // closes.
+                    loop {
+                        let mut buf = Vec::new();
+                        loop {
+                            let mut byte = [0u8; 1];
+                            match stream.read(&mut byte).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(_) => buf.push(byte[0]),
+                            }
+                            if buf.ends_with(b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        let head_end = buf.len();
+                        // The tests all declare a content-length; a head
+                        // without one is treated as a bodyless request.
+                        let mut content_length = 0usize;
+                        for line in buf[..head_end].split(|b| *b == b'\n') {
+                            let line = line.to_ascii_lowercase();
+                            if let Some(rest) = line.strip_prefix(b"content-length:") {
+                                let digits: Vec<u8> = rest
+                                    .iter()
+                                    .copied()
+                                    .filter(|b| b.is_ascii_digit())
+                                    .collect();
+                                content_length = std::str::from_utf8(&digits)
+                                    .ok()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0);
+                            }
+                        }
+                        let mut body = vec![0u8; content_length];
+                        let mut filled = 0usize;
+                        while filled < content_length {
+                            let mut byte = [0u8; 1];
+                            match stream.read(&mut byte).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(_) => {
+                                    body[filled] = byte[0];
+                                    filled += 1;
+                                }
+                            }
+                        }
+                        r.fetch_add(1, Ordering::SeqCst);
+                        let mut response =
+                            format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n", body.len())
+                                .into_bytes();
+                        response.extend_from_slice(&body);
+                        if stream.write_all(&response).await.is_err() {
+                            return;
+                        }
+                        if stream.flush().await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (streams, requests, port)
+    }
+
+    async fn post_and_collect(
+        ctx: &TngStreamContext,
+        body: ScriptedBody,
+        content_length: usize,
+    ) -> Result<(u16, Vec<u8>), crate::error::TngError> {
+        let req = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("/t")
+            .header(http::header::HOST, "backend.invalid")
+            .header(http::header::CONTENT_LENGTH, content_length)
+            .body(body)
+            .unwrap();
+        let resp = ctx.forward_request(req, None).await?;
+        let status = resp.status().as_u16();
+        let bytes = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .unwrap()
+            .to_bytes()
+            .as_ref()
+            .to_vec();
+        Ok((status, bytes))
+    }
+
+    async fn wait_flag(flag: &AtomicBool, max_ms: u64) -> bool {
+        for _ in 0..(max_ms / 2).max(1) {
+            if flag.load(Ordering::SeqCst) {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        flag.load(Ordering::SeqCst)
+    }
+
+    /// The cold path pulls the request body while the dial is still pending:
+    /// the body is fully consumed before the preconnect resolves, yet the
+    /// backend has seen no request head at that moment (the head goes out
+    /// only after the handshake). The eventual response carries the exact
+    /// bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    // The forward task runs on the bare test runtime: the test needs its
+    // awaitable JoinHandle, which the supervised spawn helper does not offer.
+    #[allow(clippy::disallowed_methods)]
+    async fn cold_path_prefix_pull_overlaps_the_backend_dial() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (streams, requests, port) = spawn_echo_upstream().await;
+            let ctx = Arc::new(make_context(runtime, port));
+            let body_len = 64 * 1024;
+            let (body, _polls, drained) = ScriptedBody::scripted(vec![test_bytes(7, body_len)]);
+
+            // A preconnect whose dial resolves only after the body would
+            // have been pulled: stand-in for the starved pre-dial on a
+            // saturated runtime.
+            let connector = Arc::clone(&ctx.connector);
+            let handle = ctx.runtime.spawn_supervised_task_current_span(async move {
+                let connected = connector.connect(true, false).await;
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                connected
+            });
+            *ctx.preconnect.lock().await = Some(handle);
+
+            let forward_ctx = Arc::clone(&ctx);
+            let forward =
+                tokio::spawn(async move { post_and_collect(&forward_ctx, body, body_len).await });
+
+            assert!(
+                wait_flag(&drained, 2000).await,
+                "the body is pulled while the dial is still pending"
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                0,
+                "no request head at the backend yet: the pull ran before the send"
+            );
+
+            let (status, echoed) = forward.await.unwrap().unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(echoed, test_bytes(7, body_len).as_ref());
+            assert_eq!(streams.load(Ordering::SeqCst), 1, "the pre-dial was reaped");
+            Ok(())
+        })
+        .await
+    }
+
+    /// A body smaller than the cap is fully buffered during the cold path
+    /// and still forwards byte-exact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cold_path_small_body_forwards_byte_exact() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (_streams, _requests, port) = spawn_echo_upstream().await;
+            let ctx = make_context(runtime, port);
+            let chunks = vec![test_bytes(1, 1000), test_bytes(2, 21), test_bytes(3, 3000)];
+            let expected: Vec<u8> = chunks.iter().flat_map(|c| c.iter().copied()).collect();
+            let total = expected.len();
+            let (body, polls, _drained) = ScriptedBody::scripted(chunks);
+
+            let (status, echoed) = post_and_collect(&ctx, body, total).await.unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(echoed, expected);
+            assert!(polls.load(Ordering::SeqCst) >= 1, "the body was consumed");
+            Ok(())
+        })
+        .await
+    }
+
+    /// A body larger than the cap forwards byte-exact too: the buffered
+    /// prefix is spliced in front of the still-live remainder.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cold_path_body_beyond_prefix_cap_forwards_byte_exact() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (_streams, _requests, port) = spawn_echo_upstream().await;
+            let ctx = make_context(runtime, port);
+            let chunks = vec![
+                test_bytes(1, 100 * 1024),
+                test_bytes(2, 100 * 1024),
+                test_bytes(3, 100 * 1024),
+            ];
+            let expected: Vec<u8> = chunks.iter().flat_map(|c| c.iter().copied()).collect();
+            let total = expected.len();
+            assert!(total > PREFIX_CAP);
+            // Note: with the content-length satisfied hyper stops polling the
+            // body at the last needed byte, so `drained` may stay false; the
+            // byte-exact echo is the real proof the remainder streamed.
+            let (body, _polls, _drained) = ScriptedBody::scripted(chunks);
+
+            let (status, echoed) = post_and_collect(&ctx, body, total).await.unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(echoed, expected);
+            Ok(())
+        })
+        .await
+    }
+
+    /// A body that breaks mid-stream keeps today's error visibility: the
+    /// captured stream error travels inside the joined body and surfaces
+    /// when hyper sends it, as a `HttpPlainTextForwardError`, and the
+    /// connection is not pooled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cold_path_body_error_surfaces_as_forward_error() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (_streams, requests, port) = spawn_echo_upstream().await;
+            let ctx = make_context(runtime, port);
+            // Declares 64 bytes but only carries 32 before the error.
+            let body = ScriptedBody::failing(vec![test_bytes(9, 32)]);
+            let req = http::Request::builder()
+                .method(http::Method::POST)
+                .uri("/t")
+                .header(http::header::HOST, "backend.invalid")
+                .header(http::header::CONTENT_LENGTH, 64usize)
+                .body(body)
+                .unwrap();
+
+            let error = ctx
+                .forward_request(req, None)
+                .await
+                .expect_err("a body that fails mid-stream must fail the request");
+            assert!(
+                matches!(error, crate::error::TngError::HttpPlainTextForwardError(_)),
+                "the body error keeps its send-time class: {error:?}"
+            );
+            assert!(
+                ctx.backend.send_request.lock().await.is_none(),
+                "the connection whose body failed must not be pooled"
+            );
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                0,
+                "the backend never got a complete request"
+            );
+            Ok(())
+        })
+        .await
+    }
+
+    /// The dial failing after the prefix pull already consumed body bytes:
+    /// the buffered frames are simply dropped, the request keeps the dial's
+    /// own error class, and nothing panics.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_dial_after_prefix_pull_keeps_connect_error() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            let ctx = make_context(runtime, port);
+            let (body, _polls, drained) = ScriptedBody::scripted(vec![test_bytes(4, 4096)]);
+
+            // A preconnect that only reports the failure after the body has
+            // been pulled.
+            let handle = ctx.runtime.spawn_supervised_task_current_span(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                Err(anyhow::anyhow!("backend is down"))
+            });
+            *ctx.preconnect.lock().await = Some(handle);
+
+            let error = ctx
+                .forward_request(
+                    http::Request::builder()
+                        .method(http::Method::POST)
+                        .uri("/t")
+                        .header(http::header::HOST, "backend.invalid")
+                        .header(http::header::CONTENT_LENGTH, 4096usize)
+                        .body(body)
+                        .unwrap(),
+                    None,
+                )
+                .await
+                .expect_err("a refused pre-dial must fail the request");
+            assert!(
+                matches!(error, crate::error::TngError::ConnectUpstreamFailed(_)),
+                "the dial error keeps its class: {error:?}"
+            );
+            assert!(
+                drained.load(Ordering::SeqCst),
+                "the prefix was pulled (and then discarded) before the dial verdict"
+            );
+            Ok(())
+        })
+        .await
+    }
+
+    /// The hot path (pooled slot hit) forwards through the reuse branch:
+    /// the fresh-dial and prefix machinery is structurally below the reuse
+    /// return, so the per-request phase counters must not move.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn hot_path_skips_fresh_dial_and_prefix_phases() -> anyhow::Result<()> {
+        run_test_with_tokio_runtime(async |runtime| {
+            let (streams, requests, port) = spawn_echo_upstream().await;
+            let ctx = make_context(runtime, port);
+
+            // First request: cold path, one fresh dial, one fresh send.
+            let (status, _) = post_and_collect(
+                &ctx,
+                {
+                    let (body, _p, _d) = ScriptedBody::scripted(vec![test_bytes(5, 128)]);
+                    body
+                },
+                128,
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, 200);
+
+            // Second request: hot path.
+            let (body, _polls, _drained) = ScriptedBody::scripted(vec![test_bytes(6, 128)]);
+            let (status, echoed) = post_and_collect(&ctx, body, 128).await.unwrap();
+            assert_eq!(status, 200);
+            assert_eq!(echoed, test_bytes(6, 128).as_ref());
+
+            let snap = ctx.latency.snapshot();
+            assert_eq!(snap["phases"]["backend_redial"]["count"], 1, "dialled once");
+            assert_eq!(
+                snap["phases"]["backend_send_fresh"]["count"], 1,
+                "the fresh-send path ran once; the hot request must not touch it"
+            );
+            assert_eq!(
+                snap["phases"]["backend_send"]["count"], 1,
+                "reuse path once"
+            );
+            assert_eq!(streams.load(Ordering::SeqCst), 1);
+            assert_eq!(requests.load(Ordering::SeqCst), 2);
+            Ok(())
+        })
+        .await
+    }
+
+    // ---------- PrefixPull / JoinedBody unit tests ----------
+
+    fn dyn_body(body: ScriptedBody) -> DynSendBody {
+        use http_body_util::BodyExt as _;
+        Box::pin(body.map_err(Into::into))
+    }
+
+    #[tokio::test]
+    async fn prefix_pull_stops_at_cap_and_keeps_the_live_body() {
+        let (body, _polls, drained) = ScriptedBody::scripted(vec![
+            test_bytes(1, 100 * 1024),
+            test_bytes(2, 100 * 1024),
+            test_bytes(3, 100 * 1024),
+        ]);
+        let pulled = PrefixPull::new(dyn_body(body)).await;
+        assert_eq!(pulled.frames.len(), 2, "stopped once the cap was covered");
+        assert!(pulled.error.is_none());
+        assert!(pulled.rest.is_some(), "the remainder keeps streaming");
+        assert!(
+            !drained.load(Ordering::SeqCst),
+            "the body was not fully consumed"
+        );
+
+        let joined = JoinedBody::from(pulled);
+        let got = http_body_util::BodyExt::collect(Box::pin(joined))
+            .await
+            .unwrap()
+            .to_bytes();
+        let mut expected = Vec::new();
+        expected.extend(test_bytes(1, 100 * 1024));
+        expected.extend(test_bytes(2, 100 * 1024));
+        expected.extend(test_bytes(3, 100 * 1024));
+        assert_eq!(got.as_ref(), expected.as_slice());
+
+        // Exactly at the cap the pull stops before seeing the end marker,
+        // so the live body stays in `rest`; the join still ends cleanly. A
+        // one-frame 128 KiB body is what the hook-capture on-bin test posts.
+        let (body, _polls, _drained) = ScriptedBody::scripted(vec![test_bytes(4, PREFIX_CAP)]);
+        let pulled = PrefixPull::new(dyn_body(body)).await;
+        assert_eq!(pulled.frames.len(), 1);
+        assert!(
+            pulled.rest.is_some(),
+            "a body of exactly the cap stops before its end"
+        );
+        let joined = JoinedBody::from(pulled);
+        let got = http_body_util::BodyExt::collect(Box::pin(joined))
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(got.as_ref(), test_bytes(4, PREFIX_CAP).as_ref());
+    }
+
+    #[tokio::test]
+    async fn prefix_pull_captures_errors_and_ends() {
+        let body = ScriptedBody::failing(vec![test_bytes(8, 16)]);
+        let pulled = PrefixPull::new(dyn_body(body)).await;
+        assert_eq!(pulled.frames.len(), 1);
+        assert!(pulled.error.is_some(), "the stream error is captured");
+        assert!(
+            pulled.rest.is_some(),
+            "a mid-stream error does not end the body"
+        );
+
+        // The ended cases: a drained body leaves no live remainder.
+        let (body, _polls, _drained) = ScriptedBody::scripted(vec![test_bytes(9, 16)]);
+        let pulled = PrefixPull::new(dyn_body(body)).await;
+        assert!(pulled.rest.is_none(), "an ended body must not be re-polled");
+
+        let mut joined = JoinedBody::from(pulled);
+        assert!(
+            !joined.is_end_stream(),
+            "the unreplayed prefix frame keeps the join non-empty"
+        );
+        assert_eq!(
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+                .await
+                .expect("frame")
+                .expect("ok")
+                .into_data()
+                .unwrap()
+                .len(),
+            16
+        );
+        assert!(
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+                .await
+                .is_none(),
+            "after the prefix, the ended body ends the join"
+        );
+
+        // A zero-frame end is an end stream up front (the empty-body case
+        // that today's `Full::new(b"")` requests rely on).
+        let (body, _polls, _drained) = ScriptedBody::scripted(vec![]);
+        let pulled = PrefixPull::new(dyn_body(body)).await;
+        assert!(pulled.frames.is_empty() && pulled.rest.is_none());
+        assert!(JoinedBody::from(pulled).is_end_stream());
+    }
+
+    #[tokio::test]
+    async fn joined_body_replays_frames_then_error_in_order() {
+        let a = http_body::Frame::data(test_bytes(1, 8));
+        let mut trailers = http::HeaderMap::new();
+        trailers.append("x-checksum", http::HeaderValue::from_static("1234"));
+        let t = http_body::Frame::trailers(trailers);
+        let joined = JoinedBody::from(Pulled {
+            frames: vec![a, t],
+            error: Some(axum::BoxError::from("boom")),
+            rest: None,
+        });
+        assert_eq!(
+            joined.size_hint().lower(),
+            8,
+            "data bytes count, trailers do not"
+        );
+        assert!(
+            !joined.is_end_stream(),
+            "a captured error is not an end of stream"
+        );
+
+        let mut joined = joined;
+        let frame = std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+            .await
+            .expect("frame")
+            .expect("ok");
+        assert_eq!(frame.into_data().unwrap().len(), 8);
+        let frame = std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+            .await
+            .expect("frame")
+            .expect("ok");
+        assert!(frame
+            .into_trailers()
+            .is_ok_and(|t| t.contains_key("x-checksum")));
+        let error = std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+            .await
+            .expect("frame")
+            .expect_err("the stored error surfaces in order");
+        assert!(error.to_string().contains("boom"));
+        assert!(
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut joined).poll_frame(cx))
+                .await
+                .is_none(),
+            "polls past the error end the stream"
+        );
+    }
+
     async fn wait_counter(ctx: &TngStreamContext, key: &str, expected: u64) -> bool {
         for _ in 0..100 {
             if ctx.preconnect_counters.snapshot()[key] == serde_json::json!(expected) {
@@ -935,7 +1709,7 @@ mod tests {
 
             // A second context: a guard dropped without forwarding abandons
             // its dial (the teardown runs on its own task).
-            let ctx2 = make_context(runtime, port);
+            let ctx2 = make_context(runtime.clone(), port);
             let preconnect = ctx2.start_preconnect().expect("cold slot pre-dials");
             drop(preconnect);
             assert!(
