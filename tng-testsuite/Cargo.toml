@@ -132,6 +132,11 @@ path = "tests/js_sdk_builtin_as.rs"
 required-features = ["js-sdk"]
 
 [[test]]
+name = "js_sdk_verify"
+path = "tests/js_sdk_verify.rs"
+required-features = ["js-sdk"]
+
+[[test]]
 name = "netfilter_ingress_recursion_detect"
 path = "tests/netfilter/netfilter_ingress_recursion_detect.rs"
 

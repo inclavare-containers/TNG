@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use gloo::utils::format::JsValueSerdeExt;
 use serde::Serialize;
 use tng::{
     config::{ingress, ra::RaArgs},
@@ -99,6 +100,10 @@ pub async fn verify(url: String, config: JsValue) -> Result<JsValue, JsValue> {
         .map_err(to_js_error)?;
 
     let info = build_info(&endpoint, &ra_args, attestation_result);
-    serde_wasm_bindgen::to_value(&info)
+    // The JSON round-trip (as `attest_info` in `fetch` already does) rather
+    // than `serde_wasm_bindgen::to_value`: a struct containing a flattened
+    // field serializes as a *map*, and serde_wasm_bindgen's default serializer
+    // hands JS a `Map` where property access reads `undefined`.
+    JsValue::from_serde(&info)
         .map_err(|e| JsError::new(&format!("Failed to serialize verification info: {e:?}")).into())
 }
