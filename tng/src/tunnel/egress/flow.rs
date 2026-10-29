@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use auto_enums::auto_enum;
 use futures::Stream;
@@ -15,8 +15,9 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::upstream::UpstreamConnector;
 use crate::tunnel::utils;
-use crate::{service::RegistedService, CommonStreamTrait, ContextualStream};
+use crate::{service::RegistedService, CommonStreamTrait};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
 use crate::tunnel::endpoint::TngEndpoint;
@@ -157,7 +158,7 @@ impl EgressFlow {
                 if let Err(error) = forward_to_upstream(
                     &metrics,
                     access_accepted,
-                    &dst,
+                    dst,
                     stream,
                     false,
                     false,
@@ -222,7 +223,7 @@ impl EgressFlow {
                         if let Err(error) = forward_to_upstream(
                             &metrics,
                             access_accepted,
-                            &dst,
+                            dst,
                             downstream,
                             encrypted,
                             attested,
@@ -246,34 +247,29 @@ impl EgressFlow {
 
 /// Common upstream-connect-and-forward logic used by both direct and encrypted paths.
 ///
-/// Handles the full lifecycle: create metrics context, connect to upstream,
-/// transition access log states, forward streams, and mark success.
+/// Dials the upstream through an `UpstreamConnector` (which owns the cx
+/// accounting and the access-log state machine), forwards the streams, and
+/// marks the connection successful once the forward finishes.
 async fn forward_to_upstream(
     metrics: &ServiceMetrics,
     access_accepted: AccessAccepted,
-    dst: &TngEndpoint,
+    dst: Arc<TngEndpoint>,
     downstream: Box<dyn CommonStreamTrait>,
     encrypted: bool,
     attested: bool,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     transport_so_mark: Option<u32>,
 ) -> Result<()> {
-    let active_cx = metrics.new_cx();
+    let connector = UpstreamConnector::new(
+        dst,
+        metrics.clone(),
+        access_accepted,
+        #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+        transport_so_mark,
+    );
 
-    let access_routed = access_accepted.into_routed(dst, encrypted);
-
-    let upstream = dst
-        .tcp_connect(
-            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-            transport_so_mark,
-        )
-        .await
-        .context("Failed to connect to upstream")?;
-    let egress_local = upstream.local_addr().context("Failed to get local addr")?;
-    let upstream = ContextualStream::new(upstream, "egress-tcp-connect");
-
-    // Print access log — Transition to AccessEstablished: upstream connected, then drop immediately to log
-    access_routed.into_established(Some(egress_local), attested);
+    let upstream = connector.connect(encrypted, attested).await?;
+    let (upstream, active_cx) = upstream.into_parts();
 
     let downstream = metrics.new_wrapped_stream(downstream);
 
