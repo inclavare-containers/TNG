@@ -253,7 +253,8 @@ mod tests {
                                 "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
-                        "no_ra": true
+                        "no_ra": true,
+                        "ohttp": {}
                     }
                 ],
                 "add_egress": [
@@ -335,6 +336,79 @@ mod tests {
                 .send()
                 .await?;
             assert!(resp.status() == StatusCode::NOT_FOUND);
+        }
+
+        // /status/egress/0/ohttp/ advertises the latency and preconnect
+        // nodes next to keys.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/egress/0/ohttp/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            assert_eq!(body, vec!["keys", "latency", "preconnect"]);
+        }
+
+        // /status/egress/0/ohttp/preconnect reports the preconnect counters.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/preconnect"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: serde_json::Value = resp.json().await?;
+            assert_eq!(body["preconnect_started"], 0);
+            assert_eq!(body["preconnect_declined_warm"], 0);
+            assert_eq!(body["preconnect_reaped"], 0);
+            assert_eq!(body["preconnect_abandoned"], 0);
+        }
+
+        // /status/egress/0/ohttp/latency reports the egress phase histogram.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/latency"
+                ))
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            assert!(status == StatusCode::OK, "got {status}: {body_text}");
+            let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+            assert_eq!(body["unit"], "microseconds");
+            let phases = body["phases"].as_object().cloned().unwrap_or_default();
+            assert_eq!(phases.len(), 15, "egress phases: {phases:?}");
+            assert_eq!(phases["handler_total"]["count"], serde_json::json!(0));
+            assert!(phases["handler_total"]["mean_us"].is_null());
+        }
+
+        // /status/ingress/0/ohttp/latency reports the ingress phase histogram.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/ohttp/latency"
+                ))
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            assert!(status == StatusCode::OK, "got {status}: {body_text}");
+            let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+            let phases = body["phases"].as_object().cloned().unwrap_or_default();
+            assert_eq!(phases.len(), 13, "ingress phases: {phases:?}");
+            assert!(phases.contains_key("outer_post_wait"));
+            assert!(phases.contains_key("writeback_pumped"));
         }
 
         canceller.cancel();

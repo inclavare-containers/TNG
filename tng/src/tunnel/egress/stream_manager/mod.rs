@@ -1,16 +1,28 @@
-use anyhow::Result;
-use futures::stream::BoxStream;
+use std::sync::Arc;
 
-use crate::{tunnel::stream::CommonStreamTrait, AttestationState};
+use anyhow::Result;
+
+use crate::{
+    tunnel::{
+        egress::stream_manager::trusted::ProtocolStreamDecoderOutput, stream::CommonStreamTrait,
+        upstream::UpstreamConnector,
+    },
+    AttestationState,
+};
 
 pub mod trusted;
 
 pub trait StreamManager {
+    /// Decodes an accepted connection. `connector` carries the upstream
+    /// dialing parameters resolved at accept time; protocols that forward
+    /// to the backend themselves (ohttp) use it, the rest leave it to the
+    /// flow loop.
     async fn consume_stream(
         &self,
         stream: Box<dyn CommonStreamTrait + std::marker::Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
-    ) -> Result<BoxStream<'static, Result<NextStream>>>;
+        connector: Arc<UpstreamConnector>,
+    ) -> Result<ProtocolStreamDecoderOutput>;
 }
 
 pub enum NextStream {

@@ -15,9 +15,9 @@ use crate::{
         },
         ra_context::RaContext,
         stream::CommonStreamTrait,
+        upstream::UpstreamConnector,
         utils::runtime::TokioRuntime,
     },
-    AttestationState,
 };
 use anyhow::bail;
 use anyhow::Context;
@@ -29,8 +29,15 @@ use futures::StreamExt;
 
 use super::StreamManager;
 
-pub type ProtocolStreamDecoderOutput =
-    BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, AttestationState)>>;
+pub enum ProtocolStreamDecoderOutput {
+    /// The decoder yields decoded byte sub-streams; the flow forwards each
+    /// one to the upstream itself (rats_tls, direct-forward matches).
+    ByteStreams(BoxStream<'static, Result<NextStream>>),
+    /// The decoder's protocol forwards to the upstream itself, dialing
+    /// through the connection's `UpstreamConnector`; the flow must not
+    /// spawn forwarding tasks for this connection (ohttp).
+    SelfForwarded,
+}
 
 #[async_trait]
 pub trait ProtocolStreamDecoder: StatusProvider {
@@ -38,6 +45,7 @@ pub trait ProtocolStreamDecoder: StatusProvider {
         &self,
         input: Box<dyn CommonStreamTrait + Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
+        connector: Arc<UpstreamConnector>,
     ) -> Result<ProtocolStreamDecoderOutput>;
 }
 
@@ -118,7 +126,8 @@ impl StreamManager for TrustedStreamManager {
         &self,
         in_stream: Box<dyn CommonStreamTrait + Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
-    ) -> Result<BoxStream<'static, Result<NextStream>>> {
+        connector: Arc<UpstreamConnector>,
+    ) -> Result<ProtocolStreamDecoderOutput> {
         let maybe_direct_forward = self
             .transport_layer
             .check_direct_forward(in_stream, self.runtime.clone())
@@ -126,23 +135,19 @@ impl StreamManager for TrustedStreamManager {
             .context("Failed to decode stream")?;
 
         match maybe_direct_forward {
-            MaybeDirectlyForward::ContinueAsTngTraffic(stream) => {
-                let mut pending = self
-                    .decoder
-                    .decode_stream(stream, peer)
-                    .await
-                    .context("Failed to decode stream")?;
-                Ok(stream! {
-                    while let Some(result) = pending.next().await {
-                        yield result.map(|(stream, att)| NextStream::Secured(stream, att));
+            MaybeDirectlyForward::ContinueAsTngTraffic(stream) => self
+                .decoder
+                .decode_stream(stream, peer, connector)
+                .await
+                .context("Failed to decode stream"),
+            MaybeDirectlyForward::DirectlyForward(stream) => {
+                Ok(ProtocolStreamDecoderOutput::ByteStreams(
+                    stream! {
+                        yield Ok(NextStream::DirectlyForward(Box::new(stream)));
                     }
-                }
-                .boxed())
+                    .boxed(),
+                ))
             }
-            MaybeDirectlyForward::DirectlyForward(stream) => Ok(stream! {
-                yield Ok(NextStream::DirectlyForward(Box::new(stream)));
-            }
-            .boxed()),
         }
     }
 }

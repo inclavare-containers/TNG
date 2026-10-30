@@ -18,6 +18,7 @@ use crate::{
             client::{OHttpClient, ServerStatusEntry},
             path_rewrite::PathRewriteGroup,
         },
+        ohttp::timing::{IngressLatency, Timer},
         ra_context::RaContext,
     },
     AttestationResult, TokioRuntime, HTTP_REQUEST_USER_AGENT_HEADER,
@@ -182,6 +183,8 @@ pub struct OHttpSecurityLayer {
     passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Headers to copy from the outer (ciphertext) response to the inner (plaintext) response.
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// Per-phase request latency histograms, served at `.../ohttp/latency`.
+    latency: Arc<IngressLatency>,
 }
 
 impl OHttpSecurityLayer {
@@ -252,6 +255,7 @@ impl OHttpSecurityLayer {
             runtime,
             passthrough_request_headers,
             passthrough_response_headers,
+            latency: Arc::new(IngressLatency::new()),
         })
     }
 
@@ -279,11 +283,14 @@ impl OHttpSecurityLayer {
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
         async {
+            let timer = Timer::start();
             let outer_path = outer_path(&self.path_rewrite_group, self.path_default, &request);
 
             let ohttp_client = self
                 .get_or_create_ohttp_client(endpoint, &outer_path)
                 .await?;
+
+            self.latency.route_lookup.record(timer.elapsed());
 
             ohttp_client.forward_request(request).await
         }
@@ -351,6 +358,7 @@ impl OHttpSecurityLayer {
                         self.runtime.clone(),
                         self.passthrough_request_headers.clone(),
                         self.passthrough_response_headers.clone(),
+                        self.latency.clone(),
                     )
                     .await
                     .map_err(TngError::CreateOHttpClientFailed)?,
@@ -359,6 +367,13 @@ impl OHttpSecurityLayer {
             .await
             .cloned()
     }
+
+    /// Latency histograms for the status endpoint and the writeback timing
+    /// in the stream forwarder's service_fn.
+    #[cfg_attr(wasm, allow(dead_code))] // the forwarder and status node are native-only
+    pub(crate) fn latency(&self) -> Arc<IngressLatency> {
+        self.latency.clone()
+    }
 }
 
 #[cfg(not(wasm))]
@@ -366,7 +381,11 @@ impl OHttpSecurityLayer {
 impl StatusProvider for OHttpSecurityLayer {
     async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
         match path {
-            [] => Ok(StatusQueryResult::Subtree(vec!["keys".into()])),
+            [] => Ok(StatusQueryResult::Subtree(vec![
+                "keys".into(),
+                "latency".into(),
+            ])),
+            ["latency"] => Ok(StatusQueryResult::Value(self.latency.snapshot())),
             ["keys"] => {
                 let map = self.ohttp_clients.read().await;
                 let mut servers =

@@ -16,6 +16,7 @@ use tower_http::{
 use web_time_compat::{Instant, InstantExt};
 
 use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters};
 use crate::tunnel::ra_context::RaContext;
 use crate::{
     config::egress::{CorsConfig, OHttpArgs},
@@ -43,6 +44,12 @@ pub struct OhttpServer {
     api: Arc<OhttpServerApi>,
     /// The configuration for the CORS
     cors_layer: Option<CorsLayer>,
+    /// Latency histograms shared with the API handler and each connection's
+    /// stream context.
+    latency: Arc<EgressLatency>,
+    /// Preconnect lifecycle counters shared with the API handler and each
+    /// connection's stream context.
+    preconnect: Arc<PreconnectCounters>,
 }
 
 impl OhttpServer {
@@ -53,6 +60,8 @@ impl OhttpServer {
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let forward_client_ip = ohttp_args.forward_client_ip;
+        let latency = Arc::new(EgressLatency::new());
+        let preconnect = Arc::new(PreconnectCounters::default());
         let (passthrough_request_headers, passthrough_response_headers) = (
             Arc::new(
                 ohttp_args
@@ -79,6 +88,8 @@ impl OhttpServer {
                     passthrough_request_headers,
                     passthrough_response_headers,
                     forward_client_ip,
+                    latency.clone(),
+                    preconnect.clone(),
                 )
                 .await?,
             ),
@@ -86,7 +97,17 @@ impl OhttpServer {
                 Some(cors_config) => Some(Self::construct_cors_layer(cors_config)?),
                 None => None,
             },
+            latency,
+            preconnect,
         })
+    }
+
+    pub(crate) fn latency(&self) -> Arc<EgressLatency> {
+        self.latency.clone()
+    }
+
+    pub(crate) fn preconnect_counters(&self) -> Arc<PreconnectCounters> {
+        self.preconnect.clone()
     }
 
     fn construct_cors_layer(cors_config: &CorsConfig) -> Result<CorsLayer> {

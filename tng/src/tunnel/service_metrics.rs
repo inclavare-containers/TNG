@@ -37,6 +37,23 @@ pub struct ServiceMetrics {
     rx_bytes_total: AttributedCounter<Counter<u64>, u64>,
 }
 
+/// Which side of the service a wrapped stream sits on, deciding which way
+/// the byte totals count.
+#[derive(Clone, Copy)]
+pub(crate) enum ByteCountOrientation {
+    /// A tunnel-facing leg (the flow's downstream side, the ingress relay):
+    /// bytes written to the stream count into `tx_bytes_total`, bytes read
+    /// into `rx_bytes_total`.
+    Tunnel,
+    /// A backend-facing leg, for a protocol that forwards to the upstream
+    /// itself instead of handing the leg back to the flow (ohttp). On the
+    /// backend socket the proxy writes requests and reads responses, the
+    /// reverse of the tunnel-facing orientation, so the counters are
+    /// crossed there: `tx_bytes_total` keeps accumulating response bytes
+    /// and `rx_bytes_total` request bytes, whatever the leg's orientation.
+    Backend,
+}
+
 impl ServiceMetrics {
     pub(self) fn new(
         meter_provider: Arc<dyn MeterProvider + Send + Sync>,
@@ -99,17 +116,37 @@ impl ServiceMetrics {
         )
     }
 
+    pub(crate) fn wrap_stream<
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
+    >(
+        &self,
+        stream: T,
+        orientation: ByteCountOrientation,
+    ) -> StreamWithCounter<T> {
+        let (tx, rx) = match orientation {
+            ByteCountOrientation::Tunnel => {
+                (self.tx_bytes_total.clone(), self.rx_bytes_total.clone())
+            }
+            ByteCountOrientation::Backend => {
+                (self.rx_bytes_total.clone(), self.tx_bytes_total.clone())
+            }
+        };
+        StreamWithCounter {
+            inner: stream,
+            tx: PendingCounter::new(tx),
+            rx: PendingCounter::new(rx),
+        }
+    }
+
+    /// Tunnel-facing wrap; shorthand for
+    /// `wrap_stream(stream, ByteCountOrientation::Tunnel)`.
     pub fn new_wrapped_stream<
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::marker::Unpin,
     >(
         &self,
         stream: T,
     ) -> StreamWithCounter<T> {
-        StreamWithCounter {
-            inner: stream,
-            tx: PendingCounter::new(self.tx_bytes_total.clone()),
-            rx: PendingCounter::new(self.rx_bytes_total.clone()),
-        }
+        self.wrap_stream(stream, ByteCountOrientation::Tunnel)
     }
 }
 

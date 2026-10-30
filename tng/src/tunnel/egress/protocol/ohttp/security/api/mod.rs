@@ -21,6 +21,7 @@ use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 #[cfg(unix)]
 use crate::tunnel::ohttp::protocol::KeyConfigResponse;
+use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters};
 use crate::tunnel::ra_context::RaContext;
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::MaybeCached;
@@ -58,12 +59,17 @@ pub struct OhttpServerApi {
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Whether to inject X-Real-IP / X-Forwarded-For from the direct peer.
     forward_client_ip: bool,
+    /// Per-phase request latency histograms, served at `.../ohttp/latency`.
+    pub(crate) latency: Arc<EgressLatency>,
+    /// Preconnect lifecycle counters, served at `.../ohttp/preconnect`.
+    pub(crate) preconnect: Arc<PreconnectCounters>,
 }
 
 impl OhttpServerApi {
     /// Create a new OHttp Server API handler
     ///
     /// This function creates an OHTTP server API with a default random key manager.
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         ra_context: Arc<RaContext>,
         key: KeyArgs,
@@ -71,6 +77,8 @@ impl OhttpServerApi {
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         forward_client_ip: bool,
+        latency: Arc<EgressLatency>,
+        preconnect: Arc<PreconnectCounters>,
     ) -> Result<Self, TngError> {
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
@@ -93,6 +101,8 @@ impl OhttpServerApi {
             passthrough_request_headers,
             passthrough_response_headers,
             forward_client_ip,
+            latency,
+            preconnect,
         })
     }
 }
@@ -100,6 +110,21 @@ impl OhttpServerApi {
 #[async_trait]
 impl StatusProvider for OhttpServerApi {
     async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
-        self.key_manager.query_status(path).await
+        match path {
+            ["latency"] => Ok(StatusQueryResult::Value(self.latency.snapshot())),
+            ["preconnect"] => Ok(StatusQueryResult::Value(self.preconnect.snapshot())),
+            // The key manager owns the rest of the tree; `latency` and
+            // `preconnect` are siblings added at this level, so advertise
+            // them alongside whatever children the key manager reports.
+            [] => match self.key_manager.query_status(&[]).await? {
+                StatusQueryResult::Subtree(mut children) => {
+                    children.push(std::borrow::Cow::Borrowed("latency"));
+                    children.push(std::borrow::Cow::Borrowed("preconnect"));
+                    Ok(StatusQueryResult::Subtree(children))
+                }
+                other => Ok(other),
+            },
+            _ => self.key_manager.query_status(path).await,
+        }
     }
 }

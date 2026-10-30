@@ -1473,9 +1473,13 @@ MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
 | `/status/egress/` | 返回 egress 实例 ID 列表 |
 | `/status/egress/{id}/` | 返回指定 egress 的资源列表 |
 | `/status/egress/{id}/ohttp/keys` | 返回 egress 的 OHTTP 密钥状态快照 |
+| `/status/egress/{id}/ohttp/latency` | 返回 egress 的 OHTTP 请求分阶段时延统计 |
 | `/status/ingress/` | 返回 ingress 实例 ID 列表 |
 | `/status/ingress/{id}/ohttp/keys` | 返回 ingress OHTTP 客户端缓存状态 |
+| `/status/ingress/{id}/ohttp/latency` | 返回 ingress 的 OHTTP 请求分阶段时延统计 |
 | `/status/ingress/{id}/rats_tls/pool` | 返回 ingress 复用隧道池状态：已生效的分片配置、流溢出计数，以及每个端点的分片数与各分片活跃流数。仅 rats-tls ingress 存在 |
+
+`latency` 端点按请求阶段返回样本数与均值 / p50 / p99 / 最大值（微秒），数据自进程启动起累计。阶段计时默认开启，启动前将环境变量 `TNG_OHTTP_LATENCY_TIMING` 设为 `off`（`0`、`no`、`false` 亦可）可关闭计时。
 
 ---
 

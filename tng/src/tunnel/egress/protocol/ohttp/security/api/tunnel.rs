@@ -24,6 +24,7 @@ use crate::tunnel::ohttp::protocol::metadata::{
     AttestedPublicKey, Metadata, NoAuth, METADATA_MAX_LEN,
 };
 use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
+use crate::tunnel::ohttp::timing::{TimedStream, Timer};
 use crate::tunnel::ra_context::VerifyContext;
 
 impl OhttpServerApi {
@@ -42,6 +43,8 @@ impl OhttpServerApi {
         payload: axum::extract::Request,
         context: TngStreamContext,
     ) -> Result<axum::response::Response, TngError> {
+        let handler_timer = Timer::start();
+
         check_request_content_type(payload.headers())?;
 
         // Select the configured outer request headers (e.g. the browser's
@@ -66,7 +69,18 @@ impl OhttpServerApi {
         );
 
         // Parse stage: read and decode metadata
+        let metadata_timer = Timer::start();
         let metadata = read_metadata_block(&mut reader).await?;
+        self.latency.metadata_wait.record(metadata_timer.elapsed());
+
+        // The request has now cleared the envelope gates (content type and
+        // metadata block), so start the backend dial before decapsulating:
+        // the TCP connect then overlaps the HPKE open, the client
+        // attestation check and the bhttp decode below instead of running
+        // serially after them. The cold path of `forward_request` reaps the
+        // dial; if this request dies first, dropping the guard closes it
+        // off quietly.
+        let _preconnect = context.start_preconnect();
 
         // Decapsulate stage: open the sealed inner request and open the
         // response seal bound to this request's HPKE context.
@@ -116,9 +130,21 @@ impl OhttpServerApi {
             response_builder = response_builder.header(name, value);
         }
 
+        // The wrap is built before the handler returns: `resp_body_first_poll`
+        // is the gap between response hand-off and hyper starting to drain the
+        // sealed outer body, and the first chunk also times the response seal.
+        let encrypted_response = TimedStream::new(
+            encrypted_response,
+            self.latency.resp_body_first_poll.clone(),
+            Some((0, self.latency.resp_body_first_chunk.clone())),
+            self.latency.resp_body_pumped.clone(),
+        );
+
         let response = response_builder
             .body(axum::body::Body::from_stream(encrypted_response))
             .map_err(TngError::ConstructHttpResponseFailed)?;
+
+        self.latency.handler_total.record(handler_timer.elapsed());
 
         Ok(response)
     }
@@ -153,6 +179,7 @@ impl OhttpServerApi {
     where
         S: AsyncRead + Unpin + Send + 'static,
     {
+        let header_timer = Timer::start();
         let header_decoded = ohttp::Server::decode_header(sealed_body)
             .await
             .map_err(|e| {
@@ -162,6 +189,7 @@ impl OhttpServerApi {
                 );
                 e
             })?;
+        self.latency.hpke_header_open.record(header_timer.elapsed());
 
         tracing::debug!(
             ?metadata,
@@ -178,10 +206,16 @@ impl OhttpServerApi {
         };
 
         // Check metadata
-        self.validate_client_attestation_consistency(metadata.client_auth)
-            .await
-            .map_err(TngError::MetadataValidateError)?;
+        let attest_timer = Timer::start();
+        let attest_result = self
+            .validate_client_attestation_consistency(metadata.client_auth)
+            .await;
+        self.latency
+            .client_attest_verify
+            .record(attest_timer.elapsed());
+        attest_result.map_err(TngError::MetadataValidateError)?;
 
+        let key_timer = Timer::start();
         let key_info = if let Some(hint) = metadata.key_config_hint {
             // Get key by hint
             self.key_manager
@@ -190,6 +224,7 @@ impl OhttpServerApi {
         } else {
             return Err(TngError::ServerKeyConfigHintNotSpecified);
         };
+        self.latency.key_lookup.record(key_timer.elapsed());
 
         // Decrypt the ohttp message
         let plain_text = match client_pk_bytes {
@@ -209,7 +244,11 @@ impl OhttpServerApi {
         };
 
         // Decode the bhttp binary message
+        let decode_timer = Timer::start();
         let decode_result = BhttpDecoder::new(plain_text).decode_message().await?;
+        self.latency.inner_req_decode.record(decode_timer.elapsed());
+
+        let seal_timer = Timer::start();
         let server_response_encapsulator = decode_result.reader_ref().response_encapsulator()?;
         let HttpMessage::Request(request) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpRequest);
@@ -217,6 +256,7 @@ impl OhttpServerApi {
 
         let sink = crate::tunnel::ohttp::seal_stream::SealedBytesSink::new();
         let response_seal = server_response_encapsulator.encapsulate_response(sink.clone())?;
+        self.latency.resp_seal_setup.record(seal_timer.elapsed());
 
         Ok((request, response_seal, sink))
     }

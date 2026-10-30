@@ -1493,9 +1493,13 @@ Generate using `openssl genpkey -algorithm X25519 -outform PEM`. TNG uses inotif
 | `/status/egress/` | Returns a list of egress instance IDs |
 | `/status/egress/{id}/` | Returns a list of resources for the specified egress |
 | `/status/egress/{id}/ohttp/keys` | Returns the OHTTP key status snapshot for the specified egress |
+| `/status/egress/{id}/ohttp/latency` | Returns the per-phase ohttp request latency statistics for the specified egress |
 | `/status/ingress/` | Returns a list of ingress instance IDs |
 | `/status/ingress/{id}/ohttp/keys` | Returns the ingress OHTTP client cache state |
+| `/status/ingress/{id}/ohttp/latency` | Returns the per-phase ohttp request latency statistics for the specified ingress |
 | `/status/ingress/{id}/rats_tls/pool` | Returns the ingress mux tunnel pool state: the resolved sharding knobs, the stream-overflow counter, and per-endpoint shard counts with active stream counts. Only present on rats-tls ingresses |
+
+The `latency` endpoints report, per request phase, the sample count and the mean / p50 / p99 / max duration in microseconds, accumulated since the process started. Phase timing is on by default; set the environment variable `TNG_OHTTP_LATENCY_TIMING` to `off` (also `0`, `no`, `false`) before startup to disable it.
 
 ---
 

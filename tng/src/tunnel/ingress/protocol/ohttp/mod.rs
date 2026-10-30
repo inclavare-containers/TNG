@@ -17,6 +17,7 @@ mod ohttp_stream_forwarder {
                 ohttp::security::OHttpSecurityLayer, ProtocolStreamForwarder,
                 ProtocolStreamForwarderOutput,
             },
+            ohttp::timing::{TimedStream, Timer},
             ra_context::RaContext,
         },
         CommonStreamTrait, TokioIo, TokioRuntime,
@@ -76,6 +77,8 @@ mod ohttp_stream_forwarder {
                         let security_layer = security_layer.clone();
                         let endpoint = endpoint.clone();
                         async move {
+                            let timer = Timer::start();
+                            let latency = security_layer.latency();
                             Ok::<_, Infallible>(
                                 match security_layer
                                     .forward_http_request(
@@ -84,8 +87,26 @@ mod ohttp_stream_forwarder {
                                     )
                                     .await
                                 {
-                                    Ok((response, _attestation_result)) => response,
-                                    Err(error) => error.into_response(),
+                                    Ok((response, _attestation_result)) => {
+                                        latency.handler_total.record(timer.elapsed());
+                                        // The wrap is built as the handler completes, so
+                                        // `writeback_first_poll` captures hyper's scheduling
+                                        // to start streaming the reply to the client.
+                                        let (head, body) = response.into_parts();
+                                        axum::response::Response::from_parts(
+                                            head,
+                                            axum::body::Body::from_stream(TimedStream::new(
+                                                body.into_data_stream(),
+                                                latency.writeback_first_poll.clone(),
+                                                None,
+                                                latency.writeback_pumped.clone(),
+                                            )),
+                                        )
+                                    }
+                                    Err(error) => {
+                                        latency.handler_total.record(timer.elapsed());
+                                        error.into_response()
+                                    }
                                 },
                             )
                         }

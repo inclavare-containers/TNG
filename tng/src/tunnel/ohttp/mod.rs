@@ -1,18 +1,20 @@
 pub mod key_config;
 pub mod protocol;
+// Egress is never linked on wasm and part of the ingress timing lives only
+// in native paths, so the wasm build would flag the unused halves.
+#[cfg_attr(wasm, allow(dead_code))]
+pub(crate) mod timing;
 
 #[cfg(not(wasm))]
 pub(crate) mod seal_stream;
 
-/// Capacity of the in-memory `tokio::io::duplex` pipe that joins the egress
-/// ohttp handler to its plain-HTTP backend connection. Every pipe-full or
-/// pipe-empty transition parks and wakes a task, and at the 4 KiB default a
-/// 64 KiB response pays that round trip 16+ times per pipe on the request
-/// critical path. Duplex buffers grow lazily, so this is a cap, not a
-/// reservation. The seal pumps run behind an always-ready sink instead of a
-/// pipe; the framing-parity unit test reconstructs the relay's old seal pipe
-/// at this size.
-#[cfg(not(wasm))]
+/// Size of the `tokio::io::duplex` pipe that once joined the egress ohttp
+/// handler to its plain-HTTP backend connection. The bridge is gone (the
+/// handler now runs its hyper client over the real backend socket); the
+/// constant survives only so the framing-parity unit test can reconstruct
+/// the relay's old seal pipe at the size it actually used. Duplex buffers
+/// grow lazily, so this was a cap, not a reservation.
+#[cfg(all(not(wasm), test))]
 pub(crate) const RELAY_PIPE_SIZE: usize = 128 * 1024;
 
 /// Maximum size of one sealed frame yielded by the seal pump. Set to the
