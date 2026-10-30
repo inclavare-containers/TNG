@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serial_test::serial;
 use tng_testsuite::{
+    kernel::kernel_splice_supported,
     run_test,
     task::{
         app::{AppType, HttpProxy},
@@ -34,7 +35,7 @@ use tng_testsuite::{
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_http_proxy_connect_ktls_e2e() -> Result<()> {
-    if tng::config::ktls::kernel_splice_supported() {
+    if kernel_splice_supported() {
         eprintln!("kernel >= 5.16: expecting the kTLS data plane (best-effort engages splice)");
     } else {
         eprintln!(
