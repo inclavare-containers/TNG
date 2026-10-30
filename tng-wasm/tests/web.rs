@@ -1,7 +1,6 @@
 //! Test suite for the Web and headless browsers.
 
 #![cfg(wasm)]
-#![feature(impl_trait_in_fn_trait_return)]
 
 extern crate wasm_bindgen_test;
 

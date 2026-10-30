@@ -161,7 +161,7 @@ npm install @inclavare-containers/tng
 
 #### 在网页中使用
 
-由于 TNG SDK 使用了 Web Workers，在生产部署时，您需要为网页的 HTTP 响应添加 `Cross-Origin-Opener-Policy:same-origin` 和 `Cross-Origin-Embedder-Policy:require-corp` 这两个 HTTP 头，否则将无法正常工作。
+TNG SDK 不依赖 `SharedArrayBuffer`，因此页面无需开启跨源隔离，也不需要配置 `Cross-Origin-Opener-Policy`、`Cross-Origin-Embedder-Policy` 之类的特殊 HTTP 响应头。
 
 > [!NOTE]
 > 由于构建产生的`.wasm`文件通常比较大，我们建议您在部署页面时开启gzip压缩，以减少传输大小，这大约能减少50%的体积。

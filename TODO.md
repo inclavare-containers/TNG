@@ -32,25 +32,6 @@ itself to preserve backward compatibility.
 
 # TODO: tng-wasm GitHub Pages demo — deferred items
 
-## Pending: COOP/COEP service-worker shim for the public Pages site
-
-**Context:** The README states the SDK requires
-`Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` (it uses Web Workers /
-`SharedArrayBuffer`). GitHub Pages cannot set custom HTTP response headers, so
-the public demo site currently ships **without** cross-origin isolation.
-
-**Why not fix now:** CI integration tests
-(`tng-testsuite/src/task/app/browser_client.rs`) run the SDK from a plain static
-server with no COOP/COEP headers and pass, which is strong evidence the
-`tng_fetch` path does not actually require `SharedArrayBuffer`. We ship bare and
-verify on real browsers first.
-
-**Trigger to fix:** If a real (non-headless) browser reports
-`SharedArrayBuffer is not defined` when using the demo, add a
-`coi-serviceworker`-style service worker under `tng-wasm/www/` that injects the
-two headers on the page response. First-visit reload quirk is acceptable.
-
 ## Pending: Automated tests for the www demo and SSE parser
 
 **Context:** No automated test covers the `tng-wasm/www/` UI or `js/sse.js`.

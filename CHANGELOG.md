@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Linux binary release tarballs are now built against the glibc 2.17 baseline, so they run on distributions from 2014 onward instead of requiring glibc 2.29.
+- Pages hosting the TNG JavaScript SDK no longer need cross-origin isolation: the `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy` response headers are no longer required, since the SDK does not use `SharedArrayBuffer`.
+- The JavaScript SDK is now built with the same 1.89.0 stable toolchain as the rest of the repo; the `nightly-2025-07-07` toolchain is now only needed for `make create-tarball`.
 
 ### Fixed
 

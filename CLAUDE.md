@@ -189,7 +189,7 @@ The `test_e2e_asr_flow` test additionally requires an ASR (Attestation Service R
 |---|---|---|
 | tng binary | `make bin-build` | sets `RUSTFLAGS="--cfg tokio_unstable"` + default features incl `builtin-as-tdx` |
 | libtng_hook.so | `make tng-hook-build` | `cargo build -p tng-hook-cdylib` via the canonical target |
-| wasm pkg | `make wasm-build-debug` | nightly toolchain + `getrandom_backend="wasm_js"` + atomics/bulk-memory target features; raw `wasm-pack build` does NOT compile (getrandom fails on wasm32) |
+| wasm pkg | `make wasm-build-debug` | sets `--cfg getrandom_backend="wasm_js"` (RUSTFLAGS); raw `wasm-pack build` does NOT compile (getrandom fails on wasm32) |
 | python wheel | `make python-wheel` | builds the tng binary first, then the wheel from source (matches the bundled binary + builtin AS) |
 | go SDK | `make go-build` | `cd tng-go && go build ./...` via the target |
 

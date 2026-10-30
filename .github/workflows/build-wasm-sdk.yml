@@ -37,17 +37,14 @@ jobs:
           submodules: "true"
 
       - uses: dtolnay/rust-toolchain@1.89.0
-
-      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-07-07
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # The wasm builds run on the pinned nightly and write to the
-          # workspace target dir; a dedicated prefix keeps the cache entry
-          # from colliding with stable-toolchain jobs.
-          prefix-key: wasm-nightly
+          # The wasm builds write to the workspace target dir; a dedicated
+          # prefix keeps the cache entry from colliding with other jobs.
+          prefix-key: wasm-stable
           # This job runs in the alinux3 container; cached host binaries
           # (wasm-pack, build scripts) are glibc-specific, so the Rocky 8
           # build job below must never restore this entry (or vice versa).
@@ -206,14 +203,12 @@ jobs:
           submodules: "true"
 
       - uses: dtolnay/rust-toolchain@1.89.0
-
-      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-07-07
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: wasm-nightly
+          prefix-key: wasm-stable
           # Host binaries in the cache are linked against this container's
           # glibc (2.28), so the entry must not be shared with the alinux3
           # test job above.

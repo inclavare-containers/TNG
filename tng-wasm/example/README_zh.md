@@ -152,7 +152,7 @@ const policyIds = ["default"];
 
 ### 8. 在服务端侧运行前端服务
 
-最简单的方式是使用仓库提供的 make 目标（会自动带上跨源隔离所需的 COOP/COEP 头）：
+最简单的方式是使用仓库提供的 make 目标：
 
 ```sh
 make wasm-example-serve
@@ -163,10 +163,8 @@ make wasm-example-serve
 如果你想手动起静态服务，可安装 [miniserve](https://github.com/svenstaro/miniserve)：
 
 ```sh
-cargo +nightly-2025-07-07 install miniserve --locked
+cargo install miniserve --locked
 miniserve ./tng-wasm \
-    --header "Cross-Origin-Opener-Policy:same-origin" \
-    --header "Cross-Origin-Embedder-Policy:require-corp" \
     --port 8082
 ```
 

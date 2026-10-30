@@ -321,10 +321,7 @@ image-mirror:
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \
-		cargo +nightly-2025-07-07 install wasm-pack@0.14.0 --locked ; \
-	fi
-	if ! rustup component list --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu | grep rust-src | grep installed >/dev/null; then \
-		rustup component add rust-src --toolchain nightly-2025-07-07-x86_64-unknown-linux-gnu ; \
+		cargo install wasm-pack@0.14.0 --locked ; \
 	fi
 
 define WASM_PATCH_PACKAGE_JSON =
@@ -337,12 +334,12 @@ endef
 
 .PHONE: wasm-build-release
 wasm-build-release: install-wasm-build-dependencies
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --target web ./tng-wasm -Z build-std=std,panic_abort
+	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --release --target web ./tng-wasm
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-build-debug
 wasm-build-debug: install-wasm-build-dependencies
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --target web ./tng-wasm -Z build-std=std,panic_abort
+	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --dev --target web ./tng-wasm
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-pack-release
@@ -378,24 +375,22 @@ wasm-unit-test-chrome: install-wasm-build-dependencies
 	unzip -o -q /tmp/chromedriver.zip -d /tmp/chromedriver-tmp && \
 	install -m 0755 /tmp/chromedriver-tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
 	rm -rf /tmp/chromedriver.zip /tmp/chromedriver-tmp
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --chrome ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome ./tng-wasm -- --nocapture
 
 .PHONE: wasm-unit-test-firefox
 wasm-unit-test-firefox: install-wasm-build-dependencies
 	if ! command -v firefox; then yum install -y firefox ; fi
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 RUSTFLAGS='--cfg getrandom_backend="wasm_js" -C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack test --headless --firefox ./tng-wasm -Z build-std=std,panic_abort -- --nocapture
+	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox ./tng-wasm -- --nocapture
 
 .PHONE: wasm-integration-test
 wasm-integration-test: wasm-build-debug install-test-deps
-	RUSTUP_TOOLCHAIN=nightly-2025-07-07 cargo test --no-default-features --features on-source-code,js-sdk --package tng-testsuite --test 'js_sdk*' -- --nocapture
+	cargo test --no-default-features --features on-source-code,js-sdk --package tng-testsuite --test 'js_sdk*' -- --nocapture
 
 .PHONY: www-demo
 www-demo: wasm-build-debug
 	cp tng-wasm/pkg/tng_wasm.js tng-wasm/www/
 	cp tng-wasm/pkg/tng_wasm_bg.wasm tng-wasm/www/
 	miniserve ./tng-wasm/www \
-		--header "Cross-Origin-Opener-Policy:same-origin" \
-		--header "Cross-Origin-Embedder-Policy:require-corp" \
 		--port 8083
 
 .PHONY: www-test
@@ -405,8 +400,6 @@ www-test:
 .PHONY: wasm-example-serve
 wasm-example-serve: wasm-build-debug
 	miniserve ./tng-wasm \
-		--header "Cross-Origin-Opener-Policy:same-origin" \
-		--header "Cross-Origin-Embedder-Policy:require-corp" \
 		--port 8082
 
 .PHONY: mac-cross-build

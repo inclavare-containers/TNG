@@ -154,7 +154,7 @@ const policyIds = ["default"];
 
 ### 8. Run the Frontend Service on the Server Side
 
-The simplest way is to use the make target provided by the repository (it automatically adds the COOP/COEP headers required for cross-origin isolation):
+The simplest way is to use the make target provided by the repository:
 
 ```sh
 make wasm-example-serve
@@ -165,10 +165,8 @@ Then visit `http://<server ip>:8082/example/`.
 If you want to start the static service manually, install [miniserve](https://github.com/svenstaro/miniserve):
 
 ```sh
-cargo +nightly-2025-07-07 install miniserve --locked
+cargo install miniserve --locked
 miniserve ./tng-wasm \
-    --header "Cross-Origin-Opener-Policy:same-origin" \
-    --header "Cross-Origin-Embedder-Policy:require-corp" \
     --port 8082
 ```
 
