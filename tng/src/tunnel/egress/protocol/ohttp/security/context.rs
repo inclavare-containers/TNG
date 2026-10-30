@@ -6,7 +6,7 @@ use futures::future::Either;
 use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters, Timer};
 use crate::tunnel::upstream::{ConnectedUpstream, UpstreamConnector};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
-use crate::{error::TngError, AttestationResult, TokioIo, TokioRuntime};
+use crate::{error::TngError, AttestationResult, TokioRuntime};
 
 type DynSendBody =
     std::pin::Pin<Box<dyn http_body::Body<Data = bytes::Bytes, Error = axum::BoxError> + Send>>;
@@ -326,6 +326,10 @@ impl TngStreamContext {
     /// cheap proof of a genuine TNG request, so garbage traffic cannot
     /// spend backend connections.
     ///
+    /// Only the TCP dial is pre-started: hyper's HTTP/1 handshake performs
+    /// no wire I/O (it builds the connection state and resolves
+    /// immediately), so there is nothing beyond the connect to overlap.
+    ///
     /// Returns `None` (and dials nothing) when a pre-dial would be wasted:
     /// the pooled backend connection is present or in use, or a preconnect
     /// is already pending. Hold the returned guard until `forward_request`
@@ -478,9 +482,13 @@ impl TngStreamContext {
     /// plus the HTTP handshake.
     async fn dial_backend(&self, attested: bool) -> Result<PooledSendRequest, TngError> {
         let redial_timer = Timer::start();
-        let connected = match self.take_preconnect(attested).await {
+        let send_request = match self.take_preconnect(attested).await {
             Some(handle) => match handle.await {
-                Ok(SupervisedTaskResult::Finished(Ok(connected))) => connected,
+                Ok(SupervisedTaskResult::Finished(Ok(connected))) => {
+                    connected
+                        .into_http1_backend(&self.runtime, self.connector.metrics())
+                        .await?
+                }
                 // The dial itself was refused: report it exactly like an
                 // inline failure. Redialing here would charge the request
                 // two cx_total for a backend that is down.
@@ -497,39 +505,17 @@ impl TngStreamContext {
                         "ohttp egress: preconnect unavailable, dialling the backend inline"
                     );
                     self.connector
-                        .connect(true, attested)
-                        .await
-                        .map_err(TngError::ConnectUpstreamFailed)?
+                        .connect_http1(&self.runtime, true, attested)
+                        .await?
                 }
             },
-            None => self
-                .connector
-                .connect(true, attested)
-                .await
-                .map_err(TngError::ConnectUpstreamFailed)?,
-        };
-        let (stream, active_cx) = connected.into_parts();
-        let stream = self.connector.metrics().new_wrapped_backend_stream(stream);
-
-        // TODO: support send both http1 and http2 payload
-        let handshake = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await;
-        let (send_request, conn) = match handshake {
-            Ok(pair) => pair,
-            Err(error) => {
-                // The dial succeeded, so a connection that dies at the HTTP
-                // layer is a teardown, not a failed connect.
-                active_cx.mark_finished_successfully();
-                return Err(TngError::HttpPlainTextForwardError(error));
+            None => {
+                self.connector
+                    .connect_http1(&self.runtime, true, attested)
+                    .await?
             }
         };
         self.latency.backend_redial.record(redial_timer.elapsed());
-
-        self.runtime.spawn_supervised_task_current_span(async move {
-            if let Err(error) = conn.await {
-                tracing::error!(?error, "The HTTP connection with upstream is broken");
-            }
-            active_cx.mark_finished_successfully();
-        });
 
         Ok(send_request)
     }

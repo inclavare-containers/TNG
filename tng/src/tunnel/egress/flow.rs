@@ -16,7 +16,6 @@ use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::upstream::UpstreamConnector;
-use crate::tunnel::utils;
 use crate::{service::RegistedService, CommonStreamTrait};
 
 use super::stream_manager::{
@@ -169,7 +168,10 @@ impl EgressFlow {
                 // When the IP doesn't match any rule, the entire connection bypasses
                 // the trusted stream manager — no OHTTP/RATS-TLS processing happens.
                 // This is a per-connection decision, made once when the TCP accept occurs.
-                if let Err(error) = forward_to_upstream(&connector, stream, false, false).await {
+                if let Err(error) = connector
+                    .connect_and_forward_bytes(stream, false, false)
+                    .await
+                {
                     tracing::error!(?error, "Failed to forward stream");
                 }
                 return;
@@ -227,8 +229,9 @@ impl EgressFlow {
                         let attested = next_stream.attestation_state().is_attested();
                         let downstream = next_stream.into_stream();
 
-                        if let Err(error) =
-                            forward_to_upstream(&connector, downstream, encrypted, attested).await
+                        if let Err(error) = connector
+                            .connect_and_forward_bytes(downstream, encrypted, attested)
+                            .await
                         {
                             tracing::error!(?error, "Failed to forward stream");
                         }
@@ -237,28 +240,6 @@ impl EgressFlow {
             }
         });
     }
-}
-
-/// Common upstream-connect-and-forward logic used by both direct and encrypted paths.
-///
-/// Dials the upstream through the outer connection's `UpstreamConnector`
-/// (which owns the cx accounting and the access-log state machine), forwards
-/// the streams, and marks the connection successful once the forward finishes.
-async fn forward_to_upstream(
-    connector: &UpstreamConnector,
-    downstream: Box<dyn CommonStreamTrait>,
-    encrypted: bool,
-    attested: bool,
-) -> Result<()> {
-    let upstream = connector.connect(encrypted, attested).await?;
-    let (upstream, active_cx) = upstream.into_parts();
-
-    let downstream = connector.metrics().new_wrapped_stream(downstream);
-
-    utils::forward::normal::forward_stream(upstream, downstream).await;
-
-    active_cx.mark_finished_successfully();
-    Ok(())
 }
 
 #[async_trait]

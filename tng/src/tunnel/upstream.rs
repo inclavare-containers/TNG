@@ -1,4 +1,5 @@
-//! Dials the egress upstream (backend) TCP connections.
+//! Dials the egress upstream (backend) TCP connections and owns their whole
+//! lifecycle.
 //!
 //! Every backend leg the egress opens — the transport-level direct forward,
 //! the rats_tls byte streams handed back to the flow, and the ohttp
@@ -7,15 +8,25 @@
 //! (the endpoint resolved by the capture mode at accept time, plus the
 //! mode's `SO_MARK`), the `cx_*` connection accounting, and the access-log
 //! state machine then live in exactly one place.
+//!
+//! So do the two ways a dialled leg is driven to its end: the byte-stream
+//! pump (`connect_and_forward_bytes`) and the HTTP/1 client bring-up with
+//! its supervised driver task (`connect_http1`). Consumers pick a lifecycle;
+//! none of them restates the wrap, the handshake, or the finish accounting.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use crate::error::TngError;
 use crate::tunnel::access_log::AccessAccepted;
 use crate::tunnel::endpoint::TngEndpoint;
-use crate::tunnel::service_metrics::{ActiveConnectionCounter, ServiceMetrics};
+use crate::tunnel::service_metrics::{
+    ActiveConnectionCounter, ByteCountOrientation, ServiceMetrics,
+};
 use crate::tunnel::stream::ContextualStream;
+use crate::tunnel::utils::runtime::TokioRuntime;
+use crate::{CommonStreamTrait, TokioIo};
 
 /// One per accepted outer connection, shared (`Arc`) by every backend leg it
 /// spawns. The endpoint is the destination the egress capture mode resolved
@@ -103,6 +114,51 @@ impl UpstreamConnector {
             active_cx,
         })
     }
+
+    /// Dials a backend and pumps it against a downstream byte stream until
+    /// both directions end, then settles the connection accounting. A dial
+    /// failure is returned already accounted by `connect`; a completed pump
+    /// counts the leg as finished.
+    pub(crate) async fn connect_and_forward_bytes(
+        &self,
+        downstream: Box<dyn CommonStreamTrait>,
+        encrypted: bool,
+        attested: bool,
+    ) -> Result<()> {
+        let upstream = self.connect(encrypted, attested).await?;
+        let (upstream, active_cx) = upstream.into_parts();
+
+        let downstream = self
+            .metrics
+            .wrap_stream(downstream, ByteCountOrientation::Tunnel);
+
+        crate::tunnel::utils::forward::normal::forward_stream(upstream, downstream).await;
+
+        active_cx.mark_finished_successfully();
+        Ok(())
+    }
+
+    /// Dials a backend and brings the socket up to a driven HTTP/1 client
+    /// connection, ready to be pooled by the caller. See
+    /// [`ConnectedUpstream::into_http1_backend`] for the post-dial lifecycle
+    /// and the error classes.
+    pub(crate) async fn connect_http1<B>(
+        &self,
+        runtime: &TokioRuntime,
+        encrypted: bool,
+        attested: bool,
+    ) -> Result<hyper::client::conn::http1::SendRequest<B>, TngError>
+    where
+        B: http_body::Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let connected = self
+            .connect(encrypted, attested)
+            .await
+            .map_err(TngError::ConnectUpstreamFailed)?;
+        connected.into_http1_backend(runtime, &self.metrics).await
+    }
 }
 
 impl ConnectedUpstream {
@@ -116,6 +172,52 @@ impl ConnectedUpstream {
         ActiveConnectionCounter,
     ) {
         (self.stream, self.active_cx)
+    }
+
+    /// Brings an already-dialled backend socket up to a driven HTTP/1
+    /// client connection: wraps it with the backend-oriented byte counters,
+    /// runs the hyper HTTP/1 handshake, and spawns the supervised driver
+    /// task. The task owns the connection accounting guard and settles it
+    /// when the connection ends, so the returned `SendRequest` needs no
+    /// separate teardown handle: dropping it (or the peer closing it) makes
+    /// the driver exit and marks the leg finished. A failure is split by
+    /// where it happened: a refused dial reaches the caller as
+    /// `ConnectUpstreamFailed` from `UpstreamConnector::connect` before
+    /// this runs, while a socket that connected but dies at the HTTP layer
+    /// is a teardown, not a failed connect, so the handshake error marks
+    /// the leg finished and reaches the caller as
+    /// `HttpPlainTextForwardError`.
+    pub(crate) async fn into_http1_backend<B>(
+        self,
+        runtime: &TokioRuntime,
+        metrics: &ServiceMetrics,
+    ) -> Result<hyper::client::conn::http1::SendRequest<B>, TngError>
+    where
+        B: http_body::Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let (stream, active_cx) = self.into_parts();
+        let stream = metrics.wrap_stream(stream, ByteCountOrientation::Backend);
+
+        // TODO: support send both http1 and http2 payload
+        let (send_request, conn) =
+            match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
+                Ok(pair) => pair,
+                Err(error) => {
+                    active_cx.mark_finished_successfully();
+                    return Err(TngError::HttpPlainTextForwardError(error));
+                }
+            };
+
+        runtime.spawn_supervised_task_current_span(async move {
+            if let Err(error) = conn.await {
+                tracing::error!(?error, "The HTTP connection with upstream is broken");
+            }
+            active_cx.mark_finished_successfully();
+        });
+
+        Ok(send_request)
     }
 }
 
