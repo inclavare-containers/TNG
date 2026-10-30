@@ -2,6 +2,8 @@ pub mod alpn;
 #[cfg(not(wasm))]
 pub mod blocking;
 pub mod client;
+#[cfg(target_os = "linux")]
+pub mod ktls;
 #[cfg(not(wasm))]
 pub mod resolver;
 #[cfg(not(wasm))]

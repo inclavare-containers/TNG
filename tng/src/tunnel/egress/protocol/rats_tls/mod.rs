@@ -1,16 +1,23 @@
 use std::sync::Arc;
 
 use crate::{
+    config::egress::RatsTlsArgs,
     error::TngError,
     status::{StatusProvider, StatusQueryResult},
     tunnel::{
         egress::{
-            protocol::rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
-            stream_manager::trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+            protocol::{
+                common::transport::TngTransportStream,
+                rats_tls::{security::RatsTlsSecurityLayer, wrapping::RatsTlsWrappingLayer},
+            },
+            stream_manager::{
+                trusted::{ProtocolStreamDecoder, ProtocolStreamDecoderOutput},
+                DecodedStream,
+            },
         },
         ra_context::RaContext,
     },
-    CommonStreamTrait, TokioRuntime,
+    AttestationState, CommonStreamTrait, TokioRuntime,
 };
 
 use anyhow::Result;
@@ -24,33 +31,34 @@ pub mod wrapping;
 pub struct RatsTlsStreamDecoder {
     security_layer: RatsTlsSecurityLayer,
     runtime: TokioRuntime,
+    multiplex: bool,
 }
 
 impl RatsTlsStreamDecoder {
     pub async fn new(
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         Ok(Self {
-            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), multiplex)
+            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), rats_tls)
                 .await?,
             runtime,
+            multiplex: rats_tls.multiplex,
         })
     }
-}
 
-#[async_trait]
-impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
-    async fn decode_stream(
+    /// Route a multiplexed (h2-configured) TLS stream: check the negotiated
+    /// ALPN, spawn the HTTP/2 server on `h2`, otherwise fall back to direct
+    /// TLS forwarding (a peer that ignores ALPN gets raw forwarding instead
+    /// of a broken h2 server).
+    fn decode_mux<T: CommonStreamTrait + Sync>(
         &self,
-        input: Box<dyn CommonStreamTrait + Sync + 'static>,
-        _peer: Option<std::net::SocketAddr>,
-    ) -> Result<ProtocolStreamDecoderOutput> {
-        // rats_tls does raw byte forwarding; peer is unused.
-        let (tls_stream, attestation_state) = self.security_layer.handshake(input).await?;
-
-        // Check negotiated ALPN protocol
+        tls_stream: crate::tunnel::utils::rustls::early_data_prefix::EarlyDataPrefixStream<
+            tokio_rustls::server::TlsStream<T>,
+        >,
+        attestation_state: AttestationState,
+    ) -> ProtocolStreamDecoderOutput {
         let (_, tls_session) = tls_stream.inner().get_ref();
         let negotiated_alpn = tls_session.alpn_protocol();
         tracing::debug!(?negotiated_alpn, "ALPN negotiated on egress TLS handshake");
@@ -70,19 +78,79 @@ impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
                     .await;
                 });
 
-            Ok(stream! {
-                while let Some(value) = receiver.recv().await {
-                    yield Ok(value);
+            stream! {
+                while let Some((stream, attestation_state)) = receiver.recv().await {
+                    yield Ok((DecodedStream::Opaque(stream), attestation_state));
                 }
             }
-            .boxed())
+            .boxed()
+        } else {
+            // Direct TLS mode fallback: return TLS stream directly
+            stream! {
+                yield Ok((DecodedStream::Opaque(Box::new(tls_stream)), attestation_state));
+            }
+            .boxed()
+        }
+    }
+}
+
+#[async_trait]
+impl ProtocolStreamDecoder for RatsTlsStreamDecoder {
+    async fn decode_stream(
+        &self,
+        input: TngTransportStream,
+        _peer: Option<std::net::SocketAddr>,
+    ) -> Result<ProtocolStreamDecoderOutput> {
+        // rats_tls does raw byte forwarding; peer is unused.
+        tracing::debug!("Start to estabilish rats-tls connection");
+
+        let output = if self.multiplex {
+            match input {
+                TngTransportStream::Inspected(stream) => {
+                    let (tls_stream, attestation_state) =
+                        self.security_layer.handshake(stream).await?;
+                    self.decode_mux(tls_stream, attestation_state)
+                }
+                TngTransportStream::Uninspected(stream) => {
+                    let (tls_stream, attestation_state) =
+                        self.security_layer.handshake(stream).await?;
+                    self.decode_mux(tls_stream, attestation_state)
+                }
+            }
         } else {
             // Direct TLS mode (multiplex=false): return TLS stream directly
-            Ok(stream! {
-                yield Ok((Box::new(tls_stream) as Box<dyn CommonStreamTrait + Sync>, attestation_state));
+            #[cfg(target_os = "linux")]
+            {
+                use crate::tunnel::utils::rustls::TlsOutcome;
+
+                let (tls_stream, attestation_state) =
+                    self.security_layer.handshake_try_ktls(input).await?;
+
+                let stream = match tls_stream {
+                    TlsOutcome::Ktls(ktls_stream) => DecodedStream::Ktls(ktls_stream),
+                    TlsOutcome::Rustls(common_stream_trait) => {
+                        DecodedStream::Opaque(common_stream_trait)
+                    }
+                };
+
+                stream! {
+                    yield Ok((stream, attestation_state));
+                }
+                .boxed()
             }
-            .boxed())
-        }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let (tls_stream, attestation_state) =
+                    self.security_layer.handshake_rustls(input).await?;
+                stream! {
+                    yield Ok((DecodedStream::Opaque(tls_stream), attestation_state));
+                }
+                .boxed()
+            }
+        };
+
+        tracing::debug!("New rats-tls connection established");
+        Ok(output)
     }
 }
 

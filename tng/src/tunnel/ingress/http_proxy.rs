@@ -30,7 +30,7 @@ use crate::tunnel::utils::socket::SetListenerSockOpts;
 use crate::tunnel::utils::tokio::TokioIo;
 use crate::HTTP_RESPONSE_SERVER_HEADER;
 
-use super::flow::{AcceptedStream, Incomming, IngressTrait};
+use super::flow::{AcceptedStream, IncomingStream, Incomming, IngressTrait};
 
 const TNG_HTTP_FORWARD_HEADER: &str = "X-Tng-Http-Forward";
 
@@ -150,12 +150,17 @@ impl RequestHelper {
                     let encrypted = stream_router.should_forward_via_tunnel(&dst);
                     let access_accepted =
                         AccessAccepted::new_ingress(peer_addr, listener_addr, mode);
+
+                    let stream: IncomingStream =
+                        match crate::tunnel::utils::hyper::downcast_http1_upgraded(upgraded) {
+                            Ok((tcp, prelude)) => IncomingStream::Raw(tcp, Some(prelude)),
+                            Err(upgraded) => {
+                                IncomingStream::Opaque(Box::new(TokioIo::new(upgraded)))
+                            }
+                        };
                     sender
                         .send(AcceptedStream {
-                            stream: Box::new(crate::ContextualStream::new(
-                                TokioIo::new(upgraded),
-                                "ingress-http-connect",
-                            )),
+                            stream,
                             src: peer_addr,
                             dst: Arc::new(dst),
                             encrypted,
@@ -197,7 +202,7 @@ impl RequestHelper {
                         listener_addr,
                         mode,
                     );
-                    sender.send(AcceptedStream { stream: Box::new(crate::ContextualStream::new(s2, "ingress-http-reverse-proxy")), src: peer_addr, dst: Arc::new(dst), encrypted, listener_addr, ingress_mode: mode, access_accepted })
+                    sender.send(AcceptedStream { stream: IncomingStream::Opaque(Box::new(s2)), src: peer_addr, dst: Arc::new(dst), encrypted, listener_addr, ingress_mode: mode, access_accepted })
                 };
 
                 let send_task = async {
@@ -382,8 +387,6 @@ pub(super) async fn serve_http_proxy_no_throw_error(
     listener_addr: SocketAddr,
     mode: IngressAccessMode,
 ) {
-    let runtime_cloned = runtime.clone();
-
     let svc = {
         ServiceBuilder::new().service(tower::service_fn(move |req| {
             let stream_router = stream_router.clone();
@@ -414,9 +417,17 @@ pub(super) async fn serve_http_proxy_no_throw_error(
     let svc = TowerToHyperService::new(svc);
 
     if let Err(error) = async {
-        let executor = runtime_cloned;
-        hyper_util::server::conn::auto::Builder::new(executor)
-            .serve_connection_with_upgrades(TokioIo::new(in_stream), svc)
+        // Use hyper's http1::Builder (not auto::Builder) so HTTP/1 CONNECT
+        // upgrades surface a downcastable IO: auto's http1_only() is a no-op
+        // for upgrades and Rewind/into_inner is sealed. serve_connection is
+        // given TokioIo<TcpStream> (the crate copy), so the downcast target in
+        // downcast_http1_upgraded must match exactly. with_upgrades() is
+        // required so hyper::upgrade::on(req) resolves in the CONNECT handler.
+        // This drops HTTP/2 server capability on the ingress http_proxy
+        // listener (TNG http_proxy does CONNECT/reverse-proxy, not h2 server).
+        hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(in_stream), svc)
+            .with_upgrades()
             .await
     }
     .await

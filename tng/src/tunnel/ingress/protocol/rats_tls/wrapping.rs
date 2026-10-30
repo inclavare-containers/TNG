@@ -11,8 +11,13 @@ use crate::{
     tunnel::{
         attestation_result::AttestationState,
         endpoint::TngEndpoint,
-        utils,
-        utils::rustls::config::{alpn::Alpn, TlsConfigGenerator},
+        utils::{
+            self,
+            rustls::{
+                config::{alpn::Alpn, TlsConfigGenerator},
+                TlsOutcome,
+            },
+        },
     },
     CommonStreamTrait,
 };
@@ -116,5 +121,71 @@ impl RatsTlsWrappingLayer {
             .connect_early(endpoint.addr(), tcp_stream)
             .await?;
         Ok((tls_stream, verifier_opt, local_addr))
+    }
+
+    /// Create a direct TLS stream without HTTP/2 CONNECT tunneling.
+    /// Used when `multiplex=false` is configured. Unlike
+    /// [`Self::create_stream_raw_0rtt`], this completes the handshake before
+    /// returning (no 0-RTT early data): the kTLS ULP can only be installed
+    /// from fully negotiated handshake secrets, so the raw/kTLS-eligible path
+    /// cannot prime with downstream data the way the opaque 0-RTT path does.
+    pub async fn create_stream_raw(
+        transport_layer_creator: &RatsTlsTransportLayerCreator,
+        tls_config_generator: &TlsConfigGenerator,
+        endpoint: &TngEndpoint,
+        #[cfg(target_os = "linux")] ktls: crate::config::ktls::EnvCheckedKtls,
+    ) -> Result<(
+        TlsOutcome,
+        /* local_addr */ Option<SocketAddr>,
+        AttestationState,
+    )> {
+        let parent_span = tracing::info_span!("wrapping", mode = "rats-tls");
+
+        let mut connector =
+            transport_layer_creator.create(&PoolKey::new(endpoint.clone()), parent_span.clone())?;
+
+        let tls_client_config = tls_config_generator
+            .get_lazy_one_time_rustls_client_config(Alpn::RatsTls)
+            .await?;
+
+        let tcp_stream: tokio::net::TcpStream = connector
+            .call(http::Request::new(()))
+            .await
+            .context("Failed to establish TCP connection for rats-tls")?
+            .into_inner();
+
+        let local_addr = tcp_stream.local_addr().ok();
+
+        #[cfg(target_os = "linux")]
+        let (outcome, attestation_state) = {
+            if !ktls.engages() {
+                let (tls_stream, attestation_state) = tls_client_config
+                    .handshake_with_stream(endpoint.addr(), tcp_stream)
+                    .await?;
+
+                (TlsOutcome::Rustls(Box::new(tls_stream)), attestation_state)
+            } else {
+                use crate::tunnel::utils::rustls::config::ktls::KtlsClientHandshakeConfig;
+
+                utils::rustls::config::ktls::handshake_ktls(
+                    KtlsClientHandshakeConfig::new(tls_client_config, endpoint.addr()),
+                    tcp_stream,
+                    ktls,
+                )
+                .await?
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let (outcome, attestation_state) = {
+            let (tls_stream, attestation_state) = tls_client_config
+                .handshake_with_stream(endpoint.addr(), tcp_stream)
+                .await?;
+
+            (TlsOutcome::Rustls(Box::new(tls_stream)), attestation_state)
+        };
+
+        tracing::debug!("Rats-TLS tunnel established");
+
+        Ok((outcome, local_addr, attestation_state))
     }
 }

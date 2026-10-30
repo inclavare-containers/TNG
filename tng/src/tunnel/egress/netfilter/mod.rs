@@ -144,8 +144,17 @@ impl EgressTrait for NetfilterEgress {
                     listen_addr,
                     EgressAccessMode::Netfilter,
                 );
+
+                // kTLS + splice needs the raw `TcpStream` fd, so hand the
+                // concrete stream up the pipeline as `Raw` instead of boxing
+                // it (which would hide the fd behind an erased trait object).
+                // The flow resolves the kTLS policy and decides whether to
+                // engage the splice data plane or box for the rustls path. The
+                // prelude is `None` — egress has no http_proxy over-read.
+                let stream = super::flow::IncomingStream::Raw(stream);
+
                 Ok(AcceptedStream {
-                    stream: Box::new(crate::ContextualStream::new(stream, "egress-netfilter")),
+                    stream,
                     src: peer_addr,
                     dst,
                     listener_addr: listen_addr,

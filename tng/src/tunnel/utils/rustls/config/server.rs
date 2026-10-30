@@ -15,6 +15,17 @@ use crate::tunnel::utils::rustls::{
 /// fit; overflow is delivered as normal 1-RTT by the client write path.
 const MAX_EARLY_DATA_SIZE: u32 = 1 << 17; // 128 KiB
 
+/// Server-side counterpart of [`enable_secret_extraction_client`] — flips
+/// `enable_secret_extraction` on a `ServerConfig` for the egress (server-side)
+/// kTLS install. No-op on non-Linux.
+#[cfg(target_os = "linux")]
+pub fn enable_secret_extraction_server(config: &mut rustls::ServerConfig) {
+    config.enable_secret_extraction = true;
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn enable_secret_extraction_server(_config: &mut rustls::ServerConfig) {}
+
 impl TlsConfigGenerator {
     pub async fn get_lazy_one_time_rustls_server_config(
         &self,
@@ -72,6 +83,12 @@ impl TlsConfigGenerator {
                 )
             }
         };
+        // kTLS needs the negotiated key material extractable so it can be
+        // installed in-kernel via `setsockopt(TLS_TX/TLS_RX)`. Set
+        // unconditionally on Linux: the config is built once and shared
+        // across connections before per-link kTLS resolution, so the tier is
+        // not known here.
+        enable_secret_extraction_server(&mut config.0);
         // Carry the brotli LRU across handshakes: the builder assigns a fresh
         // empty cache per config, so overwrite it with the generator-shared
         // one. Cert rotation auto-misses on the new encoding.

@@ -39,7 +39,7 @@ pub struct CommonArgs {
 }
 
 /// Configuration for rats-TLS transport.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Copy)]
 #[serde(deny_unknown_fields)]
 pub struct RatsTlsArgs {
     /// When `true`, uses HTTP/2 CONNECT tunneling to multiplex multiple
@@ -70,6 +70,17 @@ pub struct RatsTlsArgs {
     /// handshake cost, not parallelism. Only meaningful with `multiplex: true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multiplex_max_connections: Option<std::num::NonZeroU32>,
+
+    /// In-kernel kTLS record-layer policy for this rats-TLS link on Linux:
+    /// `"disabled"` (never engage), `"best-effort"` (default; falls back to
+    /// rustls when kTLS cannot be used), or `"required"` (fail instead of
+    /// falling back). A bare boolean is **not** accepted — use the kebab-case
+    /// string. Requires Linux with kernel KTLS support and a kernel >= 5.16
+    /// for the recv-splice data plane; on older kernels `best-effort` falls
+    /// back to rustls and `required` fails the setup.
+    #[cfg(target_os = "linux")]
+    #[serde(default)]
+    pub ktls: super::ktls::Ktls,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -546,7 +557,7 @@ mod tests {
     use anyhow::Result;
     use serde_json::json;
 
-    use crate::config::TngConfig;
+    use crate::config::{ktls::Ktls, TngConfig};
 
     use super::{
         AddIngressArgs, IngressMode, IngressNetfilterCaptureDst, IngressNetfilterCaptureDstArgs,
@@ -575,7 +586,7 @@ mod tests {
 
         // Round-trip: unset omits the field entirely.
         let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
-        assert!(serde_json::to_value(&args)?
+        assert!(serde_json::to_value(args)?
             .get("multiplex_max_streams_per_connection")
             .is_none());
         Ok(())
@@ -598,10 +609,43 @@ mod tests {
 
         // Round-trip: unset omits the field entirely.
         let args: RatsTlsArgs = serde_json::from_value(json!({"multiplex": true}))?;
-        assert!(serde_json::to_value(&args)?
+        assert!(serde_json::to_value(args)?
             .get("multiplex_max_connections")
             .is_none());
         Ok(())
+    }
+
+    #[test]
+    fn parse_ktls_default_best_effort() {
+        let args: RatsTlsArgs = serde_json::from_str("{}").unwrap();
+        assert_eq!(args.ktls, Ktls::BestEffort);
+        assert!(!args.multiplex);
+    }
+
+    #[test]
+    fn parse_ktls_modes() {
+        // Only the three-tier kebab-case policy strings parse; a bare boolean
+        // is rejected.
+        assert!(serde_json::from_str::<RatsTlsArgs>(r#"{"ktls": true}"#).is_err());
+        assert!(serde_json::from_str::<RatsTlsArgs>(r#"{"ktls": false}"#).is_err());
+        assert_eq!(
+            serde_json::from_str::<RatsTlsArgs>(r#"{"ktls": "best-effort"}"#)
+                .unwrap()
+                .ktls,
+            Ktls::BestEffort
+        );
+        assert_eq!(
+            serde_json::from_str::<RatsTlsArgs>(r#"{"ktls": "disabled"}"#)
+                .unwrap()
+                .ktls,
+            Ktls::Disabled
+        );
+        assert_eq!(
+            serde_json::from_str::<RatsTlsArgs>(r#"{"ktls": "required"}"#)
+                .unwrap()
+                .ktls,
+            Ktls::Required
+        );
     }
 
     #[test]
@@ -1282,7 +1326,7 @@ mod tests {
         assert_eq!(args.tls, None);
         assert!(args.tls_ca_certs.is_empty());
         // round-trip: default-off fields must NOT be serialized
-        let rt = serde_json::to_value(&args)?;
+        let rt = serde_json::to_value(args)?;
         assert!(rt.get("tls").is_none());
         assert!(rt.get("tls_ca_certs").is_none());
         Ok(())
@@ -1299,7 +1343,7 @@ mod tests {
             args.tls_ca_certs,
             vec!["/etc/tng/ca.pem", "/etc/tng/extra.pem"]
         );
-        let rt = serde_json::to_value(&args)?;
+        let rt = serde_json::to_value(args)?;
         assert_eq!(rt["tls"], true);
         assert_eq!(rt["tls_ca_certs"][0], "/etc/tng/ca.pem");
         // Some(false) is not skipped (only None is), but stays false:

@@ -1,6 +1,3 @@
-use std::future::Future;
-use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -8,15 +5,16 @@ use async_trait::async_trait;
 
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
+use crate::tunnel::ingress::flow::IncomingStream;
 use crate::tunnel::ingress::protocol::ohttp::OHttpStreamForwarder;
 use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
 use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
 use crate::tunnel::ra_context::RaContext;
-use crate::CommonStreamTrait;
-use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime, AttestationState};
+use crate::tunnel::service_metrics::ServiceMetrics;
+use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime};
 
-use super::StreamManager;
+use super::{StreamManager, StreamManagerOutput};
 
 /// Which protocol forwarder this manager routes to, so the status tree only
 /// advertises the subtree that actually exists.
@@ -118,7 +116,7 @@ impl TrustedStreamManager {
                     ),
 
                     None => {
-                        let rats_tls = common_args.rats_tls.as_ref().cloned().unwrap_or_default();
+                        let rats_tls = common_args.rats_tls.unwrap_or_default();
                         Box::new(
                             RatsTlsStreamForwarder::new(
                                 #[cfg(any(
@@ -129,9 +127,7 @@ impl TrustedStreamManager {
                                 transport_so_mark,
                                 ra_context,
                                 runtime.clone(),
-                                rats_tls.multiplex,
-                                rats_tls.multiplex_max_streams_per_connection,
-                                rats_tls.multiplex_max_connections,
+                                &rats_tls,
                             )
                             .await?,
                         )
@@ -149,17 +145,14 @@ impl TrustedStreamManager {
 }
 
 impl StreamManager for TrustedStreamManager {
-    async fn forward_stream<'a>(
+    async fn forward_stream(
         &self,
-        endpoint: &'a TngEndpoint,
-        downstream: Box<dyn CommonStreamTrait + 'static>,
-    ) -> Result<(
-        Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + 'static>>,
-        AttestationState,
-        /* upstream_local */ Option<SocketAddr>,
-    )> {
+        endpoint: &TngEndpoint,
+        downstream: IncomingStream,
+        metrics: Arc<ServiceMetrics>,
+    ) -> Result<StreamManagerOutput> {
         self.stream_forwarder
-            .forward_stream(endpoint, downstream)
+            .forward_stream(endpoint, downstream, metrics)
             .await
     }
 }

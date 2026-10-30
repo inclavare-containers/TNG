@@ -3,7 +3,8 @@ use std::time::Duration;
 use crate::{
     config::egress::{DirectForwardRules, OHttpArgs},
     tunnel::{
-        stream::{CommonStreamTrait, FirstByteReadTimeoutStream},
+        egress::flow::IncomingStream,
+        stream::{FirstByteReadTimeoutStream, PreludedStream},
         utils::{
             http_inspector::{HttpRequestInspector, InspectionResult},
             runtime::TokioRuntime,
@@ -13,6 +14,7 @@ use crate::{
 
 use anyhow::{bail, Context as _, Result};
 use direct_forward::DirectForwardTrafficDetector;
+use tokio::net::TcpStream;
 use tracing::Instrument;
 
 mod direct_forward;
@@ -62,18 +64,17 @@ impl TransportLayer {
 impl TransportLayer {
     pub async fn check_direct_forward(
         &self,
-        in_stream: Box<dyn CommonStreamTrait + Sync>,
+        in_stream: IncomingStream,
         _runtime: TokioRuntime,
     ) -> Result<MaybeDirectlyForward> {
         let span = tracing::info_span!("transport");
 
-        // Set timeout for underly tcp stream
-        let in_stream = {
-            Box::pin(FirstByteReadTimeoutStream::new(
-                in_stream,
-                TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT,
-            ))
-        };
+        let IncomingStream::Raw(in_stream) = in_stream;
+        // Set timeout for underlying tcp stream, so that we can fail quickly if the peer does not
+        // send any byte to us. This may happen when a none tng client is connected to tng server
+        // unexpectedly but waiting for tng server to send data first (e.g. the JDBC driver client).
+        let in_stream =
+            FirstByteReadTimeoutStream::new(in_stream, TRANSPORT_LAYER_READ_FIRST_BYTE_TIMEOUT);
 
         async {
             tracing::debug!(
@@ -92,8 +93,20 @@ impl TransportLayer {
                 let request_info =
                     result.context("Failed during inspecting http request from downstream")?;
 
-                let inspected_stream =
-                    Box::new(inspected_stream) as Box<dyn CommonStreamTrait + Sync>;
+                // In this case, the stream is already read by the HttpRequestInspector, so we can
+                // unbox it (from FirstByteReadTimeoutStream) to get the underlying stream;
+                let inspected_stream = {
+                    let PreludedStream {
+                        stream,
+                        prelude,
+                        prelude_pos,
+                    } = inspected_stream;
+                    PreludedStream {
+                        stream: stream.assume_first_byte_completed(),
+                        prelude,
+                        prelude_pos,
+                    }
+                };
 
                 // If it should be forwarded directly, we just do that.
                 if direct_forward_traffic_detector.should_forward_directly(&request_info) {
@@ -103,13 +116,15 @@ impl TransportLayer {
                 } else {
                     tracing::debug!("Try to decode as TNG traffic");
                     // If not, we try to treat it as tng traffic, it is determined by the configuration of transport layer.
-                    MaybeDirectlyForward::ContinueAsTngTraffic(inspected_stream)
+                    MaybeDirectlyForward::ContinueAsTngTraffic(TngTransportStream::Inspected(
+                        inspected_stream,
+                    ))
                 }
             } else {
                 // Treat it as a valid tng traffic and try to decode from it.
-                MaybeDirectlyForward::ContinueAsTngTraffic(
-                    Box::new(in_stream) as Box<dyn CommonStreamTrait + Sync>
-                )
+                MaybeDirectlyForward::ContinueAsTngTraffic(TngTransportStream::Uninspected(
+                    in_stream,
+                ))
             };
 
             Ok(state)
@@ -120,6 +135,11 @@ impl TransportLayer {
 }
 
 pub enum MaybeDirectlyForward {
-    DirectlyForward(Box<dyn CommonStreamTrait + Sync>),
-    ContinueAsTngTraffic(Box<dyn CommonStreamTrait + Sync>),
+    DirectlyForward(PreludedStream<TcpStream>),
+    ContinueAsTngTraffic(TngTransportStream),
+}
+
+pub enum TngTransportStream {
+    Inspected(PreludedStream<TcpStream>),
+    Uninspected(FirstByteReadTimeoutStream<TcpStream>),
 }

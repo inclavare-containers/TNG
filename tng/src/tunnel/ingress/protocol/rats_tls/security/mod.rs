@@ -23,6 +23,7 @@ use tracing::{Instrument, Span};
 use web_time_compat::{Instant, InstantExt};
 
 use crate::{
+    config::ingress::RatsTlsArgs,
     tunnel::{
         attestation_result::AttestationState,
         endpoint::{EndpointAddr, TngEndpoint},
@@ -30,7 +31,10 @@ use crate::{
         ra_context::RaContext,
         utils::{
             runtime::TokioRuntime,
-            rustls::config::{alpn::Alpn, TlsConfigGenerator},
+            rustls::{
+                config::{alpn::Alpn, TlsConfigGenerator},
+                TlsOutcome,
+            },
             tokio::TokioIo,
         },
     },
@@ -162,6 +166,14 @@ pub struct RatsTlsSecurityLayer {
     multiplex_max_connections: usize,
     handshake_gate: tokio::sync::Semaphore,
     overflowed_streams: AtomicU64,
+    // Read only on the Linux kTLS handshake path; unused (but stored) elsewhere.
+    #[cfg(target_os = "linux")]
+    ktls: crate::config::ktls::EnvCheckedKtls,
+}
+
+pub enum AllocatedSecuredStream {
+    Raw(TlsOutcome),
+    Multiplexed(Box<dyn CommonStreamTrait + Sync>),
 }
 
 impl RatsTlsSecurityLayer {
@@ -174,9 +186,7 @@ impl RatsTlsSecurityLayer {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
-        multiplex_max_streams_per_connection: Option<NonZeroU32>,
-        multiplex_max_connections: Option<NonZeroU32>,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         let transport_layer_creator = RatsTlsTransportLayerCreator::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
@@ -185,19 +195,30 @@ impl RatsTlsSecurityLayer {
         let tls_config_generator =
             Arc::new(TlsConfigGenerator::new(ra_context, runtime.clone()).await?);
 
+        // Resolve the kTLS policy once here against the link constraints
+        #[cfg(target_os = "linux")]
+        let ktls = rats_tls
+            .ktls
+            .resolve(&crate::config::ktls::KtlsEnvConstraints::link(
+                rats_tls.multiplex,
+            ))?;
+
         Ok(Self {
             next_id: AtomicU64::new(0),
             pool: RwLock::new(HashMap::new()),
             transport_layer_creator,
             tls_config_generator,
             runtime,
-            multiplex,
-            multiplex_max_streams_per_connection,
-            multiplex_max_connections: multiplex_max_connections
+            multiplex: rats_tls.multiplex,
+            multiplex_max_streams_per_connection: rats_tls.multiplex_max_streams_per_connection,
+            multiplex_max_connections: rats_tls
+                .multiplex_max_connections
                 .map(|v| v.get() as usize)
                 .unwrap_or_else(pool::default_max_connections),
             handshake_gate: tokio::sync::Semaphore::const_new(MAX_CONCURRENT_TUNNEL_HANDSHAKES),
             overflowed_streams: AtomicU64::new(0),
+            #[cfg(target_os = "linux")]
+            ktls,
         })
     }
 
@@ -449,6 +470,56 @@ impl RatsTlsSecurityLayer {
             endpoint,
         )
         .await
+    }
+
+    /// Allocate an upstream for a `multiplex=false` (raw/kTLS-eligible) or
+    /// multiplex link, and report the peer attestation state.
+    ///
+    /// Non-multiplex: completes the handshake via
+    /// [`RatsTlsWrappingLayer::create_stream_raw`], installing the kTLS ULP
+    /// when the policy engages; multiplex rides the shard pool (same path as
+    /// [`Self::allocate_multiplex_stream`], guards and cooldown included).
+    pub async fn allocate_secured_stream_try_ktls(
+        &self,
+        endpoint: TngEndpoint,
+    ) -> Result<(
+        AllocatedSecuredStream,
+        /* local_addr */ Option<SocketAddr>,
+        AttestationState,
+    )> {
+        if !self.multiplex {
+            // Try to create a raw stream and fallback to rustls if ktls failed
+            let (stream, local_addr, att) = RatsTlsWrappingLayer::create_stream_raw(
+                &self.transport_layer_creator,
+                &self.tls_config_generator,
+                &endpoint,
+                #[cfg(target_os = "linux")]
+                self.ktls,
+            )
+            .instrument(tracing::info_span!("wrapping", mode = "rats-tls"))
+            .await?;
+            Ok((AllocatedSecuredStream::Raw(stream), local_addr, att))
+        } else {
+            let (stream, local_addr, att, _session_id) =
+                self.allocate_multiplex_stream(endpoint).await?;
+            Ok((AllocatedSecuredStream::Multiplexed(stream), local_addr, att))
+        }
+    }
+
+    /// An `IncomingStream::Opaque` downstream has no raw socket, so kTLS (which
+    /// installs on a raw fd) is impossible. Apply the policy: `required` bails
+    /// the connection, `best-effort`/`disabled` fall back to the rustls data
+    /// plane (0-RTT or multiplex path).
+    #[cfg(target_os = "linux")]
+    pub(super) fn check_opaque_downstream(&self) -> Result<()> {
+        use crate::config::ktls::{FallbackDecision, KtlsConnUnavailable};
+        match self
+            .ktls
+            .on_connection_unavailable(KtlsConnUnavailable::OpaqueDownstream)
+        {
+            FallbackDecision::Bail(error) => Err(error),
+            FallbackDecision::FallBack => Ok(()),
+        }
     }
 }
 

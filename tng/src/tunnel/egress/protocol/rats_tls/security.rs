@@ -1,67 +1,150 @@
 use std::sync::Arc;
 
-use crate::tunnel::{
-    ra_context::RaContext,
-    stream::CommonStreamTrait,
-    utils::{
-        runtime::TokioRuntime,
-        rustls::{
-            config::{alpn::Alpn, TlsConfigGenerator},
-            early_data_prefix::EarlyDataPrefixStream,
+#[cfg(target_os = "linux")]
+use crate::tunnel::utils::rustls::TlsOutcome;
+use crate::AttestationState;
+use crate::{
+    config::egress::RatsTlsArgs,
+    tunnel::{
+        egress::protocol::common::transport::TngTransportStream,
+        ra_context::RaContext,
+        stream::CommonStreamTrait,
+        utils::{
+            runtime::TokioRuntime,
+            rustls::config::{alpn::Alpn, server::LazyOnetimeTlsServerConfig, TlsConfigGenerator},
         },
     },
 };
-use crate::AttestationState;
 use anyhow::Result;
-use tracing::Instrument;
 
 pub(super) struct RatsTlsSecurityLayer {
     tls_config_generator: TlsConfigGenerator,
     multiplex: bool,
+    // Read only on the Linux kTLS handshake path; unused (but stored) elsewhere.
+    #[cfg(target_os = "linux")]
+    ktls: crate::config::ktls::EnvCheckedKtls,
 }
 
 impl RatsTlsSecurityLayer {
     pub async fn new(
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
-        multiplex: bool,
+        rats_tls: &RatsTlsArgs,
     ) -> Result<Self> {
         let tls_config_generator = TlsConfigGenerator::new(ra_context, runtime).await?;
 
+        #[cfg(target_os = "linux")]
+        let ktls = rats_tls
+            .ktls
+            .resolve(&crate::config::ktls::KtlsEnvConstraints::link(
+                rats_tls.multiplex,
+            ))?;
+
         Ok(Self {
             tls_config_generator,
-            multiplex,
+            multiplex: rats_tls.multiplex,
+            #[cfg(target_os = "linux")]
+            ktls,
         })
     }
 
+    async fn prepare_tls_config(&self) -> Result<LazyOnetimeTlsServerConfig> {
+        // Prepare TLS config
+        let alpn = if self.multiplex {
+            Alpn::Http2
+        } else {
+            Alpn::RatsTls
+        };
+        self.tls_config_generator
+            .get_lazy_one_time_rustls_server_config(alpn)
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tracing::instrument(skip_all, name = "security", level = "info")]
+    pub async fn handshake_try_ktls(
+        &self,
+        stream: TngTransportStream,
+    ) -> Result<(TlsOutcome, AttestationState)> {
+        // Engagement gate — mirrors ingress `wrapping::create_stream_raw`.
+        // When kTLS is not engaged (policy `disabled`, or the kernel < 5.16
+        // floor resolved `best-effort` to `disabled`), do NOT attempt kTLS at
+        // all: go straight to the user-space rustls data plane. Without this
+        // gate the egress side installs kTLS even when the operator disabled
+        // it (the cipher is kernel-compatible on 6.6), so `kTLS=disabled`
+        // still hits the kTLS splice path instead of the intended rustls
+        // fallback — asymmetry vs ingress, which has always gated here.
+        if !self.ktls.engages() {
+            let (tls_stream, attestation_state) = self.handshake_rustls(stream).await?;
+            return Ok((TlsOutcome::Rustls(tls_stream), attestation_state));
+        }
+
+        use crate::tunnel::utils::rustls::config::ktls::KtlsServerHandshakeConfig;
+
+        let tls_server_config = self.prepare_tls_config().await?;
+
+        match stream {
+            TngTransportStream::Inspected(preluded_stream) => {
+                crate::tunnel::utils::rustls::config::ktls::handshake_ktls(
+                    KtlsServerHandshakeConfig::new(tls_server_config),
+                    preluded_stream,
+                    self.ktls,
+                )
+                .await
+            }
+            TngTransportStream::Uninspected(first_byte_read_timeout_stream) => {
+                crate::tunnel::utils::rustls::config::ktls::handshake_ktls(
+                    KtlsServerHandshakeConfig::new(tls_server_config),
+                    first_byte_read_timeout_stream,
+                    self.ktls,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Generic server handshake returning the concrete (early-data-preserving)
+    /// stream, so the caller can read the negotiated ALPN off the rustls
+    /// session before deciding the h2-vs-direct routing.
+    #[tracing::instrument(skip_all, name = "security", level = "info")]
     pub async fn handshake<T: CommonStreamTrait + std::marker::Sync>(
         &self,
         stream: T,
     ) -> Result<(
-        EarlyDataPrefixStream<tokio_rustls::server::TlsStream<T>>,
+        crate::tunnel::utils::rustls::early_data_prefix::EarlyDataPrefixStream<
+            tokio_rustls::server::TlsStream<T>,
+        >,
         AttestationState,
     )> {
-        async {
-            // Prepare TLS config
-            let alpn = if self.multiplex {
-                Alpn::Http2
-            } else {
-                Alpn::RatsTls
-            };
-            let tls_server_config = self
-                .tls_config_generator
-                .get_lazy_one_time_rustls_server_config(alpn)
-                .await?;
+        let tls_server_config = self.prepare_tls_config().await?;
 
-            tracing::debug!("Start to estabilish rats-tls connection");
+        let (tls_stream, attestation_state) =
+            tls_server_config.handshake_with_stream(stream).await?;
 
-            let (security_layer_stream, attestation_state) =
-                tls_server_config.handshake_with_stream(stream).await?;
+        Ok((tls_stream, attestation_state))
+    }
 
-            tracing::debug!("New rats-tls connection established");
-            Ok((security_layer_stream, attestation_state))
-        }
-        .instrument(tracing::info_span!("security"))
-        .await
+    #[tracing::instrument(skip_all, name = "security", level = "info")]
+    pub async fn handshake_rustls(
+        &self,
+        stream: TngTransportStream,
+    ) -> Result<(Box<dyn CommonStreamTrait + Sync>, AttestationState)> {
+        let tls_server_config = self.prepare_tls_config().await?;
+
+        Ok(match stream {
+            TngTransportStream::Inspected(preluded_stream) => {
+                let (tls_stream, attestation_state) = tls_server_config
+                    .handshake_with_stream(preluded_stream)
+                    .await?;
+
+                (Box::new(tls_stream), attestation_state)
+            }
+            TngTransportStream::Uninspected(first_byte_read_timeout_stream) => {
+                let (tls_stream, attestation_state) = tls_server_config
+                    .handshake_with_stream(first_byte_read_timeout_stream)
+                    .await?;
+                (Box::new(tls_stream), attestation_state)
+            }
+        })
     }
 }

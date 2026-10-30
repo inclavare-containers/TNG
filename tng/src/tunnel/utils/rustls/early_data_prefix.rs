@@ -26,6 +26,14 @@ impl<S> EarlyDataPrefixStream<S> {
     pub fn inner(&self) -> &S {
         &self.inner
     }
+
+    /// Split into the drained early-data prefix and the wrapped stream. The
+    /// kTLS install path needs the raw `TlsStream` and must re-inject the
+    /// prefix itself (or re-wrap on the rustls fallback path).
+    #[cfg(target_os = "linux")]
+    pub fn into_parts(self) -> (Vec<u8>, S) {
+        (self.prefix, self.inner)
+    }
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for EarlyDataPrefixStream<S> {

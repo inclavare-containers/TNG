@@ -874,6 +874,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitfield-struct"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8769c4854c5ada2852ddf6fd09d15cf43d4c2aaeccb4de6432f5402f08a6003b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4139,6 +4150,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "ktls"
+version = "6.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5b79b6ec9c9d56656298df28f92dbaf2e83816be6d12c5b896461087e52d701"
+dependencies = [
+ "futures-util",
+ "ktls-sys",
+ "libc",
+ "memoffset 0.9.1",
+ "nix 0.29.0",
+ "num_enum",
+ "pin-project-lite",
+ "rustls",
+ "smallvec",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+]
+
+[[package]]
+name = "ktls-core"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5502ef8386c9b091182a810e10582871abde6f5187ac6418983939443fcd92cb"
+dependencies = [
+ "bitfield-struct",
+ "libc",
+ "nix 0.30.1",
+ "rustls",
+ "zeroize",
+ "zeroize_derive",
+]
+
+[[package]]
+name = "ktls-stream"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e01fed085a83789b426d8ad65a9b270ecba60845dbfde8f8e83f0d7357e9d7"
+dependencies = [
+ "ktls-core",
+ "pin-project-lite",
+ "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "ktls-sys"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ed84c81d133bc00e291085cff51c15cb07d3cede0aade1f2d82dd33df82d7e7"
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4737,6 +4801,19 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+ "memoffset 0.9.1",
+]
+
+[[package]]
+name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
@@ -4914,6 +4991,28 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi 0.5.3",
  "libc",
+]
+
+[[package]]
+name = "num_enum"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
+dependencies = [
+ "num_enum_derive",
+ "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -8055,6 +8154,9 @@ dependencies = [
  "hyper-util",
  "indexmap 2.14.2",
  "itertools 0.14.0",
+ "ktls",
+ "ktls-core",
+ "ktls-stream",
  "libc",
  "local-ip-address",
  "moka",
@@ -8107,6 +8209,7 @@ dependencies = [
  "tokio",
  "tokio-graceful",
  "tokio-rustls",
+ "tokio-splice2",
  "tokio-util",
  "tokio_with_wasm",
  "tonic",
@@ -8299,6 +8402,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
 dependencies = [
  "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-splice2"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3512dd280d6eb6810a34477214bb12640c791f148a14c8c8aecd69b4da6c1f25"
+dependencies = [
+ "crossbeam-utils",
+ "pin-project",
+ "rustix 1.1.5",
  "tokio",
 ]
 

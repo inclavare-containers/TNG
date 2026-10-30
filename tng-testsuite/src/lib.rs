@@ -1,3 +1,4 @@
+pub mod kernel;
 pub mod log_capture;
 pub mod netns;
 pub mod nip_io_hosts;

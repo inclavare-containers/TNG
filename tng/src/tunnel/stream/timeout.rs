@@ -48,15 +48,28 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>
     /// The caller **must** ensure that the first byte read has logically
     /// completed before calling this method. Blindly unwrapping the stream
     /// before the first byte is read will bypass the timeout check.
-    // The type is crate-private, so without this the lib build (which excludes
-    // the unit tests below) reports the method as dead code.
-    #[allow(dead_code)]
     pub fn assume_first_byte_completed(self) -> T {
         debug_assert!(
             matches!(self.state, State::AfterFirstRead),
             "first byte read has not completed"
         );
         self.inner
+    }
+
+    /// Returns a reference to the underlying stream.
+    ///
+    /// # Warning
+    ///
+    /// The caller **must** ensure that the first byte read has logically
+    /// completed before calling this method. Blindly unwrapping the stream
+    /// before the first byte is read will bypass the timeout check.
+    #[cfg_attr(not(target_os = "linux"), allow(unused))]
+    pub fn assume_first_byte_completed_ref(&self) -> &T {
+        debug_assert!(
+            matches!(self.state, State::AfterFirstRead),
+            "first byte read has not completed"
+        );
+        &self.inner
     }
 }
 
