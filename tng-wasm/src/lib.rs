@@ -8,6 +8,21 @@ use wasm_bindgen::prelude::*;
 
 pub mod fetch;
 
+/// Convenience appraisal of a certificate exported from the browser. A page
+/// cannot read or authenticate its own TLS peer certificate through Web APIs.
+#[wasm_bindgen]
+pub async fn verify_certificate(
+    certificate_der: Vec<u8>,
+    verify: JsValue,
+) -> Result<JsValue, JsValue> {
+    let args = serde_wasm_bindgen::from_value(verify)
+        .map_err(|e| JsError::new(&format!("Invalid verification policy: {e}")))?;
+    let result = tng::verify_certificate(&certificate_der, &args)
+        .await
+        .map_err(|e| JsError::new(&format!("Certificate verification failed: {e:?}")))?;
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()).into())
+}
+
 #[wasm_bindgen(start)]
 pub fn init_tng() {
     // print pretty errors in wasm https://github.com/rustwasm/console_error_panic_hook

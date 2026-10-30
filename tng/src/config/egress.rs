@@ -52,6 +52,12 @@ pub struct RatsTlsArgs {
     /// whose bandwidth is limited by the TLS encryption capacity of one CPU core.
     #[serde(default)]
     pub multiplex: bool,
+
+    /// Accept ordinary HTTPS clients using HTTP/1.1 and an attested server
+    /// certificate. Browsers do not appraise its evidence automatically.
+    /// Requires attest-only mode and cannot be combined with multiplexing.
+    #[serde(default)]
+    pub http1: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

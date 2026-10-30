@@ -224,3 +224,17 @@ WASM builds use the pinned toolchain's LLVM archiver. macOS's native archive
 indexer does not index WASM C objects correctly; a successful Rust link alone
 can otherwise leave unresolved crypto imports. `make wasm-build-release`
 installs and selects the matching `llvm-tools` component.
+
+## Appraising a browser-exported certificate
+
+`await verify_certificate(derBytes, verifyConfig)` checks a DER RA-TLS certificate
+with the same provider appraisal used by native TNG. `verifyConfig` is a flat
+`VerifyArgs` object. With the SNP builtin feature, use `background_check`,
+`as_provider: "coco"`, `as_type: "builtin"` and an independently approved policy.
+The result contains `certificate_sha256`, `public_key_sha256` and
+`attestation_result`; errors reject the promise. Expired certificates are refused.
+
+This function checks the supplied bytes. JavaScript cannot establish which TLS
+certificate the browser received: export it through the browser's own certificate
+viewer and independently verify it. A page-supplied verifier cannot authenticate
+its own initial script. Do not give the page secrets before that independent check.

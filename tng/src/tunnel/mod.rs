@@ -1,5 +1,6 @@
 pub(crate) mod access_log;
 pub(crate) mod attestation_result;
+pub(crate) mod certificate;
 #[cfg(not(wasm))]
 pub(crate) mod datagram;
 #[cfg(feature = "__egress-common")]
