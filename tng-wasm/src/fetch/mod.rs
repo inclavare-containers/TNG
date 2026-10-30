@@ -49,10 +49,16 @@ pub async fn fetch(
         .into_checked()
         .map_err(to_js_error)?;
 
-    let (http_response, attestation_result) = dispatch_request(url, init, &ohttp, &ra_args).await?;
+    let (http_response, attestation_result, server_public_key) =
+        dispatch_request(url, init, &ohttp, &ra_args).await?;
 
     let web_response = convert_to_web_response(http_response).await?;
-    attach_attestation_info(web_response, attestation_result, &ra_args)
+    attach_attestation_info(
+        web_response,
+        attestation_result,
+        server_public_key,
+        &ra_args,
+    )
 }
 
 /// Build a browser-side `web_sys::Request` from the caller's URL/init, convert
@@ -63,7 +69,7 @@ async fn dispatch_request(
     init: web_sys::RequestInit,
     ohttp: &OHttpArgs,
     ra_args: &RaArgs,
-) -> Result<(axum::response::Response, AttestationResult), JsValue> {
+) -> Result<(axum::response::Response, AttestationResult, Option<String>), JsValue> {
     // 1. Construct the browser-side Request from the caller's URL/init.
     let web_request = web_sys::Request::new_with_str_and_init(&url, &init)?;
 
@@ -104,19 +110,7 @@ async fn forward_request(
     url_scheme: &'static str,
     ra_args: &RaArgs,
     request: axum::extract::Request,
-) -> Result<(axum::response::Response, AttestationResult)> {
-    // Reassemble as http::Request (same type as axum::extract::Request) so the
-    // parts can be logged once before forwarding.
-    let request = {
-        let (parts, body) = request.into_parts();
-        tracing::debug!(
-            request=?parts,
-            ?ra_args,
-            "http::Request to be send"
-        );
-        http::Request::from_parts(parts, body)
-    };
-
+) -> Result<(axum::response::Response, AttestationResult, Option<String>)> {
     let shutdown = tokio_graceful::Shutdown::no_signal();
     let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
 
@@ -124,14 +118,16 @@ async fn forward_request(
     let ohttp_security_layer =
         OHttpSecurityLayer::new(ohttp, url_scheme, ra_context, runtime.clone()).await?;
 
+    let server_public_key = ohttp_security_layer
+        .verified_server_public_key(endpoint, &request)
+        .await?;
     let (response, attestation_result) = ohttp_security_layer
         .forward_http_request(endpoint, request)
         .await?;
 
-    tracing::info!(?attestation_result, "start forward task");
     let Some(attestation_result) = attestation_result else {
         bail!("The attestation result is missing");
     };
 
-    Ok((response, attestation_result))
+    Ok((response, attestation_result, server_public_key))
 }

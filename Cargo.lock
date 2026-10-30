@@ -569,7 +569,7 @@ checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -587,6 +587,7 @@ dependencies = [
  "hex",
  "jsonwebtoken",
  "kbs-types",
+ "key-value-storage",
  "lazy_static",
  "log",
  "p256",
@@ -1704,7 +1705,7 @@ dependencies = [
  "bitfield 0.13.2",
  "bitflags 1.3.2",
  "codicon",
- "dirs",
+ "dirs 5.0.1",
  "hex",
  "hyper 0.14.32",
  "hyper-tls 0.5.0",
@@ -2168,7 +2169,16 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
 ]
 
 [[package]]
@@ -2189,8 +2199,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2200,7 +2222,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
 dependencies = [
  "libc",
- "redox_users",
+ "redox_users 0.4.6",
  "winapi",
 ]
 
@@ -2424,7 +2446,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -4104,6 +4126,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "key-value-storage"
+version = "0.1.0"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
+dependencies = [
+ "async-trait",
+ "derivative",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5163,6 +5197,18 @@ name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "sha2",
+]
+
+[[package]]
+name = "p384"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
@@ -6320,15 +6366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rdrand"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d92195228612ac8eed47adbc2ed0f04e513a4ccb98175b6f2bd04d963b533655"
-dependencies = [
- "rand_core 0.6.4",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6358,6 +6395,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
+dependencies = [
+ "libredox",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6380,13 +6427,14 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.21.7",
  "cfg-if",
  "chrono",
+ "key-value-storage",
  "log",
  "reqwest 0.13.5",
  "serde",
@@ -7317,16 +7365,35 @@ dependencies = [
  "bitflags 1.3.2",
  "byteorder",
  "codicon",
- "dirs",
+ "dirs 5.0.1",
  "hex",
  "iocuddle",
  "lazy_static",
  "libc",
- "openssl",
- "rdrand",
  "serde",
  "serde-big-array",
  "serde_bytes",
+ "static_assertions",
+ "uuid",
+]
+
+[[package]]
+name = "sev"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ff74d7e7d1cc172f3a45adec74fbeee928d71df095b85aaaf66eb84e1e31e6"
+dependencies = [
+ "base64 0.22.1",
+ "bitfield 0.19.5",
+ "bitflags 2.13.2",
+ "byteorder",
+ "dirs 6.0.0",
+ "hex",
+ "iocuddle",
+ "lazy_static",
+ "libc",
+ "serde",
+ "serde-big-array",
  "static_assertions",
  "uuid",
 ]
@@ -8055,6 +8122,7 @@ dependencies = [
  "hyper-util",
  "indexmap 2.14.2",
  "itertools 0.14.0",
+ "jsonwebtoken",
  "libc",
  "local-ip-address",
  "moka",
@@ -8066,6 +8134,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "p256",
  "parking_lot 0.12.5",
  "peekable 0.4.1",
  "pin-project",
@@ -8208,6 +8277,7 @@ version = "2.12.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bincode",
  "bytes",
  "cfg_aliases",
  "console_error_panic_hook",
@@ -8220,11 +8290,14 @@ dependencies = [
  "http-body 1.1.0",
  "http-body-util",
  "js-sys",
+ "kbs-types",
  "rats-cert",
  "reqwest 0.13.5",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sev 4.0.0",
+ "sev 7.1.0",
  "tng",
  "tokio",
  "tokio-graceful",
@@ -8234,6 +8307,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "tracing-wasm",
+ "verifier",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -9073,7 +9147,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=94e2f4bc172e0fe78f377085361a042f687a0c63#94e2f4bc172e0fe78f377085361a042f687a0c63"
+source = "git+https://github.com/mateo-moon/trustee?rev=2de41693c4b40fbf8e86e20cba7a78817836b4bd#2de41693c4b40fbf8e86e20cba7a78817836b4bd"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -9098,13 +9172,17 @@ dependencies = [
  "log",
  "openssl",
  "openssl-sys",
+ "p384",
+ "pem",
  "quick-xml",
  "regex",
  "reqwest 0.13.5",
+ "rsa",
  "scroll 0.11.0",
  "serde",
  "serde_json",
- "sev",
+ "sev 4.0.0",
+ "sev 7.1.0",
  "sha1",
  "sha2",
  "shadow-rs 0.19.0",
@@ -9117,6 +9195,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "web-time",
+ "x509-cert",
  "x509-parser",
 ]
 

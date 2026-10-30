@@ -114,6 +114,7 @@ pub mod tests {
                 common: ingress::CommonArgs{
                     web_page_inject: false,
                     ohttp: Some(ingress::OHttpArgs {
+                        expected_server_public_key: None,
                         path_rewrites: vec![PathRewrite {
                             match_regex: "^/foo/bar/([^/]+)([/]?.*)$".to_owned(),
                             substitution: "/foo/bar/\\1".to_owned(),
@@ -238,6 +239,7 @@ pub mod tests {
                 common: ingress::CommonArgs {
                     web_page_inject: false,
                     ohttp: Some(ingress::OHttpArgs {
+                        expected_server_public_key: None,
                         path_rewrites: vec![],
                         path_default: ingress::PathDefault::Root,
                         header_passthrough: Some(IngressHeaderPassthroughConfig {

@@ -155,6 +155,7 @@ __builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
+builtin-as-snp-rust = ["__builtin-as", "attestation-service/snp-rustcrypto"]
 builtin-as-tdx-ffi = ["__builtin-as", "attestation-service/tdx-verifier"]
 # Pure-Rust dcap-qvl backend (no libtdx-verify/libsgx_dcap_quoteverify link).
 # Statically linkable; fetches TDX collateral from a PCCS over HTTPS.
@@ -171,7 +172,7 @@ ctor = {workspace = true}
 # rules read. Dev-only: the real-evidence tdx.kernel test parses the real PAI
 # fixture (`tdx_CCEL_data_pai`) through the same crate the attestation-service
 # TDX verifier uses, so the test exercises the exact production parser.
-eventlog = {git = "https://github.com/openanolis/trustee/", rev = "94e2f4bc172e0fe78f377085361a042f687a0c63"}
+eventlog = {git = "https://github.com/mateo-moon/trustee", rev = "2de41693c4b40fbf8e86e20cba7a78817836b4bd"}
 rayon = {workspace = true}
 rsa = {workspace = true}
 rstest = {workspace = true}

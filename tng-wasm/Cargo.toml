@@ -28,7 +28,7 @@ js-sys = {workspace = true}
 serde = {workspace = true}
 serde-wasm-bindgen = {workspace = true}
 serde_json = {workspace = true}
-tng = {path = "../tng", default-features = false, features = ["__ingress-common", "builtin-as-tdx-rust"]}
+tng = {path = "../tng", default-features = false, features = ["__ingress-common", "builtin-as-tdx-rust", "builtin-as-snp-rust"]}
 tokio = {workspace = true, default-features = false}
 tokio-graceful = {workspace = true, default-features = false}
 tracing = {workspace = true}
@@ -51,11 +51,17 @@ tokio_with_wasm = {workspace = true}
 tokio_with_wasm_proc = {workspace = true}
 
 [dev-dependencies]
+bincode = "1.3"
+sev-modern = { package = "sev", version = "=7.1.0", default-features = false, features = ["snp", "serde"] }
+sev = { version = "4", default-features = false, features = ["snp"] }
+verifier = { git = "https://github.com/mateo-moon/trustee", rev = "2de41693c4b40fbf8e86e20cba7a78817836b4bd", default-features = false, features = ["snp-rustcrypto"] }
+kbs-types = { workspace = true }
+
 reqwest = {workspace = true}
 # Direct access to the builtin-as converter so a wasm-bindgen-test can exercise
 # the WebCrypto challenger keygen path (`build_challenger_webcrypto`). The
 # features unify with the ones already enabled via `tng`'s rats-cert dep.
-rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "builtin-as-tdx-rust"]}
+rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "builtin-as-tdx-rust", "builtin-as-snp-rust"]}
 wasm-bindgen-test = "0.3.76"
 
 [build-dependencies]
