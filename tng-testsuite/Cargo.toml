@@ -188,6 +188,11 @@ name = "ohttp"
 path = "tests/ohttp/ohttp.rs"
 
 [[test]]
+name = "ohttp_egress_hook"
+path = "tests/ohttp/ohttp_egress_hook.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "client_auth_mode"
 path = "tests/ohttp/client_auth_mode.rs"
 
