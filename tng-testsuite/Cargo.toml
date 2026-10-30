@@ -394,3 +394,7 @@ name = "key_sync"
 path = "tests/key_sync.rs"
 required-features = ["on-source-code"]
 
+[[test]]
+name = "hook_connection_fairness"
+path = "tests/hook/hook_connection_fairness.rs"
+required-features = ["on-bin"]
