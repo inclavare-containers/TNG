@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ohttp tunnels carry more requests under remote attestation: keep-alive request rates improve 2.8-14.1% at every measured concurrency (1-128); short-connection (no keep-alive) rates improve 2.9-9.3% at concurrency 1-32 with p99 up to 12.3% lower, while saturated short connections (c=64-128) run 2.8-3.6% slower for up to 11.2% lower p99.
 - Linux binary release tarballs are now built against the glibc 2.17 baseline, so they run on distributions from 2014 onward instead of requiring glibc 2.29.
 
 ### Fixed
