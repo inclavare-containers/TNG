@@ -14,6 +14,7 @@ use wasm_bindgen::prelude::*;
 mod attestation;
 mod request;
 mod response;
+pub mod verify;
 
 use self::attestation::attach_attestation_info;
 use self::request::{build_http_request, parse_request_uri, upstream_endpoint};

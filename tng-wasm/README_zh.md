@@ -8,6 +8,8 @@ TNG Client JavaScript SDK为浏览器环境提供客户端功能，使用wasm-pa
 
 我们在 GitHub Pages 上提供了一个集成 TNG JavaScript SDK 的网页在线示例：<https://inclavare-containers.github.io/TNG/>
 
+该站点包含两个页面：API 演练场（通过隧道发起通用 HTTP 请求和 LLM 推理），以及一个带远程验证面板的聊天演示页，面板展示已认证端点的 EAR 评估结果。聊天页使用 SDK 的 `verify()` API 检查远端的远程认证，无需发送业务请求。
+
 ## 获取 SDK
 
 您可以通过两种方式获取 TNG SDK：

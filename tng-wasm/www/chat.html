@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>TNG Chat Demo</title>
+    <link rel="stylesheet" href="./css/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title-block">
+        <h1 data-i18n="chat.title">TNG Chat Demo</h1>
+        <p class="subtitle" data-i18n="chat.subtitle"></p>
+      </div>
+      <div class="topbar-right">
+        <a class="nav-link" href="./index.html" data-i18n="chat.back_api">API demo</a>
+        <label class="lang-toggle">
+          <select id="lang-select">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+        <span id="init-badge" class="badge badge-waiting"></span>
+      </div>
+    </header>
+
+    <!-- Shared TNG settings: identical ids/structure to index.html so the
+         shared settings.js wiring and config.js builder work unchanged. -->
+    <section class="card tng-card" id="tng-config-wrap">
+      <div class="card-head">
+        <h2 data-i18n="tng.title"></h2>
+        <button type="button" id="view-config-btn" data-i18n="tng.view_config"></button>
+      </div>
+      <div class="grid">
+        <label>
+          <span data-i18n="tng.as_provider"></span>
+          <select id="tng-as-provider">
+            <option value="coco" data-i18n="tng.as_provider.coco"></option>
+            <option value="ita" data-i18n="tng.as_provider.ita"></option>
+          </select>
+        </label>
+        <label id="tng-as-type-wrap" hidden>
+          <span data-i18n="tng.as_type"></span>
+          <select id="tng-as-type">
+            <option value="restful" data-i18n="tng.as_type.restful"></option>
+            <option value="grpc" data-i18n="tng.as_type.grpc"></option>
+            <option value="builtin" data-i18n="tng.as_type.builtin"></option>
+          </select>
+        </label>
+        <label id="tng-as-addr-wrap">
+          <span data-i18n="tng.as_addr"></span>
+          <input type="text" id="tng-as-addr" name="tng-as-addr" autocomplete="off" list="dl-tng-as-addr" data-i18n-placeholder="tng.as_addr.placeholder" />
+          <datalist id="dl-tng-as-addr"></datalist>
+        </label>
+        <label id="tng-api-key-wrap" hidden>
+          <span data-i18n="tng.api_key"></span>
+          <input type="password" id="tng-api-key" autocomplete="off" data-i18n-placeholder="tng.api_key.placeholder" />
+          <p class="hint" id="tng-api-key-hint" hidden data-i18n="tng.api_key.help"></p>
+        </label>
+        <label id="tng-ita-jwks-wrap" hidden>
+          <span data-i18n="tng.ita_jwks_addr"></span>
+          <input type="text" id="tng-ita-jwks-addr" autocomplete="off" data-i18n-placeholder="tng.ita_jwks_addr.placeholder" />
+        </label>
+        <label>
+          <span data-i18n="tng.policy_ids"></span>
+          <input type="text" id="tng-policy-ids" value="default" />
+        </label>
+        <label>
+          <span data-i18n="tng.model"></span>
+          <select id="tng-model">
+            <option value="background_check" data-i18n="tng.model.background_check"></option>
+            <option value="passport" data-i18n="tng.model.passport"></option>
+          </select>
+        </label>
+      </div>
+      <label class="inline checkbox" id="tng-skip-as-token-cert-verify-wrap">
+        <input type="checkbox" id="tng-skip-as-token-cert-verify" />
+        <span data-i18n="tng.skip_as_token_cert_verify"></span>
+      </label>
+
+      <div id="tng-builtin-settings" hidden>
+        <h3 class="card-subhead" data-i18n="tng.builtin.title"></h3>
+        <div class="grid">
+          <label id="tng-builtin-policy-wrap">
+            <span data-i18n="tng.builtin.policy"></span>
+            <select id="tng-builtin-policy">
+              <option value="hardware_only" data-i18n="tng.builtin.policy.hardware_only"></option>
+              <option value="hardware_only_strict" data-i18n="tng.builtin.policy.hardware_only_strict"></option>
+              <option value="hardware_with_reference_values" data-i18n="tng.builtin.policy.hardware_with_reference_values"></option>
+              <option value="hardware_strict_with_reference_values" data-i18n="tng.builtin.policy.hardware_strict_with_reference_values"></option>
+              <option value="trust_all" data-i18n="tng.builtin.policy.trust_all"></option>
+              <option value="inline" data-i18n="tng.builtin.policy.inline"></option>
+            </select>
+          </label>
+        </div>
+        <label id="tng-builtin-policy-content-wrap" hidden>
+          <span data-i18n="tng.builtin.policy.content"></span>
+          <textarea id="tng-builtin-policy-content" rows="4" spellcheck="false" data-i18n-placeholder="tng.builtin.policy.content.placeholder"></textarea>
+        </label>
+        <div class="field">
+          <span class="field-label" data-i18n="tng.builtin.reference_values"></span>
+          <div id="tng-builtin-rvs" class="headers-list"></div>
+          <button type="button" id="tng-builtin-add-rv" data-i18n="tng.builtin.reference_values.add"></button>
+        </div>
+        <p class="hint" data-i18n="tng.builtin.hint"></p>
+      </div>
+
+      <h3 class="card-subhead" data-i18n="ohttp.title"></h3>
+      <label>
+        <span data-i18n="ohttp.path_default"></span>
+        <select id="ohttp-path-default">
+          <option value="root" data-i18n="ohttp.path_default.root"></option>
+          <option value="original" data-i18n="ohttp.path_default.original"></option>
+        </select>
+      </label>
+      <div class="field">
+        <span class="field-label" data-i18n="ohttp.path_rewrites"></span>
+        <div id="ohttp-path-rewrites" class="headers-list"></div>
+        <button type="button" id="ohttp-add-rewrite" data-i18n="ohttp.path_rewrites.add"></button>
+      </div>
+
+      <pre id="config-preview" class="config-preview" hidden></pre>
+    </section>
+
+    <main class="chat-layout">
+      <!-- Chat column -->
+      <section class="chat-main card">
+        <div class="chat-conn">
+          <label>
+            <span data-i18n="chat.base_url"></span>
+            <input type="text" id="chat-base-url" autocomplete="off" list="dl-chat-base-url" data-i18n-placeholder="llm.base_url.placeholder" />
+            <datalist id="dl-chat-base-url"></datalist>
+          </label>
+          <label>
+            <span data-i18n="chat.model"></span>
+            <input type="text" id="chat-model" autocomplete="off" data-i18n-placeholder="chat.model.placeholder" />
+          </label>
+          <label>
+            <span data-i18n="chat.token"></span>
+            <input type="password" id="chat-token" autocomplete="off" data-i18n-placeholder="llm.token.placeholder" />
+          </label>
+        </div>
+        <div id="chat-log" class="chat-log" data-empty="true"></div>
+        <form id="chat-form" class="composer" autocomplete="off">
+          <textarea id="chat-input" rows="2" data-i18n-placeholder="chat.input.placeholder"></textarea>
+          <div class="composer-actions">
+            <button type="button" id="chat-clear" data-i18n="chat.clear"></button>
+            <button type="submit" id="chat-send" class="primary" disabled data-i18n="chat.send"></button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Remote verification panel -->
+      <aside class="verify-panel card">
+        <div class="panel-head">
+          <h2 data-i18n="panel.title"></h2>
+          <span id="verify-badge" class="badge badge-waiting"></span>
+        </div>
+        <button type="button" id="reverify-btn" data-i18n="panel.reverify"></button>
+
+        <svg class="panel-diagram" viewBox="0 0 340 120" role="img" aria-label="TNG tunnel diagram">
+          <defs>
+            <marker id="d-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 1 L 8 5 L 0 9 z" class="diagram-arrow" />
+            </marker>
+          </defs>
+          <rect class="diagram-box diagram-app" x="6" y="36" width="104" height="48" rx="6" />
+          <text class="diagram-title" x="58" y="56" text-anchor="middle" data-i18n="panel.diagram.app">Browser Chat App</text>
+          <text class="diagram-note" x="58" y="72" text-anchor="middle" data-i18n="panel.diagram.app.note">Verifies attestation, encrypts requests</text>
+          <rect class="diagram-box diagram-tunnel" x="130" y="36" width="80" height="48" rx="6" />
+          <text class="diagram-title" x="170" y="56" text-anchor="middle" data-i18n="panel.diagram.tunnel">TNG Tunnel</text>
+          <text class="diagram-note" x="170" y="72" text-anchor="middle">OHTTP + RA</text>
+          <rect class="diagram-box diagram-egress" x="230" y="36" width="104" height="48" rx="6" />
+          <text class="diagram-title" x="282" y="56" text-anchor="middle" data-i18n="panel.diagram.egress">Remote Egress (TEE)</text>
+          <text class="diagram-note" x="282" y="72" text-anchor="middle" data-i18n="panel.diagram.egress.note">Attested secure hardware</text>
+          <line class="diagram-link" x1="110" y1="60" x2="130" y2="60" marker-end="url(#d-arrow)" />
+          <line class="diagram-link" x1="210" y1="60" x2="230" y2="60" marker-end="url(#d-arrow)" />
+        </svg>
+
+        <dl class="panel-fields">
+          <div><dt data-i18n="panel.verified_at"></dt><dd id="verify-time"></dd></div>
+          <div><dt data-i18n="panel.endpoint"></dt><dd id="verify-endpoint"></dd></div>
+          <div><dt data-i18n="panel.as"></dt><dd id="verify-as"></dd></div>
+          <div><dt data-i18n="panel.exp"></dt><dd id="verify-exp"></dd></div>
+        </dl>
+        <div class="panel-section">
+          <h3 data-i18n="panel.verifiers"></h3>
+          <ul id="verify-verifiers" class="verifier-list"></ul>
+        </div>
+        <div id="verify-error" class="panel-error" hidden></div>
+        <details class="panel-claims">
+          <summary data-i18n="panel.claims"></summary>
+          <pre id="verify-claims" class="code-block"></pre>
+        </details>
+      </aside>
+    </main>
+
+    <script type="module" src="./js/chat.js"></script>
+  </body>
+</html>
