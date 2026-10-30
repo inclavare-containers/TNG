@@ -54,6 +54,19 @@ impl TrustedStreamManager {
         if common_args.ohttp.is_some() && common_args.rats_tls.is_some() {
             bail!("Cannot specify both `ohttp` and `rats_tls` — they are mutually exclusive");
         }
+        if common_args.rats_tls.as_ref().is_some_and(|args| args.http1)
+            && (common_args
+                .rats_tls
+                .as_ref()
+                .is_some_and(|args| args.multiplex)
+                || common_args.quic.is_some()
+                || common_args.direct_forward.is_some()
+                || common_args.ra_args.no_ra
+                || common_args.ra_args.attest.is_none()
+                || common_args.ra_args.verify.is_some())
+        {
+            bail!("rats_tls.http1 requires attest-only TCP mode without multiplex, quic or direct_forward");
+        }
 
         let ra_args = common_args.ra_args.clone().into_checked()?;
         let ra_context = Arc::new(RaContext::from_ra_args(&ra_args).await?);
@@ -98,13 +111,15 @@ impl TrustedStreamManager {
                         .await?,
                 ),
                 None => {
-                    let multiplex = common_args
-                        .rats_tls
-                        .as_ref()
-                        .unwrap_or(&Default::default())
-                        .multiplex;
+                    let args = common_args.rats_tls.clone().unwrap_or_default();
                     Box::new(
-                        RatsTlsStreamDecoder::new(ra_context, runtime.clone(), multiplex).await?,
+                        RatsTlsStreamDecoder::new(
+                            ra_context,
+                            runtime.clone(),
+                            args.multiplex,
+                            args.http1,
+                        )
+                        .await?,
                     )
                 }
             },
@@ -155,5 +170,31 @@ impl StatusProvider for TrustedStreamManager {
             ["ohttp", rest @ ..] => self.decoder.query_status(rest).await,
             _ => Err(TngError::StatusPathNotFound),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod browser_mode_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn http1_rejects_unsafe_modes_before_contacting_the_attester() -> Result<()> {
+        crate::tests::run_test_with_tokio_runtime(|runtime| async move {
+            let base = json!({"rats_tls":{"http1":true},"attest":{"aa_provider":"coco_asr","asr_addr":"http://127.0.0.1:1"}});
+            let mut modes = Vec::new();
+            let mut v=base.clone(); v["rats_tls"]["multiplex"]=json!(true); modes.push(v);
+            let mut v=base.clone(); v["no_ra"]=json!(true); modes.push(v);
+            let mut v=base.clone(); v.as_object_mut().context("config object")?.remove("attest"); modes.push(v);
+            let mut v=base.clone(); v["direct_forward"]=json!([{ "http_path":"/.*" }]); modes.push(v);
+            let mut v=base; v["quic"]=json!({}); modes.push(v);
+            for value in modes {
+                let args: CommonArgs=serde_json::from_value(value)?;
+                let result=TrustedStreamManager::new(&args,runtime.clone()).await;
+                let error=match result { Ok(_) => anyhow::bail!("unsafe browser configuration accepted"), Err(error)=>error };
+                assert!(error.to_string().contains("requires attest-only TCP mode"), "unexpected error: {error:?}");
+            }
+            Ok(())
+        }).await
     }
 }

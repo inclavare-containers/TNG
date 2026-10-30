@@ -103,10 +103,21 @@ pub struct TlsConfigGenerator {
 impl TlsConfigGenerator {
     #[allow(unused_variables)]
     pub async fn new(ra_context: Arc<RaContext>, runtime: TokioRuntime) -> Result<Self> {
+        Self::new_with_stable_key(ra_context, runtime, false).await
+    }
+
+    /// Browser certificate checks pin a guest key. Refreshing evidence may
+    /// renew its certificate, but must not silently replace that key.
+    #[allow(unused_variables)]
+    pub async fn new_with_stable_key(
+        ra_context: Arc<RaContext>,
+        runtime: TokioRuntime,
+        stable_key: bool,
+    ) -> Result<Self> {
         let mode = match ra_context.as_ref() {
             #[cfg(unix)]
             RaContext::AttestOnly(attest_ctx) => TlsConfigGeneratorMode::Attest(Arc::new(
-                CertManager::new(attest_ctx.clone(), runtime).await?,
+                CertManager::new_with_stable_key(attest_ctx.clone(), runtime, stable_key).await?,
             )),
             RaContext::VerifyOnly(verify_ctx) => TlsConfigGeneratorMode::Verify(
                 verify_ctx.clone(),
@@ -115,7 +126,10 @@ impl TlsConfigGenerator {
             #[cfg(unix)]
             RaContext::AttestAndVerify { attest, verify } => {
                 TlsConfigGeneratorMode::AttestAndVerify(
-                    Arc::new(CertManager::new(attest.clone(), runtime).await?),
+                    Arc::new(
+                        CertManager::new_with_stable_key(attest.clone(), runtime, stable_key)
+                            .await?,
+                    ),
                     verify.clone(),
                     Arc::new(CertVerifyCache::default_sized()),
                 )

@@ -672,6 +672,38 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 
 <a name="direct_forward-rules"></a>
 
+### Browser HTTPS (egress only)
+
+`rats_tls.http1: true` serves ordinary HTTPS requests, including the initial
+HTML and JavaScript, using TNG's attested certificate. It requires attest-only
+TCP mode and rejects `multiplex`, `quic`, `direct_forward`, `no_ra`, or a client
+verification policy. The listener negotiates `http/1.1`; native `rats-tls`
+inspection clients remain supported. It does not advertise the HTTP/2 CONNECT
+protocol. TLS early data is disabled in this mode.
+
+```json
+{
+  "add_egress": [{
+    "mapping": {"in": {"host": "0.0.0.0", "port": 443}, "out": {"host": "127.0.0.1", "port": 8080}},
+    "rats_tls": {"http1": true},
+    "attest": {"aa_provider": "coco_asr", "asr_addr": "http://127.0.0.1:8006", "refresh_interval": 600}
+  }]
+}
+```
+
+Browsers do not automatically appraise the evidence and may show a self-signed
+certificate warning. Accepting that warning is not attestation verification.
+Users must independently check the certificate exported by the browser, its
+binding to the attested key, and independently approved VM/workload measurements
+before providing secrets. Verifying a different connection to the same endpoint
+alone is insufficient. A checker served by the page is only a convenience.
+
+The private key stays in the attesting process and is reused across certificate
+refreshes. Restarting that process creates a new key. Recheck renewed certificates
+and fail closed on an unexpected key change. Applications must not put bootstrap
+credentials in the initial URL or retain usable browser signing keys accessible
+to an unverified returning page.
+
 ### direct_forward Rules
 
 In some scenarios, it is necessary to allow plain-text traffic alongside encrypted traffic (e.g., health checks). `direct_forward` specifies matching rules; if any rule matches, traffic is forwarded without decryption.

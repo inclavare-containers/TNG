@@ -76,12 +76,22 @@ impl TlsConfigGenerator {
         // empty cache per config, so overwrite it with the generator-shared
         // one. Cert rotation auto-misses on the new encoding.
         config.0.cert_compression_cache = self.server_cert_compression_cache.clone();
-        config.0.alpn_protocols = vec![alpn.as_bytes().to_vec()];
+        config.0.alpn_protocols = if matches!(alpn, Alpn::Http1) {
+            // Keep native RA-TLS inspection tools usable on this listener.
+            // Never advertise h2: that mode implements CONNECT tunneling.
+            vec![b"http/1.1".to_vec(), Alpn::RatsTls.as_bytes().to_vec()]
+        } else {
+            vec![alpn.as_bytes().to_vec()]
+        };
 
         // Enable TLS 1.3 0-RTT early data. rustls only accepts early data with
         // stateful resumption (the default ticketer); installing a real ticketer
         // (stateless tickets) silently disables 0-RTT, so do not add one.
-        config.0.max_early_data_size = MAX_EARLY_DATA_SIZE;
+        config.0.max_early_data_size = if matches!(alpn, Alpn::Http1) {
+            0
+        } else {
+            MAX_EARLY_DATA_SIZE
+        };
         // Shared across handshakes: connection A stores the resumption secret
         // that connection B looks up to accept its 0-RTT.
         config.0.session_storage = self.server_session_store.clone();

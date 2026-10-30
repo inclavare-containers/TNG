@@ -9,6 +9,8 @@
 pub enum Alpn {
     /// Direct RA-TLS connection, no HTTP/2 multiplexing.
     RatsTls,
+    /// Ordinary HTTPS, with the same attested certificate and raw forwarding.
+    Http1,
     /// HTTP/2 CONNECT tunnel mode nested inside an outer Rats-TLS connection.
     /// The outer TLS layer carries attestation evidence; the inner HTTP/2
     /// CONNECT tunnel provides multiplexed streams (`multiplex=true`).
@@ -23,6 +25,7 @@ impl Alpn {
     pub fn as_bytes(&self) -> &'static [u8] {
         match self {
             Alpn::RatsTls => b"rats-tls",
+            Alpn::Http1 => b"http/1.1",
             Alpn::Http2 => b"h2",
             Alpn::Serf => b"serf",
             Alpn::RatsQuic => b"rats-quic",

@@ -31,10 +31,16 @@ impl RatsTlsStreamDecoder {
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
         multiplex: bool,
+        http1: bool,
     ) -> Result<Self> {
         Ok(Self {
-            security_layer: RatsTlsSecurityLayer::new(ra_context, runtime.clone(), multiplex)
-                .await?,
+            security_layer: RatsTlsSecurityLayer::new(
+                ra_context,
+                runtime.clone(),
+                multiplex,
+                http1,
+            )
+            .await?,
             runtime,
         })
     }

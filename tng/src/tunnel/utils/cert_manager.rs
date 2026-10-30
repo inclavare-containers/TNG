@@ -2,7 +2,7 @@ use again::RetryPolicy;
 use anyhow::{Context as _, Result};
 use rats_cert::{
     cert::create::CertBuilder,
-    crypto::{AsymmetricAlgo, HashAlgo},
+    crypto::{AsymmetricAlgo, AsymmetricPrivateKey, DefaultCrypto, HashAlgo},
     tee::AttesterPipeline,
 };
 use std::{pin::Pin, sync::Arc, time::Duration};
@@ -27,11 +27,29 @@ impl std::fmt::Debug for CertManager {
 
 impl CertManager {
     pub async fn new(attest_ctx: Arc<AttestContext>, runtime: TokioRuntime) -> Result<Self> {
+        Self::new_with_stable_key(attest_ctx, runtime, false).await
+    }
+
+    pub async fn new_with_stable_key(
+        attest_ctx: Arc<AttestContext>,
+        runtime: TokioRuntime,
+        stable_key: bool,
+    ) -> Result<Self> {
         let refresh_strategy = attest_ctx.refresh_strategy();
+        // Never export this key or persist it outside the attesting process.
+        let key = if stable_key {
+            Some(Arc::new(DefaultCrypto::gen_private_key(
+                AsymmetricAlgo::P256,
+            )?))
+        } else {
+            None
+        };
 
         let cert = MaybeCached::new(runtime, refresh_strategy, move || {
             let attest_ctx = attest_ctx.clone();
-            Box::pin(async move { Self::fetch_new_cert(&attest_ctx).await }) as Pin<Box<_>>
+            let key = key.clone();
+            Box::pin(async move { Self::fetch_new_cert(&attest_ctx, key.as_deref()).await })
+                as Pin<Box<_>>
         })
         .await?;
 
@@ -40,11 +58,12 @@ impl CertManager {
 
     async fn fetch_new_cert(
         attest_ctx: &AttestContext,
+        key: Option<&AsymmetricPrivateKey>,
     ) -> Result<(rustls::sign::CertifiedKey, Expire)> {
         let retry_policy = RetryPolicy::fixed(Duration::from_secs(1)).with_max_retries(3);
         retry_policy
             .retry(|| async {
-                Self::fetch_new_cert_inner(attest_ctx)
+                Self::fetch_new_cert_inner(attest_ctx, key)
                     .await
                     .context("Failed to generate new cert")
             })
@@ -53,6 +72,7 @@ impl CertManager {
 
     async fn fetch_new_cert_inner(
         attest_ctx: &AttestContext,
+        key: Option<&AsymmetricPrivateKey>,
     ) -> Result<(rustls::sign::CertifiedKey, Expire)> {
         tracing::debug!("Generate new cert with rats-rs");
 
@@ -63,10 +83,12 @@ impl CertManager {
                 ..
             } => {
                 let attester_pipeline = AttesterPipeline::new(attester, converter);
-                let cert_bundle = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
-                    .with_subject("CN=TNG,O=Inclavare Containers")
-                    .build(AsymmetricAlgo::P256)
-                    .await?;
+                let builder = CertBuilder::new(attester_pipeline, HashAlgo::Sha256)
+                    .with_subject("CN=TNG,O=Inclavare Containers");
+                let cert_bundle = match key {
+                    Some(key) => builder.build_with_private_key(key).await?,
+                    None => builder.build(AsymmetricAlgo::P256).await?,
+                };
 
                 tracing::debug!(cert = cert_bundle.cert_to_pem()?, "Generated new cert");
 
@@ -87,10 +109,12 @@ impl CertManager {
                 )
             }
             AttestContext::BackgroundCheck { attester, .. } => {
-                let cert_bundle = CertBuilder::new(attester, HashAlgo::Sha256)
-                    .with_subject("CN=TNG,O=Inclavare Containers")
-                    .build(AsymmetricAlgo::P256)
-                    .await?;
+                let builder = CertBuilder::new(attester, HashAlgo::Sha256)
+                    .with_subject("CN=TNG,O=Inclavare Containers");
+                let cert_bundle = match key {
+                    Some(key) => builder.build_with_private_key(key).await?,
+                    None => builder.build(AsymmetricAlgo::P256).await?,
+                };
 
                 tracing::debug!(cert = cert_bundle.cert_to_pem()?, "Generated new cert");
 
