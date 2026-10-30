@@ -20,7 +20,7 @@
 | 护照模型 (Passport) | RFC 9334 模型之一：Attester 预先向 AS 换取 Attestation Result，之后把令牌当作「护照」出示 |
 | HPKE | RFC 9180 混合公钥加密，ohttp 封装的密码学基础 |
 | KeyConfig | RFC 9458 定义的 HPKE 公钥配置，egress 分发给 ingress 用于加密 |
-| 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求的封装](#加密请求的封装)） |
+| 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求与响应的封装](#加密请求与响应的封装)） |
 | DICE 证书 (DiceCert) | 被证明端自签的 X.509 证书，自定义扩展携带 RA 证明材料，随 TLS 握手出示（见[DICE 证书](#dice-证书证明材料的载体)） |
 | ALPN | TLS 应用层协议协商，TNG 用它在 `rats-tls`（非多路复用）与 `h2`（多路复用）间选择数据面 |
 
@@ -67,7 +67,7 @@ ingress 把所有外层请求 POST 到**同一个 URL**（`base_url`）：外层
 | `x-tng-ohttp-api` 头取值 | 客户端实际行为 | 请求体 | 说明 |
 |---|---|---|---|
 | `/tng/key-config` | POST（JSON） | `KeyConfigRequest` | 获取密钥配置，[见下节](#密钥配置分发) |
-| `/tng/tunnel` | POST | 元数据帧 + ohttp 密文 | 加密的业务请求，[见封装一节](#加密请求的封装) |
+| `/tng/tunnel` | POST | 元数据帧 + ohttp 密文 | 加密的业务请求，[见封装一节](#加密请求与响应的封装) |
 | `/tng/background-check/challenge` | GET | 无 | 经 egress 向 AS 取挑战值（仅 Server 验 Client + 背调模型） |
 | `/tng/background-check/verify` | POST（JSON） | `AttestationVerifyRequest` | 经 egress 向 AS 提交 Evidence 换取 Attestation Result（同上） |
 
@@ -119,13 +119,17 @@ ingress 在加密第一个请求之前，先向 egress 请求 KeyConfig（1-RTT�
 
 ingress 侧缓存密钥配置，其有效期取「密钥 `expire_timestamp`、Attestation Result 的 JWT `exp`」二者的最小值，到期自动后台刷新（默认 300 秒周期，配置了 `attest` 时跟随证明刷新策略）。egress 收到用已不存在的密钥加密的请求时返回 422（遵循 RFC 9458 §6.4 的 key-config 不匹配语义），ingress 据此立刻废弃缓存并重新获取。
 
-### 加密请求的封装
+### 加密请求与响应的封装
 
 `x-tng-ohttp-api: /tng/tunnel` 的请求体不是 JSON，而是三段拼接的二进制：
 
 ```text
 [4 字节大端长度 N][N 字节 prost 编码的 Metadata][ohttp-chunked 加密后的请求体（可流式）]
 ```
+
+egress 把响应密封进同一套分块密文，格式见响应密文一节。
+
+#### 元数据帧
 
 元数据部分定义在 `tng/src/tunnel/ohttp/protocol/metadata.proto`：
 
@@ -157,27 +161,25 @@ message ServerKeyConfigHint {
 - `client_auth` 二选一：`NoAuth`（ingress 不做证明，匿名客户端）或 `AttestedPublicKey`（ingress 要向 egress 证明自己，见 [Server 验 Client](#server-验-client)）。选择不是显式配置项：ingress 配置了 `attest` 即自动携带 `AttestedPublicKey`，egress 配置了 `verify` 即要求之，二者不匹配会被拒绝。wasm 版 ingress 受平台所限始终是 `NoAuth`。
 - 元数据帧总长度上限 32 MiB（`Attestation Result` 令牌可能很大，放在 body 里而不是 HTTP 头，就是为了绕开头大小限制）。超限返回 413。
 
-密文段采用分块流式封装（chunked-ohttp，按 [draft-ietf-ohai-chunked-ohttp](https://datatracker.ietf.org/doc/html/draft-ietf-ohai-chunked-ohttp) 规定、由 TNG 使用的 ohttp fork 实现）：不像 RFC 9458 那样把整条消息一次 AEAD 封装，而是把明文按块增量加密，任意大小的请求都能边流式传输边密封、边解密。外层 `Content-Type` 为 `message/ohttp-chunked-req`，egress 强制校验，不符返回 400。响应同理：HTTP 200，`Content-Type: message/ohttp-chunked-res`，密文流式返回，ingress 边收边解密（对 SSE 等流式响应同样适用）。这两种内容类型一律不做压缩。
-
 #### ohttp-chunked 请求密文
 
-元数据帧之后，请求密文是一整条流：
+元数据帧之后是一条 chunked-ohttp 流，按 [draft-ietf-ohai-chunked-ohttp](https://datatracker.ietf.org/doc/html/draft-ietf-ohai-chunked-ohttp) 规定、由 TNG 使用的 ohttp fork 实现。明文逐块密封而不是像 RFC 9458 那样一次 AEAD 封装，任意大小的请求都能边流式传输边密封、边解密。外层 `Content-Type` 为 `message/ohttp-chunked-req`，egress 强制校验，不符返回 400。请求密文是一整条流：
 
 ```text
 [key_id 1B][kem_id 2B][kdf_id 2B][aead_id 2B][enc n_enc B][chunk][chunk]...[终止块]
 ```
 
-- **请求头**（7 字节）：字段顺序与编码和 RFC 9458 §3.1 KeyConfig 的标识部分一致，1 字节 key id 之后依次是 2 字节大端的 KEM、KDF、AEAD id。egress 先读它定位密钥，并与元数据里的 `key_config_hint` 互相印证。TNG 签发的密钥一律使用 X25519-SHA256 KEM；对称套件随密钥配置分发（self_generated 密钥把 HKDF-SHA256 + AES-128-GCM 排在首位、ChaCha20-Poly1305 次之，群组共享密钥只含 ChaCha20-Poly1305），ingress 取列表中第一个自己支持的套件。
-- **`enc`**：承载共享密钥的 HPKE 封装，长度 `n_enc` 字节（X25519-SHA256 为 32）。`AttestedPublicKey` 模式下 HPKE 交换本身以认证模式运行：ingress 用与 `pk_s` 配对的私钥做封装，egress 把元数据里的 `pk_s` 参与解封装，因此只有持有被证明密钥的一方可能产出这条请求。
-- **数据块**：一块由「变长整数长度 + 等长的 AEAD 密文」组成。变长整数采用 RFC 9292 的 2 位前缀编码：首字节最高 2 位给出总宽度（00 = 1 字节、01 = 2 字节、10 = 4 字节、11 = 8 字节），其余位按大端承载数值。长度按密文字节计，即明文加 AEAD 标签（所有套件均为 16 字节）。单个数据块明文至多 16 KiB（2^14），egress 对更长的声明长度直接拒绝。每块使用自己的 nonce，取 nonce 基值异或块序号（从 0 起计），一条流内的各块 nonce 互不重复。长度前缀本身不在认证范围内：只有块顺序（经每块 nonce）与终止块的位置（经其 AAD）受保护，同一长度值改写成不同宽度的变长整数编码仍然有效。
-- **终止块**：最后一个块的变长整数长度为 0，其密文部分恰好是对空明文的 AEAD 标签。数据块的附加认证数据（AAD）是空字节串，终止块的 AAD 是 ASCII 字符串 `final`，这正是「流到此为止」的标志。终止块必定存在，因此流的结尾同样经过认证；在它之前截断的 body 按残缺拒绝。
-- **明文**：分块层不理解 HTTP。它的明文是内层请求按二进制 HTTP（bhttp，RFC 9292）的再编码，分块只按任意 16 KiB 边界切分；egress 把解密出的流 bhttp 解码成转发给后端的请求。
+- 请求头 7 字节，字段顺序与编码和 RFC 9458 §3.1 KeyConfig 的标识部分一致：1 字节 key id 之后依次是 2 字节大端的 KEM、KDF、AEAD id。egress 先读它定位密钥，并与元数据里的 `key_config_hint` 互相印证。TNG 签发的密钥一律使用 X25519-SHA256 KEM；对称套件随密钥配置分发（self_generated 密钥把 HKDF-SHA256 + AES-128-GCM 排在首位、ChaCha20-Poly1305 次之，群组共享密钥只含 ChaCha20-Poly1305），ingress 取列表中第一个自己支持的套件。
+- `enc` 是承载共享密钥的 HPKE 封装，长度 `n_enc` 字节（X25519-SHA256 为 32）。`AttestedPublicKey` 模式下 HPKE 交换以认证模式运行：ingress 用与 `pk_s` 配对的私钥做封装，egress 把元数据里的 `pk_s` 参与解封装，因此只有持有被证明密钥的一方可能产出这条请求。
+- 数据块由「变长整数长度 + 等长的 AEAD 密文」组成。变长整数采用 RFC 9292 的 2 位前缀编码：首字节最高 2 位给出总宽度（00 = 1 字节、01 = 2 字节、10 = 4 字节、11 = 8 字节），其余位按大端承载数值。长度按密文字节计，即明文加 AEAD 标签（所有套件均为 16 字节）。单个数据块明文至多 16 KiB（2^14），egress 对更长的声明长度直接拒绝。每块用自己的 nonce，取 nonce 基值异或块序号（从 0 起计），一条流内的各块 nonce 互不重复。长度前缀本身不在认证范围内：只有块顺序（经每块 nonce）与终止块的位置（经其 AAD）受保护，同一长度值改写成不同宽度的变长整数编码仍然有效。
+- 终止块的变长整数长度为 0，密文部分恰好是对空明文的 AEAD 标签。数据块的附加认证数据（AAD）是空字节串，终止块的 AAD 是 ASCII 字符串 `final`，流到此为止。终止块必定存在，流的结尾同样经过认证；在它之前截断的 body 按残缺拒绝。
+- 分块层不理解 HTTP，它的明文是内层请求按二进制 HTTP（bhttp，RFC 9292）的再编码，分块只按任意 16 KiB 边界切分；egress 把解密出的流 bhttp 解码成转发给后端的请求。
 
 HPKE 的域分隔字符串取自 chunked 草案，而非 RFC 9458：请求的 info 参数是 ASCII 字符串 `message/bhttp chunked request`，后跟一个零字节与 7 字节请求头；响应密钥按标签 `message/bhttp chunked response` 导出。RFC 9458 的非分块变体使用 `message/bhttp request` 与 `message/bhttp response`；字符串刻意取不同值，因此分块端点与非分块端点即使密钥相同也不能互操作。
 
 #### ohttp-chunked 响应密文
 
-响应 body 是：
+egress 以 HTTP 200 与 `Content-Type: message/ohttp-chunked-res` 回应，该内容类型一律不做压缩。密文流式返回，ingress 边收边解密，SSE 等流式响应同样适用。响应 body 是：
 
 ```text
 [响应 nonce max(n_k, n_n) B][chunk][chunk]...[终止块]
@@ -223,7 +225,7 @@ RA 各节的时序图沿用 RFC 9334 附录 A 事件表对应的形式化记号�
 | CX | KeyConfig 过期 | `hpke_key_config.expire_timestamp` |
 | OP2 | 基于验证结果的密码学操作 | 验证通过后执行 HPKE 加密/解密的时刻 |
 
-图中消息以形式化记号表示内容，具体线格式（JSON 字段名、proto 结构、Content-Type）见[密钥配置分发](#密钥配置分发)与[加密请求的封装](#加密请求的封装)两节。
+图中消息以形式化记号表示内容，具体线格式（JSON 字段名、proto 结构、Content-Type）见[密钥配置分发](#密钥配置分发)与[加密请求与响应的封装](#加密请求与响应的封装)两节。
 
 ### Client 验 Server
 

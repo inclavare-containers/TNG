@@ -20,7 +20,7 @@ Terminology: this document calls the two endpoints **TNG Ingress** (the tunnel e
 | Passport model | One of the RFC 9334 models: the Attester obtains an Attestation Result from the AS up front and presents the token as a "passport" |
 | HPKE | RFC 9180 Hybrid Public-Key Encryption, the cryptographic basis of the ohttp encapsulation |
 | KeyConfig | The HPKE public-key configuration defined by RFC 9458 that the egress distributes to the ingress for encryption |
-| Metadata frame | A custom metadata blob TNG prepends to the ohttp ciphertext (see [Encapsulating the encrypted request](#encapsulating-the-encrypted-request)) |
+| Metadata frame | A custom metadata blob TNG prepends to the ohttp ciphertext (see [Encapsulating the encrypted request and response](#encapsulating-the-encrypted-request-and-response)) |
 | DICE certificate (DiceCert) | A self-signed X.509 certificate the proven side generates, carrying the RA material in a custom extension and presented during the TLS handshake (see [DICE certificate](#dice-certificate-the-carrier-of-the-attested-material)) |
 | ALPN | TLS Application-Layer Protocol Negotiation; TNG uses it to select the data plane between `rats-tls` (non-multiplexed) and `h2` (multiplexed) |
 
@@ -67,7 +67,7 @@ The ingress POSTs every outer request to **the same URL** (`base_url`): the oute
 | `x-tng-ohttp-api` header value | Actual client behavior | Request body | Description |
 |---|---|---|---|
 | `/tng/key-config` | POST (JSON) | `KeyConfigRequest` | Fetch the key configuration, [see below](#key-configuration-distribution) |
-| `/tng/tunnel` | POST | Metadata frame + ohttp ciphertext | The encrypted business request, [see the encapsulation section](#encapsulating-the-encrypted-request) |
+| `/tng/tunnel` | POST | Metadata frame + ohttp ciphertext | The encrypted business request, [see the encapsulation section](#encapsulating-the-encrypted-request-and-response) |
 | `/tng/background-check/challenge` | GET | none | Fetch a challenge from the AS via the egress (Server-verifies-Client + Background-Check only) |
 | `/tng/background-check/verify` | POST (JSON) | `AttestationVerifyRequest` | Submit Evidence to the AS via the egress to obtain an Attestation Result (same scenario) |
 
@@ -119,13 +119,17 @@ The two models are mutually exclusive: requesting `passport` from a background-c
 
 The ingress caches the key configuration. The cache's validity is the minimum of the key's `expire_timestamp` and the Attestation Result's JWT `exp`, refreshed automatically in the background (300-second cycle by default; when `attest` is configured it follows the attestation refresh strategy). When the egress receives a request sealed with a key that no longer exists it returns 422 (following the key-config mismatch semantics of RFC 9458 §6.4), upon which the ingress immediately drops its cache and refetches.
 
-### Encapsulating the Encrypted Request
+### Encapsulating the Encrypted Request and Response
 
 The request body for `x-tng-ohttp-api: /tng/tunnel` is not JSON. It is three concatenated binary sections:
 
 ```text
 [4-byte big-endian length N][N bytes of prost-encoded Metadata][ohttp-chunked encrypted request body (streamable)]
 ```
+
+The egress seals the response into the same chunked ciphertext.
+
+#### The Metadata Frame
 
 The metadata section is defined in `tng/src/tunnel/ohttp/protocol/metadata.proto`:
 
@@ -157,27 +161,25 @@ Three points worth noting:
 - `client_auth` picks one of two: `NoAuth` (the ingress does not attest itself, an anonymous client) or `AttestedPublicKey` (the ingress proves itself to the egress, see [Server verifies Client](#server-verifies-client)). The choice is not an explicit config knob: an ingress with `attest` configured automatically carries `AttestedPublicKey`, an egress with `verify` configured requires it, and a mismatch is rejected. The wasm ingress is always `NoAuth` due to platform constraints.
 - The metadata frame is capped at 32 MiB (the Attestation Result token can be large; putting it in the body rather than an HTTP header is exactly to bypass header size limits). Exceeding it returns 413.
 
-The ciphertext section uses a chunked streaming encapsulation (chunked-ohttp, specified by [draft-ietf-ohai-chunked-ohttp](https://datatracker.ietf.org/doc/html/draft-ietf-ohai-chunked-ohttp) and implemented by the ohttp fork TNG uses): instead of sealing the whole message in a single AEAD operation the way RFC 9458 does, it encrypts the plaintext incrementally in chunks, so a request of any size can be sealed and decrypted while streaming. The outer `Content-Type` is `message/ohttp-chunked-req`, enforced by the egress; anything else returns 400. Responses work the same way: HTTP 200, `Content-Type: message/ohttp-chunked-res`, with the ciphertext streamed back so the ingress decrypts as data arrives (this also covers SSE-style streaming responses). Neither content type is ever compressed.
-
 #### The ohttp-chunked Request Ciphertext
 
-After the metadata frame, the request ciphertext is a single stream:
+The ciphertext after the metadata frame is a chunked-ohttp stream, specified by [draft-ietf-ohai-chunked-ohttp](https://datatracker.ietf.org/doc/html/draft-ietf-ohai-chunked-ohttp) and implemented by the ohttp fork TNG uses. The plaintext is sealed chunk by chunk rather than in one AEAD operation as in RFC 9458, so a request of any size can be sealed and decrypted while streaming. The outer `Content-Type` is `message/ohttp-chunked-req`; the egress rejects anything else with 400. The request ciphertext is a single stream:
 
 ```text
 [key_id 1B][kem_id 2B][kdf_id 2B][aead_id 2B][enc n_enc B][chunk][chunk]...[terminating chunk]
 ```
 
-- **Request header** (7 bytes): the same field order and encoding as the identifier portion of the RFC 9458 §3.1 KeyConfig, a 1-byte key id followed by 2-byte big-endian KEM, KDF, and AEAD ids. The egress reads it first to locate the key, cross-checked against the metadata's `key_config_hint`. All keys TNG issues use the X25519-SHA256 KEM; the symmetric suites travel with the key configuration (self-generated keys advertise HKDF-SHA256 with AES-128-GCM first and ChaCha20-Poly1305 second, cluster-shared keys advertise only ChaCha20-Poly1305), and the ingress picks the first suite it supports.
-- **`enc`**: the HPKE encapsulation that carries the shared secret, `n_enc` bytes (32 for X25519-SHA256). In `AttestedPublicKey` mode the HPKE exchange itself runs in authenticated mode: the ingress encapsulates with the private key paired with `pk_s`, and the egress feeds `pk_s` from the metadata into decapsulation, so only the holder of the attested key can have produced the request.
-- **Chunk**: a varint length followed by that many bytes of AEAD ciphertext. The varint uses the 2-bit-prefix encoding of RFC 9292: the first two bits of the first byte give the total width (00 = 1 byte, 01 = 2, 10 = 4, 11 = 8) and the remaining bits carry the value in big-endian order. The length counts ciphertext bytes, which is plaintext plus the AEAD tag (16 bytes for every suite advertised). A data chunk carries at most 16 KiB (2^14) of plaintext; the egress rejects any longer declared length. Each chunk is sealed with its own nonce, the nonce base XORed with the chunk's sequence number counting from 0, so no two chunks of one stream share a nonce. The length prefix itself is not authenticated: only the chunk order (through the per-chunk nonce) and the position of the final chunk (through its AAD) are covered, so the same length value rewritten in a different varint width remains valid.
-- **Terminating chunk**: the last chunk carries a varint length of 0, and its ciphertext is exactly the AEAD tag over an empty plaintext. Data chunks use the empty byte string as additional authenticated data (AAD); the terminating chunk uses the ASCII string `final`, which is what marks the end of the stream. It is always present, so the end of the body is authenticated as well; a body that stops before it is rejected as truncated.
-- **Plaintext**: the chunked layer is not HTTP-aware. Its plaintext is the inner request re-encoded as binary HTTP (bhttp, RFC 9292), which the chunking splits at arbitrary 16 KiB boundaries; the egress bhttp-decodes the decrypted stream into the request it forwards to the backend.
+- The request header is 7 bytes, with the same field order and encoding as the identifier portion of the RFC 9458 §3.1 KeyConfig: a 1-byte key id, then 2-byte big-endian KEM, KDF, and AEAD ids. The egress reads it first to locate the key, cross-checked against the metadata's `key_config_hint`. All keys TNG issues use the X25519-SHA256 KEM; the symmetric suites travel with the key configuration (self-generated keys advertise HKDF-SHA256 with AES-128-GCM first and ChaCha20-Poly1305 second, cluster-shared keys advertise only ChaCha20-Poly1305), and the ingress picks the first suite it supports.
+- `enc` is the HPKE encapsulation that carries the shared secret, `n_enc` bytes (32 for X25519-SHA256). In `AttestedPublicKey` mode the HPKE exchange runs in authenticated mode: the ingress encapsulates with the private key paired with `pk_s`, and the egress feeds `pk_s` from the metadata into decapsulation, so only the holder of the attested key can have produced the request.
+- A chunk is a varint length followed by that many bytes of AEAD ciphertext. The varint uses the 2-bit-prefix encoding of RFC 9292: the first two bits of the first byte give the total width (00 = 1 byte, 01 = 2, 10 = 4, 11 = 8) and the remaining bits carry the value in big-endian order. The length counts ciphertext bytes, which is plaintext plus the AEAD tag (16 bytes for every suite advertised). A data chunk carries at most 16 KiB (2^14) of plaintext; the egress rejects any longer declared length. Each chunk is sealed with the nonce base XORed with the chunk's sequence number counting from 0, so no two chunks of one stream share a nonce. The length prefix itself is not authenticated; only the chunk order (through the per-chunk nonce) and the position of the final chunk (through its AAD) are covered, so the same length value rewritten in a different varint width remains valid.
+- The terminating chunk carries a varint length of 0, and its ciphertext is exactly the AEAD tag over an empty plaintext. Data chunks use the empty byte string as additional authenticated data (AAD); the terminating chunk uses the ASCII string `final`, which marks the end of the stream. It is always present, so the end of the body is authenticated as well; a body that stops before it is rejected as truncated.
+- The chunked layer is not HTTP-aware. Its plaintext is the inner request re-encoded as binary HTTP (bhttp, RFC 9292), which the chunking splits at arbitrary 16 KiB boundaries; the egress bhttp-decodes the decrypted stream into the request it forwards to the backend.
 
-The HPKE domain-separation strings are the chunked draft's, not RFC 9458's. The request's HPKE info parameter is the ASCII string `message/bhttp chunked request` followed by a zero byte and the 7-byte request header, and the response secret is exported under the label `message/bhttp chunked response`. The non-chunked variant of RFC 9458 uses `message/bhttp request` and `message/bhttp response`; the strings differ by design, so a chunked endpoint and a non-chunked endpoint are not interoperable even with the same key.
+The HPKE domain-separation strings come from the chunked draft rather than RFC 9458. The request's HPKE info parameter is the ASCII string `message/bhttp chunked request` followed by a zero byte and the 7-byte request header, and the response secret is exported under the label `message/bhttp chunked response`. The non-chunked variant of RFC 9458 uses `message/bhttp request` and `message/bhttp response`; the strings differ by design, so a chunked endpoint and a non-chunked endpoint are not interoperable even with the same key.
 
 #### The ohttp-chunked Response Ciphertext
 
-The response body is:
+The egress answers with HTTP 200 and `Content-Type: message/ohttp-chunked-res`, and never compresses that content type. The ciphertext is streamed back and the ingress decrypts as it arrives, which also carries SSE-style streaming responses. The body is:
 
 ```text
 [response nonce max(n_k, n_n) B][chunk][chunk]...[terminating chunk]
@@ -223,7 +225,7 @@ How the diagram events map to the implementation:
 | CX | KeyConfig expiry | `hpke_key_config.expire_timestamp` |
 | OP2 | cryptographic operation based on the verified result | the moment HPKE encryption/decryption runs after verification |
 
-The diagrams express message contents with this formal notation; the concrete wire formats (JSON field names, the proto structure, Content-Types) are in [Key Configuration Distribution](#key-configuration-distribution) and [Encapsulating the Encrypted Request](#encapsulating-the-encrypted-request).
+The diagrams express message contents with this formal notation; the concrete wire formats (JSON field names, the proto structure, Content-Types) are in [Key Configuration Distribution](#key-configuration-distribution) and [Encapsulating the Encrypted Request and Response](#encapsulating-the-encrypted-request-and-response).
 
 ### Client Verifies Server
 
