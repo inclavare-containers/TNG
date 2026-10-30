@@ -20,7 +20,7 @@
 | 护照模型 (Passport) | RFC 9334 模型之一：Attester 预先向 AS 换取 Attestation Result，之后把令牌当作「护照」出示 |
 | HPKE | RFC 9180 混合公钥加密，ohttp 封装的密码学基础 |
 | KeyConfig | RFC 9458 定义的 HPKE 公钥配置，egress 分发给 ingress 用于加密 |
-| 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求与响应的封装](#加密请求与响应的封装)） |
+| 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求的封装](#加密请求的封装)） |
 | DICE 证书 (DiceCert) | 被证明端自签的 X.509 证书，自定义扩展携带 RA 证明材料，随 TLS 握手出示（见[DICE 证书](#dice-证书证明材料的载体)） |
 | ALPN | TLS 应用层协议协商，TNG 用它在 `rats-tls`（非多路复用）与 `h2`（多路复用）间选择数据面 |
 
@@ -67,7 +67,7 @@ ingress 把所有外层请求 POST 到**同一个 URL**（`base_url`）：外层
 | `x-tng-ohttp-api` 头取值 | 客户端实际行为 | 请求体 | 说明 |
 |---|---|---|---|
 | `/tng/key-config` | POST（JSON） | `KeyConfigRequest` | 获取密钥配置，[见下节](#密钥配置分发) |
-| `/tng/tunnel` | POST | 元数据帧 + ohttp 密文 | 加密的业务请求，[见封装一节](#加密请求与响应的封装) |
+| `/tng/tunnel` | POST | 元数据帧 + ohttp 密文 | 加密的业务请求，[见封装一节](#加密请求的封装) |
 | `/tng/background-check/challenge` | GET | 无 | 经 egress 向 AS 取挑战值（仅 Server 验 Client + 背调模型） |
 | `/tng/background-check/verify` | POST（JSON） | `AttestationVerifyRequest` | 经 egress 向 AS 提交 Evidence 换取 Attestation Result（同上） |
 
@@ -119,15 +119,13 @@ ingress 在加密第一个请求之前，先向 egress 请求 KeyConfig（1-RTT�
 
 ingress 侧缓存密钥配置，其有效期取「密钥 `expire_timestamp`、Attestation Result 的 JWT `exp`」二者的最小值，到期自动后台刷新（默认 300 秒周期，配置了 `attest` 时跟随证明刷新策略）。egress 收到用已不存在的密钥加密的请求时返回 422（遵循 RFC 9458 §6.4 的 key-config 不匹配语义），ingress 据此立刻废弃缓存并重新获取。
 
-### 加密请求与响应的封装
+### 加密请求的封装
 
 `x-tng-ohttp-api: /tng/tunnel` 的请求体不是 JSON，而是三段拼接的二进制：
 
 ```text
 [4 字节大端长度 N][N 字节 prost 编码的 Metadata][ohttp-chunked 加密后的请求体（可流式）]
 ```
-
-egress 把响应密封进同一套分块密文，格式见响应密文一节。
 
 #### 元数据帧
 
@@ -177,7 +175,7 @@ message ServerKeyConfigHint {
 
 HPKE 的域分隔字符串取自 chunked 草案，而非 RFC 9458：请求的 info 参数是 ASCII 字符串 `message/bhttp chunked request`，后跟一个零字节与 7 字节请求头；响应密钥按标签 `message/bhttp chunked response` 导出。RFC 9458 的非分块变体使用 `message/bhttp request` 与 `message/bhttp response`；字符串刻意取不同值，因此分块端点与非分块端点即使密钥相同也不能互操作。
 
-#### ohttp-chunked 响应密文
+### 加密响应的封装
 
 egress 以 HTTP 200 与 `Content-Type: message/ohttp-chunked-res` 回应，该内容类型一律不做压缩。密文流式返回，ingress 边收边解密，SSE 等流式响应同样适用。响应 body 是：
 
@@ -225,7 +223,7 @@ RA 各节的时序图沿用 RFC 9334 附录 A 事件表对应的形式化记号�
 | CX | KeyConfig 过期 | `hpke_key_config.expire_timestamp` |
 | OP2 | 基于验证结果的密码学操作 | 验证通过后执行 HPKE 加密/解密的时刻 |
 
-图中消息以形式化记号表示内容，具体线格式（JSON 字段名、proto 结构、Content-Type）见[密钥配置分发](#密钥配置分发)与[加密请求与响应的封装](#加密请求与响应的封装)两节。
+图中消息以形式化记号表示内容，具体线格式（JSON 字段名、proto 结构、Content-Type）见[密钥配置分发](#密钥配置分发)、[加密请求的封装](#加密请求的封装)与[加密响应的封装](#加密响应的封装)三节。
 
 ### Client 验 Server
 
