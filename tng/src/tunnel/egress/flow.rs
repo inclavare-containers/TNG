@@ -16,6 +16,8 @@ use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::utils;
+use crate::tunnel::utils::drain::DrainRegistry;
+use crate::tunnel::utils::forward::normal::AppSide;
 use crate::{service::RegistedService, CommonStreamTrait, ContextualStream};
 
 use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
@@ -130,15 +132,27 @@ impl EgressFlow {
             src,
             dst,
             listener_addr: _,
-            egress_mode: _,
+            egress_mode,
             // Egress processes multiple upstream connections per accepted downstream.
             // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
             mut access_accepted,
             encrypted,
         } = accepted_stream;
 
+        // Hook egress serves bind-hijacked server listeners: the accepted
+        // downstream is the remote (tunnel-side) connection and tng dials
+        // back to the app on the upstream side, so the app-facing socket is
+        // upstream. Non-hook egress modes accept the local app's connection
+        // directly. The exec teardown drain reads this to pick which
+        // direction to keep alive.
+        let app_side = match egress_mode {
+            EgressAccessMode::Hook => AppSide::Upstream,
+            _ => AppSide::Downstream,
+        };
+
         let trusted_stream_manager = self.trusted_stream_manager.clone();
         let metrics = self.metrics.clone();
+        let drain = runtime.drain_registry();
 
         // TODO: stop all task when downstream is already closed
 
@@ -163,6 +177,8 @@ impl EgressFlow {
                     false,
                     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                     transport_so_mark,
+                    drain,
+                    app_side,
                 )
                 .await
                 {
@@ -197,6 +213,7 @@ impl EgressFlow {
                     let dst = dst.clone();
                     let access_accepted = access_accepted.clone_for_multiplexing();
                     let metrics = metrics.clone();
+                    let drain = drain.clone();
 
                     async move {
                         // Protocol-level direct forward: determined by TransportLayer
@@ -232,6 +249,8 @@ impl EgressFlow {
                                 target_os = "linux"
                             ))]
                             transport_so_mark,
+                            drain,
+                            app_side,
                         )
                         .await
                         {
@@ -248,6 +267,7 @@ impl EgressFlow {
 ///
 /// Handles the full lifecycle: create metrics context, connect to upstream,
 /// transition access log states, forward streams, and mark success.
+#[allow(clippy::too_many_arguments)]
 async fn forward_to_upstream(
     metrics: &ServiceMetrics,
     access_accepted: AccessAccepted,
@@ -257,6 +277,8 @@ async fn forward_to_upstream(
     attested: bool,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     transport_so_mark: Option<u32>,
+    drain: Arc<DrainRegistry>,
+    app_side: AppSide,
 ) -> Result<()> {
     let active_cx = metrics.new_cx();
 
@@ -277,7 +299,7 @@ async fn forward_to_upstream(
 
     let downstream = metrics.new_wrapped_stream(downstream);
 
-    utils::forward::normal::forward_stream(upstream, downstream).await;
+    utils::forward::normal::forward_stream_with_drain(upstream, downstream, drain, app_side).await;
 
     active_cx.mark_finished_successfully();
     Ok(())

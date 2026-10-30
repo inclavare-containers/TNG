@@ -3,7 +3,10 @@ use std::{future::Future, net::SocketAddr, pin::Pin};
 use anyhow::{Context as _, Result};
 
 use crate::{
-    tunnel::{attestation_result::AttestationState, endpoint::TngEndpoint, utils},
+    tunnel::{
+        attestation_result::AttestationState, endpoint::TngEndpoint, utils,
+        utils::forward::normal::AppSide, utils::runtime::TokioRuntime,
+    },
     CommonStreamTrait, ContextualStream,
 };
 
@@ -12,24 +15,23 @@ use super::StreamManager;
 pub struct UnprotectedStreamManager {
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     transport_so_mark: Option<u32>,
+    runtime: TokioRuntime,
+    app_side: AppSide,
 }
 
 impl UnprotectedStreamManager {
     pub fn new(
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
+        runtime: TokioRuntime,
+        app_side: AppSide,
     ) -> Self {
         Self {
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             transport_so_mark,
+            runtime,
+            app_side,
         }
-    }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
-impl Default for UnprotectedStreamManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -56,9 +58,14 @@ impl StreamManager for UnprotectedStreamManager {
         let upstream_local = upstream.local_addr().context("Failed to get local addr")?;
         let upstream = ContextualStream::new(upstream, "ingress-unprotected-tcp");
 
+        let drain = self.runtime.drain_registry();
+        let app_side = self.app_side;
         Ok((
-            Box::pin(async {
-                let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
+            Box::pin(async move {
+                let _: () = utils::forward::normal::forward_stream_with_drain(
+                    upstream, downstream, drain, app_side,
+                )
+                .await;
                 Ok(())
             }) as Pin<Box<_>>,
             AttestationState::Unattested,

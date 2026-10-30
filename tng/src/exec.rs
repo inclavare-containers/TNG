@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -16,6 +17,14 @@ use crate::config::{
 };
 use crate::tunnel::access_log::EgressAccessMode;
 use crate::tunnel::access_log::IngressAccessMode;
+
+/// Worst-case time `tng exec` waits after the child exits for in-flight
+/// forwards to deliver the data the app already wrote. The drain ends early
+/// as soon as the last forward finishes, so a normal exit (no connection
+/// still transferring) is not delayed; only a connection whose tail is still
+/// moving (or stuck on a peer that never drains) costs the full window, after
+/// which the old hard cancel applies.
+const EXEC_DRAIN_WINDOW: Duration = Duration::from_secs(2);
 
 /// A centralized port allocator that ensures no two auto-allocated ports collide
 /// across all egress and ingress hook entries in exec mode.
@@ -172,6 +181,7 @@ impl TngExec {
                 .context("Failed to initialize TNG runtime")?;
 
         let canceller = runtime.canceller();
+        let drain = runtime.drain_registry();
 
         // Create a oneshot channel to signal when the runtime is fully serving.
         // This prevents a TOCTOU race where the child process tries to connect
@@ -353,7 +363,36 @@ impl TngExec {
             }
         }
 
-        // 9. Cancel TNG runtime
+        // 9. Quiesce, then cancel the TNG runtime.
+        //
+        // Cancelling the supervised tasks right here would drop every
+        // in-flight forward mid-transfer: the app-socket kernel recv queue,
+        // the forward's CopyBuffer, and unflushed rustls records would all be
+        // discarded with no close_notify, leaving the remote peer with a
+        // truncated stream. Instead fire the closing signal first — forwards
+        // keep delivering the app->tunnel direction to EOF and shut it down
+        // cleanly — and bounded-wait for them to finish. An exec whose
+        // transfers all completed before the child exited has zero in-flight
+        // forwards, so the wait resolves without parking and adds no delay.
+        let inflight = drain.inflight();
+        if inflight > 0 {
+            tracing::info!(
+                inflight,
+                "child exited; draining in-flight data on {inflight} connection(s) before teardown"
+            );
+        }
+        drain.begin_graceful_close();
+        if tokio::time::timeout(EXEC_DRAIN_WINDOW, drain.wait_idle())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                force_cancelled = drain.inflight(),
+                window_ms = EXEC_DRAIN_WINDOW.as_millis() as u64,
+                "drain window expired; force-cancelling in-flight connection(s) (their remaining data is lost)"
+            );
+        }
+
         canceller.cancel();
         let _ = runtime_handle.await;
 

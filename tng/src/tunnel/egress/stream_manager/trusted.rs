@@ -70,20 +70,32 @@ impl TrustedStreamManager {
         let runtime = if is_h2_or_ohttp {
             #[cfg(not(wasm))]
             {
-                TokioRuntime::new_multi_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::new_multi_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
             #[cfg(wasm)]
             {
-                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::wasm_main_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
         } else {
             #[cfg(not(wasm))]
             {
-                TokioRuntime::current(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::current(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
             #[cfg(wasm)]
             {
-                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::wasm_main_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
         };
 

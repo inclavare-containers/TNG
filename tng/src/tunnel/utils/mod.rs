@@ -1,5 +1,6 @@
 #[cfg(unix)]
 pub mod cert_manager;
+pub mod drain;
 #[cfg(not(wasm))]
 pub mod endpoint_matcher;
 #[cfg(not(wasm))]

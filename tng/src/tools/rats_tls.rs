@@ -217,6 +217,7 @@ async fn dump(endpoint: &str, attest_json: Option<&str>, cert_out: Option<PathBu
             use crate::tunnel::utils::cert_manager::CertManager;
             use crate::tunnel::utils::runtime::TokioRuntime;
             use crate::tunnel::utils::rustls::config::resolver::SnapshotCertResolver;
+            use crate::DrainRegistry;
 
             let attest_args: AttestArgs =
                 serde_json::from_str(json).context("parse --attest as AttestArgs JSON")?;
@@ -226,7 +227,7 @@ async fn dump(endpoint: &str, attest_json: Option<&str>, cert_out: Option<PathBu
             // CertManager spawns a refresh task on a TokioRuntime; reuse the
             // current runtime handle so dump stays a one-shot in-process call.
             let shutdown = tokio_graceful::Shutdown::new(async {});
-            let runtime = TokioRuntime::current(shutdown.guard())
+            let runtime = TokioRuntime::current(shutdown.guard(), DrainRegistry::new_shared())
                 .context("acquire tokio runtime for cert manager")?;
             let cert_manager = Arc::new(
                 CertManager::new(Arc::new(attest_ctx), runtime)

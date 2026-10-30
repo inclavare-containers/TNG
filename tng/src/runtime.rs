@@ -11,6 +11,7 @@ use crate::tunnel::ingress::hook::HookIngress;
 use crate::tunnel::ingress::socks5::Socks5Ingress;
 use crate::tunnel::ingress::{http_proxy::HttpProxyIngress, mapping::MappingIngress};
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::utils::drain::DrainRegistry;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{
     config::{egress::EgressMode, ingress::IngressMode, TngConfig},
@@ -62,6 +63,7 @@ impl TngRuntime {
         }
 
         let canceller = CancellationToken::new();
+        let drain = DrainRegistry::new_shared();
 
         // Capture the current tracing span so that shutdown log messages
         // carry the task tag when spawned by tokio_graceful internally.
@@ -89,7 +91,11 @@ impl TngRuntime {
         };
 
         // Create TokioRuntime with the shutdown guard with currently running tokio runtime.
-        let runtime = crate::tunnel::utils::runtime::TokioRuntime::current(shutdown.guard())?;
+        // The drain registry rides the runtime: every child runtime built from this one
+        // propagates it like the shutdown guard, so forwards find the same registry the
+        // exec teardown path closes.
+        let runtime =
+            crate::tunnel::utils::runtime::TokioRuntime::current(shutdown.guard(), drain)?;
 
         let meter_provider =
             Self::setup_metric_exporter(&tng_config).context("Failed to setup metric exporter")?;
@@ -358,6 +364,16 @@ impl TngRuntime {
 
     pub fn canceller(&self) -> CancellationToken {
         self.canceller.clone()
+    }
+
+    /// Handle on the quiesce-then-cancel registry. `tng exec` fires the
+    /// closing signal after its child exits and bounded-waits for in-flight
+    /// forwards to drain before the hard `canceller()` cancel; the rest of
+    /// the process (e.g. `tng launch`) never closes the token, leaving the
+    /// drain inert. The registry itself lives on the primary `TokioRuntime`,
+    /// which every flow and every child runtime already carries.
+    pub fn drain_registry(&self) -> Arc<DrainRegistry> {
+        self.runtime.drain_registry()
     }
 
     pub async fn serve(self) -> Result<()> {

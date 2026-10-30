@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
+- Transfers through `tng exec` no longer hang or silently truncate when the wrapped application exits mid-transfer: in-flight data is drained before teardown (bounded at 2s) and forward errors surface promptly.
 
 ## [2.12.0] - 2026-10-25
 

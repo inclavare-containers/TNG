@@ -8,6 +8,7 @@ use tokio_graceful::ShutdownGuard;
 use tokio_with_wasm::alias as tokio;
 use tracing::Instrument;
 
+use crate::tunnel::utils::drain::DrainRegistry;
 use crate::tunnel::utils::runtime::future::TokioRuntimeSupportedFuture;
 
 pub mod future;
@@ -38,6 +39,7 @@ pub struct TokioRuntime {
     inner: Arc<TokioRuntimeInner>,
     #[allow(unused)]
     shutdown_guard: ShutdownGuard,
+    drain: Arc<DrainRegistry>,
 }
 
 #[derive(Debug)]
@@ -56,7 +58,10 @@ enum TokioRuntimeInner {
 impl TokioRuntime {
     #[cfg(not(wasm))]
     #[allow(dead_code)]
-    pub fn new_multi_thread(shutdown_guard: ShutdownGuard) -> Result<Self> {
+    pub fn new_multi_thread(
+        shutdown_guard: ShutdownGuard,
+        drain: Arc<DrainRegistry>,
+    ) -> Result<Self> {
         use anyhow::Context;
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -70,31 +75,46 @@ impl TokioRuntime {
                 rt_handle,
             }),
             shutdown_guard,
+            drain,
         })
     }
 
     #[cfg(not(wasm))]
     #[allow(dead_code)]
-    pub fn current(shutdown_guard: ShutdownGuard) -> Result<Self> {
+    pub fn current(shutdown_guard: ShutdownGuard, drain: Arc<DrainRegistry>) -> Result<Self> {
         let rt_handle = tokio::runtime::Handle::try_current()?;
         Ok(Self {
             inner: Arc::new(TokioRuntimeInner::Reference { rt_handle }),
             shutdown_guard,
+            drain,
         })
     }
 
     #[cfg(wasm)]
     #[allow(dead_code)]
-    pub fn wasm_main_thread(shutdown_guard: ShutdownGuard) -> Result<Self> {
+    pub fn wasm_main_thread(
+        shutdown_guard: ShutdownGuard,
+        drain: Arc<DrainRegistry>,
+    ) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(TokioRuntimeInner::WasmMainThread),
             shutdown_guard,
+            drain,
         })
     }
 
     #[allow(dead_code)]
     pub fn shutdown_guard(&self) -> &ShutdownGuard {
         &self.shutdown_guard
+    }
+
+    /// The `tng exec` teardown drain registry shared with this runtime's
+    /// parent. Child runtimes spawned from a `TokioRuntime` must propagate
+    /// the handle exactly like [`Self::shutdown_guard`], so a forward reaches
+    /// the same registry no matter which runtime tier drives it.
+    #[allow(dead_code)]
+    pub fn drain_registry(&self) -> Arc<DrainRegistry> {
+        self.drain.clone()
     }
 }
 

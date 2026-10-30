@@ -43,7 +43,9 @@
 //! trusted data, and if it is TLS-corrupt or RST its write half (the other
 //! direction's sink) is dead too, so draining is impossible. The forward
 //! returns promptly so the owning task drops both sockets and the application
-//! sees the connection close instead of hanging.
+//! sees the connection close instead of hanging. Before parking, the failed
+//! direction also shuts down its writer best-effort, so the peer sees a close
+//! (close_notify/FIN) rather than silence if the socket drop is delayed.
 //!
 //! ## Write anomalies (on a direction's write)
 //!
@@ -67,14 +69,45 @@
 //! A failed direction is parked as `Done(sent)` on error (see
 //! `transfer_one_direction`) so it is not re-driven on the next poll, which
 //! would otherwise stall the forward when the other direction is still active.
+//!
+//! ## Closing (`tng exec` process-exit drain)
+//!
+//! `forward_stream_with_drain` additionally watches a `DrainRegistry` closing
+//! token. When `tng exec`'s child exits, exec fires that token (a distinct
+//! signal from the hard-cancel shutdown guard) and waits a bounded window for
+//! forwards to finish. A forward that observes closing treats the app process
+//! as gone; `AppSide` says which forward endpoint faces the (now dead) app:
+//!
+//! - the direction reading the app-side socket keeps running to read EOF or
+//!   error, flushing and shutting down the tunnel writer as the normal R1
+//!   half-close does, so every byte the app had already written (kernel recv
+//!   queue of the app-facing socket plus the CopyBuffer) reaches the peer
+//!   followed by a close (close_notify + FIN) instead of a silent socket drop;
+//! - the direction writing to the app-side socket is parked immediately: its
+//!   sink is the dead app, so the forward stops waiting on the tunnel read,
+//!   best-effort shuts down the app-facing writer, and marks the direction
+//!   done. The park never blocks the forward's return.
+//!
+//! Which endpoint faces the app depends on the access mode: hook ingress and
+//! non-hook egress accept the app's own connection (`AppSide::Downstream`),
+//! while hook egress (bind-hijacked server listener) dials back to the app
+//! (`AppSide::Upstream`).
+//!
+//! `forward_stream_with_drain` is the only forward entry point; a registry
+//! whose closing token never fires (launch mode) leaves behavior exactly as
+//! the rules above, with no closing input.
 
 use bytes::BytesMut;
 use std::future::{poll_fn, Future};
 use std::io;
 use std::pin::{pin, Pin};
+use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio_util::sync::CancellationToken;
+
+use crate::tunnel::utils::drain::DrainRegistry;
 
 /// Error that captures the direction and read/write side of a forward failure,
 /// while preserving the original `io::Error` as the source.
@@ -141,7 +174,13 @@ impl CopyBuffer {
             if self.buf.capacity() > self.buf.len() && !self.read_done {
                 match self.poll_fill_buf(cx, reader.as_mut()) {
                     Poll::Ready(Ok(())) => {}
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(read_err(err))),
+                    Poll::Ready(Err(err)) => {
+                        // Same best-effort half-close as the mid-write fill
+                        // error below: a read error must not leave the peer in
+                        // silence until the socket drop.
+                        let _ = writer.as_mut().poll_shutdown(cx);
+                        return Poll::Ready(Err(read_err(err)));
+                    }
                     Poll::Pending => {
                         if self.pos == self.buf.len() {
                             if self.need_flush {
@@ -162,7 +201,7 @@ impl CopyBuffer {
             }
 
             while self.pos < self.buf.len() {
-                match self.poll_write_buf(cx, reader.as_mut(), writer.as_mut()) {
+                match writer.as_mut().poll_write(cx, &self.buf[self.pos..]) {
                     Poll::Ready(Ok(i)) => {
                         if i == 0 {
                             return Poll::Ready(Err(ForwardError::WriteZero));
@@ -174,10 +213,24 @@ impl CopyBuffer {
                     }
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(write_err(err))),
                     Poll::Pending => {
+                        // Sole refill point for a pending write. Refilling here
+                        // (rather than inside the write call) keeps a read
+                        // error surfacing as a read error (fatal): filling
+                        // inside `poll_write` could only report its result as
+                        // a zero-byte write, which classifies Soft and wedges
+                        // the forward while the other direction still holds
+                        // unwritten bytes.
                         if !self.read_done && self.buf.capacity() > self.buf.len() {
                             match self.poll_fill_buf(cx, reader.as_mut()) {
                                 Poll::Ready(Ok(())) => {}
-                                Poll::Ready(Err(err)) => return Poll::Ready(Err(read_err(err))),
+                                Poll::Ready(Err(err)) => {
+                                    // Fail loudly, close cleanly: park-time
+                                    // socket drop alone can leave the peer in
+                                    // silence, so attempt the half-close now,
+                                    // best-effort.
+                                    let _ = writer.as_mut().poll_shutdown(cx);
+                                    return Poll::Ready(Err(read_err(err)));
+                                }
                                 Poll::Pending => return Poll::Pending,
                             }
                         } else {
@@ -221,31 +274,6 @@ impl CopyBuffer {
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
             Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn poll_write_buf<R, W>(
-        &mut self,
-        cx: &mut TaskContext<'_>,
-        mut reader: Pin<&mut R>,
-        mut writer: Pin<&mut W>,
-    ) -> Poll<io::Result<usize>>
-    where
-        R: AsyncRead + Unpin + ?Sized,
-        W: AsyncWrite + ?Sized,
-    {
-        let me = &mut *self;
-        match writer.as_mut().poll_write(cx, &me.buf[me.pos..]) {
-            Poll::Pending => {
-                if !me.read_done && me.buf.capacity() > me.buf.len() {
-                    match me.poll_fill_buf(cx, reader.as_mut()) {
-                        Poll::Ready(Ok(())) => {}
-                        other => return other.map(|_| Ok(0)),
-                    }
-                }
-                Poll::Pending
-            }
-            res => res,
         }
     }
 }
@@ -447,6 +475,19 @@ fn apply_abort(abort: AbortKind, state: &TransferState, done: &mut Option<u64>, 
     }
 }
 
+/// Which forward endpoint faces the wrapped app, so the closing drain knows
+/// which direction's source dies with the process. See the module docs'
+/// closing rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppSide {
+    /// The app's connection arrives on the `downstream` side (hook ingress
+    /// proxy, non-hook egress local listener).
+    Downstream,
+    /// TNG dials back to the app on the `upstream` side (hook egress serving a
+    /// bind-hijacked server listener).
+    Upstream,
+}
+
 /// Copies data bidirectionally between two streams with specified buffer sizes.
 ///
 /// Returns `(a_to_b_bytes, b_to_a_bytes)`. A direction that ends with a clean
@@ -461,11 +502,17 @@ fn apply_abort(abort: AbortKind, state: &TransferState, done: &mut Option<u64>, 
 /// other direction drain its buffered data and force-finishes it once idle.
 /// Either way the forward returns promptly so the owning task drops both
 /// sockets and the application sees the connection close instead of hanging.
+///
+/// If `closing` is provided and fires (the `tng exec` process-exit drain),
+/// the direction writing to the app-side endpoint is parked on the spot and
+/// the direction reading it keeps running to its normal completion. See the
+/// module docs' closing rules.
 async fn copy_bidirectional_impl<A, B>(
     a: &mut A,
     b: &mut B,
     a_to_b_buffer_size: usize,
     b_to_a_buffer_size: usize,
+    closing: Option<(&CancellationToken, AppSide)>,
 ) -> (u64, u64)
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -478,7 +525,66 @@ where
     // returns so the other direction is handled consistently.
     let mut abort = AbortKind::None;
 
+    // Closing-signal state. The wait future is created once and stays pinned
+    // across polls so its waker registration survives between polls: without
+    // that, a token fired while the forward is Pending (both directions
+    // idle-read) would never wake it. Without a closing input the wait never
+    // resolves.
+    let (closing_token, app_side) = match closing {
+        Some((token, side)) => (Some(token), side),
+        None => (None, AppSide::Downstream),
+    };
+    let closing_wait = async move {
+        match closing_token {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let mut closing_wait = pin!(closing_wait);
+    let mut closing_seen = false;
+    let mut app_writer_parked = false;
+
     poll_fn(|cx| {
+        if !closing_seen && closing_wait.as_mut().poll(cx).is_ready() {
+            closing_seen = true;
+        }
+        if closing_seen && !app_writer_parked {
+            // The app process is gone: stop waiting for data destined to the
+            // app. Best-effort shut down the app-facing writer, park that
+            // direction with what it delivered, and do not block the forward's
+            // return; the direction reading the app socket keeps running to
+            // EOF and shuts down the tunnel writer on its own (R1 path).
+            app_writer_parked = true;
+            match app_side {
+                AppSide::Downstream => {
+                    let (sent, remain) = state_amt_remain(&b_to_a);
+                    if remain > 0 {
+                        tracing::debug!(
+                            sent,
+                            remain,
+                            direction = "upstream to downstream",
+                            "closing: discarding unwritten data destined for the exited app"
+                        );
+                    }
+                    let _ = Pin::new(&mut *a).poll_shutdown(cx);
+                    b_to_a = TransferState::Done(sent);
+                }
+                AppSide::Upstream => {
+                    let (sent, remain) = state_amt_remain(&a_to_b);
+                    if remain > 0 {
+                        tracing::debug!(
+                            sent,
+                            remain,
+                            direction = "downstream to upstream",
+                            "closing: discarding unwritten data destined for the exited app"
+                        );
+                    }
+                    let _ = Pin::new(&mut *b).poll_shutdown(cx);
+                    a_to_b = TransferState::Done(sent);
+                }
+            }
+        }
+
         // Transfer from a to b (downstream -> upstream)
         let a_to_b_result = transfer_one_direction(
             cx,
@@ -488,7 +594,9 @@ where
             ForwardError::ReadDownstream,
             ForwardError::WriteUpstream,
         );
-        // Transfer from b to a (upstream -> downstream)
+        // Transfer from b to a (upstream -> downstream). Once parked by the
+        // closing signal this is a no-op: `Done` reports its final count on
+        // every poll.
         let b_to_a_result = transfer_one_direction(
             cx,
             &mut b_to_a,
@@ -528,10 +636,11 @@ where
     .await
 }
 
-pub async fn forward_stream(
+async fn forward_inner(
     mut upstream: impl AsyncRead + AsyncWrite + Unpin,
     mut downstream: impl AsyncRead + AsyncWrite + Unpin,
-) {
+    closing: Option<(&CancellationToken, AppSide)>,
+) -> (u64, u64) {
     tracing::debug!("Starting to transmit application data");
     // downstream corresponds to 'a', upstream corresponds to 'b'
     // a_to_b is downstream -> upstream (tx/from_client)
@@ -541,6 +650,7 @@ pub async fn forward_stream(
         &mut upstream,
         FORWARD_BUF_SIZE,
         FORWARD_BUF_SIZE,
+        closing,
     )
     .await;
     tracing::debug!(
@@ -548,6 +658,40 @@ pub async fn forward_stream(
         rx_bytes = from_server,
         "Finished transmit application data",
     );
+    (from_client, from_server)
+}
+
+/// Bidirectional forward with the `tng exec` process-exit drain: the forward
+/// registers as in-flight, watches the registry's closing token, and when it
+/// fires finishes the direction reading the app-side socket to EOF
+/// (delivering everything the app had already written, then shutting down the
+/// tunnel writer) while parking the direction that would write to the app.
+/// `app_side` says which endpoint faces the wrapped app. See the module docs'
+/// closing rules. A registry that never closes (e.g. `tng launch`, which has
+/// no child to exit) leaves behavior exactly as the close rules above.
+pub async fn forward_stream_with_drain(
+    upstream: impl AsyncRead + AsyncWrite + Unpin,
+    downstream: impl AsyncRead + AsyncWrite + Unpin,
+    drain: Arc<DrainRegistry>,
+    app_side: AppSide,
+) {
+    let _inflight = drain.register();
+    let (from_client, from_server) =
+        forward_inner(upstream, downstream, Some((drain.closing(), app_side))).await;
+    if drain.closing().is_cancelled() {
+        // Drain duration measured from when exec fired the closing signal,
+        // not the forward's whole lifetime; closed_at is always set once the
+        // token is cancelled.
+        let drained_ms = drain
+            .closed_at()
+            .map_or(0, |at| at.elapsed().as_millis() as u64);
+        tracing::debug!(
+            tx_bytes = from_client,
+            rx_bytes = from_server,
+            drained_ms,
+            "connection drained its in-flight data after the app exited",
+        );
+    }
 }
 
 #[cfg(test)]
@@ -575,11 +719,20 @@ mod tests {
         write_err: Option<io::ErrorKind>,
         /// If set, poll_write succeeds until this many bytes are written, then returns the error.
         write_err_after: Option<(io::ErrorKind, u32)>,
+        /// If set, poll_read returns this error once the injected data has been
+        /// drained, instead of Pending/EOF. Models a read failure that arrives
+        /// after the copy loop has buffered bytes and is mid-write.
+        read_err_after_data: Option<io::ErrorKind>,
+        /// If set, poll_write always returns Pending (sink backpressure, e.g. a
+        /// full socket send buffer).
+        write_pending: bool,
         /// If set, poll_write returns Ok(0) (writer reports zero capacity),
         /// which the copy loop turns into ForwardError::WriteZero.
         write_zero: bool,
         /// Whether the stream has been "read-closed" — poll_read returns EOF.
         read_eof: bool,
+        /// Set once poll_shutdown has been called on this stream.
+        shutdown_called: bool,
         /// Bytes written to this stream (for assertions).
         written: Vec<u8>,
     }
@@ -591,8 +744,11 @@ mod tests {
                 read_err: None,
                 write_err: None,
                 write_err_after: None,
+                read_err_after_data: None,
+                write_pending: false,
                 write_zero: false,
                 read_eof: false,
+                shutdown_called: false,
                 written: Vec::new(),
             }
         }
@@ -612,6 +768,16 @@ mod tests {
         /// Make poll_write fail after `bytes` bytes are written.
         fn set_write_err_after(&mut self, kind: io::ErrorKind, bytes: u32) {
             self.write_err_after = Some((kind, bytes));
+        }
+
+        /// Make poll_read return this error once the injected data has drained.
+        fn set_read_err_after_data(&mut self, kind: io::ErrorKind) {
+            self.read_err_after_data = Some(kind);
+        }
+
+        /// Make poll_write return Pending (sink backpressure).
+        fn set_write_pending(&mut self) {
+            self.write_pending = true;
         }
 
         fn set_write_zero(&mut self) {
@@ -655,6 +821,16 @@ mod tests {
             self.inner.lock().unwrap().set_write_err_after(kind, bytes);
         }
 
+        /// Make poll_read return this error once the injected data has drained.
+        fn set_read_err_after_data(&self, kind: io::ErrorKind) {
+            self.inner.lock().unwrap().set_read_err_after_data(kind);
+        }
+
+        /// Make poll_write return Pending (sink backpressure).
+        fn set_write_pending(&self) {
+            self.inner.lock().unwrap().set_write_pending();
+        }
+
         /// Make poll_write return Ok(0) (WriteZero).
         fn set_write_zero(&self) {
             self.inner.lock().unwrap().set_write_zero();
@@ -663,6 +839,16 @@ mod tests {
         /// Make poll_read return EOF immediately (no data).
         fn close_read(&self) {
             self.inner.lock().unwrap().close_read();
+        }
+
+        /// Whether poll_shutdown has been called on this stream.
+        fn shutdown_called(&self) -> bool {
+            self.inner.lock().unwrap().shutdown_called
+        }
+
+        /// Bytes accepted by poll_write so far (for assertions).
+        fn written(&self) -> Vec<u8> {
+            self.inner.lock().unwrap().written.clone()
         }
     }
 
@@ -681,6 +867,11 @@ mod tests {
 
             // Then: available data
             if inner.read_data.is_empty() {
+                // A deferred read error fires only once the injected data has
+                // drained, so the copy loop can be mid-buffer when it arrives.
+                if let Some(kind) = inner.read_err_after_data.take() {
+                    return Poll::Ready(Err(io::Error::from(kind)));
+                }
                 // No data left. If the read end has been "closed", signal EOF
                 // (like a real TCP FIN after all buffered data is consumed).
                 if inner.read_eof {
@@ -703,6 +894,10 @@ mod tests {
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
             let mut inner = self.inner.lock().unwrap();
+
+            if inner.write_pending {
+                return Poll::Pending;
+            }
 
             if let Some(kind) = inner.write_err.take() {
                 return Poll::Ready(Err(io::Error::from(kind)));
@@ -742,6 +937,7 @@ mod tests {
             self: Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
         ) -> Poll<io::Result<()>> {
+            self.inner.lock().unwrap().shutdown_called = true;
             Poll::Ready(Ok(()))
         }
     }
@@ -756,7 +952,14 @@ mod tests {
 
     /// Runs `copy_bidirectional_impl` and returns `(downstream→upstream, upstream→downstream)` byte counts.
     async fn run_copy(downstream: &mut MockStream, upstream: &mut MockStream) -> (u64, u64) {
-        copy_bidirectional_impl(downstream, upstream, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE).await
+        copy_bidirectional_impl(
+            downstream,
+            upstream,
+            FORWARD_BUF_SIZE,
+            FORWARD_BUF_SIZE,
+            None,
+        )
+        .await
     }
 
     // =====================================================================
@@ -964,8 +1167,14 @@ mod tests {
         assert_eq!(&buf, b"world");
 
         // After consuming all data, both sides see EOF → forward_stream returns Ok
-        let result =
-            copy_bidirectional_impl(&mut ds_a, &mut us_a, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE).await;
+        let result = copy_bidirectional_impl(
+            &mut ds_a,
+            &mut us_a,
+            FORWARD_BUF_SIZE,
+            FORWARD_BUF_SIZE,
+            None,
+        )
+        .await;
         assert_eq!(
             result,
             (0, 0),
@@ -1157,9 +1366,14 @@ mod tests {
         upstream.close_read();
         upstream.set_write_err(io::ErrorKind::PermissionDenied);
 
-        let (ds_to_us, us_to_ds) =
-            copy_bidirectional_impl(&mut ds_a, &mut upstream, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE)
-                .await;
+        let (ds_to_us, us_to_ds) = copy_bidirectional_impl(
+            &mut ds_a,
+            &mut upstream,
+            FORWARD_BUF_SIZE,
+            FORWARD_BUF_SIZE,
+            None,
+        )
+        .await;
         assert_eq!(ds_to_us, 0, "write to upstream failed immediately");
         assert!(
             us_to_ds < resp.len() as u64,
@@ -1188,8 +1402,13 @@ mod tests {
 
         // Drive run_copy and drain ds_b concurrently in one task (no spawn):
         // Dir2's writes to ds_a only progress while ds_b is being read.
-        let copy_fut =
-            copy_bidirectional_impl(&mut ds_a, &mut upstream, FORWARD_BUF_SIZE, FORWARD_BUF_SIZE);
+        let copy_fut = copy_bidirectional_impl(
+            &mut ds_a,
+            &mut upstream,
+            FORWARD_BUF_SIZE,
+            FORWARD_BUF_SIZE,
+            None,
+        );
         let drain_fut = async {
             let mut got = Vec::new();
             let mut buf = [0u8; 64];
@@ -1213,5 +1432,339 @@ mod tests {
             resp.len()
         );
         assert_eq!(got, resp, "drained bytes must equal the full response");
+    }
+
+    // =====================================================================
+    // Read error arriving while the direction's write side is Pending.
+    // poll_copy's write-Pending branch refills the buffer mid-write; a fill
+    // error there must surface as a read error (fatal), not be masked into a
+    // zero-byte write.
+    // =====================================================================
+
+    /// Direct pin on `CopyBuffer::poll_copy`: upstream (the reader) serves data,
+    /// the downstream sink write goes Pending, and the next fill errors. That
+    /// read error must surface as the `ForwardError::ReadUpstream` variant, not
+    /// as a `WriteZero` masked from the failed fill, and the direction's writer
+    /// must have shutdown attempted before the direction is parked.
+    #[tokio::test]
+    async fn test_read_error_during_pending_write_surfaces_as_read_error() {
+        let mut upstream = MockStream::new();
+        let mut downstream = MockStream::new();
+        upstream.inject_read_data(b"tail bytes");
+        upstream.set_read_err_after_data(reset());
+        downstream.set_write_pending();
+
+        let mut buf = CopyBuffer::new(FORWARD_BUF_SIZE);
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(500),
+            poll_fn(|cx| {
+                buf.poll_copy(
+                    cx,
+                    Pin::new(&mut upstream),
+                    Pin::new(&mut downstream),
+                    ForwardError::ReadUpstream,
+                    ForwardError::WriteDownstream,
+                )
+            }),
+        )
+        .await
+        .expect("poll_copy must reach a terminal state in one poll");
+
+        assert!(
+            matches!(outcome, Err(ForwardError::ReadUpstream(_))),
+            "a read error arriving while the write side is Pending must surface as ReadUpstream (fatal read rule), got {outcome:?}"
+        );
+        if let Err(ForwardError::ReadUpstream(err)) = &outcome {
+            assert_eq!(
+                err.kind(),
+                reset(),
+                "the surfaced ReadUpstream must carry the source read error"
+            );
+        }
+        assert!(
+            downstream.shutdown_called(),
+            "the failed direction's writer must have poll_shutdown attempted, not be parked Done in silence"
+        );
+    }
+
+    /// Same interleaving driven through the full bidirectional forward: before
+    /// the fix, the masked error became WriteZero, which classify_error treats
+    /// as Soft, and Soft does not force-finish the other direction while its
+    /// buffer still holds unwritten bytes, so the forward wedged forever. A
+    /// read error is fatal by the close rules, so the other direction must be
+    /// force-finished and the forward must return (and the failed direction's
+    /// writer must be shut down so the peer gets a close instead of silence).
+    #[tokio::test]
+    async fn test_read_error_during_pending_write_does_not_wedge_forward() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        // a→b (downstream→upstream): buffered request can never be written out
+        // because the upstream sink is Pending; its direction stays in flight.
+        downstream.inject_read_data(b"client tail");
+        downstream.close_read();
+        downstream.set_write_pending();
+
+        // b→a (upstream→downstream): response data is buffered, the downstream
+        // sink is Pending, and the next upstream read errors.
+        upstream.inject_read_data(b"server tail");
+        upstream.set_read_err_after_data(reset());
+        upstream.set_write_pending();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            run_copy(&mut downstream, &mut upstream),
+        )
+        .await;
+        let (ds_to_us, us_to_ds) =
+            result.expect("forward must not wedge when a read error lands mid-pending-write: a non-EOF read error is fatal, so the other direction must be force-finished and the forward must return");
+        assert_eq!(
+            (ds_to_us, us_to_ds),
+            (0, 0),
+            "neither direction delivered anything before the fatal read error"
+        );
+        assert!(
+            downstream.shutdown_called(),
+            "the errored direction's writer (downstream) must have poll_shutdown attempted before being parked"
+        );
+    }
+
+    /// ContextualStream wraps both endpoints of the egress forward, so the
+    /// error its poll_write surfaces must keep the inner ErrorKind:
+    /// is_benign_write_kind classifies write errors by kind, and laundering
+    /// BrokenPipe into Other turns every benign egress write error Fatal,
+    /// leaving rule W2 (drain the other direction) dead code on that path.
+    #[tokio::test]
+    async fn test_contextual_write_error_kind_still_classifies_soft() {
+        use crate::tunnel::stream::ContextualStream;
+
+        let raw = MockStream::new();
+        raw.set_write_err(broken_pipe());
+        let mut wrapped = ContextualStream::new(raw, "egress-downstream");
+
+        let error = tokio::io::AsyncWriteExt::write(&mut wrapped, b"x")
+            .await
+            .expect_err("wrapped stream write was set to fail with BrokenPipe");
+        assert!(
+            is_benign_write_kind(error.kind()),
+            "ContextualStream must preserve the inner ErrorKind so is_benign_write_kind matches (W2 soft drain); got {:?}",
+            error.kind()
+        );
+        assert!(
+            matches!(
+                classify_error(&ForwardError::WriteDownstream(error)),
+                AbortKind::Soft
+            ),
+            "a benign wrapped write error must classify Soft, not Fatal"
+        );
+    }
+
+    // =====================================================================
+    // Closing signal: the `tng exec` process-exit drain.
+    // =====================================================================
+
+    /// Closing fires while the reverse (upstream→downstream) direction is
+    /// Pending and the drain direction has queued data: the queued bytes must
+    /// reach the tunnel writer in full, the drain direction must attempt
+    /// poll_shutdown on its writer (close_notify + FIN), the app-facing
+    /// writer must get the parked direction's best-effort shutdown, and the
+    /// forward must return instead of waiting on the never-EOFing tunnel read.
+    #[tokio::test]
+    async fn test_closing_drains_queued_app_data() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        // app->tunnel: queued tail data, then EOF (the exited app's socket).
+        downstream.inject_read_data(b"residual tail");
+        downstream.close_read();
+        // tunnel->app: no data and no EOF — would keep the forward Pending
+        // forever without the closing signal.
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            copy_bidirectional_impl(
+                &mut downstream,
+                &mut upstream,
+                FORWARD_BUF_SIZE,
+                FORWARD_BUF_SIZE,
+                Some((&token, AppSide::Downstream)),
+            ),
+        )
+        .await
+        .expect("closing must not hang the forward once the reverse direction is Pending");
+        let (ds_to_us, us_to_ds) = result;
+        assert_eq!(
+            us_to_ds, 0,
+            "reverse direction was parked with nothing delivered"
+        );
+        assert_eq!(
+            upstream.written(),
+            b"residual tail".to_vec(),
+            "every drained byte must be written to the tunnel side"
+        );
+        assert_eq!(
+            ds_to_us,
+            upstream.written().len() as u64,
+            "delivered count must match what reached the tunnel writer"
+        );
+        assert!(
+            upstream.shutdown_called(),
+            "the drain direction must shut down its writer so the peer gets close_notify + FIN"
+        );
+        assert!(
+            downstream.shutdown_called(),
+            "the parked reverse direction must attempt a best-effort shutdown of the app-facing writer"
+        );
+    }
+
+    /// Closing fires with nothing in flight: the app direction is already at
+    /// EOF with an empty buffer, so the forward must return immediately
+    /// instead of parking on the idle reverse direction.
+    #[tokio::test]
+    async fn test_closing_returns_immediately_when_nothing_inflight() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        downstream.close_read(); // EOF, no queued bytes
+                                 // upstream read: Pending forever.
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            copy_bidirectional_impl(
+                &mut downstream,
+                &mut upstream,
+                FORWARD_BUF_SIZE,
+                FORWARD_BUF_SIZE,
+                Some((&token, AppSide::Downstream)),
+            ),
+        )
+        .await
+        .expect("closing with no in-flight data must finish promptly");
+        assert_eq!(result, (0, 0), "nothing queued, nothing delivered");
+        assert!(upstream.shutdown_called());
+    }
+
+    /// Hook egress wraps a bind-hijacked server listener: the app socket is
+    /// the `upstream` endpoint (`AppSide::Upstream`), so closing must drain
+    /// upstream->downstream (read the app socket, write the tunnel side) and
+    /// park the opposite direction — the inverse of the `AppSide::Downstream`
+    /// case above.
+    #[tokio::test]
+    async fn test_closing_drains_app_data_when_app_is_upstream_side() {
+        let mut downstream = MockStream::new(); // tunnel side: read Pending forever
+        let mut upstream = MockStream::new(); // app side: queued data, then EOF
+
+        upstream.inject_read_data(b"server tail");
+        upstream.close_read();
+
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            copy_bidirectional_impl(
+                &mut downstream,
+                &mut upstream,
+                FORWARD_BUF_SIZE,
+                FORWARD_BUF_SIZE,
+                Some((&token, AppSide::Upstream)),
+            ),
+        )
+        .await
+        .expect("closing must drain the app side regardless of which endpoint faces it");
+        let (ds_to_us, us_to_ds) = result;
+        assert_eq!(
+            us_to_ds,
+            downstream.written().len() as u64,
+            "the app's queued bytes must be delivered to the tunnel side"
+        );
+        assert_eq!(downstream.written(), b"server tail".to_vec());
+        assert_eq!(ds_to_us, 0, "the parked direction delivered nothing");
+        assert!(
+            downstream.shutdown_called(),
+            "the drain direction must shut down its writer so the peer gets close_notify + FIN"
+        );
+        assert!(
+            upstream.shutdown_called(),
+            "the parked direction must attempt a best-effort shutdown of the app-facing writer"
+        );
+    }
+
+    /// A closing token that never fires must leave behavior identical to the
+    /// plain forward (backward compatibility for launch mode and every path
+    /// that has not begun the drain).
+    #[tokio::test]
+    async fn test_uncancelled_closing_token_is_inert() {
+        let mut downstream = MockStream::new();
+        let mut upstream = MockStream::new();
+
+        downstream.inject_read_data(b"hello from client");
+        downstream.close_read();
+        upstream.inject_read_data(b"hello from server");
+        upstream.close_read();
+
+        let token = CancellationToken::new();
+
+        let (ds_to_us, us_to_ds) = tokio::time::timeout(
+            Duration::from_millis(500),
+            copy_bidirectional_impl(
+                &mut downstream,
+                &mut upstream,
+                FORWARD_BUF_SIZE,
+                FORWARD_BUF_SIZE,
+                Some((&token, AppSide::Downstream)),
+            ),
+        )
+        .await
+        .expect("normal bidirectional EOF must complete");
+        assert_eq!(ds_to_us, 17);
+        assert_eq!(us_to_ds, 17);
+        assert_eq!(downstream.written(), b"hello from server");
+        assert_eq!(upstream.written(), b"hello from client");
+    }
+
+    /// Closing fires but the app-facing read never reaches EOF (in exec this
+    /// cannot outlive the kernel's delivery of the dead app's FIN, but the
+    /// drain is bounded by the exec-side window regardless). The forward must
+    /// stay Pending rather than finish on its own, and dropping it (the hard
+    /// cancel) must release the registry so `wait_idle` resolves — the exact
+    /// sequence exec performs when the bound expires.
+    #[tokio::test]
+    async fn test_closing_slow_drain_force_finish_releases_registry() {
+        let drain = DrainRegistry::new_shared();
+        let downstream = MockStream::new(); // read Pending forever
+        let upstream = MockStream::new(); // reverse direction: Pending too
+
+        drain.begin_graceful_close();
+        // Box::pin so dropping the handle really drops the future (and runs
+        // the in-flight guard's Drop), the way the hard cancel drops the task.
+        let mut forward = Box::pin(forward_stream_with_drain(
+            upstream,
+            downstream,
+            drain.clone(),
+            AppSide::Downstream,
+        ));
+
+        // The parked reverse direction must not let the forward finish while
+        // the drain direction is still readable-pending.
+        let raced = tokio::time::timeout(Duration::from_millis(100), forward.as_mut()).await;
+        assert!(
+            raced.is_err(),
+            "closing must not fabricate completion while the drain direction is Pending"
+        );
+        assert_eq!(drain.inflight(), 1);
+
+        // The hard-cancel analogue: drop the forward future, the guard's Drop
+        // decrements, and the exec-side bounded wait resolves.
+        drop(forward);
+        tokio::time::timeout(Duration::from_millis(100), drain.wait_idle())
+            .await
+            .expect("dropped forward must leave the registry idle");
     }
 }

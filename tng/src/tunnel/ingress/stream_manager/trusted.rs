@@ -13,6 +13,7 @@ use crate::tunnel::ingress::protocol::rats_tls::RatsTlsStreamForwarder;
 use crate::tunnel::ingress::protocol::ProtocolStreamForwarder;
 use crate::tunnel::ingress::stream_manager::TngEndpoint;
 use crate::tunnel::ra_context::RaContext;
+use crate::tunnel::utils::forward::normal::AppSide;
 use crate::CommonStreamTrait;
 use crate::{config::ingress::CommonArgs, tunnel::utils::runtime::TokioRuntime, AttestationState};
 
@@ -49,6 +50,7 @@ impl TrustedStreamManager {
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         transport_so_mark: Option<u32>,
         parent_runtime: TokioRuntime,
+        app_side: AppSide,
     ) -> Result<Self> {
         if common_args.web_page_inject {
             bail!("The `web_page_inject` field is not supported")
@@ -79,20 +81,32 @@ impl TrustedStreamManager {
         let runtime = if is_h2_or_ohttp {
             #[cfg(not(wasm))]
             {
-                TokioRuntime::new_multi_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::new_multi_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
             #[cfg(wasm)]
             {
-                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::wasm_main_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
         } else {
             #[cfg(not(wasm))]
             {
-                TokioRuntime::current(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::current(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
             #[cfg(wasm)]
             {
-                TokioRuntime::wasm_main_thread(parent_runtime.shutdown_guard().clone())?
+                TokioRuntime::wasm_main_thread(
+                    parent_runtime.shutdown_guard().clone(),
+                    parent_runtime.drain_registry(),
+                )?
             }
         };
 
@@ -129,6 +143,7 @@ impl TrustedStreamManager {
                                 transport_so_mark,
                                 ra_context,
                                 runtime.clone(),
+                                app_side,
                                 rats_tls.multiplex,
                                 rats_tls.multiplex_max_streams_per_connection,
                                 rats_tls.multiplex_max_connections,

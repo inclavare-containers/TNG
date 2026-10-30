@@ -7,7 +7,7 @@ use tng::{
         ra::RaArgs,
     },
     tunnel::{endpoint::TngEndpoint, ingress::protocol::ohttp::security::OHttpSecurityLayer},
-    AttestationResult, RaContext, TokioRuntime,
+    AttestationResult, DrainRegistry, RaContext, TokioRuntime,
 };
 use wasm_bindgen::prelude::*;
 
@@ -118,7 +118,7 @@ async fn forward_request(
     };
 
     let shutdown = tokio_graceful::Shutdown::no_signal();
-    let runtime = TokioRuntime::wasm_main_thread(shutdown.guard())?;
+    let runtime = TokioRuntime::wasm_main_thread(shutdown.guard(), DrainRegistry::new_shared())?;
 
     let ra_context = Arc::new(RaContext::from_ra_args(ra_args).await?);
     let ohttp_security_layer =

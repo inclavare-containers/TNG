@@ -16,6 +16,7 @@ use crate::tunnel::access_log::{AccessAccepted, IngressAccessMode};
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
+use crate::tunnel::utils::forward::normal::AppSide;
 use crate::tunnel::utils::runtime::TokioRuntime;
 use crate::{service::RegistedService, tunnel::stream::CommonStreamTrait};
 
@@ -80,18 +81,30 @@ impl IngressFlow {
         #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
         let transport_so_mark = ingress.transport_so_mark();
 
+        // Hook ingress accepts the local app's (connect-hijacked) connection on
+        // the downstream side; the other modes listen for remote traffic and
+        // dial the local app upstream. The exec teardown drain reads this to
+        // pick which direction to keep alive.
+        let app_side = match ingress.ingress_mode() {
+            IngressAccessMode::Hook => AppSide::Downstream,
+            _ => AppSide::Upstream,
+        };
+
         let trusted_stream_manager = Arc::new(
             TrustedStreamManager::new(
                 common_args,
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
                 runtime.clone(),
+                app_side,
             )
             .await?,
         );
         let unprotected_stream_manager = Arc::new(UnprotectedStreamManager::new(
             #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
             transport_so_mark,
+            runtime.clone(),
+            app_side,
         ));
 
         Ok(Self {

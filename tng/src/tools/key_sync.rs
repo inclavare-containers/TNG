@@ -36,6 +36,7 @@ async fn run_impl(opts: super::cli::KeySyncOptions) -> Result<()> {
     use crate::config::egress::PeerSharedArgs;
     use crate::config::ra::{AttestArgs, RaArgsUnchecked, VerifyArgs};
     use crate::tunnel::utils::runtime::TokioRuntime;
+    use crate::DrainRegistry;
 
     let attest: AttestArgs =
         serde_json::from_str(&opts.attest).context("parse --attest as AttestArgs JSON")?;
@@ -63,8 +64,8 @@ async fn run_impl(opts: super::cli::KeySyncOptions) -> Result<()> {
     let shutdown = tokio_graceful::Shutdown::new(async {
         std::future::pending::<()>().await;
     });
-    let runtime =
-        TokioRuntime::current(shutdown.guard()).context("acquire tokio runtime for key-sync")?;
+    let runtime = TokioRuntime::current(shutdown.guard(), DrainRegistry::new_shared())
+        .context("acquire tokio runtime for key-sync")?;
 
     let daemon = KeySyncDaemon::new(runtime, peer_shared, opts.out_dir, opts.ready_file).await?;
     daemon.serve().await

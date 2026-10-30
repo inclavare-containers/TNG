@@ -38,6 +38,7 @@ pub(crate) const HTTP_RESPONSE_SERVER_HEADER: &str =
 pub use crate::tunnel::attestation_result::{AttestationResult, AttestationState};
 pub use crate::tunnel::ra_context::RaContext;
 pub use crate::tunnel::stream::{CommonStreamTrait, ContextualStream};
+pub use crate::tunnel::utils::drain::DrainRegistry;
 pub use crate::tunnel::utils::runtime::TokioRuntime;
 pub use crate::tunnel::utils::tokio::TokioIo;
 
@@ -77,7 +78,7 @@ pub(crate) mod tests {
     use crate::{
         config::TngConfig,
         runtime::{TngRuntime, TracingReloadHandle},
-        TokioRuntime,
+        DrainRegistry, TokioRuntime,
     };
 
     pub static RELOAD_HANDLE: OnceCell<TracingReloadHandle> = OnceCell::new();
@@ -150,7 +151,14 @@ pub(crate) mod tests {
         let cancel_clone = cancel.clone();
         let shutdown = tokio_graceful::Shutdown::new(async move { cancel_clone.cancelled().await });
 
-        let res = async { f(TokioRuntime::current(shutdown.guard())?).await }.await;
+        let res = async {
+            f(TokioRuntime::current(
+                shutdown.guard(),
+                DrainRegistry::new_shared(),
+            )?)
+            .await
+        }
+        .await;
 
         cancel.cancel();
         if tokio::time::timeout(shutdown_timeout, shutdown.shutdown())

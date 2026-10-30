@@ -11,7 +11,7 @@ use crate::{
             ProtocolStreamForwarderOutput,
         },
         ra_context::RaContext,
-        utils,
+        utils::{self, forward::normal::AppSide},
     },
     AttestationState, CommonStreamTrait, ContextualStream, TokioRuntime,
 };
@@ -25,6 +25,10 @@ mod wrapping;
 
 pub struct RatsTlsStreamForwarder {
     security_layer: RatsTlsSecurityLayer,
+    // The exec teardown drain rides this runtime; the security layer holds a
+    // separate clone for its own tasks.
+    runtime: TokioRuntime,
+    app_side: AppSide,
 }
 
 impl RatsTlsStreamForwarder {
@@ -33,6 +37,7 @@ impl RatsTlsStreamForwarder {
         transport_so_mark: Option<u32>,
         ra_context: Arc<RaContext>,
         runtime: TokioRuntime,
+        app_side: AppSide,
         multiplex: bool,
         multiplex_max_streams_per_connection: Option<std::num::NonZeroU32>,
         multiplex_max_connections: Option<std::num::NonZeroU32>,
@@ -42,12 +47,14 @@ impl RatsTlsStreamForwarder {
                 #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
                 transport_so_mark,
                 ra_context,
-                runtime,
+                runtime.clone(),
                 multiplex,
                 multiplex_max_streams_per_connection,
                 multiplex_max_connections,
             )
             .await?,
+            runtime,
+            app_side,
         })
     }
 
@@ -101,9 +108,14 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
             .await?;
             let upstream: Box<dyn CommonStreamTrait + Sync> =
                 Box::new(ContextualStream::new(tls_stream, "ingress-rats-tls-direct"));
+            let drain = self.runtime.drain_registry();
+            let app_side = self.app_side;
             Ok((
                 Box::pin(async move {
-                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
+                    let _: () = utils::forward::normal::forward_stream_with_drain(
+                        upstream, downstream, drain, app_side,
+                    )
+                    .await;
                     Ok(())
                 }),
                 attestation_state,
@@ -113,9 +125,14 @@ impl ProtocolStreamForwarder for RatsTlsStreamForwarder {
             // Multiplex: single long-lived TLS connection; 0-RTT does not apply.
             let (upstream, local_addr, attestation_state, _session_id) =
                 self.connect(endpoint.clone()).await?;
+            let drain = self.runtime.drain_registry();
+            let app_side = self.app_side;
             Ok((
                 Box::pin(async move {
-                    let _: () = utils::forward::normal::forward_stream(upstream, downstream).await;
+                    let _: () = utils::forward::normal::forward_stream_with_drain(
+                        upstream, downstream, drain, app_side,
+                    )
+                    .await;
                     Ok(())
                 }),
                 attestation_state,
