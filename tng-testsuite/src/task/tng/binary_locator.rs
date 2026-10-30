@@ -9,7 +9,7 @@
 //! The caller only needs to locate the `tng` binary. `LD_PRELOAD` setup
 //! for `libtng_hook.so` is handled by `tng exec` itself, not by tests.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
@@ -26,20 +26,23 @@ pub fn resolve_tng_binary() -> Result<PathBuf> {
     }
 
     // 2. target/<profile>/tng — derive from test binary location
-    if let Some(path) = resolve_from_target_dir() {
+    let target_dir_binary = resolve_from_target_dir();
+    if let Some(path) = &target_dir_binary {
         if path.exists() {
-            return Ok(path);
+            return Ok(path.clone());
         }
     }
 
     // 3. PATH
     if let Ok(path) = which::which("tng") {
+        warn_outside_workspace(&path, target_dir_binary.as_deref());
         return Ok(path);
     }
 
     // 4. System install
     let system_path = PathBuf::from("/usr/bin/tng");
     if system_path.exists() {
+        warn_outside_workspace(&system_path, target_dir_binary.as_deref());
         return Ok(system_path);
     }
 
@@ -51,6 +54,21 @@ pub fn resolve_tng_binary() -> Result<PathBuf> {
          - $PATH (cargo install or manual install)\n\
          - /usr/bin/tng (system install)"
     )
+}
+
+/// Warn when resolution falls back to a PATH/system binary because the
+/// workspace target binary does not exist. The tests then drive a `tng` that
+/// may be stale or built from different sources than the code under test,
+/// silently invalidating results. This is a warning, not an error: CI
+/// legitimately uses the RPM-installed `/usr/bin/tng`.
+fn warn_outside_workspace(resolved: &Path, expected: Option<&Path>) {
+    tracing::warn!(
+        ?resolved,
+        ?expected,
+        "workspace target tng binary not found, resolved a PATH/system binary instead; \
+         `cargo test --features on-bin` does not build target/<profile>/tng \
+         (run `cargo build -p tng` or set TNG_BINARY)"
+    );
 }
 
 /// Derive the tng binary path from the test binary's location.
