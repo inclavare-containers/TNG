@@ -55,6 +55,7 @@ Update both languages together (see Bilingual Documentation Convention) and do n
 The general persistent-text rules (human voice, why-not-what comments, no version-pinned assertions, no em dashes, self-contained references, no incident leaks) live in the global agent instructions. Project-specific additions:
 
 - **Commit messages and PR descriptions are in English.** Title in imperative mood ("log: stop writing secrets into logs"); body explains what and why in plain English. The bilingual convention above applies to documentation, not to commit/PR text.
+- **Draft and edit persistent text under the `/humanizer` skill.** Whenever writing or reworking prose in docs, READMEs, commit messages, or PR descriptions, invoke `/humanizer` and follow its rules: no staged openers, no not-X-but-Y weight padding, no one-line closers, no bold-label bullet lists, no inflation. State each point in plain order and keep reference text neutral. When polishing a finished draft, run it through the skill once before committing.
 
 ## Documentation Structure & Craft
 
