@@ -253,7 +253,8 @@ mod tests {
                                 "port": portpicker::pick_unused_port().unwrap()
                             }
                         },
-                        "no_ra": true
+                        "no_ra": true,
+                        "ohttp": {}
                     }
                 ],
                 "add_egress": [
@@ -331,6 +332,94 @@ mod tests {
                 .build()?
                 .get(format!(
                     "http://127.0.0.1:{port}/status/egress/999/ohttp/keys"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::NOT_FOUND);
+        }
+
+        // /status/egress/0/ohttp/ advertises the latency node next to keys
+        // only in a latency-timing build; a default build keeps the keys
+        // node alone.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/egress/0/ohttp/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            #[cfg(feature = "latency-timing")]
+            assert_eq!(body, vec!["keys", "latency"]);
+            #[cfg(not(feature = "latency-timing"))]
+            assert_eq!(body, vec!["keys"]);
+        }
+
+        // /status/egress/0/ohttp/latency reports the egress phase histogram.
+        #[cfg(feature = "latency-timing")]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/latency"
+                ))
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            assert!(status == StatusCode::OK, "got {status}: {body_text}");
+            let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+            assert_eq!(body["unit"], "microseconds");
+            let phases = body["phases"].as_object().cloned().unwrap_or_default();
+            assert_eq!(phases.len(), 15, "egress phases: {phases:?}");
+            assert_eq!(phases["handler_total"]["count"], serde_json::json!(0));
+            assert!(phases["handler_total"]["mean_us"].is_null());
+        }
+
+        // A default build does not register the latency node at all.
+        #[cfg(not(feature = "latency-timing"))]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/latency"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::NOT_FOUND);
+        }
+
+        // /status/ingress/0/ohttp/latency reports the ingress phase histogram.
+        #[cfg(feature = "latency-timing")]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/ohttp/latency"
+                ))
+                .send()
+                .await?;
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            assert!(status == StatusCode::OK, "got {status}: {body_text}");
+            let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+            let phases = body["phases"].as_object().cloned().unwrap_or_default();
+            assert_eq!(phases.len(), 13, "ingress phases: {phases:?}");
+            assert!(phases.contains_key("outer_post_wait"));
+            assert!(phases.contains_key("writeback_pumped"));
+        }
+
+        #[cfg(not(feature = "latency-timing"))]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/ingress/0/ohttp/latency"
                 ))
                 .send()
                 .await?;

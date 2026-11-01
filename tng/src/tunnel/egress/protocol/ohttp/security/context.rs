@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::response::IntoResponse;
 
+use crate::tunnel::ohttp::timing::{EgressLatency, Timer};
 use crate::{error::TngError, AttestationResult, CommonStreamTrait, TokioIo, TokioRuntime};
 
 type DynSendBody =
@@ -67,6 +68,9 @@ pub struct TngStreamContext {
     /// `SendRequest` is dropped, which tears down the backend connection and
     /// its copy task.
     pub(crate) backend: Arc<BackendSlot>,
+    /// Shared with the API handler; records the backend-wait segments of
+    /// every forwarded request.
+    pub(crate) latency: Arc<EgressLatency>,
 }
 
 impl TngStreamContext {
@@ -91,7 +95,9 @@ impl TngStreamContext {
         let req = req.map(|body| -> DynSendBody { Box::pin(body.map_err(Into::into)) });
         let req = req.map(SendBoxBody);
 
+        let lock_timer = Timer::start();
         let mut slot = self.backend.send_request.lock().await;
+        self.latency.backend_slot_wait.record(lock_timer.elapsed());
 
         if let Some(send_request) = slot.as_mut() {
             // `ready()` waits if the connection is still streaming the
@@ -100,8 +106,13 @@ impl TngStreamContext {
             // Once `send_request()` is used, an error is returned to the
             // caller rather than retried: the request may have reached the
             // backend.
-            if send_request.ready().await.is_ok() {
+            let ready_timer = Timer::start();
+            let is_ready = send_request.ready().await.is_ok();
+            self.latency.backend_ready.record(ready_timer.elapsed());
+            if is_ready {
+                let send_timer = Timer::start();
                 let response = send_request.send_request(req).await;
+                self.latency.backend_send.record(send_timer.elapsed());
                 if response.is_err() {
                     // `ready()` can answer Ok while the connection is dying
                     // under a previous aborted response: the upstream close
@@ -124,9 +135,11 @@ impl TngStreamContext {
             .map_err(|_| TngError::ConnectUpstreamFailed)?;
 
         // TODO: support send both http1 and http2 payload
+        let redial_timer = Timer::start();
         let (mut send_request, conn) = hyper::client::conn::http1::handshake(TokioIo::new(s1))
             .await
             .map_err(TngError::HttpPlainTextForwardError)?;
+        self.latency.backend_redial.record(redial_timer.elapsed());
 
         self.runtime.spawn_supervised_task_current_span(async move {
             if let Err(error) = conn.await {
@@ -135,7 +148,9 @@ impl TngStreamContext {
         });
 
         tracing::debug!("Forwarding HTTP request to upstream now");
+        let send_timer = Timer::start();
         let response = send_request.send_request(req).await;
+        self.latency.backend_send_fresh.record(send_timer.elapsed());
         // Pool only on success: a handle whose very first send failed must
         // not be the connection a later request inherits.
         if response.is_ok() {
@@ -169,6 +184,7 @@ mod tests {
                 sender,
                 peer_addr: None,
                 backend: Arc::default(),
+                latency: Arc::new(EgressLatency::new()),
             },
             receiver,
         )

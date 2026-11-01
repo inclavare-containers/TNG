@@ -175,6 +175,11 @@ default = [
 # none of its code needs `#[cfg(not(wasm))]/#[cfg(wasm)]` gates.
 tools = []
 
+# Per-phase ohttp latency histograms + the `/ohttp/latency` and
+# `/ohttp/preconnect` status nodes. Development build: not in `default`, not
+# in any release artifact.
+latency-timing = []
+
 __egress-common = ["hyper/server", "dep:async-tungstenite", "dep:serf", "dep:peekable", "dep:uuid", "dep:pkcs8"]
 egress-all = ["egress-mapping", "egress-netfilter", "egress-mapping-udp", "egress-netfilter-udp"]
 egress-mapping = ["__egress-common"]

@@ -68,6 +68,7 @@ use crate::{
                 },
                 metadata::ServerKeyConfigHint,
             },
+            timing::{IngressLatency, TimedStream, Timer},
         },
         ra_context::{RaContext, VerifyContext},
     },
@@ -95,6 +96,8 @@ pub struct OHttpClientInner {
     /// Headers to copy from the outer OHTTP response to the inner (plaintext) response.
     #[allow(unused)]
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// Per-phase latency histograms owned by the security layer.
+    latency: Arc<IngressLatency>,
 }
 
 struct KeyStoreValue {
@@ -149,13 +152,14 @@ impl OHttpClient {
         })
     }
 
-    pub async fn new(
+    pub(crate) async fn new(
         ra_context: Arc<RaContext>,
         http_client: Arc<reqwest::Client>,
         base_url: String,
         runtime: TokioRuntime,
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+        latency: Arc<IngressLatency>,
     ) -> Result<Self> {
         // Parsed once per client, not per forwarded request. The error keeps
         // the context text the per-request parse produced before; the caller
@@ -191,6 +195,7 @@ impl OHttpClient {
             runtime: runtime.clone(),
             passthrough_request_headers,
             passthrough_response_headers,
+            latency,
         });
 
         let key_store_value = MaybeCached::new(runtime.clone(), refresh_strategy, {
@@ -214,7 +219,9 @@ impl OHttpClient {
         &self,
         request: axum::extract::Request,
     ) -> Result<(axum::response::Response, Option<AttestationResult>), TngError> {
+        let timer = Timer::start();
         let key_store_value = self.key_store_value.get_latest().await?;
+        self.inner.latency.keyconfig_wait.record(timer.elapsed());
 
         match self
             .inner
@@ -499,6 +506,8 @@ impl OHttpClientInner {
         )>,
         request: axum::extract::Request,
     ) -> Result<axum::response::Response, TngError> {
+        let timer = Timer::start();
+
         // Extract passthrough headers before the request is consumed by BHttp encoding
         let passthrough_headers = self.passthrough_headers(&request);
 
@@ -567,11 +576,22 @@ impl OHttpClientInner {
                 client_request,
                 sink,
             );
+            // Frame 0 is the metadata buffer clone; the first real sealed
+            // chunk is frame 1. The first-poll gap is when reqwest starts
+            // pulling the body, not when the seal starts.
+            let body = TimedStream::new(
+                body,
+                self.latency.req_body_first_poll.clone(),
+                Some((1, self.latency.req_body_first_chunk.clone())),
+                self.latency.req_body_pumped.clone(),
+            );
             (
                 client_response_decapsulator,
                 reqwest::Body::wrap_stream(body),
             )
         };
+
+        self.latency.seal_setup.record(timer.elapsed());
 
         // Forward the sealed request to the upstream server
         let response = self
@@ -747,7 +767,12 @@ impl OHttpClientInner {
             "OHTTP response body stream ready for decapsulation"
         );
 
-        let response_body = response.bytes_stream();
+        let response_body = TimedStream::new(
+            response.bytes_stream(),
+            self.latency.resp_stream_first_poll.clone(),
+            None,
+            self.latency.resp_stream_pumped.clone(),
+        );
 
         #[cfg(wasm)]
         // Create a new stream wrapper here since reqwest::Response is not Send, which is required by BhttpDecoder.
@@ -782,6 +807,7 @@ impl OHttpClientInner {
     where
         R: futures::AsyncRead + Unpin + Send + 'static,
     {
+        let timer = Timer::start();
         let decode_result = BhttpDecoder::new(decrypted_body)
             .decode_message()
             .await
@@ -796,6 +822,7 @@ impl OHttpClientInner {
         let HttpMessage::Response(mut response) = decode_result.into_full_message()? else {
             return Err(TngError::InvalidHttpResponse);
         };
+        self.latency.inner_resp_decode.record(timer.elapsed());
 
         // Copy the configured outer response headers (outer -> inner),
         // collected by `validate_outer_response` before the body stream was
@@ -827,6 +854,7 @@ impl OHttpClientInner {
         ohttp_request_body: reqwest::Body,
         passthrough_headers: Vec<(http::HeaderName, http::HeaderValue)>,
     ) -> Result<reqwest::Response, TngError> {
+        let timer = Timer::start();
         let url = self.base_url.clone();
 
         tracing::debug!(?url, "Sending OHTTP request to upstream server");
@@ -849,6 +877,8 @@ impl OHttpClientInner {
             .send()
             .await
             .map_err(TngError::HttpCipherTextForwardError)?;
+
+        self.latency.outer_post_wait.record(timer.elapsed());
 
         #[cfg(unix)]
         tracing::debug!(
