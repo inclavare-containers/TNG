@@ -338,9 +338,9 @@ mod tests {
             assert!(resp.status() == StatusCode::NOT_FOUND);
         }
 
-        // /status/egress/0/ohttp/ advertises the latency node next to keys
-        // only in a latency-timing build; a default build keeps the keys
-        // node alone.
+        // /status/egress/0/ohttp/ advertises the latency and preconnect
+        // nodes next to keys only in a latency-timing build; a default
+        // build keeps the keys node alone.
         {
             let resp = reqwest::ClientBuilder::new()
                 .no_proxy()
@@ -351,9 +351,41 @@ mod tests {
             assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
             let body: Vec<String> = resp.json().await?;
             #[cfg(feature = "latency-timing")]
-            assert_eq!(body, vec!["keys", "latency"]);
+            assert_eq!(body, vec!["keys", "latency", "preconnect"]);
             #[cfg(not(feature = "latency-timing"))]
             assert_eq!(body, vec!["keys"]);
+        }
+
+        // /status/egress/0/ohttp/preconnect reports the preconnect counters.
+        #[cfg(feature = "latency-timing")]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/preconnect"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: serde_json::Value = resp.json().await?;
+            assert_eq!(body["preconnect_started"], 0);
+            assert_eq!(body["preconnect_declined_warm"], 0);
+            assert_eq!(body["preconnect_reaped"], 0);
+            assert_eq!(body["preconnect_abandoned"], 0);
+        }
+
+        #[cfg(not(feature = "latency-timing"))]
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{port}/status/egress/0/ohttp/preconnect"
+                ))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::NOT_FOUND);
         }
 
         // /status/egress/0/ohttp/latency reports the egress phase histogram.

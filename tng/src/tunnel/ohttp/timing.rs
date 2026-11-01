@@ -150,6 +150,62 @@ mod recorder {
         }
     }
 
+    /// Lifecycle counters for backend preconnects, served at
+    /// `.../ohttp/preconnect`. The latency histograms alone cannot separate the
+    /// outcomes of a pre-dial on a saturated runtime: a `backend_redial` wait is
+    /// the same whether the preconnect was declined at the peek, started but not
+    /// yet finished at reap time, or never started. Each event is one relaxed
+    /// atomic increment: zero allocation, safe from any path.
+    ///
+    /// The accounting identity is
+    /// `started = reaped + abandoned + at most one still pending`: a dial that is
+    /// started always ends up reaped by its request's `forward_request` or torn
+    /// down by the guard of the request that started it.
+    #[derive(Default)]
+    pub(crate) struct PreconnectCounters {
+        started: AtomicU64,
+        declined_warm: AtomicU64,
+        reaped: AtomicU64,
+        abandoned: AtomicU64,
+    }
+
+    #[allow(dead_code)] // recorded once the backend pre-dial path is built
+    impl PreconnectCounters {
+        /// A preconnect was declined because the backend slot peek found a
+        /// pooled connection present or a concurrent forward holding the slot.
+        pub(crate) fn record_declined_warm(&self) {
+            self.declined_warm.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// A preconnect dial task was spawned.
+        pub(crate) fn record_started(&self) {
+            self.started.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// The cold path of `forward_request` took the pending dial from the
+        /// slot (whatever verdict the dial later produced).
+        pub(crate) fn record_reaped(&self) {
+            self.reaped.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// A dial nobody reaped was taken from the slot by the teardown guard
+        /// of the request that started it.
+        pub(crate) fn record_abandoned(&self) {
+            self.abandoned.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl PreconnectCounters {
+        pub(crate) fn snapshot(&self) -> serde_json::Value {
+            serde_json::json!({
+                "preconnect_started": self.started.load(Ordering::Relaxed),
+                "preconnect_declined_warm": self.declined_warm.load(Ordering::Relaxed),
+                "preconnect_reaped": self.reaped.load(Ordering::Relaxed),
+                "preconnect_abandoned": self.abandoned.load(Ordering::Relaxed),
+            })
+        }
+    }
+
     /// A segment start point. Reads the clock on construction; `elapsed`
     /// hands the sample to [`Histogram::record`].
     pub(crate) struct Timer(Instant);
@@ -199,9 +255,32 @@ mod recorder {
         #[inline(always)]
         pub(crate) fn record(&self, _elapsed: Option<Duration>) {}
     }
+
+    #[derive(Default)]
+    pub(crate) struct PreconnectCounters {
+        // Not a unit struct: every shape's call sites build these with
+        // `::default()`, and the unit form would trip clippy's
+        // default_constructed_unit_structs on the disabled build only.
+        _unmeasured: std::marker::PhantomData<u64>,
+    }
+
+    #[allow(dead_code)] // recorded once the backend pre-dial path is built
+    impl PreconnectCounters {
+        #[inline(always)]
+        pub(crate) fn record_declined_warm(&self) {}
+
+        #[inline(always)]
+        pub(crate) fn record_started(&self) {}
+
+        #[inline(always)]
+        pub(crate) fn record_reaped(&self) {}
+
+        #[inline(always)]
+        pub(crate) fn record_abandoned(&self) {}
+    }
 }
 
-pub(crate) use recorder::{Histogram, Timer};
+pub(crate) use recorder::{Histogram, PreconnectCounters, Timer};
 
 macro_rules! define_latency {
     ($name:ident { $($field:ident),* $(,)? }) => {
@@ -396,7 +475,7 @@ mod tests {
         bucket_lower_us, bucket_of, bucket_width_us, Histogram, HIST_BUCKETS, LINEAR_BUCKETS,
         MAX_BUCKETS_US,
     };
-    use super::{EgressLatency, IngressLatency, TimedStream};
+    use super::{EgressLatency, IngressLatency, PreconnectCounters, TimedStream};
 
     #[test]
     fn bucket_layout_matches_definition() {
@@ -527,6 +606,30 @@ mod tests {
         assert_eq!(egress["phases"].as_object().unwrap().len(), 15);
     }
 
+    #[test]
+    fn preconnect_counters_snapshot_tracks_events() {
+        let counters = PreconnectCounters::default();
+        let snap = counters.snapshot();
+        for key in [
+            "preconnect_started",
+            "preconnect_declined_warm",
+            "preconnect_reaped",
+            "preconnect_abandoned",
+        ] {
+            assert_eq!(snap[key], 0, "{key} starts at zero");
+        }
+        counters.record_started();
+        counters.record_started();
+        counters.record_declined_warm();
+        counters.record_reaped();
+        counters.record_abandoned();
+        let snap = counters.snapshot();
+        assert_eq!(snap["preconnect_started"], 2);
+        assert_eq!(snap["preconnect_declined_warm"], 1);
+        assert_eq!(snap["preconnect_reaped"], 1);
+        assert_eq!(snap["preconnect_abandoned"], 1);
+    }
+
     #[tokio::test]
     async fn timed_stream_records_first_poll_and_completion() {
         let lat = IngressLatency::new();
@@ -629,8 +732,8 @@ mod tests {
 mod tests {
     use std::time::Duration;
 
-    use super::recorder::{Histogram, Timer};
-    use crate::tunnel::ohttp::timing::{EgressLatency, IngressLatency};
+    use super::recorder::{Histogram, PreconnectCounters, Timer};
+    use super::{EgressLatency, IngressLatency};
 
     /// Without the feature a segment start reads no clock, hands `None` to
     /// the stub `record`, and a record call cannot panic on any input.
@@ -651,5 +754,14 @@ mod tests {
         let egress = EgressLatency::new();
         ingress.handler_total.record(None);
         egress.handler_total.record(Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn stub_preconnect_counters_accept_every_event() {
+        let counters = PreconnectCounters::default();
+        counters.record_declined_warm();
+        counters.record_started();
+        counters.record_reaped();
+        counters.record_abandoned();
     }
 }

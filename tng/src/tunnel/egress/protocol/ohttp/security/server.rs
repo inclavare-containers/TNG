@@ -16,7 +16,7 @@ use tower_http::{
 use web_time_compat::{Instant, InstantExt};
 
 use crate::status::{StatusProvider, StatusQueryResult};
-use crate::tunnel::ohttp::timing::EgressLatency;
+use crate::tunnel::ohttp::timing::{EgressLatency, PreconnectCounters};
 use crate::tunnel::ra_context::RaContext;
 use crate::{
     config::egress::{CorsConfig, OHttpArgs},
@@ -85,6 +85,10 @@ impl OhttpServer {
                     passthrough_response_headers,
                     forward_client_ip,
                     latency.clone(),
+                    // Served through the status node only; unlike the
+                    // latency histograms these are not shared with
+                    // per-connection state yet.
+                    Arc::new(PreconnectCounters::default()),
                 )
                 .await?,
             ),
