@@ -1,4 +1,5 @@
-//! Dials the egress upstream (backend) TCP connections.
+//! Dials the egress upstream (backend) TCP connections and owns their
+//! byte-stream lifecycle.
 //!
 //! Every backend leg the egress opens (the transport-level direct forward,
 //! the rats_tls byte streams handed back to the flow, and the ohttp
@@ -7,6 +8,10 @@
 //! (the endpoint resolved by the capture mode at accept time, plus the
 //! mode's `SO_MARK`), the `cx_*` connection accounting, and the access-log
 //! state machine then live in exactly one place.
+//!
+//! The byte-stream lifecycle (dial, wrap the tunnel-facing stream with the
+//! service counters, pump both directions, settle the accounting) lives in
+//! `connect_and_forward_bytes`, so the flow never restates it.
 
 use std::sync::Arc;
 
@@ -16,6 +21,7 @@ use crate::tunnel::access_log::AccessAccepted;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::{ActiveConnectionCounter, ServiceMetrics};
 use crate::tunnel::stream::ContextualStream;
+use crate::CommonStreamTrait;
 
 /// One per accepted outer connection, shared (`Arc`) by every backend leg it
 /// spawns. The endpoint is the destination the egress capture mode resolved
@@ -96,6 +102,27 @@ impl UpstreamConnector {
             stream: ContextualStream::new(stream, "egress-tcp-connect"),
             active_cx,
         })
+    }
+
+    /// Dials a backend and pumps it against a downstream byte stream until
+    /// both directions end, then settles the connection accounting. A dial
+    /// failure is returned already accounted by `connect`; a completed pump
+    /// counts the leg as finished.
+    pub(crate) async fn connect_and_forward_bytes(
+        &self,
+        downstream: Box<dyn CommonStreamTrait>,
+        encrypted: bool,
+        attested: bool,
+    ) -> Result<()> {
+        let upstream = self.connect(encrypted, attested).await?;
+        let (upstream, active_cx) = upstream.into_parts();
+
+        let downstream = self.metrics.new_wrapped_stream(downstream);
+
+        crate::tunnel::utils::forward::normal::forward_stream(upstream, downstream).await;
+
+        active_cx.mark_finished_successfully();
+        Ok(())
     }
 }
 
