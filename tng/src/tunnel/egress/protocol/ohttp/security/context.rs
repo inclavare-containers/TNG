@@ -4,7 +4,7 @@ use axum::response::IntoResponse;
 
 use crate::tunnel::upstream::{ConnectedUpstream, UpstreamConnector};
 use crate::tunnel::utils::runtime::supervised_task::SupervisedTaskResult;
-use crate::{error::TngError, AttestationResult, TokioIo, TokioRuntime};
+use crate::{error::TngError, AttestationResult, TokioRuntime};
 
 type DynSendBody =
     std::pin::Pin<Box<dyn http_body::Body<Data = bytes::Bytes, Error = axum::BoxError> + Send>>;
@@ -135,6 +135,10 @@ impl TngStreamContext {
     /// cheap proof of a genuine TNG request, so garbage traffic cannot
     /// spend backend connections.
     ///
+    /// Only the TCP dial is pre-started: hyper's HTTP/1 handshake performs
+    /// no wire I/O (it builds the connection state and resolves
+    /// immediately), so there is nothing beyond the connect to overlap.
+    ///
     /// Returns `None` (and dials nothing) when a pre-dial would be wasted:
     /// the pooled backend connection is present or in use. Hold the
     /// returned handle until `forward_request` consumes it; dropping it
@@ -184,8 +188,6 @@ impl TngStreamContext {
         B: std::marker::Send,
         <B as http_body::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        // TODO: maybe adjust forward the request to the upstream server with reqwest?
-
         use http_body_util::BodyExt as _;
         let req = req.map(|body| -> DynSendBody { Box::pin(body.map_err(Into::into)) });
         let req = req.map(SendBoxBody);
@@ -224,9 +226,13 @@ impl TngStreamContext {
         // access line is stamped at dial time, and that dial is stamped
         // unattested. Dropping the handle closes the dial off quietly.
         let dial = if attested { None } else { dial };
-        let connected = match dial {
+        let mut send_request = match dial {
             Some(dial) => match dial.into_connection().await {
-                Some(Ok(connected)) => connected,
+                Some(Ok(connected)) => {
+                    connected
+                        .into_http1_backend(&self.runtime, self.connector.metrics())
+                        .await?
+                }
                 // The dial itself was refused: report it exactly like an
                 // inline failure. Redialing here would charge the request
                 // two cx_total for a backend that is down.
@@ -241,38 +247,16 @@ impl TngStreamContext {
                         "ohttp egress: pre-dial unavailable, dialling the backend inline"
                     );
                     self.connector
-                        .connect(true, attested)
-                        .await
-                        .map_err(TngError::ConnectUpstreamFailed)?
+                        .connect_http1(&self.runtime, true, attested)
+                        .await?
                 }
             },
-            None => self
-                .connector
-                .connect(true, attested)
-                .await
-                .map_err(TngError::ConnectUpstreamFailed)?,
-        };
-        let (stream, active_cx) = connected.into_parts();
-        let stream = self.connector.metrics().new_wrapped_backend_stream(stream);
-
-        // TODO: support send both http1 and http2 payload
-        let handshake = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await;
-        let (mut send_request, conn) = match handshake {
-            Ok(pair) => pair,
-            Err(error) => {
-                // The dial succeeded, so a connection that dies at the HTTP
-                // layer is a teardown, not a failed connect.
-                active_cx.mark_finished_successfully();
-                return Err(TngError::HttpPlainTextForwardError(error));
+            None => {
+                self.connector
+                    .connect_http1(&self.runtime, true, attested)
+                    .await?
             }
         };
-
-        self.runtime.spawn_supervised_task_current_span(async move {
-            if let Err(error) = conn.await {
-                tracing::error!(?error, "The HTTP connection with upstream is broken");
-            }
-            active_cx.mark_finished_successfully();
-        });
 
         tracing::debug!("Forwarding HTTP request to upstream now");
         let response = send_request.send_request(req).await;
