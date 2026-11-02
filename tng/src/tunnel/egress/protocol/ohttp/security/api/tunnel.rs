@@ -68,6 +68,14 @@ impl OhttpServerApi {
         // Parse stage: read and decode metadata
         let metadata = read_metadata_block(&mut reader).await?;
 
+        // The request has now cleared the envelope gates (content type and
+        // metadata block), so start the backend dial before decapsulating:
+        // the TCP connect then overlaps the HPKE open, the client
+        // attestation check and the bhttp decode below instead of running
+        // serially after them. `forward_request` consumes the dial; if this
+        // request dies before then, the handle's Drop closes it off quietly.
+        let dial = context.begin_backend_dial();
+
         // Decapsulate stage: open the sealed inner request and open the
         // response seal bound to this request's HPKE context.
         let (mut request, response_seal, sealed_sink) =
@@ -85,7 +93,7 @@ impl OhttpServerApi {
         );
 
         // Forward the request to the upstream server
-        let response = context.forward_request(request, None).await?;
+        let response = context.forward_request(request, None, dial).await?;
 
         tracing::debug!(
             status = ?response.status(),

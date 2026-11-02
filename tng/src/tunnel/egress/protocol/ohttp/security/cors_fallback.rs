@@ -103,7 +103,9 @@ where
                 // does for the decrypted inner request; the preflight's path is
                 // the outer request path. The backend's preflight response
                 // (carrying its `Access-Control-Allow-*`) is relayed verbatim.
-                match ctx.forward_request(req, None).await {
+                // A bare preflight brings no pre-dial: it never passes
+                // through the tunnel API where one would start.
+                match ctx.forward_request(req, None, None).await {
                     Ok(response) => Ok(response),
                     Err(error) => {
                         tracing::error!(
