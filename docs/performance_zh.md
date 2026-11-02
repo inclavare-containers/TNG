@@ -16,6 +16,7 @@
 
 当前快照按 `master` 上的现行方法测量：
 
+- 两台测试机（server 与 client）均为阿里云 ECS `ecs.g8i.xlarge` 实例：4 vCPU、16 GiB 内存、网卡带宽基础 4 Gbit/s、突发最高 15 Gbit/s、网卡队列数 4。
 - 开启远程证明：egress 通过 attestation-agent Unix socket 提交证明，ingress 使用内置证明服务按 `hardware_only` 策略验证。
 - HTTP 响应体 64 KiB。每轮运行同时测量两种 HTTP 连接模式（keep-alive 与无 keep-alive）以及 iperf3 TCP 吞吐。
 - 每个场景的并发梯度为 1、8、16、32、64、128。

@@ -16,6 +16,7 @@ The harness is documented in [`bench/README.md`](../bench/README.md): `bash benc
 
 The current snapshot was measured with the methodology on `master`:
 
+- Both hosts (server and client) are Alibaba Cloud ECS `ecs.g8i.xlarge` instances: 4 vCPU, 16 GiB memory, 4 Gbit/s base / up to 15 Gbit/s burst NIC bandwidth, 4 NIC queues.
 - Remote attestation enabled: the egress attests through the attestation-agent Unix socket, the ingress verifies with the built-in attestation service under the `hardware_only` policy.
 - HTTP body size 64 KiB. Every run measures both HTTP connection modes (keep-alive and no keep-alive) plus iperf3 TCP throughput.
 - Concurrency sweep 1, 8, 16, 32, 64, 128 in every scenario.
