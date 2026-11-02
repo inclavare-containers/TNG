@@ -306,6 +306,31 @@ mod tests {
             assert_eq!(body, vec!["0"]);
         }
 
+        // /status/egress/0/ advertises only the configured protocol's subtree.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/egress/0/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            assert_eq!(body, vec!["ohttp"]);
+        }
+
+        // /status/egress/0/rats_tls is a 404: an ohttp egress claims only
+        // its own segment.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/egress/0/rats_tls/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::NOT_FOUND);
+        }
+
         // /status/egress/0/ohttp/keys should return KeyStatusSnapshot
         {
             let resp = reqwest::ClientBuilder::new()
@@ -424,6 +449,38 @@ mod tests {
             assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
             let body: Vec<String> = resp.json().await?;
             assert_eq!(body, vec!["rats_tls"]);
+        }
+
+        // /status/egress/0/ advertises the egress's own segment: rats_tls,
+        // not ohttp.
+        {
+            let resp = reqwest::ClientBuilder::new()
+                .no_proxy()
+                .build()?
+                .get(format!("http://127.0.0.1:{port}/status/egress/0/"))
+                .send()
+                .await?;
+            assert!(resp.status() == StatusCode::OK, "got {}", resp.status());
+            let body: Vec<String> = resp.json().await?;
+            assert_eq!(body, vec!["rats_tls"]);
+        }
+
+        // A rats_tls egress owns no ohttp status subtree: both the subtree
+        // root and deeper paths are 404s.
+        {
+            for path in ["rats_tls/", "ohttp/keys"] {
+                let resp = reqwest::ClientBuilder::new()
+                    .no_proxy()
+                    .build()?
+                    .get(format!("http://127.0.0.1:{port}/status/egress/0/{path}"))
+                    .send()
+                    .await?;
+                assert!(
+                    resp.status() == StatusCode::NOT_FOUND,
+                    "/status/egress/0/{path}: got {}",
+                    resp.status()
+                );
+            }
         }
 
         // /status/ingress/0/rats_tls/ lists the pool node.

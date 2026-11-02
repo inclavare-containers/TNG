@@ -2,12 +2,12 @@
 //! byte-stream lifecycle.
 //!
 //! Every backend leg the egress opens (the transport-level direct forward,
-//! the rats_tls byte streams handed back to the flow, and the ohttp
-//! self-forwarded keep-alive connections) goes through one
-//! `UpstreamConnector` per accepted outer connection. The dial parameters
-//! (the endpoint resolved by the capture mode at accept time, plus the
-//! mode's `SO_MARK`), the `cx_*` connection accounting, and the access-log
-//! state machine then live in exactly one place.
+//! the protocol-level direct forward, the rats_tls byte streams, and the
+//! ohttp keep-alive connections) goes through one `UpstreamConnector` per
+//! accepted outer connection, dialed by the handler that owns the leg. The
+//! dial parameters (the endpoint resolved by the capture mode at accept
+//! time, plus the mode's `SO_MARK`), the `cx_*` connection accounting, and
+//! the access-log state machine then live in exactly one place.
 //!
 //! The byte-stream lifecycle (dial, wrap the tunnel-facing stream with the
 //! service counters, pump both directions, settle the accounting) lives in

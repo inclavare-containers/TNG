@@ -18,7 +18,7 @@ use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::upstream::UpstreamConnector;
 use crate::{service::RegistedService, CommonStreamTrait};
 
-use super::stream_manager::{trusted::TrustedStreamManager, StreamManager};
+use super::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::runtime::TokioRuntime;
 
@@ -148,9 +148,9 @@ impl EgressFlow {
             // One connector per outer connection. It owns the accept-time
             // resolved upstream endpoint, the access-log state (cloned per
             // backend leg), and the cx accounting shared by every leg,
-            // whether that leg is forwarded by the loop below or, for ohttp,
-            // dialed directly by the request handlers the stream manager
-            // hands the connection to.
+            // whichever handler dials it: the transport-level forward below,
+            // the direct-forward pump, or the protocol handler the stream
+            // manager dispatches the connection to.
             let connector = Arc::new(UpstreamConnector::new(
                 dst,
                 metrics,
@@ -175,60 +175,14 @@ impl EgressFlow {
                 return;
             }
 
-            // Existing trusted stream path
-            let mut pending = match trusted_stream_manager
-                .consume_stream(stream, Some(src), connector.clone())
+            // Existing trusted stream path: the stream manager claims the
+            // connection and every protocol handler dials its backend legs
+            // through this connector.
+            if let Err(error) = trusted_stream_manager
+                .handle_connection(stream, Some(src), connector, runtime_cloned)
                 .await
             {
-                Ok(pending) => pending,
-                Err(error) => {
-                    tracing::error!(?error, "Failed to consume stream from client");
-                    return;
-                }
-            };
-
-            while let Some(next_stream) = pending.next().await {
-                let next_stream = match next_stream {
-                    Ok(next_stream) => next_stream,
-                    Err(error) => {
-                        tracing::error!(?error, "Failed to get next stream");
-                        continue;
-                    }
-                };
-
-                // Spawn a task to handle the connection
-                runtime_cloned.spawn_supervised_task_current_span({
-                    let connector = connector.clone();
-
-                    async move {
-                        // Protocol-level direct forward: determined by TransportLayer
-                        // inside consume_stream. The first bytes of the stream are inspected
-                        // as HTTP; if the path matches a configured direct_forward regex
-                        // (common_args.direct_forward_rules), the request bypasses OHTTP
-                        // decryption entirely and is forwarded as plain HTTP to upstream.
-                        //
-                        // This is a per-request decision, distinct from the transport-level
-                        // decision above. A connection can pass the transport-level IP/ifname
-                        // check (encrypted=true, entering the trusted stream path) yet
-                        // still yield DirectlyForward NextStreams when individual request
-                        // paths match the direct_forward rules.
-                        //
-                        // Three sub-stream outcomes:
-                        // - Secured(stream, Fresh/Resumed): decrypted + attested
-                        // - Secured(stream, Unattested): OHTTP/RATS-TLS decrypted, no attestation
-                        // - DirectlyForward(stream): plain HTTP matched by direct_forward rule
-                        let encrypted = next_stream.is_secured();
-                        let attested = next_stream.attestation_state().is_attested();
-                        let downstream = next_stream.into_stream();
-
-                        if let Err(error) = connector
-                            .connect_and_forward_bytes(downstream, encrypted, attested)
-                            .await
-                        {
-                            tracing::error!(?error, "Failed to forward stream");
-                        }
-                    }
-                });
+                tracing::error!(?error, "Failed to consume stream from client");
             }
         });
     }

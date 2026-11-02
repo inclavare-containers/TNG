@@ -5,58 +5,49 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
-        egress::{
-            protocol::{
-                common::transport::{MaybeDirectlyForward, TransportLayer},
-                ohttp::security::OHttpSecurityLayer,
-                rats_tls::RatsTlsStreamDecoder,
-            },
-            stream_manager::NextStream,
+        egress::protocol::{
+            common::transport::{MaybeDirectlyForward, TransportLayer},
+            ohttp::security::OHttpSecurityLayer,
+            rats_tls::RatsTlsStreamDecoder,
         },
         ra_context::RaContext,
         stream::CommonStreamTrait,
         upstream::UpstreamConnector,
         utils::runtime::TokioRuntime,
     },
-    AttestationState,
 };
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use async_stream::stream;
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-
-use super::StreamManager;
-
-pub type ProtocolStreamDecoderOutput =
-    BoxStream<'static, Result<(Box<dyn CommonStreamTrait + Sync>, AttestationState)>>;
-
-#[async_trait]
-pub trait ProtocolStreamDecoder: StatusProvider {
-    async fn decode_stream(
-        &self,
-        input: Box<dyn CommonStreamTrait + Sync + 'static>,
-        peer: Option<std::net::SocketAddr>,
-    ) -> Result<ProtocolStreamDecoderOutput>;
-}
 
 /// The protocol this egress terminates, decided once from the config. Each
-/// accepted connection is claimed by exactly one of these handlers, and the
-/// two differ in how they own the connection: OHTTP claims it outright (its
-/// security layer serves the outer HTTP and dials backend legs itself
-/// through the connection's `UpstreamConnector`), while RATS-TLS runs the
-/// decoder contract and hands decoded byte legs back to the flow loop.
-enum TerminatedProtocol {
+/// accepted connection is claimed by exactly one of these handlers for its
+/// whole lifetime, and each protocol owns its upstream data path: OHTTP
+/// serves the outer HTTP and dials a backend connection per decrypted
+/// request, RATS-TLS decodes the TLS connection and dials one backend
+/// connection (multiplex=false) or one per CONNECT stream (multiplex=true).
+/// Both dial through the connection's `UpstreamConnector`.
+enum EgressProtocol {
     OHttp(Arc<OHttpSecurityLayer>),
-    RatsTls(Box<dyn ProtocolStreamDecoder + Send + Sync + 'static>),
+    RatsTls(Box<RatsTlsStreamDecoder>),
+}
+
+impl EgressProtocol {
+    /// The segment this protocol's status subtree lives under, matching the
+    /// config field that selected it.
+    fn segment(&self) -> &'static str {
+        match self {
+            EgressProtocol::OHttp(_) => "ohttp",
+            EgressProtocol::RatsTls(_) => "rats_tls",
+        }
+    }
 }
 
 pub struct TrustedStreamManager {
     transport_layer: TransportLayer,
 
-    protocol: TerminatedProtocol,
+    protocol: EgressProtocol,
 
     runtime: TokioRuntime,
 }
@@ -100,7 +91,7 @@ impl TrustedStreamManager {
         };
 
         let protocol = match &common_args.ohttp {
-            Some(ohttp_args) => TerminatedProtocol::OHttp(Arc::new(
+            Some(ohttp_args) => EgressProtocol::OHttp(Arc::new(
                 OHttpSecurityLayer::new(ra_context, ohttp_args.clone(), runtime.clone()).await?,
             )),
             None => {
@@ -109,7 +100,7 @@ impl TrustedStreamManager {
                     .as_ref()
                     .unwrap_or(&Default::default())
                     .multiplex;
-                TerminatedProtocol::RatsTls(Box::new(
+                EgressProtocol::RatsTls(Box::new(
                     RatsTlsStreamDecoder::new(ra_context, runtime.clone(), multiplex).await?,
                 ))
             }
@@ -124,15 +115,25 @@ impl TrustedStreamManager {
             runtime,
         })
     }
-}
 
-impl StreamManager for TrustedStreamManager {
-    async fn consume_stream(
+    /// Claims an accepted encrypted connection. The first bytes decide
+    /// between a protocol-level direct forward and the configured TNG
+    /// protocol; either way the connection is owned from here on by the
+    /// handler it was dispatched to, together with every backend leg it
+    /// dials through `connector`. The call returns when the connection is
+    /// fully handled: a direct forward is pumped inline on this task;
+    /// OHTTP runs on `self.runtime`, the protocol's dedicated runtime,
+    /// spawned there and awaited here; the RATS-TLS handshake runs on this
+    /// task while each decoded leg is pumped from a per-leg task on
+    /// `forward_runtime`, the runtime the egress flow uses for the legs of
+    /// this connection.
+    pub async fn handle_connection(
         &self,
         in_stream: Box<dyn CommonStreamTrait + Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
         connector: Arc<UpstreamConnector>,
-    ) -> Result<BoxStream<'static, Result<NextStream>>> {
+        forward_runtime: TokioRuntime,
+    ) -> Result<()> {
         let maybe_direct_forward = self
             .transport_layer
             .check_direct_forward(in_stream, self.runtime.clone())
@@ -141,40 +142,54 @@ impl StreamManager for TrustedStreamManager {
 
         match maybe_direct_forward {
             MaybeDirectlyForward::ContinueAsTngTraffic(stream) => match &self.protocol {
-                // OHTTP claims the whole connection here, at the same level
-                // as a direct-forward match claims its plain stream: the
-                // security layer serves the outer HTTP and forwards each
-                // decrypted request to the backend itself, dialling through
-                // `connector`. No legs come back for the flow to forward, so
-                // the stream the flow loop reads is empty.
-                TerminatedProtocol::OHttp(security_layer) => {
+                // OHTTP claims the whole connection at the same level as a
+                // direct-forward match claims its plain stream: the security
+                // layer serves the outer HTTP and forwards each decrypted
+                // request to the backend itself, dialling through
+                // `connector`.
+                EgressProtocol::OHttp(security_layer) => {
                     let security_layer = security_layer.clone();
-                    self.runtime.spawn_supervised_task(async move {
+                    let handle = self.runtime.spawn_supervised_task(async move {
                         if let Err(error) =
                             security_layer.handle_stream(stream, connector, peer).await
                         {
                             tracing::error!(?error, "Failed to handle OHTTP stream")
                         }
                     });
-                    Ok(futures::stream::empty().boxed())
+                    // Isolation stays on the dedicated runtime; awaiting the
+                    // task is what makes the dispatch own the connection for
+                    // its whole lifetime. A cancelled or panicked handler has
+                    // nothing left to report: its errors were logged inside.
+                    let _ = handle.await;
+                    Ok(())
                 }
-                TerminatedProtocol::RatsTls(decoder) => {
-                    let mut pending = decoder
-                        .decode_stream(stream, peer)
+                EgressProtocol::RatsTls(handler) => {
+                    handler
+                        .handle_stream(stream, peer, connector, forward_runtime)
                         .await
-                        .context("Failed to decode stream")?;
-                    Ok(stream! {
-                        while let Some(result) = pending.next().await {
-                            yield result.map(|(stream, att)| NextStream::Secured(stream, att));
-                        }
-                    }
-                    .boxed())
                 }
             },
-            MaybeDirectlyForward::DirectlyForward(stream) => Ok(stream! {
-                yield Ok(NextStream::DirectlyForward(Box::new(stream)));
+            MaybeDirectlyForward::DirectlyForward(stream) => {
+                // Protocol-level direct forward: determined by TransportLayer.
+                // The first bytes of the stream are inspected as HTTP; if the
+                // path matches a configured direct_forward regex
+                // (common_args.direct_forward_rules), the request bypasses
+                // OHTTP decryption entirely and is forwarded as plain HTTP to
+                // upstream.
+                //
+                // This is a per-request decision, distinct from the
+                // transport-level decision in the flow. A connection can pass
+                // the transport-level IP/ifname check (encrypted=true,
+                // entering the trusted path) yet still have its first bytes
+                // match a direct_forward rule and be pumped as-is here.
+                if let Err(error) = connector
+                    .connect_and_forward_bytes(stream, false, false)
+                    .await
+                {
+                    tracing::error!(?error, "Failed to forward stream");
+                }
+                Ok(())
             }
-            .boxed()),
         }
     }
 }
@@ -183,12 +198,13 @@ impl StreamManager for TrustedStreamManager {
 impl StatusProvider for TrustedStreamManager {
     async fn query_status(&self, path: &[&str]) -> Result<StatusQueryResult, TngError> {
         match path {
-            [] => Ok(StatusQueryResult::Subtree(vec!["ohttp".into()])),
-            ["ohttp", rest @ ..] => match &self.protocol {
-                TerminatedProtocol::OHttp(security_layer) => {
-                    security_layer.query_status(rest).await
-                }
-                TerminatedProtocol::RatsTls(decoder) => decoder.query_status(rest).await,
+            [] => Ok(StatusQueryResult::Subtree(vec![self
+                .protocol
+                .segment()
+                .into()])),
+            [segment, rest @ ..] if *segment == self.protocol.segment() => match &self.protocol {
+                EgressProtocol::OHttp(security_layer) => security_layer.query_status(rest).await,
+                EgressProtocol::RatsTls(handler) => handler.query_status(rest).await,
             },
             _ => Err(TngError::StatusPathNotFound),
         }
