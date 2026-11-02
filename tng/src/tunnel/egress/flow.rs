@@ -131,9 +131,7 @@ impl EgressFlow {
             dst,
             listener_addr: _,
             egress_mode: _,
-            // Egress processes multiple upstream connections per accepted downstream.
-            // Extract access_accepted fields here so they can be cloned per inner-loop iteration.
-            mut access_accepted,
+            access_accepted,
             encrypted,
         } = accepted_stream;
 
@@ -147,6 +145,20 @@ impl EgressFlow {
         runtime.spawn_supervised_task_with_span(span, async move {
             tracing::debug!("Start serving new connection from client");
 
+            // One connector per outer connection. It owns the accept-time
+            // resolved upstream endpoint, the access-log state (cloned per
+            // backend leg), and the cx accounting shared by every leg,
+            // whether that leg is forwarded by the loop below or, for ohttp,
+            // dialed directly by the request handlers the stream manager
+            // hands the connection to.
+            let connector = Arc::new(UpstreamConnector::new(
+                dst,
+                metrics,
+                access_accepted,
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                transport_so_mark,
+            ));
+
             if !encrypted {
                 // Transport-level direct forward: determined at accept time by the
                 // egress mode's host/ifname filter (HookEgress::encrypted checks whether
@@ -154,15 +166,9 @@ impl EgressFlow {
                 // When the IP doesn't match any rule, the entire connection bypasses
                 // the trusted stream manager — no OHTTP/RATS-TLS processing happens.
                 // This is a per-connection decision, made once when the TCP accept occurs.
-                if let Err(error) = UpstreamConnector::new(
-                    dst,
-                    metrics.clone(),
-                    access_accepted,
-                    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-                    transport_so_mark,
-                )
-                .connect_and_forward_bytes(stream, false, false)
-                .await
+                if let Err(error) = connector
+                    .connect_and_forward_bytes(stream, false, false)
+                    .await
                 {
                     tracing::error!(?error, "Failed to forward stream");
                 }
@@ -171,7 +177,7 @@ impl EgressFlow {
 
             // Existing trusted stream path
             let mut pending = match trusted_stream_manager
-                .consume_stream(stream, Some(src))
+                .consume_stream(stream, Some(src), connector.clone())
                 .await
             {
                 Ok(pending) => pending,
@@ -192,9 +198,7 @@ impl EgressFlow {
 
                 // Spawn a task to handle the connection
                 runtime_cloned.spawn_supervised_task_current_span({
-                    let dst = dst.clone();
-                    let access_accepted = access_accepted.clone_for_multiplexing();
-                    let metrics = metrics.clone();
+                    let connector = connector.clone();
 
                     async move {
                         // Protocol-level direct forward: determined by TransportLayer
@@ -217,19 +221,9 @@ impl EgressFlow {
                         let attested = next_stream.attestation_state().is_attested();
                         let downstream = next_stream.into_stream();
 
-                        if let Err(error) = UpstreamConnector::new(
-                            dst,
-                            metrics,
-                            access_accepted,
-                            #[cfg(any(
-                                target_os = "android",
-                                target_os = "fuchsia",
-                                target_os = "linux"
-                            ))]
-                            transport_so_mark,
-                        )
-                        .connect_and_forward_bytes(downstream, encrypted, attested)
-                        .await
+                        if let Err(error) = connector
+                            .connect_and_forward_bytes(downstream, encrypted, attested)
+                            .await
                         {
                             tracing::error!(?error, "Failed to forward stream");
                         }

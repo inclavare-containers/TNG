@@ -92,8 +92,8 @@ where
 
         let mut inner = self.inner.clone();
         // Only the forwarded-preflight branch below uses the stream context;
-        // cloning it unconditionally would refcount-bump the runtime, sender,
-        // and backend slot on every tunnel POST.
+        // cloning it unconditionally would refcount-bump the runtime,
+        // connector, and backend slot on every tunnel POST.
         let ctx = is_preflight.then(|| self.state.clone());
 
         Box::pin(async move {

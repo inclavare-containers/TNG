@@ -463,8 +463,10 @@ mod tests {
             // duplex + BufReader(SEAL_CHUNK_SIZE) + copy_buf + close.
             let mut kc = aes128_config();
             let client = ohttp::ClientRequest::from_config(&mut kc).expect("client");
-            let (mut read_half, write_half) =
-                tokio::io::duplex(crate::tunnel::ohttp::RELAY_PIPE_SIZE);
+            // 128 KiB: the capacity the retired duplex bridge's relay pipe
+            // actually ran with, inlined so this pins the framing of that
+            // exact configuration.
+            let (mut read_half, write_half) = tokio::io::duplex(128 * 1024);
             let seal = client
                 .encapsulate_stream(write_half.compat())
                 .expect("encapsulate");
