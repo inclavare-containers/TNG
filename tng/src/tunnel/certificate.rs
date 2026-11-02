@@ -82,7 +82,7 @@ pub(crate) async fn verify_for_context(
 ) -> Result<AttestationResult> {
     // Step 1: Extract evidence from certificate
     let pending_result = CertVerifier::new()
-        .verify_der(&end_entity)
+        .verify_der(end_entity)
         .await
         .map_err(|e| anyhow!("Failed to extract evidence from certificate: {:?}", e))?;
 

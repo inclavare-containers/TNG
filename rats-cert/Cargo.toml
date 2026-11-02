@@ -167,12 +167,13 @@ default = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita"
 
 [dev-dependencies]
 ctor = {workspace = true}
+jsonwebtoken = {workspace = true, features = ["use_pem"]}
 # Parses the real TDX CC event log (TCG PC Client Platform Firmware Profile)
 # into the structured `uefi_event_logs` shape the Rego `actual_measurement`
 # rules read. Dev-only: the real-evidence tdx.kernel test parses the real PAI
 # fixture (`tdx_CCEL_data_pai`) through the same crate the attestation-service
 # TDX verifier uses, so the test exercises the exact production parser.
-eventlog = {git = "https://github.com/mateo-moon/trustee", rev = "2de41693c4b40fbf8e86e20cba7a78817836b4bd"}
+eventlog = {git = "https://github.com/mateo-moon/trustee", rev = "95ee31df4f0fb597cfa0365f88f5f73a53c5b948"}
 rayon = {workspace = true}
 rsa = {workspace = true}
 rstest = {workspace = true}

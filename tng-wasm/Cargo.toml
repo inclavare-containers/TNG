@@ -54,7 +54,7 @@ tokio_with_wasm_proc = {workspace = true}
 bincode = "1.3"
 sev-modern = { package = "sev", version = "=7.1.0", default-features = false, features = ["snp", "serde"] }
 sev = { version = "4", default-features = false, features = ["snp"] }
-verifier = { git = "https://github.com/mateo-moon/trustee", rev = "2de41693c4b40fbf8e86e20cba7a78817836b4bd", default-features = false, features = ["snp-rustcrypto"] }
+verifier = { git = "https://github.com/mateo-moon/trustee", rev = "95ee31df4f0fb597cfa0365f88f5f73a53c5b948", default-features = false, features = ["snp-rustcrypto"] }
 kbs-types = { workspace = true }
 
 reqwest = {workspace = true}

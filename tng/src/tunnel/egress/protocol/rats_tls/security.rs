@@ -143,7 +143,9 @@ mod http1_tests {
                 .route("/aa/evidence", axum::routing::get(move || { let id = next.fetch_add(1, Ordering::SeqCst); async move { axum::Json(serde_json::json!({"test_generation":id})) } }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let addr = listener.local_addr()?;
-            let server = tokio::spawn(async move { axum::serve(listener, router).await });
+            let server = runtime.spawn_unsupervised_task_current_span(async move {
+                axum::serve(listener, router).await
+            });
             let args: RaArgsUnchecked = serde_json::from_value(serde_json::json!({"attest": {"aa_provider":"coco_asr", "asr_addr":format!("http://{addr}"), "refresh_interval":0}}))?;
             let context = Arc::new(RaContext::from_ra_args(&args.into_checked()?).await?);
             let layer = Arc::new(RatsTlsSecurityLayer::new(context.clone(), runtime.clone(), false, true).await?);
