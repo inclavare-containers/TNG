@@ -57,14 +57,12 @@ pub(crate) struct BackendSlot {
 /// [`TngStreamContext::begin_backend_dial`], owned by the request that
 /// started it. The handle is passed to `forward_request`, which reaps the
 /// dial on the cold path; dropping it before then (a decapsulation error, a
-/// client disconnect, a request that rode the pooled connection) closes the
-/// dial off quietly instead of parking an already-connected, already-idling
-/// socket for a later request to inherit. The dial task is supervised, so a
-/// handle dropped at process teardown dies with shutdown rather than
-/// lingering past the process exit.
-#[must_use = "the handle tears down an unconsumed dial; hold it until it is passed to forward_request"]
+/// client disconnect, a request that rode the pooled connection) detaches
+/// the supervised dial task, which settles the connection and closes it when
+/// it finishes, instead of parking an already-connected, already-idling
+/// socket for a later request to inherit.
+#[must_use = "dropping the handle lets the dial settle in the background; hold it until it is passed to forward_request"]
 pub(crate) struct BackendDial {
-    runtime: TokioRuntime,
     /// `None` once `into_connection` has taken the task's verdict.
     handle: Option<
         tokio::task::JoinHandle<SupervisedTaskResult<Result<ConnectedUpstream, anyhow::Error>>>,
@@ -75,34 +73,13 @@ impl BackendDial {
     /// Await the dial's verdict: `Some(Ok(..))` for a connected socket,
     /// `Some(Err(..))` for a dial the backend refused, `None` when the dial
     /// task vanished (shutdown cancelled it, or it panicked) without ever
-    /// answering. Consuming the handle makes the Drop teardown a no-op.
+    /// answering.
     async fn into_connection(mut self) -> Option<Result<ConnectedUpstream, anyhow::Error>> {
         let handle = self.handle.take()?;
         match handle.await {
             Ok(SupervisedTaskResult::Finished(connected)) => Some(connected),
             _ => None,
         }
-    }
-}
-
-impl Drop for BackendDial {
-    fn drop(&mut self) {
-        // The common case is that forward_request already took the verdict;
-        // the taken handle makes that a no-op without spawning anything.
-        let Some(handle) = self.handle.take() else {
-            return;
-        };
-        // Reap a dial nobody consumed. Awaiting the handle and letting any
-        // connected socket drop marks the leg finished and closes it: an
-        // unused connection is not a failed one. A dial error, or a dial
-        // cancelled by shutdown, accounted itself when the dial future
-        // unwound inside the task, so those outcomes need nothing here.
-        // Spawning the reaper (instead of awaiting inline) keeps an
-        // abandoned request's error path from waiting on a dial that is
-        // still running.
-        self.runtime.spawn_supervised_task_current_span(async move {
-            let _ = handle.await;
-        });
     }
 }
 
@@ -162,7 +139,6 @@ impl TngStreamContext {
             connector.connect(true, false).await
         });
         Some(BackendDial {
-            runtime: self.runtime.clone(),
             handle: Some(handle),
         })
     }
@@ -775,7 +751,6 @@ mod tests {
                 >());
             handle.abort();
             let dial = BackendDial {
-                runtime: ctx.runtime.clone(),
                 handle: Some(handle),
             };
 
