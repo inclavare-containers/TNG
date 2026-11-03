@@ -695,6 +695,16 @@ mod tests {
             }
         }
 
+        /// A minimal valid inline rego policy for the reference-value tests
+        /// below, which only care that construction loads the reference
+        /// values. Using the inline policy keeps them independent of which
+        /// static policies the guard accepts or rejects.
+        fn accepting_inline_policy() -> PolicyConfig {
+            PolicyConfig::Inline {
+                content: STANDARD.encode("package policy\ndefault allow = true"),
+            }
+        }
+
         /// Builtin verify path is `BackgroundCheck` with `TngConverter::Coco(CocoConverter::Builtin(..))`.
         fn assert_verify_context_builtin_background_check(ctx: &VerifyContext) {
             match ctx {
@@ -749,7 +759,7 @@ mod tests {
             rvs.insert("example-measurement".to_string(), serde_json::json!([]));
             let provenance = Provenance { rvs };
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Inline {
                         content: provenance,
@@ -813,7 +823,7 @@ mod tests {
         #[serial]
         async fn test_verify_context_builtin_error_invalid_reference_path() {
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Path {
                         path: "/nonexistent/ref.json".to_string(),
@@ -899,7 +909,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -940,7 +950,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -979,7 +989,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![ReferenceValueConfig::ReleaseManifest {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -1002,7 +1012,7 @@ mod tests {
             let provenance2 = Provenance { rvs: rvs2 };
 
             let verify_args = make_verify_builtin_args(
-                PolicyConfig::HardwareWithReferenceValues,
+                accepting_inline_policy(),
                 vec![
                     ReferenceValueConfig::Sample {
                         payload: SampleProvenancePayloadConfig::Inline {

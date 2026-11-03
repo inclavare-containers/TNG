@@ -213,7 +213,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `model` | string | — | Set to `"background_check"` to enable explicitly (omitting it defaults to this mode) |
 | `as_type` | string | `"builtin"` | Set to `"builtin"` to enable the built-in AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | Built-in AS verification policy. Defaults to `{"type": "hardware_only"}` if omitted (the alias `{"type": "default"}` resolves to the same). `type` values are shown in the scenarios and the cheat-sheet at the end |
-| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list; only used when the policy requires reference values |
+| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `hardware_with_reference_values`, `hardware_strict_with_reference_values`, `hardware_strict_with_measurements`, `inline`, `path`, and `transparency_log` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), and `hardware_only_strict`, because their verification rules do not consume reference values. An empty list is accepted for every policy |
 
 **PCCS configuration**
 
@@ -227,20 +227,21 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 
 **Verification strategies**
 
-Compare the four strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
+Compare the five strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
 
-| Strategy (`type`) | Hardware TEE check | Compare measurements | Requires user input | Use case |
-|---|---|---|---|---|
-| `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | Only confirm the peer is a genuine TEE |
-| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ trusted baseline | ✅ `reference_values` | Compare against a trusted baseline to detect tampering |
-| `inline` / `path` | ✅ | depends on policy | ✅ rego policy | Custom decision logic |
-| `transparency_log` | ✅ | ✅ Rekor-anchored | ✅ log entry | Supply-chain transparency anchoring |
+| Strategy (`type`) | Hardware TEE check | Compare measurements | Requires user input | `reference_values` | Use case |
+|---|---|---|---|---|---|
+| `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | rejected when non-empty | Only confirm the peer is a genuine TEE |
+| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ trusted baseline | ✅ `reference_values` | accepted | Compare against a trusted baseline to detect tampering |
+| `hardware_strict_with_measurements` | ✅ | ✅ registered reference values | ✅ measurement list | accepted | Verify user-owned artifacts without a transparency service |
+| `inline` / `path` | ✅ | depends on policy | ✅ rego policy | accepted | Custom decision logic |
+| `transparency_log` | ✅ | ✅ Rekor-anchored | ✅ log entry | accepted | Supply-chain transparency anchoring |
 
-> `trust_all` is debug-only (affirms every dimension); see the cheat-sheet at the end.
+> `trust_all` is debug-only (affirms every dimension) and rejects a non-empty `reference_values`; an empty list is accepted by every policy. See the cheat-sheet at the end.
 
 **Scenario 1: Platform attestation only**
 
-Goal: only confirm the peer is a genuine TEE, without comparing measurements. No policy or reference values are needed: omit `attestation_policy` and `reference_values` and the default `{"type": "hardware_only"}` applies: it only verifies hardware TEE recognition and ignores reference values; it is the simplest starting configuration, suited to general-purpose deployments.
+Goal: only confirm the peer is a genuine TEE, without comparing measurements. No policy or reference values are needed: omit `attestation_policy` and `reference_values` and the default `{"type": "hardware_only"}` applies. It only verifies hardware TEE recognition. This policy's rules do not consume reference values, so a non-empty `reference_values` list is rejected at load; it is the simplest starting configuration, suited to general-purpose deployments.
 
 <details>
 <summary>Example: default configuration</summary>
@@ -282,7 +283,7 @@ Goal: verify evidence with your own rules. Set `attestation_policy.type` to `"in
 
 **Scenario 3: Compare against reference values**
 
-Goal: compare the peer's actual measurements against a "trusted baseline" (reference values) to confirm the runtime environment has not been tampered with. Set `attestation_policy.type` to `"hardware_with_reference_values"` (trustee comprehensive appraisal against reference values) or `"hardware_strict_with_reference_values"` (same, but additionally requires TDX to be non-debug and include an event log); the trusted baseline is provided via `reference_values`.
+Goal: compare the peer's actual measurements against a "trusted baseline" (reference values) to confirm the runtime environment has not been tampered with. Set `attestation_policy.type` to `"hardware_with_reference_values"` (trustee comprehensive appraisal against reference values) or `"hardware_strict_with_reference_values"` (same, but additionally requires TDX to be non-debug and include an event log); the trusted baseline is provided via `reference_values`. Only policies whose rules consume reference values accept the list; the `trust_all`, `hardware_only`, and `hardware_only_strict` policies reject a non-empty list at load, while an empty list is accepted everywhere.
 
 Each `reference_values[]` entry has two `type` fields: the outer one selects the reference-value **source**, the inner `payload.type` selects the **loading method**.
 
@@ -653,12 +654,12 @@ Basic example (Restful):
 
 | `type` | One-liner | See |
 |---|---|---|
-| `hardware_only` (alias `default`) | Only verifies hardware TEE recognition, ignores reference values (default) | Scenario 1 |
+| `hardware_only` (alias `default`) | Only verifies hardware TEE recognition; rejects a non-empty `reference_values` (default) | Scenario 1 |
 | `hardware_only_strict` | Same, but TDX must be non-debug and include an event log | Scenario 1 note |
 | `hardware_with_reference_values` | Trustee comprehensive appraisal against reference values | Scenario 3 |
 | `hardware_strict_with_reference_values` | Same, additionally requires TDX non-debug and event log | Scenario 3 |
 | `hardware_strict_with_measurements` | Strict hardware posture plus an explicit measurement list appraised against registered reference values | Scenario 3 Example 3c |
-| `trust_all` | Affirms every dimension unconditionally (debug/test only) | — |
+| `trust_all` | Affirms every dimension unconditionally (debug/test only) and rejects a non-empty `reference_values` | — |
 | `inline` | Inline base64 rego | Scenario 2 |
 | `path` | rego file path | Scenario 2 |
 | `transparency_log` | Anchor to a Rekor v1 transparency log | Scenario 4 |
