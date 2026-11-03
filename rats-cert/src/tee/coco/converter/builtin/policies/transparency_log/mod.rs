@@ -187,7 +187,7 @@ impl PolicyConfig {
 /// static list is empty so policies without static measurements are
 /// byte-identical to before; the caller AND-gates `static_ok` into
 /// `measurements_verified` only when the block is emitted.
-pub(super) fn static_reference_rules(static_measurements: &[String]) -> String {
+fn static_reference_rules(static_measurements: &[String]) -> String {
     if static_measurements.is_empty() {
         return String::new();
     }
@@ -952,18 +952,18 @@ tdx_eventlog_present if {{ count(input.tdx.uefi_event_logs) > 0 }}
     Ok(rego)
 }
 
-#[cfg(test)]
 /// Evaluate a bundled rego policy against `input` and return the four AR4SI
 /// trust-vector values as (executables, hardware, configuration, file_system).
-async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
+#[cfg(test)]
+pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
     eval_policy_vector_with_rvs(policy, input, &[]).await
 }
 
-#[cfg(test)]
 /// Same as [`eval_policy_vector`], but first registers each `(name, value)`
 /// pair as a sample reference value in the in-memory RVPS so policies that
 /// call `query_reference_value` resolve against real data.
-async fn eval_policy_vector_with_rvs(
+#[cfg(test)]
+pub(crate) async fn eval_policy_vector_with_rvs(
     policy: &str,
     input: &str,
     rvs: &[(&str, &str)],
@@ -1059,10 +1059,7 @@ mod tests {
     // convert → verify_evidence). `tee_from_str` + `CocoEvidence` live in the
     // evidence module; `HashAlgo` in crate::crypto; `ReportData` in crate::tee.
     // (Not all of these are imported by the builtin mod, so pull them in here.)
-    use super::super::{
-        build_hardware_strict_with_measurements_policy,
-        build_hardware_strict_with_reference_values_policy, load_policy,
-    };
+    use super::super::load_policy;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
     use crate::tee::coco::converter::builtin::host_fns::{dsse_pae, DSSE_PAYLOAD_TYPE};
@@ -1128,21 +1125,6 @@ mod tests {
             eval_policy_vector(policy, missing_eventlog).await,
             (2, 97, 2, 2)
         );
-    }
-
-    #[tokio::test]
-    async fn test_rego_hardware_strict_with_reference_values_restricts_tdx_hardware() {
-        let policy = build_hardware_strict_with_reference_values_policy()
-            .expect("build strict reference-values policy");
-
-        let valid_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
-        assert_eq!(eval_policy_vector(&policy, valid_tdx).await.1, 2);
-
-        let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
-        assert_eq!(eval_policy_vector(&policy, debug_tdx).await.1, 97);
-
-        let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
-        assert_eq!(eval_policy_vector(&policy, missing_eventlog).await.1, 97);
     }
 
     #[tokio::test]
@@ -4138,65 +4120,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             .await,
             (97, 2, 2, 2),
             "a pinned repo with no pull-image event must reject (fail-closed)"
-        );
-    }
-
-    /// The `hardware_strict_with_measurements` builtin policy: strict
-    /// hardware posture plus the listed measurements appraised against
-    /// reference values, no transparency service.
-    #[cfg(feature = "crypto-rustcrypto")]
-    #[tokio::test]
-    async fn hardware_static_measurements_policy_appraises() {
-        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
-        let model_hash = "9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875";
-        let image_digest =
-            "sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b";
-
-        let policy = build_hardware_strict_with_measurements_policy(&[
-            "model".to_string(),
-            "container.image.model-server".to_string(),
-        ])
-        .expect("build policy");
-
-        let load_model_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"pai/load-model","content":{"model-id":"Qwen/Qwen3.8-27B","hash":"9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"}}}}"#;
-        let pull_image_event = r#"{"type_name":"EV_EVENT_TAG","details":{"unicode_name":"AAEL","data":{"domain":"alibabacloud.com","operation":"kangaroo/pull-image","content":{"reference":"registry.example.com/my/model-server:v3","digest":"sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"}}}}"#;
-        let input = format!(
-            r#"{{"tdx":{{"quote":{{"header":{{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}},"body":{{"mr_td":{mr_td:?},"td_attributes":"0000001000000000"}}}},"uefi_event_logs":[{load_model_event},{pull_image_event}]}}}}"#
-        );
-        let rvs = &[
-            ("measurement.model.Qwen/Qwen3.8-27B", model_hash),
-            ("measurement.container.image.model-server", image_digest),
-        ];
-
-        assert_eq!(
-            eval_policy_vector_with_rvs(&policy, &input, rvs).await,
-            (2, 2, 2, 2),
-            "matching static measurements must affirm"
-        );
-        assert_eq!(
-            eval_policy_vector_with_rvs(
-                &policy,
-                &input,
-                &[("measurement.model.Qwen/Qwen3.8-27B", "deadbeef")]
-            )
-            .await,
-            (97, 2, 2, 2),
-            "mismatched static measurements must reject"
-        );
-        assert_eq!(
-            eval_policy_vector_with_rvs(&policy, &input, &[]).await,
-            (97, 2, 2, 2),
-            "unregistered reference values must reject"
-        );
-
-        // Debug-enabled TD: bit 0 of the FIRST td_attributes byte set (the
-        // low nibble of the first byte turns odd) degrades hardware per the
-        // hardware_only_strict posture.
-        let debug_input = input.replace("\"0000001000000000\"", "\"0100001000000000\"");
-        assert_eq!(
-            eval_policy_vector_with_rvs(&policy, &debug_input, rvs).await,
-            (2, 97, 2, 2),
-            "debug-enabled TDX must degrade hardware (strict posture)"
         );
     }
 

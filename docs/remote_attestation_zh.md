@@ -136,7 +136,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 }
 ```
 
-**3. 按需收紧验证强度。** 先过渡到 `hardware_only_strict`（更严的平台校验）；再视需要自定义策略（`inline`/`path` rego）与参考值（`sample`/`slsa`/`release_manifest`）做度量比对；高级场景可用 `transparency_log` 锚定到 Rekor 透明日志。详见 [Background Check 模式](#background-check-模式) 下内置 AS 的场景 1 至 4。
+**3. 按需收紧验证强度。** 先过渡到 `hardware_only_strict`（更严的平台校验）；再以模块化的 `modules` 策略钉住具体校验项（启动度量、容器镜像、模型、GPU、TDX 平台姿态），条目类型与语义见 [`modules` 证明策略](attestation_modules_zh.md)；需要完全自定义判定逻辑时写自定义策略（`inline`/`path` rego）配参考值；高级场景可用 `transparency_log` 锚定到 Rekor 透明日志。详见 [Background Check 模式](#background-check-模式) 下内置 AS 的场景 1 至 4。
 
 **4. 大规模 / 中心化场景再上外部 AS。** 若有大量远程证明验证需求、需要中心化的验证与配置管理，改用外部部署的 Attestation Service（[Trustee](https://github.com/openanolis/trustee)），verify 侧切到 `as_type: "restful"`/`"grpc"` + `as_addr`。详见 [Background Check 模式](#background-check-模式) 下的外部 AS 小节。
 
@@ -214,7 +214,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `model` | string | — | 设为 `"background_check"` 显式启用（省略即默认该模式） |
 | `as_type` | string | `"builtin"` | 设为 `"builtin"` 启用内置 AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | 内置 AS 的验证策略。省略时默认 `{"type": "hardware_only"}`（别名 `{"type": "default"}` 同样解析为该策略）。`type` 取值见下方场景与末尾速查表 |
-| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表。只有 `hardware_with_reference_values`、`hardware_strict_with_reference_values`、`hardware_strict_with_measurements`、`inline`、`path`、`transparency_log` 这些策略会消费它。非空列表在 `trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict` 下于加载期被拒绝，因为这些策略的校验规则不读取参考值。空列表对所有策略都放行 |
+| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表。只有 `inline`、`path`、`transparency_log` 三种策略会消费它。非空列表在 `trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 下于加载期被拒绝，因为这些策略的校验规则不读取参考值。空列表对所有策略都放行 |
 
 **PCCS 配置**
 
@@ -230,13 +230,12 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **验证策略**
 
-先按下表对比五种验证策略，按你的目标选一个；`attestation_policy` 的 `type` 取值随场景不同。
+先按下表对比四种验证策略，按你的目标选一个；`attestation_policy` 的 `type` 取值随场景不同。
 
 | 策略（`type`） | 校验硬件 TEE | 比对度量值 | 需用户提供 | `reference_values` | 适用 |
 |---|---|---|---|---|---|
 | `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | 非空即拒绝 | 只确认对端是真 TEE |
-| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ 可信基线 | ✅ `reference_values` | 接受 | 比对可信基线，确认未被篡改 |
-| `hardware_strict_with_measurements` | ✅ | ✅ 注册参考值 | ✅ 度量清单 | 接受 | 无需透明服务校验用户侧产物 |
+| `modules` | ✅ | ✅ 策略内钉住的基线 | ✅ 模块规则列表 | 非空即拒绝 | 钉启动度量、镜像、模型、GPU、TDX 姿态等校验 |
 | `inline` / `path` | ✅ | 视策略而定 | ✅ rego 策略 | 接受 | 自定义判定逻辑 |
 | `transparency_log` | ✅ | ✅ Rekor 锚定 | ✅ 日志条目 | 接受 | 供应链透明度锚定 |
 
@@ -284,9 +283,65 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 > [!TIP]
 > OPA/rego 是进阶用法。多数部署用场景 1 的 `hardware_only` 即可，仅在需要自定义判定逻辑时才写 rego。也可把自定义 rego 与参考值组合：将 `attestation_policy.type` 设为 `"inline"` / `"path"`，同时提供 `reference_values`，策略里即可读取参考值做判定。
 
-**场景 3：与参考值做度量比对**
+**场景 3：模块化校验规则（`modules`）**
 
-目标：把对端的实际度量值与"可信基线"（参考值）比对，确认运行环境未被篡改。设 `attestation_policy.type` 为 `"hardware_with_reference_values"`（基于 trustee 的完整参考值度量）或 `"hardware_strict_with_reference_values"`（同前，但额外要求 TDX 非 debug 且包含 eventlog）；可信基线通过 `reference_values` 提供。只有规则会消费参考值的策略才接受该列表；`trust_all`、`hardware_only`、`hardware_only_strict` 会在加载期拒绝非空列表，空列表则对所有策略放行。
+目标：对端的平台姿态、启动链、工作负载制品或 GPU 提出具体、可校验的要求。设 `attestation_policy.type` 为 `"modules"`：每个条目声明一项具类型校验，可信基线直接钉在策略里。组内同一 AR4SI 维度的条目 AND；每个维度在携带该维度条目的组之间 OR，不含某维度条目的组不约束该维度；空列表除硬件 TEE 识别外不设要求；每项校验都 fail-closed：证据缺少被测值、或与钉住的基线不符，评定即非 affirming。`modules` 类型把每个钉住的值作为字面量嵌入生成的规则，并在加载期拒绝非空 `reference_values` 列表。条目类型、各模块字段、以及从已删除的固定策略变体迁移，见 [`modules` 证明策略](attestation_modules_zh.md)。
+
+<details>
+<summary>示例 3a：单组钉住姿态、GPU 与度量</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "modules",
+            "modules": [
+                { "type": "tdx", "value": {} },
+                { "type": "nvidia", "value": { "verify": "local" } },
+                { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
+                { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
+                { "type": "container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
+                { "type": "ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+            ]
+        }
+    }
+}
+```
+
+该组要求 strict TDX 姿态、客户机自报的 GPU 证明通过、钉住的 OVMF 与内核度量，以及所钉镜像的 digest 与所钉模型的哈希。摘要值仅为示例，请替换为你自己制品实测得到的值。
+</details>
+
+<details>
+<summary>示例 3b：两条可替代基线（嵌套多组）</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "modules",
+            "modules": [
+                [
+                    { "type": "tdx", "value": {} },
+                    { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
+                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+                ],
+                [
+                    { "type": "tdx", "value": {} },
+                    { "type": "tdx.td-shim", "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
+                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+                ]
+            ]
+        }
+    }
+}
+```
+
+任一组整体通过即评定通过：匹配第一条基线的 OVMF 启动虚机，或匹配第二条基线的 td-shim 启动机密容器。度量混搭跨两条基线的证据两组都不命中。
+</details>
+
+`reference_values` 字段只为消费参考值的策略类型提供可信基线：场景 2 的自定义 `inline`/`path` 策略，以及场景 4 中 `transparency_log` 的静态度量。`trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 的规则从不读取参考值，非空列表在加载期被拒绝。空列表对所有策略都放行。
 
 每个 `reference_values[]` 条目有两个 `type`：外层选参考值**来源**，内层 `payload.type` 选**加载方式**。
 
@@ -326,14 +381,15 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 嵌套字段含义：`provenance_info.type` 为 `rv-release-manifest` 或 `slsa-intoto-statements`，标识 provenance 格式；`rekor_api_version`（默认 `2`）是 Rekor 日志 API 版本；`provenance_source` 描述参考值来源（`protocol` 如 `oci`、`uri`、`artifact`）；`operation_type` 为 `refresh` 或 `add`。
 
 <details>
-<summary>示例 3a：sample 来源</summary>
+<summary>示例 3c：sample 来源</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -366,14 +422,15 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 </details>
 
 <details>
-<summary>示例 3b：slsa 来源</summary>
+<summary>示例 3d：slsa 来源</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -403,14 +460,15 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 </details>
 
 <details>
-<summary>示例 3c：release_manifest 来源</summary>
+<summary>示例 3e：release_manifest 来源</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -436,36 +494,6 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
                                 "operation_type": "refresh"
                             }
                         ]
-                    }
-                }
-            }
-        ]
-    }
-}
-```
-</details>
-
-<details>
-<summary>示例 3c：钉住用户侧度量</summary>
-
-`hardware_strict_with_measurements` 策略把一份显式度量清单与注册的参考值比对，平台姿态取 strict（TDX 非 debug 且包含 eventlog）。用于透明日志不发布的用户侧产物——用户自己的模型、用户提供的容器镜像——不需要场景 4 的透明日志。度量类型：`"model"`（每条 `pai/load-model` 事件都须匹配 `measurement.model.<model-id>`）和 `"container.image.<repo>"`（镜像 reference 的 repo 尾段等于 `<repo>` 的每条 pull-image 事件都须匹配 `measurement.container.image.<repo>`；repo 段自由命名，钉了没有对应事件的 repo 会 fail-closed）。每个配置的度量共同 AND 门控 `executables` 信任维度。
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "hardware_strict_with_measurements",
-            "measurements": ["model", "container.image.model-server"]
-        },
-        "reference_values": [
-            {
-                "type": "sample",
-                "payload": {
-                    "type": "inline",
-                    "content": {
-                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
-                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
                     }
                 }
             }
@@ -527,12 +555,12 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **`publishedMeasurements` 缺省时：** 度量重建与哈希比对被整体跳过，仅执行 TDX 平台检查，executables 信任维度保持 affirming。显式空数组（`[]`）**并不等同**于缺省：它仍会执行检查，而对真实日志参考必然拒绝。当仅需平台证明、不需要度量绑定时，用缺省来跳过度量检查。
 
-**静态参考值度量（`staticReferenceMeasurements`）：** 不走透明日志、而是与内置 AS 静态注册的参考值（`reference_values`，RVPS `query_reference_value`）比对的度量类型。用于透明日志不发布的用户侧产物——典型如用户自己的模型和用户提供的容器镜像。rekor-v1 与 artifact-server 两种 primary 均可搭配使用。支持两种类型：
+**静态参考值度量（`staticReferenceMeasurements`）：** 不走透明日志、而是与内置 AS 静态注册的参考值（`reference_values`，RVPS `query_reference_value`）比对的度量类型。用于透明日志不发布的用户侧产物，典型如用户自己的模型和用户提供的容器镜像。rekor-v1 与 artifact-server 两种 primary 均可搭配使用。支持两种类型：
 
-- `"model"`：每条 `alibabacloud.com` `pai/load-model` AAEL 事件都须与以 `measurement.model.<model-id>` 注册的参考值匹配。key 由事件自身的 `model-id` 决定，且至少要存在一条 load-model 事件——参考值未注册或事件缺失都会拒绝。key 命名沿用 upstream trustee 默认策略（`measurement.model.<model-id>`），将来外部 Trustee AS 可以用同名参考值无缝接替。
+- `"model"`：每条 `alibabacloud.com` `pai/load-model` AAEL 事件都须与以 `measurement.model.<model-id>` 注册的参考值匹配。key 由事件自身的 `model-id` 决定，且至少要存在一条 load-model 事件，参考值未注册或事件缺失都会拒绝。key 命名沿用 upstream trustee 默认策略（`measurement.model.<model-id>`），将来外部 Trustee AS 可以用同名参考值无缝接替。
 - `"container.image.<repo>"`：镜像 reference 的 repo 尾段等于 `<repo>` 的每条 `kangaroo/pull-image` 事件，都须与以 `measurement.container.image.<repo>` 注册的 digest 匹配。`<repo>` 段是自由命名：它就是你所钉镜像 reference 的 repo 尾段（路径最后一段，registry 主机、路径前缀、tag/digest 都剥掉），任何名字都行、没有任何名字有特殊地位；钉了没有对应 pull-image 事件的 repo 会 fail-closed（拒绝而非跳过）。参考值名是 trustee 风格的 `measurement.` 前缀加上 manifest 度量类型 `container.image.<repo>` 组合而成。
 
-每个静态检查与透明日志检查共同 AND 门控 `measurements_verified`（与 primary 解析、以及配置时的 fallback 解析一起）：透明日志检查与全部静态检查都通过才通过，否则评定拒绝。`staticReferenceMeasurements` 不得与 `publishedMeasurements` / `fallbackPublishedMeasurements` 重复；加载期校验会拒绝不支持的类型、重复项和重叠。同一套校验也可通过 `hardware_strict_with_measurements` 策略独立使用（不需要透明日志服务）。
+每个静态检查与透明日志检查共同 AND 门控 `measurements_verified`（与 primary 解析、以及配置时的 fallback 解析一起）：透明日志检查与全部静态检查都通过才通过，否则评定拒绝。`staticReferenceMeasurements` 不得与 `publishedMeasurements` / `fallbackPublishedMeasurements` 重复；加载期校验会拒绝不支持的类型、重复项和重叠。同一套校验也可作为 `modules` 度量条目独立使用（不需要透明日志服务）：`ai.model.<model-id>` 与 `container.image.<repo>` 条目把同样的基线直接钉在策略里。
 
 </details>
 
@@ -572,7 +600,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 }
 ```
 
-`container.image.model-server` 钉的是 reference 以 repo `model-server` 结尾的镜像（如 `registry.example.com/my/model-server:v3`——registry 主机与 tag 不参与匹配）。模型的参考值是度量工具为模型算出的 root hash；镜像的参考值是镜像 digest。
+`container.image.model-server` 钉的是 reference 以 repo `model-server` 结尾的镜像（如 `registry.example.com/my/model-server:v3`，registry 主机与 tag 不参与匹配）。模型的参考值是度量工具为模型算出的 root hash；镜像的参考值是镜像 digest。
 
 </details>
 
@@ -659,9 +687,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 |---|---|---|
 | `hardware_only`（别名 `default`） | 仅校验硬件 TEE 识别；拒绝非空 `reference_values`（默认） | 场景 1 |
 | `hardware_only_strict` | 同上，但要求 TDX 非 debug 且包含 eventlog | 场景 1 注 |
-| `hardware_with_reference_values` | 基于 trustee 的完整参考值度量 | 场景 3 |
-| `hardware_strict_with_reference_values` | 同上，额外要求 TDX 非 debug 且包含 eventlog | 场景 3 |
-| `hardware_strict_with_measurements` | strict 平台姿态 + 显式度量清单对照注册参考值 | 场景 3 示例 3c |
+| `modules` | 模块化校验规则：按模块设校验、基线内联钉住；同一维度条目在组内 AND，每个维度在携带该维度的组间 OR | 场景 3 |
 | `trust_all` | 全部维度恒通过（仅调试/测试）且拒绝非空 `reference_values` | — |
 | `inline` | 内联 base64 rego | 场景 2 |
 | `path` | rego 文件路径 | 场景 2 |

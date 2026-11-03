@@ -14,8 +14,10 @@ pub use converter::BuiltinCocoConverter;
 // The config types were all public before the split into `policy_config`; keep
 // that reachability for downstream users of the builtin converter.
 pub use policy_config::{
-    ArtifactLogService, PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-    SlsaReferenceValuePayloadConfig, TransparencyServiceConfig,
+    ArtifactLogService, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig, NvidiaVerify,
+    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+    SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog,
+    TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyServiceConfig,
 };
 
 /// Default policy ID used by builtin AS

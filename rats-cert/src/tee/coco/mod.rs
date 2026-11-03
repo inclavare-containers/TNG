@@ -192,11 +192,17 @@ mod tests {
             // Create attester
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
 
-            // Create builtin converter (embedded AS)
-            let converter =
-                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
-                    .await
-                    .expect("Failed to create builtin converter");
+            // Create builtin converter (embedded AS) with a modules policy
+            // pinning a boot measurement to a dummy value. The pinned value
+            // never matches real hardware, so the appraisal stays
+            // non-affirming (the assertion below).
+            let policy: PolicyConfig = serde_json::from_str(
+                r#"{"type":"modules","modules":[{"type":"tdx.ovmf","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+            )
+            .expect("modules policy parses");
+            let converter = BuiltinCocoConverter::new(&policy, &[])
+                .await
+                .expect("Failed to create builtin converter");
 
             // Create builtin verifier from converter's work dir
             let verifier = converter
@@ -273,8 +279,11 @@ mod tests {
             // Policy selectable via BENCH_POLICY env (default TrustAll) so the
             // rego-appraisal cost can be isolated by comparing policies.
             let policy = match std::env::var("BENCH_POLICY").as_deref() {
-                Ok("hw_rv") => PolicyConfig::HardwareWithReferenceValues,
                 Ok("hw_only") => PolicyConfig::HardwareOnly,
+                Ok("modules") => serde_json::from_str(
+                    r#"{"type":"modules","modules":[{"type":"tdx","value":{}}]}"#,
+                )
+                .expect("modules bench policy parses"),
                 _ => PolicyConfig::TrustAll,
             };
             let converter = BuiltinCocoConverter::new(&policy, &[])

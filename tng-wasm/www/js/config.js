@@ -55,10 +55,6 @@ function buildBuiltinPolicy(policy, content) {
   switch (policy) {
     case "hardware_only_strict":
       return { type: "hardware_only_strict" };
-    case "hardware_with_reference_values":
-      return { type: "hardware_with_reference_values" };
-    case "hardware_strict_with_reference_values":
-      return { type: "hardware_strict_with_reference_values" };
     case "trust_all":
       return { type: "trust_all" };
     case "inline":
@@ -112,10 +108,14 @@ export function buildTngConfig(inputs) {
     verify.as_type = "builtin";
     const policy = buildBuiltinPolicy(builtinPolicy, builtinPolicyContent);
     if (policy) verify.attestation_policy = policy;
-    const rvs = builtinReferenceValues
-      .map(buildBuiltinReferenceValue)
-      .filter(Boolean);
-    if (rvs.length) verify.reference_values = rvs;
+    // Only the inline policy consumes reference_values; the bundled templates
+    // reject a non-empty list, so do not attach rows to them.
+    if (builtinPolicy === "inline") {
+      const rvs = builtinReferenceValues
+        .map(buildBuiltinReferenceValue)
+        .filter(Boolean);
+      if (rvs.length) verify.reference_values = rvs;
+    }
   } else {
     // coco restful (default) or grpc. policy_ids is consumed by the AS.
     verify.policy_ids = policyIds;

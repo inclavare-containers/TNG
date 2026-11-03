@@ -136,7 +136,7 @@ Adopt remote attestation progressively, from the simplest link to a production-g
 }
 ```
 
-**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then add a custom policy (`inline`/`path` rego) and reference values (`sample`/`slsa`/`release_manifest`) for measurement comparison; for advanced cases use `transparency_log` to anchor to a Rekor transparency log. See Scenarios 1 to 4 under the built-in AS in [Background Check Mode](#background-check-mode).
+**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then pin concrete checks (boot measurements, container images, models, GPU, TDX platform posture) with the modular `modules` policy, whose entry types and semantics are in [Modules Attestation Policy](attestation_modules.md); write a custom policy (`inline`/`path` rego) with reference values when you need fully custom decision logic; for advanced cases use `transparency_log` to anchor to a Rekor transparency log. See Scenarios 1 to 4 under the built-in AS in [Background Check Mode](#background-check-mode).
 
 **4. Use an external AS for large-scale / centralized cases.** If you have a high volume of remote-attestation verifications and need centralized verification and configuration management, switch to an externally deployed Attestation Service ([Trustee](https://github.com/openanolis/trustee)) and set the verify side to `as_type: "restful"`/`"grpc"` + `as_addr`. See the External AS section under [Background Check Mode](#background-check-mode).
 
@@ -214,7 +214,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `model` | string | — | Set to `"background_check"` to enable explicitly (omitting it defaults to this mode) |
 | `as_type` | string | `"builtin"` | Set to `"builtin"` to enable the built-in AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | Built-in AS verification policy. Defaults to `{"type": "hardware_only"}` if omitted (the alias `{"type": "default"}` resolves to the same). `type` values are shown in the scenarios and the cheat-sheet at the end |
-| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `hardware_with_reference_values`, `hardware_strict_with_reference_values`, `hardware_strict_with_measurements`, `inline`, `path`, and `transparency_log` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), and `hardware_only_strict`, because their verification rules do not consume reference values. An empty list is accepted for every policy |
+| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `inline`, `path`, and `transparency_log` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules`, because their verification rules do not consume reference values. An empty list is accepted for every policy |
 
 **PCCS configuration**
 
@@ -230,13 +230,12 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 
 **Verification strategies**
 
-Compare the five strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
+Compare the four strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
 
 | Strategy (`type`) | Hardware TEE check | Compare measurements | Requires user input | `reference_values` | Use case |
 |---|---|---|---|---|---|
 | `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | rejected when non-empty | Only confirm the peer is a genuine TEE |
-| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ trusted baseline | ✅ `reference_values` | accepted | Compare against a trusted baseline to detect tampering |
-| `hardware_strict_with_measurements` | ✅ | ✅ registered reference values | ✅ measurement list | accepted | Verify user-owned artifacts without a transparency service |
+| `modules` | ✅ | ✅ values pinned in the policy | ✅ module list | rejected when non-empty | Pin checks on boot measurements, images, models, GPUs, and TDX posture |
 | `inline` / `path` | ✅ | depends on policy | ✅ rego policy | accepted | Custom decision logic |
 | `transparency_log` | ✅ | ✅ Rekor-anchored | ✅ log entry | accepted | Supply-chain transparency anchoring |
 
@@ -284,9 +283,65 @@ Goal: verify evidence with your own rules. Set `attestation_policy.type` to `"in
 > [!TIP]
 > OPA/rego is an advanced feature. Most deployments are fine with `hardware_only` from Scenario 1; write rego only when you need custom decision logic. You can also combine custom rego with reference values: set `attestation_policy.type` to `"inline"` / `"path"` and also provide `reference_values`; the policy can then read the reference values to make decisions.
 
-**Scenario 3: Compare against reference values**
+**Scenario 3: Modular verification rules (`modules`)**
 
-Goal: compare the peer's actual measurements against a "trusted baseline" (reference values) to confirm the runtime environment has not been tampered with. Set `attestation_policy.type` to `"hardware_with_reference_values"` (trustee comprehensive appraisal against reference values) or `"hardware_strict_with_reference_values"` (same, but additionally requires TDX to be non-debug and include an event log); the trusted baseline is provided via `reference_values`. Only policies whose rules consume reference values accept the list; the `trust_all`, `hardware_only`, and `hardware_only_strict` policies reject a non-empty list at load, while an empty list is accepted everywhere.
+Goal: pin concrete, checkable requirements on the peer's platform posture, boot chain, workload artifacts, or GPUs. Set `attestation_policy.type` to `"modules"`: each entry declares one typed check and pins its trusted baseline directly in the policy. Entries of the same AR4SI dimension within a group AND together; each dimension is OR-ed over the groups that carry entries of that dimension, and a group without entries of a dimension does not constrain that dimension; an empty list imposes nothing beyond hardware-TEE recognition; every check fails closed, so a measured value missing from the evidence or differing from the pinned baseline makes the appraisal non-affirming. The `modules` type embeds each pinned value as a literal in the generated rules and rejects a non-empty `reference_values` list at load. The entry types, per-module fields, and the migration from the removed fixed policy types are in [Modules Attestation Policy](attestation_modules.md).
+
+<details>
+<summary>Example 3a: single group pinning posture, GPU, and measurements</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "modules",
+            "modules": [
+                { "type": "tdx", "value": {} },
+                { "type": "nvidia", "value": { "verify": "local" } },
+                { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
+                { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
+                { "type": "container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
+                { "type": "ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+            ]
+        }
+    }
+}
+```
+
+The group requires the strict TDX posture, a successful guest-reported GPU attestation, the pinned OVMF and kernel measurements, and the pinned digest and hash for the named image and model. The digests are examples; use the values measured for your own artifacts.
+</details>
+
+<details>
+<summary>Example 3b: two alternative baselines (nested groups)</summary>
+
+```json
+{
+    "verify": {
+        "as_type": "builtin",
+        "attestation_policy": {
+            "type": "modules",
+            "modules": [
+                [
+                    { "type": "tdx", "value": {} },
+                    { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
+                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+                ],
+                [
+                    { "type": "tdx", "value": {} },
+                    { "type": "tdx.td-shim", "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
+                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+                ]
+            ]
+        }
+    }
+}
+```
+
+The appraisal passes when either group passes in full: an OVMF-booted VM matching the first baseline, or a td-shim-booted confidential container matching the second. Measurements mixed across the two baselines pass neither.
+</details>
+
+The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2 and the `transparency_log` static measurements of Scenario 4. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values. An empty list is accepted by every policy.
 
 Each `reference_values[]` entry has two `type` fields: the outer one selects the reference-value **source**, the inner `payload.type` selects the **loading method**.
 
@@ -326,14 +381,15 @@ Structure of `ReferenceValueListPayload` (`release_manifest` / `slsa`):
 Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-intoto-statements`, identifying the provenance format; `rekor_api_version` (default `2`) is the Rekor log API version; `provenance_source` describes the reference-value source (`protocol` e.g. `oci`, `uri`, `artifact`); `operation_type` is `refresh` or `add`.
 
 <details>
-<summary>Example 3a: sample source</summary>
+<summary>Example 3c: sample source</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -366,14 +422,15 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 </details>
 
 <details>
-<summary>Example 3b: slsa source</summary>
+<summary>Example 3d: slsa source</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -403,14 +460,15 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 </details>
 
 <details>
-<summary>Example 3c: release_manifest source</summary>
+<summary>Example 3e: release_manifest source</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "hardware_with_reference_values"
+            "type": "path",
+            "path": "/etc/tng/policy.rego"
         },
         "reference_values": [
             {
@@ -436,36 +494,6 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
                                 "operation_type": "refresh"
                             }
                         ]
-                    }
-                }
-            }
-        ]
-    }
-}
-```
-</details>
-
-<details>
-<summary>Example 3c: pin user-owned measurements</summary>
-
-The `hardware_strict_with_measurements` policy appraises an explicit measurement list against the registered reference values, on the strict hardware posture (TDX must be non-debug and include an event log). Use it for user-owned artifacts that a transparency service does not publish — a user-provided model, user-provided container images — without Scenario 4's transparency log. Measurement types: `"model"` (every `pai/load-model` event must match `measurement.model.<model-id>`) and `"container.image.<repo>"` (every pull-image event whose image reference repo tail equals `<repo>` must match `measurement.container.image.<repo>`; the repo segment is free-form, and a pinned repo without a matching event fails closed). Every configured measurement AND-gates the `executables` trust dimension.
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "hardware_strict_with_measurements",
-            "measurements": ["model", "container.image.model-server"]
-        },
-        "reference_values": [
-            {
-                "type": "sample",
-                "payload": {
-                    "type": "inline",
-                    "content": {
-                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
-                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
                     }
                 }
             }
@@ -527,12 +555,12 @@ The `transparency_log` policy anchors the trusted measurement set to an authenti
 
 **When `publishedMeasurements` is absent:** the measurement reconstruction and hash comparison are skipped entirely; only the TDX platform checks run, and the executables trust dimension stays affirming. An explicit empty array (`[]`) is *not* the same: it still runs the check, which always rejects against a real logged reference. Use absence to opt out of measurement binding (e.g. when only platform attestation matters).
 
-**Static reference measurements (`staticReferenceMeasurements`):** measurement types appraised against reference values statically registered with the builtin AS (`reference_values`, RVPS `query_reference_value`) instead of the transparency log. Use it for user-owned artifacts the transparency service does not publish — the user's model and the user-provided container images, typically. Works with the rekor-v1 primary and the artifact-server primary alike. Two types are supported:
+**Static reference measurements (`staticReferenceMeasurements`):** measurement types appraised against reference values statically registered with the builtin AS (`reference_values`, RVPS `query_reference_value`) instead of the transparency log. Use it for user-owned artifacts the transparency service does not publish, typically the user's model and user-provided container images. Works with the rekor-v1 primary and the artifact-server primary alike. Two types are supported:
 
-- `"model"`: every `alibabacloud.com` `pai/load-model` AAEL event must match the reference value registered under `measurement.model.<model-id>`. The key is selected by the event's own `model-id`, and at least one load-model event must exist — none registered, or no event at all, rejects. The key name follows the upstream trustee default policy (`measurement.model.<model-id>`), so an external Trustee AS can serve the same reference-value name later.
+- `"model"`: every `alibabacloud.com` `pai/load-model` AAEL event must match the reference value registered under `measurement.model.<model-id>`. The key is selected by the event's own `model-id`, and at least one load-model event must exist; none registered, or no event at all, rejects. The key name follows the upstream trustee default policy (`measurement.model.<model-id>`), so an external Trustee AS can serve the same reference-value name later.
 - `"container.image.<repo>"`: every `kangaroo/pull-image` event whose image reference's repo tail equals `<repo>` must match the digest registered under `measurement.container.image.<repo>`. The `<repo>` segment is free-form: it is the repo tail of the image you are pinning (the last path segment of the reference, registry host, path prefix and tag/digest stripped), so any name works and nothing is special about it; a pinned repo with no matching pull-image event fails closed (reject, not skip). The reference-value name is the trustee-style `measurement.` prefix composed with the manifest measurement type `container.image.<repo>`.
 
-Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) via the `hardware_strict_with_measurements` policy.
+Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) as `modules` measurement entries: `ai.model.<model-id>` and `container.image.<repo>` pin those baselines directly in the policy.
 
 </details>
 
@@ -572,7 +600,7 @@ Each static check AND-gates `measurements_verified` (together with the primary r
 }
 ```
 
-`container.image.model-server` pins the image whose reference ends with repo `model-server` (e.g. `registry.example.com/my/model-server:v3` — the registry host and tag are not part of the match). The model reference value is the root hash a measurement tool computed for the model; the image reference value is the image digest.
+`container.image.model-server` pins the image whose reference ends with repo `model-server` (e.g. `registry.example.com/my/model-server:v3`, where the registry host and tag are not part of the match). The model reference value is the root hash a measurement tool computed for the model; the image reference value is the image digest.
 
 </details>
 
@@ -659,9 +687,7 @@ Basic example (Restful):
 |---|---|---|
 | `hardware_only` (alias `default`) | Only verifies hardware TEE recognition; rejects a non-empty `reference_values` (default) | Scenario 1 |
 | `hardware_only_strict` | Same, but TDX must be non-debug and include an event log | Scenario 1 note |
-| `hardware_with_reference_values` | Trustee comprehensive appraisal against reference values | Scenario 3 |
-| `hardware_strict_with_reference_values` | Same, additionally requires TDX non-debug and event log | Scenario 3 |
-| `hardware_strict_with_measurements` | Strict hardware posture plus an explicit measurement list appraised against registered reference values | Scenario 3 Example 3c |
+| `modules` | Modular verification rules: per-module checks with baselines pinned inline; entries of one dimension AND within a group, and each dimension is OR-ed over the groups carrying it | Scenario 3 |
 | `trust_all` | Affirms every dimension unconditionally (debug/test only) and rejects a non-empty `reference_values` | — |
 | `inline` | Inline base64 rego | Scenario 2 |
 | `path` | rego file path | Scenario 2 |

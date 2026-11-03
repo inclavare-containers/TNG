@@ -8,16 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PolicyConfig {
-    /// Use the attestation-service default policy (the trustee
-    /// `ear_default_policy_cpu.rego`): a comprehensive appraisal that checks
-    /// hardware, boot measurements, configuration and filesystem against
-    /// configured reference values. Suited to deployments where those
-    /// reference values are available and mandatory.
-    /// See: https://github.com/openanolis/trustee/blob/7a6a7b8a2554295bcd296963d353761eaf4f70eb/attestation-service/src/token/ear_default_policy_cpu.rego
-    HardwareWithReferenceValues,
-    /// Trustee default reference-value appraisal with stricter TDX hardware
-    /// requirements: TDX evidence must be non-debug and include an event log.
-    HardwareStrictWithReferenceValues,
     /// tng-bundled template: only hardware TEE recognition is enforced; the
     /// other three trustworthiness dimensions are affirming by default and
     /// `data.reference` is ignored. This is the default policy, suited to
@@ -28,19 +18,20 @@ pub enum PolicyConfig {
     /// tng-bundled template: keeps the hardware-only posture for reference
     /// values, but TDX evidence must be non-debug and include an event log.
     HardwareOnlyStrict,
-    /// tng-bundled template: the `hardware_only_strict` platform posture (TDX
-    /// must be non-debug and include an event log) plus an explicit
-    /// measurement list appraised against the builtin AS's registered
-    /// reference values (RVPS `query_reference_value`), so user-owned
-    /// artifacts (the model, user-provided container images) can be verified
-    /// without a transparency service. Same measurement types and
-    /// reference-value names as the transparency_log policy's
-    /// `staticReferenceMeasurements`. The `strict` infix follows
-    /// `hardware_strict_with_reference_values`: non-debug TDX with an event
-    /// log is required.
-    HardwareStrictWithMeasurements {
-        #[serde(rename = "measurements")]
-        measurements: Vec<String>,
+    /// Modular verification rules: a list of module entries, each declaring a
+    /// verification requirement over one part of the evidence (platform
+    /// posture, firmware/kernel/image/model measurement, GPU).
+    /// Entries within one group are AND-ed; multiple groups are alternative
+    /// baselines evaluated with OR. Measurement values are pinned inline in
+    /// the entries, so this type must not be combined with external
+    /// `reference_values`. Omitting a module type imposes no requirement on
+    /// that part; listing one is fail-closed.
+    Modules {
+        /// Either a flat list (a single group, entries AND-ed) or a list of
+        /// lists (one acceptable baseline per inner list). An empty list
+        /// imposes no requirements (the `hardware_only` equivalent).
+        #[serde(default)]
+        modules: ModuleGroupsConfig,
     },
     /// tng-bundled template: every trustworthiness dimension is affirming
     /// regardless of input. **For development and testing only.**
@@ -99,6 +90,222 @@ pub enum PolicyConfig {
 /// Default schema version for the transparency-log policy config.
 fn default_schema_version() -> String {
     "1.0.0".to_string()
+}
+
+/// One entry in a `modules` attestation-policy group. `type` selects the
+/// module family; `value` is a measurement string for the measurement families
+/// (`tdx.*`, `container.image.*`, `ai.model.*`) and a posture object for the
+/// posture families (`tdx`, `nvidia`). The `value` shape is
+/// validated against the family at load time (see [`ModuleEntryConfig`]); an
+/// unrecognized type, a malformed value, or a name-segment charset violation is
+/// a configuration error rejected before any appraisal runs, never silently
+/// ignored.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModuleEntryConfig {
+    #[serde(rename = "type")]
+    pub module_type: String,
+    pub value: serde_json::Value,
+}
+
+/// The `modules` list, in either accepted JSON shape. A flat array is a single
+/// group whose entries AND; an array of arrays is multiple groups, each group
+/// AND-ing within itself and OR-ing across groups. serde distinguishes them by
+/// the outer array's element type (object vs array), so no tag field is needed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ModuleGroupsConfig {
+    /// A single flat group.
+    Single(Vec<ModuleEntryConfig>),
+    /// Multiple groups, each a flat inner group.
+    Groups(Vec<Vec<ModuleEntryConfig>>),
+}
+
+impl Default for ModuleGroupsConfig {
+    fn default() -> Self {
+        ModuleGroupsConfig::Single(Vec::new())
+    }
+}
+
+impl ModuleGroupsConfig {
+    /// Normalize both shapes to the list of groups a flat single group is a
+    /// one-element list. An outer empty array (`[]`) is one empty group (no
+    /// requirements), matching the `hardware_only` equivalence.
+    pub fn as_groups(&self) -> Vec<&Vec<ModuleEntryConfig>> {
+        match self {
+            ModuleGroupsConfig::Single(entries) => vec![entries],
+            ModuleGroupsConfig::Groups(groups) => groups.iter().collect(),
+        }
+    }
+}
+
+/// A `tdx` platform-posture module. Every field defaults to the strict choice,
+/// so `{"type":"tdx","value":{}}` appraises the full strict posture. There is
+/// no total on/off switch: the entry's presence in a group imposes the posture;
+/// omitting the entry imposes none.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct TdxPostureConfig {
+    /// TD debug attribute gate. `deny` (default) requires the debug bit clear;
+    /// `allow` skips the check.
+    #[serde(default)]
+    pub debug: TdxBit,
+    /// SEPT #VE-disable attribute gate. `require` (default) demands the bit set;
+    /// `allow` skips the check.
+    #[serde(default)]
+    pub sept_ve_disable: TdxSeptVe,
+    /// Performance-counter attribute gate. `deny` (default) requires the bit
+    /// clear; `allow` skips the check.
+    #[serde(default)]
+    pub perfmon: TdxBit,
+    /// Service-TD (`mr_servicetd`) gate. `deny` (default) requires the field
+    /// be all-zero or absent (quote v4); `allow` skips the check.
+    #[serde(default)]
+    pub service_td: TdxBit,
+    /// TCB status/advisory gate. Opt-in: absent (the default) applies no TCB
+    /// requirement, so the strict posture does not force `tcb_verification`
+    /// claims that older deployments may not carry.
+    #[serde(default)]
+    pub tcb: Option<TdxTcbConfig>,
+    /// Collateral freshness gate. Opt-in: absent applies no collateral check.
+    #[serde(default)]
+    pub collateral: Option<TdxCollateralConfig>,
+    /// Event log must be present. `required` (default) demands a non-empty
+    /// event log; `optional` skips the check.
+    #[serde(default)]
+    pub eventlog: TdxEventlog,
+}
+
+/// A boolean "deny the bit / allow the bit" posture switch. The default is the
+/// denying (strict) side.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TdxBit {
+    #[default]
+    Deny,
+    Allow,
+}
+
+/// The SEPT #VE-disable switch, which defaults to requiring the bit (opposite
+/// polarity from the plain deny/allow [`TdxBit`]).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TdxSeptVe {
+    #[default]
+    Require,
+    Allow,
+}
+
+/// An event-log requirement switch, defaulting to required. The "off" side is
+/// spelled `optional` in the JSON schema.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TdxEventlog {
+    #[default]
+    Required,
+    Optional,
+}
+
+/// TCB status/advisory configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
+pub struct TdxTcbConfig {
+    /// Minimum TCB status rank. `up_to_date` (default) rejects the
+    /// out-of-date ranks; `out_of_date` accepts them (Revoked is still rejected).
+    pub min_status: TcbMinStatus,
+    /// Advisory IDs that force a reject when present in the platform's
+    /// affected list.
+    pub reject_advisories: Vec<String>,
+    /// Advisory IDs exempted from `reject_advisories`.
+    pub allow_advisories: Vec<String>,
+}
+
+/// Minimum TCB status accepted by a `tcb` gate (the `min_status` field).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TcbMinStatus {
+    /// Accept the out-of-date ranks as well; only Revoked is rejected.
+    OutOfDate,
+    /// Only accept ranks at or above UpToDate (reject the OutOfDate family).
+    /// The default.
+    #[default]
+    UpToDate,
+}
+
+/// Collateral freshness configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
+pub struct TdxCollateralConfig {
+    /// Allow expired TCB collateral. Defaults false (collateral must be fresh).
+    pub allow_expired: bool,
+    /// Minimum `tcb_level_date_tag` (YYYY-MM-DD). `None` means unset.
+    #[serde(default)]
+    pub min_tcb_date: Option<String>,
+    /// Maximum collateral age in days from `latest_issue_date`. `None` unset.
+    #[serde(default)]
+    pub max_collateral_age_days: Option<u32>,
+}
+
+/// An `nvidia` GPU-appraisal module. Absent from a group, GPUs are not
+/// appraised; present, `verify` selects the strength and fail-closes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct NvidiaPostureConfig {
+    /// `local` trusts only the guest-reported AAEL attestation result codes;
+    /// `remote` actively appraises the per-GPU `nvidia_gpu.<i>` claims.
+    pub verify: NvidiaVerify,
+    /// Remote-only: require every enumerated GPU to report `cc_enabled`.
+    #[serde(default = "nvidia_default_true")]
+    pub require_cc_mode: bool,
+    /// Remote-only: require every GPU to carry an evaluated `measurement`.
+    #[serde(default = "nvidia_default_true")]
+    pub require_report: bool,
+    /// Remote-only: minimum number of enumerated GPUs.
+    #[serde(default = "nvidia_default_min_count")]
+    pub min_count: u64,
+    /// Remote-only: allowed GPU UUIDs (empty = no whitelist).
+    #[serde(default)]
+    pub allow_uuids: Vec<String>,
+    /// Remote-only: allowed driver versions (empty = no whitelist).
+    #[serde(default)]
+    pub allow_driver_versions: Vec<String>,
+    /// Remote-only: allowed VBIOS versions (empty = no whitelist).
+    #[serde(default)]
+    pub allow_vbios_versions: Vec<String>,
+    /// Remote-only: allowed per-GPU measurement digests, each 96 lowercase hex
+    /// (empty = no whitelist).
+    #[serde(default)]
+    pub measurement_digest: Vec<String>,
+}
+
+/// The `nvidia` verification strength. No default: it is required, and an
+/// unrecognized value is rejected at deserialization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NvidiaVerify {
+    /// Trust the guest-reported AAEL gpu/attestation result codes.
+    Local,
+    /// Actively appraise the per-GPU `nvidia_gpu.<i>` evaluated claims.
+    Remote,
+}
+
+fn nvidia_default_true() -> bool {
+    true
+}
+
+fn nvidia_default_min_count() -> u64 {
+    1
+}
+
+/// Human-readable JSON value shape for config-error messages.
+pub(crate) fn value_shape(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
 }
 
 /// A transparency-log service whose entry authenticates the reference

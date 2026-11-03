@@ -224,7 +224,7 @@ mod tests {
     async fn make_builtin_verify_context() -> VerifyContext {
         let verify_args = VerifyArgs::BackgroundCheck {
             converter: ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                attestation_policy: PolicyConfig::HardwareWithReferenceValues,
+                attestation_policy: PolicyConfig::HardwareOnly,
                 reference_values: vec![],
             }),
             verifier: VerifierArgs::Coco(CocoVerifierArgs::Builtin),

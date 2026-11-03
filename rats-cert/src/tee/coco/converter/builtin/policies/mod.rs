@@ -8,7 +8,6 @@ use base64::Engine;
 use self::transparency_log::build_artifact_server_policy;
 #[cfg(feature = "crypto-rustcrypto")]
 use self::transparency_log::build_transparency_log_policy;
-use self::transparency_log::static_reference_rules;
 #[cfg(feature = "crypto-rustcrypto")]
 use super::host_fns::resolve_dsse_signature;
 use super::policy_config::PolicyConfig;
@@ -16,19 +15,14 @@ use super::policy_config::PolicyConfig;
 use super::policy_config::TransparencyServiceConfig;
 use crate::errors::*;
 
+pub(crate) mod modules;
 pub(crate) mod transparency_log;
 
 /// Load policy from configuration
-/// Returns None for the AS built-in default policy
-/// (HardwareWithReferenceValues), and a URL-safe base64 encoding of the
-/// policy source for the tng-bundled templates and the user-supplied
-/// Inline/Path variants.
+/// Returns a URL-safe base64 encoding of the policy source for the
+/// tng-bundled templates and the user-supplied Inline/Path variants.
 pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>> {
     match policy {
-        PolicyConfig::HardwareWithReferenceValues => Ok(None),
-        PolicyConfig::HardwareStrictWithReferenceValues => Ok(Some(
-            URL_SAFE_NO_PAD.encode(build_hardware_strict_with_reference_values_policy()?),
-        )),
         PolicyConfig::HardwareOnly => Ok(Some(
             URL_SAFE_NO_PAD.encode(include_str!("static/hardware_only.rego")),
         )),
@@ -169,8 +163,8 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
         PolicyConfig::TransparencyLog { .. } => {
             Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto)
         }
-        PolicyConfig::HardwareStrictWithMeasurements { measurements } => {
-            let policy = build_hardware_strict_with_measurements_policy(measurements)?;
+        PolicyConfig::Modules { modules } => {
+            let policy = modules::build_modules_policy(modules)?;
             Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
         }
         PolicyConfig::Inline { content } => {
@@ -194,137 +188,9 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
     }
 }
 
-fn build_hardware_strict_with_reference_values_policy() -> Result<String> {
-    const TDX_HARDWARE_RULE: &str = r#"hardware := 2 if {
-	# Check the quote is a TDX quote signed by Intel SGX Quoting Enclave
-	input.tdx.quote.header.tee_type == "81000000"
-	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
-	# Check TDX Module version and its hash. Also check OVMF code hash.
-	# input.tdx.quote.body.mr_seam in query_reference_value("tdx.mr_seam")
-	# input.tdx.quote.body.tcb_svn in query_reference_value("tdx.tcb_svn")
-	# input.tdx.quote.body.mr_td in query_reference_value("tdx.mr_td")
-}"#;
-    const TDX_HARDWARE_RULE_STRICT: &str = r#"hardware := 2 if {
-	# Check the quote is a TDX quote signed by Intel SGX Quoting Enclave
-	input.tdx.quote.header.tee_type == "81000000"
-	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
-	tdx_debug_disabled
-	tdx_eventlog_present
-	# Check TDX Module version and its hash. Also check OVMF code hash.
-	# input.tdx.quote.body.mr_seam in query_reference_value("tdx.mr_seam")
-	# input.tdx.quote.body.tcb_svn in query_reference_value("tdx.tcb_svn")
-	# input.tdx.quote.body.mr_td in query_reference_value("tdx.mr_td")
-}"#;
-    const TDX_STRICT_HELPERS: &str = r#"
-
-# TNG strict TDX hardware predicates. The verifier has already replayed the
-# event log against quote RTMRs before these claims reach policy evaluation.
-tdx_debug_disabled if {
-	regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes)
-}
-
-tdx_eventlog_present if {
-	count(input.tdx.uefi_event_logs) > 0
-}
-"#;
-
-    let default_policy = attestation_service::token::ear_broker::DEFAULT_POLICY;
-    if !default_policy.contains(TDX_HARDWARE_RULE) {
-        return Err(Error::BuiltinPolicyTemplateFailed {
-            detail: "TDX hardware rule not found in Trustee default policy".to_string(),
-        });
-    }
-
-    Ok(
-        default_policy.replacen(TDX_HARDWARE_RULE, TDX_HARDWARE_RULE_STRICT, 1)
-            + TDX_STRICT_HELPERS,
-    )
-}
-
-/// Build the `hardware_strict_with_measurements` builtin policy: the
-/// `hardware_only_strict` platform posture plus the listed measurements
-/// appraised against registered reference values. Without a valid
-/// measurement list this is a config error (an empty list would silently
-/// degrade to plain `hardware_only_strict`).
-fn build_hardware_strict_with_measurements_policy(measurements: &[String]) -> Result<String> {
-    if measurements.is_empty() {
-        return Err(Error::BuiltinPolicyTemplateFailed {
-            detail: "measurements must be non-empty".to_string(),
-        });
-    }
-    let mut seen = std::collections::HashSet::new();
-    for t in measurements {
-        if !(t == "model" || t.starts_with("container.image.")) {
-            return Err(Error::BuiltinPolicyTemplateFailed {
-                detail: format!("unsupported measurements type {t}"),
-            });
-        }
-        if !seen.insert(t) {
-            return Err(Error::BuiltinPolicyTemplateFailed {
-                detail: format!("duplicate measurements type {t}"),
-            });
-        }
-    }
-
-    let static_rules = static_reference_rules(measurements);
-
-    Ok(format!(
-        r#"package policy
-
-import rego.v1
-
-# Hardware platform posture from hardware_only_strict (TDX must be non-debug
-# with an event log; the verifier has already replayed the event log against
-# the quote RTMRs before these claims reach policy evaluation) plus the
-# listed measurements: executables affirms only when every configured
-# measurement matches its registered reference value.
-default executables := 97
-default configuration := 2
-default file_system := 2
-default hardware := 97
-
-hardware := 2 if {{
-	input.tdx.quote.header.tee_type == "81000000"
-	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
-	tdx_debug_disabled
-	tdx_eventlog_present
-}}
-
-hardware := 2 if {{
-	input.csv.version in ["1", "2"]
-}}
-
-hardware := 2 if {{
-	input.tpm
-}}
-
-hardware := 2 if {{
-	input.system
-}}
-
-# td_attributes is serialized as lowercase hex. The debug bit is bit 0 of the
-# first byte, so the low nibble of the first byte must be even.
-tdx_debug_disabled if {{
-	regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes)
-}}
-
-tdx_eventlog_present if {{
-	count(input.tdx.uefi_event_logs) > 0
-}}
-
-{static_rules}
-# The measurements are read from the TDX event log, so executables affirms
-# only on TDX evidence with every measurement check passing.
-executables := 2 if {{
-	input.tdx
-	static_ok
-}}
-"#
-    ))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::policy_config::ModuleGroupsConfig;
     use super::*;
 
     #[tokio::test]
@@ -353,36 +219,6 @@ default file_system := 2"#;
         let content = String::from_utf8(decoded).expect("Invalid UTF-8");
         assert!(content.contains("package policy"));
         assert!(content.contains("default executables"));
-    }
-
-    #[tokio::test]
-    async fn test_load_hardware_with_reference_values_policy() {
-        // Equivalent to the former Default: falls through to the AS built-in
-        // trustee rego, so no inline content is registered.
-        let policy_config = PolicyConfig::HardwareWithReferenceValues;
-        let result = load_policy(&policy_config).await;
-        assert!(result.is_ok());
-        assert!(
-            result.unwrap().is_none(),
-            "HardwareWithReferenceValues policy should return None"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_load_hardware_strict_with_reference_values_policy() {
-        let policy_config = PolicyConfig::HardwareStrictWithReferenceValues;
-        let result = load_policy(&policy_config).await;
-        assert!(result.is_ok());
-        let encoded = result
-            .unwrap()
-            .expect("Should return Some for HardwareStrictWithReferenceValues policy");
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&encoded)
-            .expect("Failed to decode policy");
-        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
-        assert!(content.contains("tdx_debug_disabled"));
-        assert!(content.contains("tdx_eventlog_present"));
-        assert!(content.contains("validate_boot_measurements_uefi_event_log"));
     }
 
     #[tokio::test]
@@ -421,6 +257,25 @@ default file_system := 2"#;
     }
 
     #[tokio::test]
+    async fn test_load_modules_policy() {
+        let policy_config = PolicyConfig::Modules {
+            modules: ModuleGroupsConfig::Single(Vec::new()),
+        };
+        let result = load_policy(&policy_config).await;
+        assert!(result.is_ok());
+        let encoded = result
+            .unwrap()
+            .expect("Should return Some for Modules policy");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("Failed to decode policy");
+        let content = String::from_utf8(decoded).expect("Invalid UTF-8");
+        assert!(content.contains("package policy"));
+        assert!(content.contains("default hardware := 97"));
+        assert!(content.contains("tee_recognized"));
+    }
+
+    #[tokio::test]
     async fn test_load_trust_all_policy() {
         let policy_config = PolicyConfig::TrustAll;
         let result = load_policy(&policy_config).await;
@@ -434,20 +289,5 @@ default file_system := 2"#;
         let content = String::from_utf8(decoded).expect("Invalid UTF-8");
         assert!(content.contains("package policy"));
         assert!(content.contains("default hardware := 2"));
-    }
-
-    /// build_hardware_strict_with_measurements_policy rejects malformed configs.
-    #[test]
-    fn hardware_strict_with_measurements_policy_rejects_bad_configs() {
-        for (types, expect) in [
-            (vec![], "non-empty"),
-            (vec!["gpu".to_string()], "unsupported"),
-            (vec!["model".to_string(), "model".to_string()], "duplicate"),
-        ] {
-            let err = build_hardware_strict_with_measurements_policy(&types)
-                .expect_err("must reject")
-                .to_string();
-            assert!(err.contains(expect), "expected {expect} in: {err}");
-        }
     }
 }

@@ -53,12 +53,7 @@ mod tests {
     // flow end-to-end in a headless browser.
     #[wasm_bindgen_test]
     async fn builtin_challenger_webcrypto_keygen_and_nonce() {
-        let converter = match BuiltinCocoConverter::new(
-            &PolicyConfig::HardwareWithReferenceValues,
-            &[],
-        )
-        .await
-        {
+        let converter = match BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[]).await {
             Ok(c) => c,
             Err(error) => panic!("failed to build builtin converter: {error:?}"),
         };

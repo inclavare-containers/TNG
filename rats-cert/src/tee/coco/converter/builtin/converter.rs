@@ -125,7 +125,9 @@ impl BuiltinCocoConverter {
             )
         };
 
-        // Load policy (skip to use AS built-in default policy for Default)
+        // Install the configured policy. Every variant now yields one: the
+        // bundled templates are embedded, `modules` generates Rego, and
+        // `inline`/`path` pass user content through.
         if let Some(policy_content) = super::policies::load_policy(policy).await? {
             attestation_service
                 .set_policy(DEFAULT_POLICY_ID.to_string(), policy_content)
@@ -146,19 +148,15 @@ impl BuiltinCocoConverter {
     }
 
     /// Short policy name used in configuration errors, for the variants whose
-    /// verification rules do not consume reference values. The rest either
-    /// query the builtin RVPS or run user-supplied rules that may read it, so
-    /// they return `None`.
+    /// verification rules do not consume reference values. `inline`, `path`
+    /// and `transparency_log` may read them, so they return `None`.
     fn policy_without_reference_values(policy: &PolicyConfig) -> Option<&'static str> {
         match policy {
             PolicyConfig::HardwareOnly => Some("hardware_only"),
             PolicyConfig::HardwareOnlyStrict => Some("hardware_only_strict"),
             PolicyConfig::TrustAll => Some("trust_all"),
-            PolicyConfig::HardwareWithReferenceValues
-            | PolicyConfig::HardwareStrictWithReferenceValues
-            | PolicyConfig::HardwareStrictWithMeasurements { .. }
-            | PolicyConfig::TransparencyLog { .. }
-            | PolicyConfig::Inline { .. } => None,
+            PolicyConfig::Modules { .. } => Some("modules"),
+            PolicyConfig::TransparencyLog { .. } | PolicyConfig::Inline { .. } => None,
             #[cfg(not(wasm))]
             PolicyConfig::Path { .. } => None,
         }
@@ -414,7 +412,7 @@ impl GenericConverter for BuiltinCocoConverter {
 #[cfg(test)]
 mod tests {
     use super::super::policy_config::{
-        SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig,
+        ModuleGroupsConfig, SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig,
     };
     use super::*;
     use base64::Engine;
@@ -461,9 +459,7 @@ mod tests {
                 content: provenance,
             },
         };
-        let result =
-            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
-                .await;
+        let result = BuiltinCocoConverter::new(&accepting_policy(), &[reference]).await;
         assert!(
             result.is_ok(),
             "Failed to create converter with inline sample reference: {:?}",
@@ -485,7 +481,7 @@ mod tests {
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+        BuiltinCocoConverter::new(&accepting_policy(), &[reference])
             .await
             .expect("Failed to create converter with path sample reference");
     }
@@ -521,7 +517,7 @@ mod tests {
         let reference = ReferenceValueConfig::ReleaseManifest {
             payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+        BuiltinCocoConverter::new(&accepting_policy(), &[reference])
             .await
             .expect("Failed to create converter with path slsa reference");
     }
@@ -554,7 +550,7 @@ mod tests {
         let reference = ReferenceValueConfig::ReleaseManifest {
             payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+        BuiltinCocoConverter::new(&accepting_policy(), &[reference])
             .await
             .expect("Failed to create converter with release manifest reference");
     }
@@ -597,7 +593,7 @@ mod tests {
                 path: ref_path.to_string_lossy().to_string(),
             },
         };
-        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
+        BuiltinCocoConverter::new(&accepting_policy(), &[reference])
             .await
             .expect("Failed to create converter with release manifest path reference");
     }
@@ -625,9 +621,7 @@ mod tests {
                 },
             },
         ];
-        let result =
-            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &references)
-                .await;
+        let result = BuiltinCocoConverter::new(&accepting_policy(), &references).await;
         assert!(
             result.is_ok(),
             "Failed with multiple references: {:?}",
@@ -638,7 +632,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_converter_new_with_empty_references() {
-        BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
+        BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[])
             .await
             .expect("Failed with empty references");
     }
@@ -650,6 +644,12 @@ mod tests {
             (PolicyConfig::TrustAll, "trust_all"),
             (PolicyConfig::HardwareOnly, "hardware_only"),
             (PolicyConfig::HardwareOnlyStrict, "hardware_only_strict"),
+            (
+                PolicyConfig::Modules {
+                    modules: ModuleGroupsConfig::Single(Vec::new()),
+                },
+                "modules",
+            ),
         ];
         for (policy, policy_name) in cases {
             let err = match BuiltinCocoConverter::new(&policy, &[sample_reference()]).await {
@@ -672,7 +672,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn test_converter_new_accepts_empty_reference_values_for_policies_that_ignore_them() {
-        for policy in [PolicyConfig::HardwareOnly, PolicyConfig::TrustAll] {
+        let policies = [
+            PolicyConfig::HardwareOnly,
+            PolicyConfig::HardwareOnlyStrict,
+            PolicyConfig::TrustAll,
+            PolicyConfig::Modules {
+                modules: ModuleGroupsConfig::Single(Vec::new()),
+            },
+        ];
+        for policy in policies {
             BuiltinCocoConverter::new(&policy, &[])
                 .await
                 .expect("empty reference_values must be accepted");
@@ -695,9 +703,7 @@ mod tests {
                 path: "/nonexistent/reference_values.json".to_string(),
             },
         };
-        let result =
-            BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[reference])
-                .await;
+        let result = BuiltinCocoConverter::new(&accepting_policy(), &[reference]).await;
         assert!(
             result.is_err(),
             "Should fail with nonexistent reference path"
@@ -720,10 +726,9 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_builtin_convert_with_default_policy() {
-            let converter =
-                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
-                    .await
-                    .expect("Failed to create converter");
+            let converter = BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[])
+                .await
+                .expect("Failed to create converter");
             let attester = CocoAttester::new(TEST_AA_ADDR).expect("Failed to create attester");
             let report_data = ReportData::Claims(serde_json::Map::new());
             let evidence = attester
@@ -788,10 +793,18 @@ default file_system := 2"#,
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_builtin_convert_and_verify_roundtrip() {
-            let converter =
-                BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
-                    .await
-                    .expect("Failed to create converter");
+            // A modules policy pinning a boot measurement to a dummy value that
+            // real hardware never matches: the appraisal stays non-affirming, so
+            // the verifier rejects the token (the assertion below). The removed
+            // `hardware_with_reference_values` policy achieved the same by
+            // appraising against (empty) registered reference values.
+            let policy: PolicyConfig = serde_json::from_str(
+            r#"{"type":"modules","modules":[{"type":"tdx.ovmf","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+        )
+        .expect("modules policy parses");
+            let converter = BuiltinCocoConverter::new(&policy, &[])
+                .await
+                .expect("Failed to create converter");
             let verifier = converter
                 .new_verifier()
                 .await

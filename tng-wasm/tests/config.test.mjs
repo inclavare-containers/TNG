@@ -271,34 +271,6 @@ test("coco builtin background_check: hardware_only_strict policy", () => {
   });
 });
 
-test("coco builtin background_check: hardware_with_reference_values policy", () => {
-  const cfg = buildTngConfig({
-    ...base,
-    provider: "coco",
-    asType: "builtin",
-    builtinPolicy: "hardware_with_reference_values",
-  });
-  assert.deepEqual(cfg.verify, {
-    model: "background_check",
-    as_type: "builtin",
-    attestation_policy: { type: "hardware_with_reference_values" },
-  });
-});
-
-test("coco builtin background_check: hardware_strict_with_reference_values policy", () => {
-  const cfg = buildTngConfig({
-    ...base,
-    provider: "coco",
-    asType: "builtin",
-    builtinPolicy: "hardware_strict_with_reference_values",
-  });
-  assert.deepEqual(cfg.verify, {
-    model: "background_check",
-    as_type: "builtin",
-    attestation_policy: { type: "hardware_strict_with_reference_values" },
-  });
-});
-
 test("coco builtin background_check: inline policy emits attestation_policy with content", () => {
   const cfg = buildTngConfig({
     ...base,
@@ -333,6 +305,7 @@ test("coco builtin background_check: one slsa RV with inline JSON content", () =
     ...base,
     provider: "coco",
     asType: "builtin",
+    builtinPolicy: "inline",
     builtinReferenceValues: [
       { type: "slsa", content: '{"rv_list":[{"id":"a","version":"1.0.0","type":"binary"}]}' },
     ],
@@ -354,6 +327,7 @@ test("coco builtin background_check: sample RV with object content", () => {
     ...base,
     provider: "coco",
     asType: "builtin",
+    builtinPolicy: "inline",
     builtinReferenceValues: [
       { type: "sample", content: '{"rvs":{"example-measurement":[]}}' },
     ],
@@ -375,6 +349,7 @@ test("coco builtin background_check: RV row with invalid JSON is dropped", () =>
     ...base,
     provider: "coco",
     asType: "builtin",
+    builtinPolicy: "inline",
     builtinReferenceValues: [
       { type: "slsa", content: "not valid json" },
       { type: "sample", content: '{"rvs":{}}' },
@@ -397,11 +372,53 @@ test("coco builtin background_check: empty RV rows are dropped, reference_values
     ...base,
     provider: "coco",
     asType: "builtin",
+    builtinPolicy: "inline",
     builtinReferenceValues: [{ type: "slsa", content: "" }],
   });
   assert.deepEqual(cfg.verify, {
     model: "background_check",
     as_type: "builtin",
+  });
+});
+
+test("coco builtin background_check: bundled policy drops RV rows (only inline consumes them)", () => {
+  const cfg = buildTngConfig({
+    ...base,
+    provider: "coco",
+    asType: "builtin",
+    builtinPolicy: "hardware_only_strict",
+    builtinReferenceValues: [
+      { type: "sample", content: '{"rvs":{"example-measurement":[]}}' },
+    ],
+  });
+  assert.deepEqual(cfg.verify, {
+    model: "background_check",
+    as_type: "builtin",
+    attestation_policy: { type: "hardware_only_strict" },
+  });
+});
+
+test("coco builtin background_check: inline policy emits both attestation_policy and reference_values", () => {
+  const cfg = buildTngConfig({
+    ...base,
+    provider: "coco",
+    asType: "builtin",
+    builtinPolicy: "inline",
+    builtinPolicyContent: "cGFja2FnZSBwb2xpY3kK",
+    builtinReferenceValues: [
+      { type: "sample", content: '{"rvs":{"example-measurement":[]}}' },
+    ],
+  });
+  assert.deepEqual(cfg.verify, {
+    model: "background_check",
+    as_type: "builtin",
+    attestation_policy: { type: "inline", content: "cGFja2FnZSBwb2xpY3kK" },
+    reference_values: [
+      {
+        type: "sample",
+        payload: { type: "inline", content: { rvs: { "example-measurement": [] } } },
+      },
+    ],
   });
 });
 

@@ -39,8 +39,8 @@ use rustls_webpki::ring::{
 // Re-export builtin config types for external use
 #[cfg(feature = "__builtin-as")]
 pub use crate::tee::coco::converter::builtin::{
-    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-    SlsaReferenceValuePayloadConfig, DEFAULT_POLICY_ID,
+    ModuleEntryConfig, ModuleGroupsConfig, PolicyConfig, ReferenceValueConfig,
+    SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig, DEFAULT_POLICY_ID,
 };
 
 // Re-export reference value list types from RVPS

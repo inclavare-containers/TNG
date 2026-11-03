@@ -600,7 +600,7 @@ mod tests {
 
         fn make_builtin_converter_args() -> ConverterArgs {
             ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                attestation_policy: PolicyConfig::HardwareWithReferenceValues,
+                attestation_policy: PolicyConfig::HardwareOnly,
                 reference_values: vec![],
             })
         }
@@ -696,13 +696,14 @@ mod tests {
             }
         }
 
-        /// A minimal valid inline rego policy for the reference-value tests
-        /// below, which only care that construction loads the reference
-        /// values. Using the inline policy keeps them independent of which
-        /// static policies the guard accepts or rejects.
-        fn accepting_inline_policy() -> PolicyConfig {
+        /// A user-supplied `inline` policy: its Rego may consume reference
+        /// values, so construction keeps accepting a non-empty
+        /// `reference_values` list. The `hardware_only` template rejects one.
+        fn accepting_policy() -> PolicyConfig {
             PolicyConfig::Inline {
-                content: STANDARD.encode("package policy\ndefault allow = true"),
+                content: STANDARD.encode(
+                    "package policy\n\ndefault executables := 3\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2",
+                ),
             }
         }
 
@@ -727,8 +728,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_creation_with_default_policy() {
-            let verify_args =
-                make_verify_builtin_args(PolicyConfig::HardwareWithReferenceValues, vec![]);
+            let verify_args = make_verify_builtin_args(PolicyConfig::HardwareOnly, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             assert_verify_context_builtin_background_check(&result.unwrap());
@@ -760,7 +760,7 @@ mod tests {
             rvs.insert("example-measurement".to_string(), serde_json::json!([]));
             let provenance = Provenance { rvs };
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Inline {
                         content: provenance,
@@ -775,8 +775,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_ra_context_verify_only_builtin() {
-            let verify_args =
-                make_verify_builtin_args(PolicyConfig::HardwareWithReferenceValues, vec![]);
+            let verify_args = make_verify_builtin_args(PolicyConfig::HardwareOnly, vec![]);
             let ra_args = RaArgs::VerifyOnly(verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
@@ -794,8 +793,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_debug_format() {
-            let verify_args =
-                make_verify_builtin_args(PolicyConfig::HardwareWithReferenceValues, vec![]);
+            let verify_args = make_verify_builtin_args(PolicyConfig::HardwareOnly, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(result.is_ok(), "Failed: {:?}", result.err());
             let ctx = result.unwrap();
@@ -824,7 +822,7 @@ mod tests {
         #[serial]
         async fn test_verify_context_builtin_error_invalid_reference_path() {
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![ReferenceValueConfig::Sample {
                     payload: SampleProvenancePayloadConfig::Path {
                         path: "/nonexistent/ref.json".to_string(),
@@ -841,8 +839,7 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
         async fn test_verify_context_builtin_challenge_generation() {
-            let verify_args =
-                make_verify_builtin_args(PolicyConfig::HardwareWithReferenceValues, vec![]);
+            let verify_args = make_verify_builtin_args(PolicyConfig::HardwareOnly, vec![]);
             let result = VerifyContext::from_verify_args(&verify_args).await;
             assert!(
                 result.is_ok(),
@@ -910,7 +907,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -951,7 +948,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![ReferenceValueConfig::Slsa {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -990,7 +987,7 @@ mod tests {
             };
 
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![ReferenceValueConfig::ReleaseManifest {
                     payload: SlsaReferenceValuePayloadConfig::Inline { content: payload },
                 }],
@@ -1013,7 +1010,7 @@ mod tests {
             let provenance2 = Provenance { rvs: rvs2 };
 
             let verify_args = make_verify_builtin_args(
-                accepting_inline_policy(),
+                accepting_policy(),
                 vec![
                     ReferenceValueConfig::Sample {
                         payload: SampleProvenancePayloadConfig::Inline {
