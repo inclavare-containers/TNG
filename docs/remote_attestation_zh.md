@@ -213,7 +213,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `model` | string | — | 设为 `"background_check"` 显式启用（省略即默认该模式） |
 | `as_type` | string | `"builtin"` | 设为 `"builtin"` 启用内置 AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | 内置 AS 的验证策略。省略时默认 `{"type": "hardware_only"}`（别名 `{"type": "default"}` 同样解析为该策略）。`type` 取值见下方场景与末尾速查表 |
-| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表，仅在策略需要参考值时使用 |
+| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表。只有 `hardware_with_reference_values`、`hardware_strict_with_reference_values`、`hardware_strict_with_measurements`、`inline`、`path`、`transparency_log` 这些策略会消费它。非空列表在 `trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict` 下于加载期被拒绝，因为这些策略的校验规则不读取参考值。空列表对所有策略都放行 |
 
 **PCCS 配置**
 
@@ -227,20 +227,21 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **验证策略**
 
-先按下表对比四种验证策略，按你的目标选一个；`attestation_policy` 的 `type` 取值随场景不同。
+先按下表对比五种验证策略，按你的目标选一个；`attestation_policy` 的 `type` 取值随场景不同。
 
-| 策略（`type`） | 校验硬件 TEE | 比对度量值 | 需用户提供 | 适用 |
-|---|---|---|---|---|
-| `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | 只确认对端是真 TEE |
-| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ 可信基线 | ✅ `reference_values` | 比对可信基线，确认未被篡改 |
-| `inline` / `path` | ✅ | 视策略而定 | ✅ rego 策略 | 自定义判定逻辑 |
-| `transparency_log` | ✅ | ✅ Rekor 锚定 | ✅ 日志条目 | 供应链透明度锚定 |
+| 策略（`type`） | 校验硬件 TEE | 比对度量值 | 需用户提供 | `reference_values` | 适用 |
+|---|---|---|---|---|---|
+| `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | 非空即拒绝 | 只确认对端是真 TEE |
+| `hardware_with_reference_values` / `hardware_strict_with_reference_values` | ✅ | ✅ 可信基线 | ✅ `reference_values` | 接受 | 比对可信基线，确认未被篡改 |
+| `hardware_strict_with_measurements` | ✅ | ✅ 注册参考值 | ✅ 度量清单 | 接受 | 无需透明服务校验用户侧产物 |
+| `inline` / `path` | ✅ | 视策略而定 | ✅ rego 策略 | 接受 | 自定义判定逻辑 |
+| `transparency_log` | ✅ | ✅ Rekor 锚定 | ✅ 日志条目 | 接受 | 供应链透明度锚定 |
 
-> `trust_all` 仅调试用（全部维度恒通过），见末尾速查表。
+> `trust_all` 仅调试用（全部维度恒通过）且拒绝非空 `reference_values`；空列表对所有策略都放行。见末尾速查表。
 
 **场景 1：仅做平台证明**
 
-目标：只确认对端是真实 TEE，不比对度量值。无需任何策略与参考值，省略 `attestation_policy` 与 `reference_values` 即可，默认 `{"type": "hardware_only"}`：仅校验硬件 TEE 可识别、忽略参考值，是最简的起步配置，适用于通用部署。
+目标：只确认对端是真实 TEE，不比对度量值。无需任何策略与参考值，省略 `attestation_policy` 与 `reference_values` 即可，默认 `{"type": "hardware_only"}`：仅校验硬件 TEE 可识别。该策略的规则不消费参考值，非空 `reference_values` 列表在加载期被拒绝；它是最简的起步配置，适用于通用部署。
 
 <details>
 <summary>示例：默认配置</summary>
@@ -282,7 +283,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **场景 3：与参考值做度量比对**
 
-目标：把对端的实际度量值与"可信基线"（参考值）比对，确认运行环境未被篡改。设 `attestation_policy.type` 为 `"hardware_with_reference_values"`（基于 trustee 的完整参考值度量）或 `"hardware_strict_with_reference_values"`（同前，但额外要求 TDX 非 debug 且包含 eventlog）；可信基线通过 `reference_values` 提供。
+目标：把对端的实际度量值与"可信基线"（参考值）比对，确认运行环境未被篡改。设 `attestation_policy.type` 为 `"hardware_with_reference_values"`（基于 trustee 的完整参考值度量）或 `"hardware_strict_with_reference_values"`（同前，但额外要求 TDX 非 debug 且包含 eventlog）；可信基线通过 `reference_values` 提供。只有规则会消费参考值的策略才接受该列表；`trust_all`、`hardware_only`、`hardware_only_strict` 会在加载期拒绝非空列表，空列表则对所有策略放行。
 
 每个 `reference_values[]` 条目有两个 `type`：外层选参考值**来源**，内层 `payload.type` 选**加载方式**。
 
@@ -653,12 +654,12 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 | `type` | 一句话 | 详见 |
 |---|---|---|
-| `hardware_only`（别名 `default`） | 仅校验硬件 TEE 识别、忽略参考值（默认） | 场景 1 |
+| `hardware_only`（别名 `default`） | 仅校验硬件 TEE 识别；拒绝非空 `reference_values`（默认） | 场景 1 |
 | `hardware_only_strict` | 同上，但要求 TDX 非 debug 且包含 eventlog | 场景 1 注 |
 | `hardware_with_reference_values` | 基于 trustee 的完整参考值度量 | 场景 3 |
 | `hardware_strict_with_reference_values` | 同上，额外要求 TDX 非 debug 且包含 eventlog | 场景 3 |
 | `hardware_strict_with_measurements` | strict 平台姿态 + 显式度量清单对照注册参考值 | 场景 3 示例 3c |
-| `trust_all` | 全部维度恒通过（仅调试/测试） | — |
+| `trust_all` | 全部维度恒通过（仅调试/测试）且拒绝非空 `reference_values` | — |
 | `inline` | 内联 base64 rego | 场景 2 |
 | `path` | rego 文件路径 | 场景 2 |
 | `transparency_log` | 锚定到 Rekor v1 透明日志 | 场景 4 |

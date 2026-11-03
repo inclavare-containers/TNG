@@ -40,6 +40,20 @@ impl BuiltinCocoConverter {
         policy: &PolicyConfig,
         reference_values: &[ReferenceValueConfig],
     ) -> Result<Self> {
+        // These policies' verification rules never consume reference values,
+        // so a non-empty external `reference_values` list would be silently
+        // inert. Supplying one is a configuration error, rejected before any
+        // state is built.
+        if !reference_values.is_empty() {
+            if let Some(policy_name) = Self::policy_without_reference_values(policy) {
+                return Err(Error::BuiltinPolicyTemplateFailed {
+                    detail: format!(
+                        "attestation_policy \"{policy_name}\" does not accept external reference_values: its verification rules do not consume them"
+                    ),
+                });
+            }
+        }
+
         // Create AttestationService instance
         let (self_signed_signer, mut attestation_service) = {
             let self_signed_signer = Arc::new(SelfSignedSigner::new()?);
@@ -129,6 +143,25 @@ impl BuiltinCocoConverter {
             #[cfg(test)]
             skip_runtime_data_check: false,
         })
+    }
+
+    /// Short policy name used in configuration errors, for the variants whose
+    /// verification rules do not consume reference values. The rest either
+    /// query the builtin RVPS or run user-supplied rules that may read it, so
+    /// they return `None`.
+    fn policy_without_reference_values(policy: &PolicyConfig) -> Option<&'static str> {
+        match policy {
+            PolicyConfig::HardwareOnly => Some("hardware_only"),
+            PolicyConfig::HardwareOnlyStrict => Some("hardware_only_strict"),
+            PolicyConfig::TrustAll => Some("trust_all"),
+            PolicyConfig::HardwareWithReferenceValues
+            | PolicyConfig::HardwareStrictWithReferenceValues
+            | PolicyConfig::HardwareStrictWithMeasurements { .. }
+            | PolicyConfig::TransparencyLog { .. }
+            | PolicyConfig::Inline { .. } => None,
+            #[cfg(not(wasm))]
+            PolicyConfig::Path { .. } => None,
+        }
     }
 
     /// Test-only builder: make `convert()` pass `runtime_data: None` to the
@@ -366,6 +399,7 @@ mod tests {
         SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig,
     };
     use super::*;
+    use base64::Engine;
     use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
     use reference_value_provider_service::rv_list::{
         ReferenceValueListItem, ReferenceValueListPayload, ReferenceValueProvenanceInfo,
@@ -373,6 +407,28 @@ mod tests {
     };
     use serde_json::json;
     use serial_test::serial;
+
+    /// A non-empty external reference value, used to exercise the
+    /// construction-time rejection.
+    fn sample_reference() -> ReferenceValueConfig {
+        let mut rvs = std::collections::HashMap::new();
+        rvs.insert("example-measurement".to_string(), json!([]));
+        ReferenceValueConfig::Sample {
+            payload: SampleProvenancePayloadConfig::Inline {
+                content: Provenance { rvs },
+            },
+        }
+    }
+
+    /// A user-supplied `inline` policy: its rego may consume reference values,
+    /// so construction keeps accepting a non-empty `reference_values` list.
+    fn accepting_policy() -> PolicyConfig {
+        PolicyConfig::Inline {
+            content: base64::engine::general_purpose::STANDARD.encode(
+                "package policy\n\ndefault executables := 3\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2",
+            ),
+        }
+    }
 
     // === Reference value loading tests ===
 
@@ -567,6 +623,50 @@ mod tests {
         BuiltinCocoConverter::new(&PolicyConfig::HardwareWithReferenceValues, &[])
             .await
             .expect("Failed with empty references");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn test_converter_new_rejects_reference_values_for_policies_that_ignore_them() {
+        let cases = [
+            (PolicyConfig::TrustAll, "trust_all"),
+            (PolicyConfig::HardwareOnly, "hardware_only"),
+            (PolicyConfig::HardwareOnlyStrict, "hardware_only_strict"),
+        ];
+        for (policy, policy_name) in cases {
+            let err = match BuiltinCocoConverter::new(&policy, &[sample_reference()]).await {
+                Ok(_) => panic!("{policy_name}: non-empty reference_values must be rejected"),
+                Err(e) => e,
+            };
+            let debug = format!("{err:?}");
+            assert!(
+                debug.contains("does not accept external reference_values"),
+                "{policy_name}: {debug}"
+            );
+            assert!(
+                err.to_string()
+                    .contains(&format!("attestation_policy \"{policy_name}\"")),
+                "{policy_name}: {debug}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn test_converter_new_accepts_empty_reference_values_for_policies_that_ignore_them() {
+        for policy in [PolicyConfig::HardwareOnly, PolicyConfig::TrustAll] {
+            BuiltinCocoConverter::new(&policy, &[])
+                .await
+                .expect("empty reference_values must be accepted");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn test_converter_new_accepting_policy_keeps_loading_reference_values() {
+        BuiltinCocoConverter::new(&accepting_policy(), &[sample_reference()])
+            .await
+            .expect("inline policy must keep accepting reference values");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
