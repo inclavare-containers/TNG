@@ -14,9 +14,13 @@
 //! its supervised driver task (`connect_http1`). Consumers pick a lifecycle;
 //! none of them restates the wrap, the handshake, or the finish accounting.
 
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 
 use anyhow::{Context, Result};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::error::TngError;
 use crate::tunnel::access_log::AccessAccepted;
@@ -47,11 +51,64 @@ pub(crate) struct UpstreamConnector {
     access_accepted: tokio::sync::Mutex<AccessAccepted>,
 }
 
-/// A connected backend stream plus its `cx_total`/`cx_active` accounting
-/// guard.
+/// A connected backend stream that owns its `cx_total`/`cx_active`
+/// accounting guard. The guard settles when this type drops, so every way a
+/// connected leg can end (pumped to completion, handed to hyper, abandoned
+/// before use, a failed HTTP handshake) is accounted for by ownership; there
+/// is no separate guard for a consumer to pair up.
 pub(crate) struct ConnectedUpstream {
     stream: ContextualStream<tokio::net::TcpStream>,
     active_cx: ActiveConnectionCounter,
+}
+
+impl Drop for ConnectedUpstream {
+    fn drop(&mut self) {
+        // Reaching this type means the socket connected, so the leg is not a
+        // failed connection however it ends, including a connection that is
+        // closed without being used. A dial that never connected counts
+        // `cx_failed` by dropping its unmarked guard inside `connect`.
+        self.active_cx.mark_finished();
+    }
+}
+
+impl AsyncRead for ConnectedUpstream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ConnectedUpstream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+    }
 }
 
 impl UpstreamConnector {
@@ -117,9 +174,8 @@ impl UpstreamConnector {
     }
 
     /// Dials a backend and pumps it against a downstream byte stream until
-    /// both directions end, then settles the connection accounting. A dial
-    /// failure is returned already accounted by `connect`; a completed pump
-    /// counts the leg as finished.
+    /// both directions end. The leg's guard settles when the pump drops it.
+    /// A dial failure is returned already accounted by `connect`.
     pub(crate) async fn connect_and_forward_bytes(
         &self,
         downstream: Box<dyn CommonStreamTrait>,
@@ -127,7 +183,6 @@ impl UpstreamConnector {
         attested: bool,
     ) -> Result<()> {
         let upstream = self.connect(encrypted, attested).await?;
-        let (upstream, active_cx) = upstream.into_parts();
 
         let downstream = self
             .metrics
@@ -135,7 +190,6 @@ impl UpstreamConnector {
 
         crate::tunnel::utils::forward::normal::forward_stream(upstream, downstream).await;
 
-        active_cx.mark_finished_successfully();
         Ok(())
     }
 
@@ -163,31 +217,18 @@ impl UpstreamConnector {
 }
 
 impl ConnectedUpstream {
-    /// Splits the tagged socket from the accounting guard. Dropping the
-    /// guard without calling `mark_finished_successfully` reports a failed
-    /// connection, so the consumer must mark when the leg ends.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        ContextualStream<tokio::net::TcpStream>,
-        ActiveConnectionCounter,
-    ) {
-        (self.stream, self.active_cx)
-    }
-
     /// Brings an already-dialled backend socket up to a driven HTTP/1
     /// client connection: wraps it with the backend-oriented byte counters,
     /// runs the hyper HTTP/1 handshake, and spawns the supervised driver
-    /// task. The task owns the connection accounting guard and settles it
-    /// when the connection ends, so the returned `SendRequest` needs no
-    /// separate teardown handle: dropping it (or the peer closing it) makes
-    /// the driver exit and marks the leg finished. A failure is split by
-    /// where it happened: a refused dial reaches the caller as
+    /// task. The connection accounting guard travels inside the stream, so
+    /// the returned `SendRequest` needs no separate teardown handle:
+    /// dropping it (or the peer closing it) makes the driver exit, the
+    /// connection drop its stream, and the leg settle as finished. A failure
+    /// is split by where it happened: a refused dial reaches the caller as
     /// `ConnectUpstreamFailed` from `UpstreamConnector::connect` before
     /// this runs, while a socket that connected but dies at the HTTP layer
-    /// is a teardown, not a failed connect, so the handshake error marks
-    /// the leg finished and reaches the caller as
-    /// `HttpPlainTextForwardError`.
+    /// is a teardown, not a failed connect, so the handshake error drops the
+    /// stream and the leg settles as finished.
     pub(crate) async fn into_http1_backend<B>(
         self,
         runtime: &TokioRuntime,
@@ -198,24 +239,19 @@ impl ConnectedUpstream {
         B::Data: Send,
         B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let (stream, active_cx) = self.into_parts();
-        let stream = metrics.wrap_stream(stream, ByteCountOrientation::Backend);
+        let stream = metrics.wrap_stream(self, ByteCountOrientation::Backend);
 
         // TODO: support send both http1 and http2 payload
         let (send_request, conn) =
             match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
                 Ok(pair) => pair,
-                Err(error) => {
-                    active_cx.mark_finished_successfully();
-                    return Err(TngError::HttpPlainTextForwardError(error));
-                }
+                Err(error) => return Err(TngError::HttpPlainTextForwardError(error)),
             };
 
         runtime.spawn_supervised_task_current_span(async move {
             if let Err(error) = conn.await {
                 tracing::error!(?error, "The HTTP connection with upstream is broken");
             }
-            active_cx.mark_finished_successfully();
         });
 
         Ok(send_request)
@@ -371,26 +407,21 @@ pub(crate) mod tests {
         assert_eq!(rec.counter_i64("cx_active"), 1);
         assert_eq!(rec.counter_u64("cx_failed"), 0);
 
-        let (_stream, active_cx) = upstream.into_parts();
-        active_cx.mark_finished_successfully();
+        drop(upstream);
         assert_eq!(rec.counter_u64("cx_total"), 1);
         assert_eq!(rec.counter_i64("cx_active"), 0);
         assert_eq!(rec.counter_u64("cx_failed"), 0);
     }
 
-    /// A leg whose guard drops without being marked (the consumer died
-    /// mid-flight) counts as a failed connection, like the pre-connector
+    /// A guard dropped without being marked (the dial failed part way)
+    /// counts as a failed connection, like the pre-connector
     /// `forward_to_upstream` early returns.
     #[tokio::test]
     async fn dropped_unmarked_guard_counts_failed() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
         let (metrics, rec) = Recorder::new();
-        let connector = connector(metrics, port);
 
-        let upstream = connector.connect(true, false).await.unwrap();
-        let connected = upstream.active_cx;
-        drop(connected);
+        let counter = metrics.new_cx();
+        drop(counter);
         assert_eq!(rec.counter_u64("cx_total"), 1);
         assert_eq!(rec.counter_i64("cx_active"), 0);
         assert_eq!(rec.counter_u64("cx_failed"), 1);

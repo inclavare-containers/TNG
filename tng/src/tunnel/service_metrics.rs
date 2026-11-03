@@ -174,6 +174,12 @@ impl ActiveConnectionCounter {
 
     /// Call this function when the stream is finished successfully, or it will report an failed connection when it is droppeds.
     pub fn mark_finished_successfully(mut self) {
+        self.mark_finished();
+    }
+
+    /// The borrowed form, for an owner whose `Drop` finishes the connection
+    /// on every exit path.
+    pub(crate) fn mark_finished(&mut self) {
         self.finished_successfully = true;
     }
 }

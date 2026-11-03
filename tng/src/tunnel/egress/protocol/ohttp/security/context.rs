@@ -92,18 +92,16 @@ impl Drop for BackendDial {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        // Reap a dial nobody consumed. A dial that completed fine is marked
-        // finished before the socket closes: an unused connection is not a
-        // failed one. A dial error, or a dial cancelled by shutdown,
-        // accounted itself when the dial future unwound inside the task, so
-        // those outcomes need nothing here. Spawning the reaper (instead of
-        // awaiting inline) keeps an abandoned request's error path from
-        // waiting on a dial that is still running.
+        // Reap a dial nobody consumed. Awaiting the handle and letting any
+        // connected socket drop marks the leg finished and closes it: an
+        // unused connection is not a failed one. A dial error, or a dial
+        // cancelled by shutdown, accounted itself when the dial future
+        // unwound inside the task, so those outcomes need nothing here.
+        // Spawning the reaper (instead of awaiting inline) keeps an
+        // abandoned request's error path from waiting on a dial that is
+        // still running.
         self.runtime.spawn_supervised_task_current_span(async move {
-            if let Ok(SupervisedTaskResult::Finished(Ok(connected))) = handle.await {
-                let (_stream, active_cx) = connected.into_parts();
-                active_cx.mark_finished_successfully();
-            }
+            let _ = handle.await;
         });
     }
 }
