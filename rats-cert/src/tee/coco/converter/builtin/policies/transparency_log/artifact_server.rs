@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 use sha2::Digest;
 
 #[cfg(feature = "crypto-rustcrypto")]
-use crate::tee::coco::converter::builtin::rekor_v1;
+use super::rekor_v1;
 
 // Wire types and the resolve POST live in the upstream `artifact-resolve-sdk`
 // crate (`ResolveRequest`, `ReleaseManifest`, `LogService`, `ResolveResponse`,
@@ -797,7 +797,7 @@ mod tests {
     // Reuse the existing rekor_v1 fixture entry to build a mock
     // /api/v1/log/entries response: the wire format is `{uuid: entry}`.
     fn rekor_entries_response_body() -> String {
-        let raw = include_str!("tests/fixtures/rekor_v1_entry.json");
+        let raw = include_str!("../../tests/fixtures/rekor_v1_entry.json");
         let uuid = "00000000-0000-0000-0000-000000000000";
         serde_json::json!({ uuid: serde_json::from_str::<serde_json::Value>(raw).unwrap() })
             .to_string()
@@ -905,7 +905,7 @@ mod tests {
     /// payloadHash-compare → `Ok(Bool(true))` happy path.
     fn cmaas_fetch_rekor_response_body() -> (String, String, i64) {
         let evidence: serde_json::Value = serde_json::from_str(include_str!(
-            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+            "../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
         ))
         .unwrap();
         let manifest = evidence["transparency"]["release_manifest"].clone();
@@ -1007,7 +1007,7 @@ mod tests {
     /// payloadHash comparison → `true`.
     fn cmaas_resolve_triple() -> (serde_json::Value, serde_json::Value, String) {
         let evidence: serde_json::Value = serde_json::from_str(include_str!(
-            "tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+            "../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
         ))
         .unwrap();
         let manifest = evidence["transparency"]["release_manifest"].clone();
