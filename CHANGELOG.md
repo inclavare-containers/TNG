@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The ohttp tunnel's keep-alive throughput rises at every measured concurrency (RA, 64 KiB body, alternating two-host A/B: +3..+14% RPS at c=1..32, +2..+3% at c=64..128, egress CPU per request down 6..23%), and no-keep-alive rises up to +9% at c<=32 with a small disclosed regression (-3..-4%) at c=64..128; the egress backend leg no longer relays through the per-request duplex pipe and dials the backend directly.
 - Linux binary release tarballs are now built against the glibc 2.17 baseline, so they run on distributions from 2014 onward instead of requiring glibc 2.29.
 - Pages hosting the TNG JavaScript SDK no longer need cross-origin isolation: the `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy` response headers are no longer required, since the SDK does not use `SharedArrayBuffer`.
 - The JavaScript SDK is now built with the same 1.89.0 stable toolchain as the rest of the repo; the `nightly-2025-07-07` toolchain is now only needed for `make create-tarball`.
