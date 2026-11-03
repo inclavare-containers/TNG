@@ -274,6 +274,7 @@ pub(crate) mod tests {
     use opentelemetry_sdk::metrics::{
         InstrumentKind, ManualReader, Pipeline, SdkMeterProvider, Temporality,
     };
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use crate::tunnel::access_log::EgressAccessMode;
     use crate::tunnel::service_metrics::ServiceMetricsCreator;
@@ -406,6 +407,41 @@ pub(crate) mod tests {
         assert_eq!(rec.counter_u64("cx_total"), 1);
         assert_eq!(rec.counter_i64("cx_active"), 1);
         assert_eq!(rec.counter_u64("cx_failed"), 0);
+
+        drop(upstream);
+        assert_eq!(rec.counter_u64("cx_total"), 1);
+        assert_eq!(rec.counter_i64("cx_active"), 0);
+        assert_eq!(rec.counter_u64("cx_failed"), 0);
+    }
+
+    /// The connected stream is the socket plus its guard: plain and vectored
+    /// writes, reads, flushes and shutdowns reach the socket through it, and
+    /// dropping it settles the leg as finished.
+    #[tokio::test]
+    async fn connected_upstream_forwards_io_and_settles_on_drop() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (metrics, rec) = Recorder::new();
+        let connector = connector(metrics, port);
+
+        let mut upstream = connector.connect(true, false).await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+
+        upstream.write_all(b"ping").await.unwrap();
+        upstream.flush().await.unwrap();
+        let _ = upstream.is_write_vectored();
+        let written = upstream
+            .write_vectored(&[std::io::IoSlice::new(b"po"), std::io::IoSlice::new(b"ng")])
+            .await
+            .unwrap();
+        assert_eq!(written, 4);
+
+        peer.write_all(b"pong").await.unwrap();
+        let mut buf = [0u8; 4];
+        upstream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"pong");
+
+        upstream.shutdown().await.unwrap();
 
         drop(upstream);
         assert_eq!(rec.counter_u64("cx_total"), 1);
