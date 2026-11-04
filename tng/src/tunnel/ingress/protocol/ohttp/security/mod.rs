@@ -1,4 +1,6 @@
 pub mod client;
+#[cfg(all(test, not(wasm)))]
+mod enrollment_tests;
 mod path_rewrite;
 
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
@@ -168,6 +170,7 @@ fn build_ohttp_http_client() -> Result<reqwest::Client> {
 }
 
 pub struct OHttpSecurityLayer {
+    expected_server_public_key: Option<String>,
     ra_context: Arc<RaContext>,
     http_client: Arc<reqwest::Client>,
     ohttp_clients: OhttpClientCache,
@@ -243,6 +246,7 @@ impl OHttpSecurityLayer {
         );
 
         Ok(Self {
+            expected_server_public_key: ohttp_args.expected_server_public_key.clone(),
             ra_context,
             http_client: Arc::new(http_client),
             ohttp_clients,
@@ -253,6 +257,28 @@ impl OHttpSecurityLayer {
             passthrough_request_headers,
             passthrough_response_headers,
         })
+    }
+
+    /// Verified transport key for browser enrollment. No application request is
+    /// sent by this operation; the same client/key cache forwards the request.
+    pub async fn verified_server_public_key(
+        &self,
+        endpoint: &TngEndpoint,
+        request: &axum::extract::Request,
+    ) -> Result<Option<String>, TngError> {
+        if self.ra_context.verify_context().is_none() {
+            return Err(TngError::CreateOHttpClientFailed(anyhow::anyhow!(
+                "OHTTP enrollment requires attestation verification"
+            )));
+        }
+        let outer_path = outer_path(&self.path_rewrite_group, self.path_default, request);
+        let client = self
+            .get_or_create_ohttp_client(endpoint, &outer_path)
+            .await?;
+        Ok(client
+            .server_status()
+            .await
+            .and_then(|status| status.server_public_key))
     }
 
     /// Derive the URL scheme for the outer OHTTP POST from the scheme of the URL
@@ -351,6 +377,7 @@ impl OHttpSecurityLayer {
                         self.runtime.clone(),
                         self.passthrough_request_headers.clone(),
                         self.passthrough_response_headers.clone(),
+                        self.expected_server_public_key.clone(),
                     )
                     .await
                     .map_err(TngError::CreateOHttpClientFailed)?,

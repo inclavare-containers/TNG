@@ -113,6 +113,9 @@ impl DatagramEgressFlow {
         service_metrics_creator: &ServiceMetricsCreator,
         runtime: TokioRuntime,
     ) -> Result<Self> {
+        if common_args.rats_tls.as_ref().is_some_and(|args| args.http1) {
+            anyhow::bail!("rats_tls.http1 is available only for TCP listeners");
+        }
         let metric_attributes = egress.metric_attributes();
         let metrics = service_metrics_creator.new_service_metrics(metric_attributes);
 

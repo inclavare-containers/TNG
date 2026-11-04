@@ -8,9 +8,6 @@ use crate::config::ra::AttestArgs;
 use crate::config::ra::VerifyArgs;
 #[cfg(unix)]
 use crate::tunnel::ra_context::AttestContext;
-use crate::tunnel::ra_context::VerifyContext;
-use crate::tunnel::utils::rustls::ra::cert_cache::CertVerifyCache;
-use crate::tunnel::utils::rustls::ra::common::LazyCertVerifier;
 #[cfg(unix)]
 use rats_cert::{
     cert::create::CertBuilder,
@@ -136,30 +133,22 @@ async fn write_or_stdout(data: &[u8], path: Option<PathBuf>) -> Result<()> {
 ///
 /// The verify path is cross-platform (it does not touch the unix-only AA
 /// attester), so unlike `gen` this is not `#[cfg(unix)]`-gated. Reuses the
-/// same `LazyCertVerifier` the TLS handshake uses: pass the cert directly to
-/// `verify_cert`, which runs the verify engine (Passport: parse+verify AS
+/// same certificate appraisal as the browser SDK and live TLS path,
+/// which runs the verify engine (Passport: parse+verify AS
 /// token; BackgroundCheck: convert via AS, verify).
 async fn verify_cmd(cert_path: &std::path::Path, verify_json: &str) -> Result<()> {
     let verify_args: VerifyArgs =
         serde_json::from_str(verify_json).context("parse --verify as VerifyArgs JSON")?;
-    let verify_ctx = std::sync::Arc::new(
-        VerifyContext::from_verify_args(&verify_args)
-            .await
-            .context("build verify context")?,
-    );
-
     let raw =
         std::fs::read(cert_path).with_context(|| format!("read cert {}", cert_path.display()))?;
     let cert_der = pem_or_der_to_der(&raw)?;
 
-    // Reuse the same stateless LazyCertVerifier the TLS handshake uses: pass
-    // the cert directly to verify_cert (Passport: parse+verify AS token;
-    // BackgroundCheck: convert via AS, verify).
-    let verifier = LazyCertVerifier::new(verify_ctx, Arc::new(CertVerifyCache::default_sized()));
-    let result = verifier
-        .verify_cert(cert_der)
+    // Certificate-file checks also enforce validity, without trusting an
+    // endpoint's statement about the browser's actual peer certificate.
+    let result = crate::verify_certificate(&cert_der, &verify_args)
         .await
-        .context("verify rats-tls cert")?;
+        .context("verify rats-tls cert")?
+        .attestation_result;
 
     // AttestationResult serializes to the raw JWT token string.
     let value = serde_json::to_value(&result).context("serialize attestation result")?;

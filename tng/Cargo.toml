@@ -153,7 +153,9 @@ shadow-rs = {workspace = true, default-features = false, features = ["tzdb", "bu
 [dev-dependencies]
 ctor = {workspace = true}
 hyper = {workspace = true, features = ["http1", "http2", "client", "server"]}
+jsonwebtoken = {workspace = true}
 once_cell = {workspace = true}
+p256 = {workspace = true}
 portpicker = {workspace = true}
 serial_test = {workspace = true}
 
@@ -209,5 +211,6 @@ __builtin-as = ["rats-cert/__builtin-as"]
 builtin-as-all = ["__builtin-as", "rats-cert/builtin-as-all"]
 builtin-as-sgx = ["__builtin-as", "rats-cert/builtin-as-sgx"]
 builtin-as-snp = ["__builtin-as", "rats-cert/builtin-as-snp"]
+builtin-as-snp-rust = ["__builtin-as", "rats-cert/builtin-as-snp-rust"]
 builtin-as-tdx-ffi = ["__builtin-as", "rats-cert/builtin-as-tdx-ffi"]
 builtin-as-tdx-rust = ["__builtin-as", "rats-cert/builtin-as-tdx-rust"]

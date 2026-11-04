@@ -8,6 +8,21 @@ use wasm_bindgen::prelude::*;
 
 pub mod fetch;
 
+/// Convenience appraisal of a certificate exported from the browser. A page
+/// cannot read or authenticate its own TLS peer certificate through Web APIs.
+#[wasm_bindgen]
+pub async fn verify_certificate(
+    certificate_der: Vec<u8>,
+    verify: JsValue,
+) -> Result<JsValue, JsValue> {
+    let args = serde_wasm_bindgen::from_value(verify)
+        .map_err(|e| JsError::new(&format!("Invalid verification policy: {e}")))?;
+    let result = tng::verify_certificate(&certificate_der, &args)
+        .await
+        .map_err(|e| JsError::new(&format!("Certificate verification failed: {e:?}")))?;
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()).into())
+}
+
 #[wasm_bindgen(start)]
 pub fn init_tng() {
     // print pretty errors in wasm https://github.com/rustwasm/console_error_panic_hook
@@ -19,7 +34,7 @@ pub fn init_tng() {
         .build();
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(
         WASMLayer::new(wasm_layer_config).with_filter(Into::<tracing_subscriber::EnvFilter>::into(
-            "info,tokio_graceful=off,rats_cert=debug,tng=debug",
+            "warn,tokio_graceful=off",
         )),
     ))
     .expect("failed to set tng default global tracing subscriber");
@@ -45,6 +60,90 @@ mod tests {
     // used by `build_challenger_webcrypto`) is available. Run with:
     //   make wasm-unit-test-chrome
     wasm_bindgen_test_configure!(run_in_browser);
+
+    // Public upstream Trustee vectors exercise the exact crypto/evidence
+    // backend in the browser, including altered signatures and bindings.
+    #[wasm_bindgen_test]
+    #[allow(clippy::unwrap_used)]
+    async fn snp_report_signatures_and_workload_bindings() {
+        use sev::firmware::{
+            guest::AttestationReport,
+            host::{CertTableEntry, CertType},
+        };
+        use verifier::{InitDataHash, ReportData, Verifier};
+        for (report_bytes, certificate) in [
+            (
+                include_bytes!("../test_data/test-report.bin").as_slice(),
+                include_bytes!("../test_data/test-vcek.der").as_slice(),
+            ),
+            (
+                include_bytes!("../test_data/turin-report.bin").as_slice(),
+                include_bytes!("../test_data/turin-vcek.der").as_slice(),
+            ),
+        ] {
+            let report: AttestationReport = bincode::deserialize(report_bytes).unwrap();
+            let evidence = serde_json::json!({ "attestation_report": report,
+                "cert_chain": [CertTableEntry::new(CertType::VCEK, certificate.to_vec())] });
+            let verifier = verifier::snp::Snp::new().unwrap();
+            let (claims, _) = verifier
+                .evaluate(
+                    evidence.clone(),
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::Value(&report.host_data),
+                )
+                .await
+                .unwrap();
+            assert_eq!(claims["init_data"], hex::encode(report.host_data));
+            assert_eq!(claims["report_data"], hex::encode(report.report_data));
+            // Current native CoCo emits the sev 7 JSON schema. It must verify
+            // through the same WASM backend, not only the older wire schema.
+            use sev_modern::parser::ByteParser;
+            let modern =
+                sev_modern::firmware::guest::AttestationReport::from_bytes(report_bytes).unwrap();
+            let modern_evidence = serde_json::json!({ "attestation_report": modern,
+                "cert_chain": evidence["cert_chain"].clone() });
+            verifier
+                .evaluate(
+                    modern_evidence.clone(),
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::Value(&report.host_data),
+                )
+                .await
+                .unwrap();
+            let mut altered = modern_evidence;
+            altered["attestation_report"]["host_data"][0] =
+                serde_json::json!(report.host_data[0] ^ 1);
+            assert!(verifier
+                .evaluate(
+                    altered,
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::NotProvided
+                )
+                .await
+                .is_err());
+            let mut wrong = report.host_data;
+            wrong[0] ^= 1;
+            assert!(verifier
+                .evaluate(
+                    evidence.clone(),
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::Value(&wrong)
+                )
+                .await
+                .is_err());
+            let mut tampered = evidence;
+            tampered["attestation_report"]["measurement"][0] =
+                serde_json::json!(255 - report.measurement[0]);
+            assert!(verifier
+                .evaluate(
+                    tampered,
+                    &ReportData::Value(&report.report_data),
+                    &InitDataHash::NotProvided
+                )
+                .await
+                .is_err());
+        }
+    }
 
     // Constructing the builtin attestation-service converter on wasm must drive
     // the WebCrypto RSA keygen path (`build_challenger_webcrypto`) rather than

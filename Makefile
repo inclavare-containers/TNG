@@ -211,7 +211,7 @@ create-tarball:
 	# protos/ at the exact rev pinned in Cargo.lock from cargo's trustee git db into
 	# the vendor dir, so ../protos/ resolves from the vendored crate dir. (Non-vendored
 	# builds work because the full git checkout keeps protos/ as a sibling.)
-	@TRUSTEE_REV=$$(sed -n 's|.*trustee/?rev=\([a-f0-9]\{40\}\).*|\1|p' Cargo.lock | head -1); \
+	@TRUSTEE_REV=$$(sed -n 's|.*trustee/*?rev=\([a-f0-9]\{40\}\).*|\1|p' Cargo.lock | head -1); \
 	PROTOS_OK=0; \
 	for db in $${CARGO_HOME:-$$HOME/.cargo}/git/db/trustee-*; do \
 		[ -d "$$db" ] || continue; \
@@ -318,11 +318,15 @@ image-mirror:
 	fi
 
 
+WASM_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
+WASM_LLVM_AR := $(shell rustc --print sysroot)/lib/rustlib/$(WASM_HOST)/bin/llvm-ar
+
 .PHONE: install-wasm-build-dependencies
 install-wasm-build-dependencies:
 	if ! command -v wasm-pack >/dev/null; then \
 		cargo install wasm-pack@0.14.0 --locked ; \
 	fi
+	rustup component add llvm-tools
 
 define WASM_PATCH_PACKAGE_JSON =
 	@echo "Patching package.json ..."
@@ -334,12 +338,12 @@ endef
 
 .PHONE: wasm-build-release
 wasm-build-release: install-wasm-build-dependencies
-	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --release --target web ./tng-wasm
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --release --target web ./tng-wasm
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-build-debug
 wasm-build-debug: install-wasm-build-dependencies
-	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --dev --target web ./tng-wasm
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack build --dev --target web ./tng-wasm
 	$(WASM_PATCH_PACKAGE_JSON)
 
 .PHONE: wasm-pack-release
@@ -375,12 +379,12 @@ wasm-unit-test-chrome: install-wasm-build-dependencies
 	unzip -o -q /tmp/chromedriver.zip -d /tmp/chromedriver-tmp && \
 	install -m 0755 /tmp/chromedriver-tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
 	rm -rf /tmp/chromedriver.zip /tmp/chromedriver-tmp
-	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome ./tng-wasm -- --nocapture
+	WASM_BINDGEN_TEST_TIMEOUT=$${WASM_BINDGEN_TEST_TIMEOUT:-120} AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --chrome ./tng-wasm -- --nocapture
 
 .PHONE: wasm-unit-test-firefox
 wasm-unit-test-firefox: install-wasm-build-dependencies
 	if ! command -v firefox; then yum install -y firefox ; fi
-	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox ./tng-wasm -- --nocapture
+	AR_wasm32_unknown_unknown="$(WASM_LLVM_AR)" RUSTFLAGS='--cfg getrandom_backend="wasm_js"' wasm-pack test --headless --firefox ./tng-wasm -- --nocapture
 
 .PHONE: wasm-integration-test
 wasm-integration-test: wasm-build-debug install-test-deps

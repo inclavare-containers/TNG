@@ -1,13 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use rats_cert::cert::verify::CertVerifier;
-use rats_cert::tee::GenericConverter;
-use rats_cert::tee::GenericEvidence;
-use rats_cert::tee::GenericVerifier;
+use anyhow::{Context, Result};
 
 use crate::tunnel::attestation_result::AttestationResult;
-use crate::tunnel::provider::{TngEvidence, TngToken};
 use crate::tunnel::ra_context::VerifyContext;
 use crate::tunnel::utils::rustls::ra::cert_cache::{cert_hash, CertVerifyCache};
 
@@ -49,29 +44,6 @@ pub async fn classify_attestation(
         }
         (None, _) => Ok(AttestationState::Unattested),
     }
-}
-
-fn parse_token_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngToken> {
-    rats_cert::errors::Result::from(TngToken::create_evidence_from_dice(cbor_tag, raw_evidence))
-        .map_err(|e| {
-            anyhow!(
-                "Failed to parse AS token from DICE cert (cbor_tag={:#x}): {e:#}",
-                cbor_tag
-            )
-        })
-}
-
-fn parse_evidence_from_dice_cert(cbor_tag: u64, raw_evidence: &[u8]) -> Result<TngEvidence> {
-    rats_cert::errors::Result::from(TngEvidence::create_evidence_from_dice(
-        cbor_tag,
-        raw_evidence,
-    ))
-    .map_err(|e| {
-        anyhow!(
-            "Failed to parse evidence from DICE cert (cbor_tag={:#x}): {e:#}",
-            cbor_tag
-        )
-    })
 }
 
 /// Stateless lazy RA verifier.
@@ -155,56 +127,7 @@ async fn verify_cert(
         return Ok(cached);
     }
 
-    // Step 1: Extract evidence from certificate
-    let pending_result = CertVerifier::new()
-        .verify_der(&end_entity)
-        .await
-        .map_err(|e| anyhow!("Failed to extract evidence from certificate: {:?}", e))?;
-
-    // Step 2: Based on verify mode, convert evidence to token and verify
-    let token = match verify_ctx {
-        VerifyContext::Passport { verifier } => {
-            // Passport: extension must parse as an AS token (not raw evidence).
-            let token =
-                parse_token_from_dice_cert(pending_result.cbor_tag, &pending_result.raw_evidence)?;
-
-            // Verify the token using pre-instantiated verifier
-            verifier
-                .verify_evidence(&token, &pending_result.report_data)
-                .await
-                .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
-
-            token
-        }
-        VerifyContext::BackgroundCheck {
-            converter,
-            verifier,
-        } => {
-            // BackgroundCheck: extension must parse as raw evidence (then convert via AS).
-            let evidence = parse_evidence_from_dice_cert(
-                pending_result.cbor_tag,
-                &pending_result.raw_evidence,
-            )?;
-
-            // Convert evidence to token via remote AS
-            let token = converter
-                .convert(&evidence)
-                .await
-                .map_err(|e| anyhow!("Failed to convert evidence to token: {:?}", e))?;
-
-            // Verify the token
-            verifier
-                .verify_evidence(&token, &pending_result.report_data)
-                .await
-                .map_err(|e| anyhow!("Token verification failed: {:?}", e))?;
-
-            token
-        }
-    };
-
-    tracing::debug!("rats-rs cert verify finished successfully");
-
-    let result = AttestationResult::from_token(token);
+    let result = crate::tunnel::certificate::verify_for_context(verify_ctx, &end_entity).await?;
     // Only cache successful verdicts; errors returned above via `?` are never cached.
     cache.insert(key, result.clone()).await;
     Ok(result)
