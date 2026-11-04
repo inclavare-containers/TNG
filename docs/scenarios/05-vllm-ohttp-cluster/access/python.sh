@@ -4,24 +4,24 @@
 # completions service, per /tmp/tngtest/CONTRACT.md. Uses the contract's globals/helpers.
 #
 # Deviation note: CONTRACT.md says "run python3 $WORKDIR/run_python.py", but on
-# this host python3 is 3.6.8 (the SDK requires >=3.8). We resolve a python >=3.8
+# this host python3 is 3.6.8 (the SDK requires >=3.10). We resolve a python >=3.10
 # (python3 first, then python) and log which interpreter was used.
 
 run_python() {
   log "python-sdk: start (AS_MODE=${AS_MODE:-external})"
 
   # ------------------------------------------------------------------
-  # 1. Resolve a Python >=3.8
+  # 1. Resolve a Python >=3.10
   # ------------------------------------------------------------------
   local PYTHON="" cand
   for cand in python3 python; do
     command -v "$cand" >/dev/null 2>&1 || continue
-    if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3,8) else 1)' 2>/dev/null; then
+    if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
       PYTHON="$cand"; break
     fi
   done
   if [ -z "$PYTHON" ]; then
-    fail python-sdk "no python >=3.8 found (python3=$(python3 --version 2>&1))"
+    fail python-sdk "no python >=3.10 found (python3=$(python3 --version 2>&1))"
     return
   fi
   log "python-sdk: using $PYTHON ($($PYTHON --version 2>&1))"

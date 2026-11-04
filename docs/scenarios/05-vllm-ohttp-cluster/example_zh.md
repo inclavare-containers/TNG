@@ -27,7 +27,7 @@
 - **tng-exec** —— 预编译的 `tng` 二进制，且同目录下有 `libtng_hook.so`（用
   `make tng-hook-build` 构建，或用 `$TNG_HOOK_LIB` 指向它）。`tng exec` 把 hook
   库预加载进 client 命令，因此 client（curl）直接访问 URL，无需 proxy 环境变量。
-- **python-sdk** —— Python ≥ 3.8。`tng-sdk` 与 `requests` 会自动安装。会拉起一个 `tng`
+- **python-sdk** —— Python ≥ 3.10。`tng-sdk` 与 `requests` 会自动安装。会拉起一个 `tng`
   子进程，按 `target/release/tng` → `target/debug/tng` 顺序解析（请先用
   `cargo build --release` 构建）。
 - **go-sdk** —— Go 工具链。会拉起一个 `tng` 子进程，按 `$TNG_BINARY` →

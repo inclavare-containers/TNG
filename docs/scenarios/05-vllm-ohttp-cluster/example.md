@@ -31,7 +31,7 @@ Per method:
   with `make tng-hook-build`, or point `$TNG_HOOK_LIB` at it). `tng exec`
   preloads the hook library into the client command, so the client (curl)
   hits the URL directly with no proxy environment.
-- **python-sdk** — Python ≥ 3.8. `tng-sdk` and `requests` are auto-installed.
+- **python-sdk** — Python ≥ 3.10. `tng-sdk` and `requests` are auto-installed.
   Spawns a `tng` subprocess resolved from `target/release/tng` →
   `target/debug/tng` (build it first with `cargo build --release`).
 - **go-sdk** — Go toolchain. Spawns a `tng` subprocess resolved from
