@@ -1,6 +1,8 @@
 package tng
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -77,5 +79,88 @@ func TestNilConfig(t *testing.T) {
 	_, err := NewRoundTripper(nil)
 	if err != ErrNilConfig {
 		t.Fatalf("expected ErrNilConfig, got %v", err)
+	}
+}
+
+func TestFromJSONWithCommentsAndTrailingCommas(t *testing.T) {
+	jsonStr := `
+		// line comment
+		{
+			/* block comment */
+			"no_ra": true,
+		}
+	`
+	cfg, err := FromJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("FromJSON failed: %v", err)
+	}
+	if !cfg.NoRA {
+		t.Fatal("NoRA should be true")
+	}
+}
+
+func TestFromJSONKeepsCommentMarkersInsideStrings(t *testing.T) {
+	const addr = "http://example.com/*not-a-comment*/"
+	cfg, err := FromJSON(`{"verify":{"as_addr":"http://example.com/*not-a-comment*/"}}`)
+	if err != nil {
+		t.Fatalf("FromJSON failed: %v", err)
+	}
+	if got := cfg.Verify["as_addr"]; got != addr {
+		t.Fatalf("as_addr = %v, want %s", got, addr)
+	}
+}
+
+func TestFromJSONWithLeadingBOM(t *testing.T) {
+	cfg, err := FromJSON("\ufeff" + `{"no_ra": true}`)
+	if err != nil {
+		t.Fatalf("FromJSON failed: %v", err)
+	}
+	if !cfg.NoRA {
+		t.Fatal("NoRA should be true")
+	}
+}
+
+func TestFromJSONWithLeadingBOMAndComments(t *testing.T) {
+	cfg, err := FromJSON("\ufeff// comment\n{\"no_ra\": true,}")
+	if err != nil {
+		t.Fatalf("FromJSON failed: %v", err)
+	}
+	if !cfg.NoRA {
+		t.Fatal("NoRA should be true")
+	}
+}
+
+func TestFromJSONRejectsBOMInsideDocument(t *testing.T) {
+	if _, err := FromJSON("{}\ufeff"); err == nil {
+		t.Fatal("U+FEFF inside the document should be rejected")
+	}
+}
+
+func TestFromJSONStillRejectsJSON5Extensions(t *testing.T) {
+	if _, err := FromJSON(`{no_ra: true}`); err == nil {
+		t.Fatal("unquoted property names should be rejected")
+	}
+	if _, err := FromJSON(`{"no_ra": 'true'}`); err == nil {
+		t.Fatal("single-quoted strings should be rejected")
+	}
+}
+
+func TestFromJSONPreservesErrorOffset(t *testing.T) {
+	const base = `{"no_ra": true "verify": {}}`
+	const comment = "// comment\n"
+
+	_, plainErr := FromJSON(base)
+	_, commentedErr := FromJSON(comment + base)
+
+	var plainSyntax, commentedSyntax *json.SyntaxError
+	if !errors.As(plainErr, &plainSyntax) {
+		t.Fatalf("expected *json.SyntaxError, got %v", plainErr)
+	}
+	if !errors.As(commentedErr, &commentedSyntax) {
+		t.Fatalf("expected *json.SyntaxError, got %v", commentedErr)
+	}
+	want := plainSyntax.Offset + int64(len(comment))
+	if commentedSyntax.Offset != want {
+		t.Fatalf("offset = %d, want %d", commentedSyntax.Offset, want)
 	}
 }
