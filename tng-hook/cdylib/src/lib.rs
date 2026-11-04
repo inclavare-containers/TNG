@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::raw::c_void;
@@ -376,7 +377,7 @@ fn init() {
     // corrupt machine-parsed frames. Centralized/file sinks are always plain.
     let ansi = matches!(info_sink.kind, SinkKind::Stderr)
         && error_sink.is_none()
-        && atty::is(atty::Stream::Stderr);
+        && std::io::stderr().is_terminal();
 
     let layer_writer = LevelRoutingWriter::new(info_sink, error_sink);
     let layer: Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync> =

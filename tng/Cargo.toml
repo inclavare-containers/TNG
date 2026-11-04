@@ -113,7 +113,6 @@ x509-cert = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
 async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
-atty = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
 hyper = {workspace = true}
 hyper-util = {workspace = true}

@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 
+use std::io::IsTerminal;
 use std::{
     fs::{File, OpenOptions},
     io::BufReader,
@@ -251,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
             let ansi = if is_file {
                 false
             } else {
-                atty::is(atty::Stream::Stdout)
+                std::io::stdout().is_terminal()
             };
             let sub = tracing_subscriber::registry().with(pending).with(
                 tracing_subscriber::fmt::layer()

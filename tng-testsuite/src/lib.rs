@@ -4,6 +4,7 @@ pub mod nip_io_hosts;
 pub mod task;
 pub mod test_context;
 
+use std::io::IsTerminal;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
@@ -50,7 +51,7 @@ async fn ensure_tracing_initialized() -> &'static ReloadHandle {
                 ))
                 .with(
                     tracing_subscriber::fmt::layer()
-                        .with_ansi(atty::is(atty::Stream::Stdout))
+                        .with_ansi(std::io::stdout().is_terminal())
                         .with_filter(
                             tracing_subscriber::EnvFilter::try_from_default_env()
                                 .unwrap_or_else(|_| {

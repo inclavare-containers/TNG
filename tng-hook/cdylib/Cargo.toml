@@ -10,7 +10,6 @@ crate-type = ["cdylib"]
 name = "tng_hook"
 
 [dependencies]
-atty = {workspace = true}
 ctor = "=0.4.1"
 libc = "0.2"
 scopeguard = "1.2"
