@@ -3,6 +3,15 @@
 > This document describes all JSON configuration fields for TNG. All fields are optional unless marked as "required".
 >
 > **Tip:** For a quick start, we recommend reviewing the complete configuration examples in the [Scenario Guide](scenarios/) first, then referring back to this document for specific field details.
+>
+> **Configuration format:** TNG accepts JSONC. Configuration files may contain `//` and `/* */` comments, trailing commas in objects and arrays, and an optional UTF-8 BOM at the start of the file. Everything else remains strict JSON (RFC 8259), so existing configurations keep working unchanged. A configuration that uses comments, trailing commas, or a BOM does not load on older TNG releases.
+>
+> ```jsonc
+> {
+>   // Comments and trailing commas are allowed.
+>   "add_ingress": [],
+> }
+> ```
 
 ## Table of Contents
 

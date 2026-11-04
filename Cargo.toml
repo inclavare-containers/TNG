@@ -65,6 +65,7 @@ hyper-util = {version = "0.1", features = ["service", "client-legacy", "http1", 
 indexmap = {version = "2.9.0", features = ["serde"]}
 itertools = "0.14.0"
 js-sys = "0.3.77"
+jsonc-parser = {version = "0.34.0", features = ["serde"]}
 jsonwebtoken = {version = "9", default-features = false, features = ["use_pem"]}
 kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "8e36434"}
 memberlist = "0.8.5"

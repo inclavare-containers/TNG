@@ -38,6 +38,7 @@ http-body-util = {workspace = true}
 httparse = {workspace = true}
 indexmap = {workspace = true}
 itertools = {workspace = true}
+jsonc-parser = {workspace = true}
 libc = "0.2"
 local-ip-address = "0.6"
 parking_lot = "0.12"

@@ -4,6 +4,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::BufReader,
+    path::PathBuf,
 };
 
 use anyhow::{bail, Context};
@@ -71,6 +72,26 @@ fn reject_hook_modes(config: &TngConfig) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn load_config(
+    config_file: Option<PathBuf>,
+    config_content: Option<String>,
+) -> anyhow::Result<TngConfig> {
+    match (config_file, config_content) {
+        (Some(_), Some(_)) => {
+            bail!("Cannot set both --config-file and --config-content at the same time")
+        }
+        (None, None) => bail!("Either --config-file or --config-content should be set"),
+        (None, Some(s)) => tng::config::parse_config_str(&s),
+        (Some(path), None) => {
+            tracing::info!(?path, "Loading config from");
+            let file = File::open(&path)
+                .with_context(|| format!("open config file {}", path.display()))?;
+            tng::config::parse_config_reader(BufReader::new(file))
+                .with_context(|| format!("load config file {}", path.display()))
+        }
+    }
 }
 
 #[tokio::main]
@@ -261,25 +282,8 @@ async fn main() -> anyhow::Result<()> {
                 show_banner("daemon");
 
                 // Load config
-                let config: TngConfig = async {
-                    Ok::<_, anyhow::Error>(match (options.config_file, options.config_content) {
-                        (Some(_), Some(_)) => {
-                            bail!("Cannot set both --config-file and --config-content at the same time")
-                        }
-                        (None, None) => {
-                            bail!("Either --config-file or --config-content should be set")
-                        }
-                        (None, Some(s)) => serde_json::from_str(&s)?,
-                        (Some(path), None) => {
-                            tracing::info!(?path, "Loading config from");
-                            let file = File::open(path)?;
-                            let reader = BufReader::new(file);
-                            serde_json::from_reader(reader)?
-                        }
-                    })
-                }
-                .await
-                .context("Failed to load config")?;
+                let config: TngConfig = load_config(options.config_file, options.config_content)
+                    .context("Failed to load config")?;
 
                 tracing::debug!(?config, "TNG config");
 
@@ -300,23 +304,8 @@ async fn main() -> anyhow::Result<()> {
 
                 use tng::exec::TngExec;
 
-                let config: TngConfig = {
-                    match (options.config_file, options.config_content) {
-                        (Some(_), Some(_)) => {
-                            bail!("Cannot set both --config-file and --config-content at the same time")
-                        }
-                        (None, None) => {
-                            bail!("Either --config-file or --config-content should be set")
-                        }
-                        (None, Some(s)) => serde_json::from_str(&s)?,
-                        (Some(path), None) => {
-                            tracing::info!(?path, "Loading config from");
-                            let file = File::open(path)?;
-                            let reader = BufReader::new(file);
-                            serde_json::from_reader(reader)?
-                        }
-                    }
-                };
+                let config: TngConfig = load_config(options.config_file, options.config_content)
+                    .context("Failed to load config")?;
 
                 let exit_code = TngExec::run(
                     config,

@@ -62,6 +62,11 @@ name = "admin_interface"
 path = "tests/basic/admin_interface.rs"
 
 [[test]]
+name = "config_parse"
+path = "tests/config_parse.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "allow_non_tng_traffic"
 path = "tests/ohttp/allow_non_tng_traffic.rs"
 

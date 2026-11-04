@@ -12,7 +12,10 @@ pub mod ingress;
 pub mod mapping_rule;
 pub mod match_rule;
 pub mod observability;
+pub mod parse;
 pub mod ra;
+
+pub use parse::{parse_config_reader, parse_config_str};
 
 // Shared types used by both tng and tng-hook
 pub use tng_hook_types::{
