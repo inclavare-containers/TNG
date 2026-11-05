@@ -104,7 +104,7 @@ async fn get_jwks_from_file_or_url(
                 .await
                 .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))?;
 
-            Ok(jwkset)
+            Ok(reject_unknown_algorithm_keys(jwkset)?)
         }
         "file" => {
             #[cfg(not(wasm))]
@@ -115,6 +115,7 @@ async fn get_jwks_from_file_or_url(
 
                 serde_json::from_slice(&file_content)
                     .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))
+                    .and_then(reject_unknown_algorithm_keys)
             }
             #[cfg(wasm)]
             {
@@ -129,6 +130,23 @@ async fn get_jwks_from_file_or_url(
             url.scheme()
         ))),
     }
+}
+
+fn reject_unknown_algorithm_keys(jwkset: jwk::JwkSet) -> Result<jwk::JwkSet, JwksGetError> {
+    // jsonwebtoken 10 maps an unknown JWK `alg` to UNKNOWN_ALGORITHM instead of
+    // failing deserialization. Keep the loader's contract: a JWKS with an
+    // unsupported algorithm is a load error, not a set with a dead key.
+    if jwkset.keys.iter().any(|key| {
+        matches!(
+            key.common.key_algorithm,
+            Some(jsonwebtoken::jwk::KeyAlgorithm::UNKNOWN_ALGORITHM)
+        )
+    }) {
+        return Err(JwksGetError::DeserializeSource(
+            "JWKS contains a key with an unsupported algorithm".to_string(),
+        ));
+    }
+    Ok(jwkset)
 }
 
 fn new_http_client() -> reqwest::Client {

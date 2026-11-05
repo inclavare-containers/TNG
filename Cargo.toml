@@ -65,7 +65,7 @@ indexmap = {version = "2.9.0", features = ["serde"]}
 itertools = "0.14.0"
 js-sys = "0.3.77"
 jsonc-parser = {version = "0.34.0", features = ["serde"]}
-jsonwebtoken = {version = "9", default-features = false, features = ["use_pem"]}
+jsonwebtoken = {version = "10", default-features = false, features = ["use_pem", "rust_crypto"]}
 kbs-types = {git = "https://github.com/inclavare-containers/kbs-types.git", rev = "8e36434"}
 memberlist = "0.8.5"
 memberlist-core = "0.8.5"
