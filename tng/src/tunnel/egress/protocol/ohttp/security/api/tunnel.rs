@@ -248,6 +248,110 @@ impl OhttpServerApi {
         Ok((request, response_seal, sink))
     }
 
+    /// WS tunnel counterpart of the decapsulate stage: validate one in-stream
+    /// control message (metadata frame + ohttp request header) and derive the
+    /// server-side record crypto for the session. Same order as
+    /// `decapsulate_request`: metadata RA check, key lookup by hint, header
+    /// decode. No network I/O.
+    pub async fn accept_ws_session(
+        &self,
+        control_message: &[u8],
+    ) -> Result<
+        (
+            ohttp::chunk::ServerOpener,
+            ohttp::chunk::ServerSealer,
+            ohttp::KeyId,
+        ),
+        TngError,
+    > {
+        // The metadata block carries the same [u32 BE len][prost bytes]
+        // framing as the body path, read here from a Cursor over the whole
+        // control message; whatever the block consumed stays behind.
+        // read_metadata_block waits for the bytes its length prefix promised,
+        // and a Cursor reports EOF without advancing: a prefix claiming more
+        // than the message holds would spin. Bound it against the frame first.
+        let declared_len = control_message.get(..4).and_then(|prefix| {
+            let bytes: [u8; 4] = prefix.try_into().ok()?;
+            let len = usize::try_from(u32::from_be_bytes(bytes)).ok()?;
+            (len + 4 <= control_message.len()).then_some(len)
+        });
+        if declared_len.is_none() {
+            return Err(TngError::MetadataReadError(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "ws control message is shorter than its metadata block",
+            )));
+        }
+        let mut reader = std::io::Cursor::new(control_message);
+        let metadata = read_metadata_block(&mut reader).await?;
+        let header = control_message
+            .get(reader.position() as usize..)
+            .ok_or_else(|| {
+                TngError::MetadataReadError(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "ws control message ends before the ohttp header",
+                ))
+            })?;
+
+        // Header decode and the suite policy check run before any key lookup
+        // or decryption, mirroring the body path: the policy is the single
+        // enforcement point for requests sealed under any key config.
+        let decoded = ohttp::Server::decode_header_from_slice(header).map_err(|e| {
+            TngError::InvalidOHttpRequest(
+                anyhow::Error::from(e)
+                    .context("ws control message carries a malformed ohttp header"),
+            )
+        })?;
+        let suite = decoded.symmetric_suite().map_err(TngError::from)?;
+        if !aead_suite_allowed(&self.aead_suites, suite) {
+            tracing::warn!(
+                aead = ?suite.aead(),
+                key_id = decoded.key_id(),
+                "Rejected ws tunnel: AEAD suite is not allowed by the egress policy"
+            );
+            return Err(TngError::OHttpSuiteNotAllowed);
+        }
+        let key_id = decoded.key_id();
+
+        // Extract client public key before validation moves client_auth
+        let client_pk_bytes = match &metadata.client_auth {
+            Some(ClientAuth::AttestedPublicKey(AttestedPublicKey { pk_s, .. })) => {
+                Some(pk_s.clone())
+            }
+            _ => None,
+        };
+
+        self.validate_client_attestation_consistency(metadata.client_auth)
+            .await
+            .map_err(TngError::MetadataValidateError)?;
+
+        let key_info = if let Some(hint) = metadata.key_config_hint {
+            self.key_manager
+                .get_key_by_public_key(&PublicKeyData::new(hint.public_key))
+                .await?
+        } else {
+            return Err(TngError::ServerKeyConfigHintNotSpecified);
+        };
+
+        let (c2s_opener, s2c_sealer) = match client_pk_bytes {
+            Some(pk_s) => {
+                let client_pk = ohttp::PublicKey::from_x25519_bytes(&pk_s).map_err(|e| {
+                    TngError::ClientRequestKeyConfigFailed(
+                        anyhow::Error::from(e).context("Failed to construct client public key"),
+                    )
+                })?;
+                decoded.into_chunk_parts_with_client_pk(key_info.key_config, client_pk)
+            }
+            None => decoded.into_chunk_parts(key_info.key_config),
+        }
+        .map_err(|e| {
+            TngError::InvalidOHttpRequest(
+                anyhow::Error::from(e).context("ws session crypto setup failed for the hinted key"),
+            )
+        })?;
+
+        Ok((c2s_opener, s2c_sealer, key_id))
+    }
+
     /// Rewrite stage: copy the configured passthrough pairs (collected by
     /// `process_encrypted_request` from the outer request before its body was
     /// consumed) onto the decrypted inner request and inject the
@@ -431,6 +535,216 @@ fn inject_forwarded_client_ip(
     };
     if let Ok(v) = http::HeaderValue::from_str(&new_xff) {
         headers.insert(http::HeaderName::from_static("x-forwarded-for"), v);
+    }
+}
+
+#[cfg(test)]
+mod ws_session_tests {
+    use super::*;
+    use crate::status::{StatusProvider, StatusQueryResult};
+    use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
+        KeyInfo, KeyManager, KeyStatus,
+    };
+    use crate::tunnel::ohttp::key_config::KeyConfigExtend;
+    use crate::tunnel::ohttp::protocol::metadata::ServerKeyConfigHint;
+    use crate::tunnel::ra_context::RaContext;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use web_time_compat::{SystemTime, SystemTimeExt};
+
+    struct FixedKeyManager {
+        key_info: KeyInfo,
+    }
+
+    #[async_trait]
+    impl StatusProvider for FixedKeyManager {
+        async fn query_status(&self, _path: &[&str]) -> Result<StatusQueryResult, TngError> {
+            Err(TngError::StatusPathNotFound)
+        }
+    }
+
+    #[async_trait]
+    impl KeyManager for FixedKeyManager {
+        async fn get_key_by_public_key(
+            &self,
+            public_key: &PublicKeyData,
+        ) -> Result<KeyInfo, TngError> {
+            if self.key_info.key_config.public_key()?.as_ref() == public_key.as_ref() {
+                Ok(self.key_info.clone())
+            } else {
+                Err(TngError::ServerKeyConfigNotFound(PublicKeyData::new(
+                    public_key.as_ref().to_vec(),
+                )))
+            }
+        }
+
+        async fn get_client_visible_key(&self) -> Result<KeyInfo, TngError> {
+            Ok(self.key_info.clone())
+        }
+
+        fn key_manager_type(&self) -> &'static str {
+            "fixed-test"
+        }
+    }
+
+    fn test_api(key_info: KeyInfo) -> OhttpServerApi {
+        OhttpServerApi {
+            ra_context: Arc::new(RaContext::NoRa),
+            key_manager: Arc::new(FixedKeyManager { key_info }),
+            #[cfg(unix)]
+            passport_cache: Arc::default(),
+            passthrough_request_headers: Arc::default(),
+            passthrough_response_headers: Arc::default(),
+            forward_client_ip: false,
+            aead_suites: vec![AeadSuite::Aes128Gcm].into(),
+        }
+    }
+
+    /// Build the in-stream control message: `[u32 BE len][prost metadata]`
+    /// followed by the ohttp ws header, plus the matching client crypto.
+    fn control_message(
+        key_config: &ohttp::KeyConfig,
+        with_hint: bool,
+    ) -> (
+        Vec<u8>,
+        ohttp::chunk::ClientSealer,
+        ohttp::chunk::PendingClientOpener,
+    ) {
+        let hpke_config = key_config.select(key_config.symmetric()[0]).unwrap();
+        let pk = ohttp::PublicKey::from_x25519_bytes(&key_config.pk_data().unwrap()).unwrap();
+        let (header, c2s_sealer, s2c_pending) =
+            ohttp::ClientRequest::start_without_body(hpke_config, key_config.key_id(), &pk)
+                .unwrap();
+        let metadata = Metadata {
+            client_auth: Some(ClientAuth::NoAuth(NoAuth {})),
+            key_config_hint: with_hint.then(|| ServerKeyConfigHint {
+                public_key: key_config.pk_data().unwrap(),
+            }),
+        };
+        let metadata_bytes = metadata.encode_to_vec();
+        let mut msg = Vec::new();
+        msg.extend(
+            u32::try_from(metadata_bytes.len())
+                .unwrap()
+                .to_be_bytes()
+                .iter(),
+        );
+        msg.extend(metadata_bytes);
+        msg.extend(&header);
+        (msg, c2s_sealer, s2c_pending)
+    }
+
+    fn fresh_key_config(key_id: u8) -> ohttp::KeyConfig {
+        // Suite must pass the test api's policy so the lookup, not the
+        // policy, is what the unknown-hint test exercises.
+        ohttp::KeyConfig::new(
+            key_id,
+            ohttp::hpke::Kem::X25519Sha256,
+            vec![ohttp::SymmetricSuite::new(
+                ohttp::hpke::Kdf::HkdfSha256,
+                ohttp::hpke::Aead::Aes128Gcm,
+            )],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn accept_ws_session_roundtrip() {
+        let key_info = KeyInfo::generate(
+            1,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &[AeadSuite::Aes128Gcm],
+        )
+        .unwrap();
+        let key_config = key_info.key_config.clone();
+        let (msg, mut c2s_sealer, s2c_pending) = control_message(&key_config, true);
+        let api = test_api(key_info);
+
+        let (mut c2s_opener, mut s2c_sealer, key_id) = api.accept_ws_session(&msg).await.unwrap();
+        assert_eq!(key_id, key_config.key_id());
+
+        let nonce = s2c_sealer.response_nonce().to_vec();
+
+        let record = c2s_sealer.seal(b"ping").unwrap();
+        assert_eq!(
+            c2s_opener.open(&record).unwrap().as_deref(),
+            Some(&b"ping"[..])
+        );
+
+        let record = s2c_sealer.seal(b"pong").unwrap();
+        let mut client_s2c = s2c_pending.with_response_nonce(&nonce).unwrap();
+        assert_eq!(
+            client_s2c.open(&record).unwrap().as_deref(),
+            Some(&b"pong"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_ws_session_rejects_missing_key_hint() {
+        let key_info = KeyInfo::generate(
+            1,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &[AeadSuite::Aes128Gcm],
+        )
+        .unwrap();
+        let (msg, _client, _pending) = control_message(&key_info.key_config.clone(), false);
+        let api = test_api(key_info);
+
+        // The chunk parts are not Debug, so drop the success payload to keep
+        // unwrap_err usable.
+        let err = api.accept_ws_session(&msg).await.map(|_| ()).unwrap_err();
+        assert!(matches!(err, TngError::ServerKeyConfigHintNotSpecified));
+    }
+
+    #[tokio::test]
+    async fn accept_ws_session_rejects_unknown_key_hint() {
+        let key_info = KeyInfo::generate(
+            1,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &[AeadSuite::Aes128Gcm],
+        )
+        .unwrap();
+        let stranger = fresh_key_config(2);
+        let (msg, _client, _pending) = control_message(&stranger, true);
+        let api = test_api(key_info);
+
+        let err = api.accept_ws_session(&msg).await.map(|_| ()).unwrap_err();
+        assert!(matches!(err, TngError::ServerKeyConfigNotFound(..)));
+    }
+
+    #[tokio::test]
+    async fn accept_ws_session_rejects_truncated_control_message() {
+        let key_info = KeyInfo::generate(
+            1,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &[AeadSuite::Aes128Gcm],
+        )
+        .unwrap();
+        let (msg, _client, _pending) = control_message(&key_info.key_config.clone(), true);
+        let api = test_api(key_info);
+
+        // Too short for the length prefix itself.
+        let err = api
+            .accept_ws_session(&msg[..2])
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, TngError::MetadataReadError(..)));
+        // Prefix intact, declared metadata block missing: must error, not spin.
+        let err = api
+            .accept_ws_session(&msg[..4])
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, TngError::MetadataReadError(..)));
     }
 }
 

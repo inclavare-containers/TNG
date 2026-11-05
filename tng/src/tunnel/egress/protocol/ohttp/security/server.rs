@@ -234,6 +234,15 @@ async fn handler(
     api: Arc<OhttpServerApi>,
     request: Request,
 ) -> Result<Response, TngError> {
+    // The WebSocket tunnel is selected by the marker subprotocol ahead of the
+    // header dispatch: the browser direct-connect form of the client role
+    // cannot set custom handshake headers, so the native ingress relays with
+    // the same marker instead of an `x-tng-ohttp-api` value, and one signal
+    // covers both. Everything else keeps the existing header dispatch.
+    if super::ws::is_ws_tunnel_upgrade(&request) {
+        return Ok(super::ws::handle_ws_tunnel(api, context, request).await);
+    }
+
     let ohttp_api = parse_ohttp_api_from_request(&request)?;
 
     match ohttp_api {
@@ -312,7 +321,7 @@ pub async fn log_request(
     // The four known api tags map to their `&'static` constants (the request
     // is moved into `next.run`, so the tag must not borrow it); only an
     // unexpected header value allocates. A missing header or a non-UTF-8
-    // value both stay "unknown", exactly as before.
+    // value both stay "unknown".
     let ohttp_api: std::borrow::Cow<'static, str> = match req
         .headers()
         .get(OhttpApi::HEADER_NAME)
@@ -329,6 +338,11 @@ pub async fn log_request(
             }
             other => std::borrow::Cow::Owned(other.to_owned()),
         },
+        // The websocket tunnel carries no api header (it dispatches on the
+        // marker subprotocol), so it tags itself with that marker.
+        None if super::ws::is_ws_tunnel_upgrade(&req) => {
+            std::borrow::Cow::Borrowed(crate::tunnel::ohttp::protocol::ws::TNG_WS_MARKER)
+        }
         None => std::borrow::Cow::Borrowed("unknown"),
     };
 
