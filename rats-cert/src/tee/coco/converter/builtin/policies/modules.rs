@@ -357,9 +357,7 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// empty module list leaves every dimension affirming except hardware
 /// recognition, exactly the `hardware_only` posture.
 pub(super) fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
-    build_modules_policy_inner(config).map_err(|e| Error::BuiltinPolicyTemplateFailed {
-        detail: format!("{e:#}"),
-    })
+    build_modules_policy_inner(config).map_err(Error::BuiltinPolicyTemplateFailed)
 }
 
 fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<String> {

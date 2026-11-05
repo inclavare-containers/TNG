@@ -287,8 +287,8 @@ pub enum Error {
     #[error("Failed to decode base64 policy content")]
     DecodePolicyContentFailed(#[source] base64::DecodeError),
 
-    #[error("Failed to build builtin policy template: {detail}")]
-    BuiltinPolicyTemplateFailed { detail: String },
+    #[error("Failed to build builtin policy template: {0:#}")]
+    BuiltinPolicyTemplateFailed(#[source] anyhow::Error),
 
     #[error("transparency_log policy requires the crypto-rustcrypto feature")]
     #[cfg(not(feature = "crypto-rustcrypto"))]

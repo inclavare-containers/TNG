@@ -46,11 +46,9 @@ impl BuiltinCocoConverter {
         // state is built.
         if !reference_values.is_empty() {
             if let Some(policy_name) = Self::policy_without_reference_values(policy) {
-                return Err(Error::BuiltinPolicyTemplateFailed {
-                    detail: format!(
-                        "attestation_policy \"{policy_name}\" does not accept external reference_values: its verification rules do not consume them"
-                    ),
-                });
+                return Err(Error::BuiltinPolicyTemplateFailed(anyhow::anyhow!(
+                    "attestation_policy \"{policy_name}\" does not accept external reference_values: its verification rules do not consume them"
+                )));
             }
         }
 
