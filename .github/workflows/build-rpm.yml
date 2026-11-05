@@ -324,6 +324,12 @@ jobs:
             # script is wrapped in single quotes on the runner side.
             sed -i "s|[^ ]*src/target/release/libtng_hook\.so|${CARGO_TARGET_DIR}/release/libtng_hook.so|" /tmp/rpmbuild/SPECS/trusted-network-gateway.spec
 
+            # The vendored tarball carries src/.git, but tar restores the CI
+            # runner uid while this container runs as root, so git refuses the
+            # repo with "dubious ownership" and shadow-rs silently compiles an
+            # empty commit hash. Trust the extracted trees so it can read HEAD.
+            git config --global --add safe.directory "*"
+
             # BuildRequires mirror the an8 buildspec environment; this job
             # installs the real build tools directly, so skip the check.
             rpmbuild --define "_topdir /tmp/rpmbuild" -ba /tmp/rpmbuild/SPECS/trusted-network-gateway.spec --nodeps --define "with_rustup 1"
@@ -364,7 +370,14 @@ jobs:
             bash -euxo pipefail -c '
             yum install -y iptables iproute openssl
             rpm -Uvh /rpms/trusted-network-gateway-*.el7.x86_64.rpm
-            tng --version
+            # A build that cannot read the source .git still succeeds:
+            # shadow-rs shells out to git and silently leaves commit_hash
+            # empty. Reject that here so a provenance-less RPM never ships.
+            tng --version | tee /tmp/tng-version.txt
+            grep -qE "commit_hash:[0-9a-f]{6,}" /tmp/tng-version.txt || {
+                echo "ERROR: tng binary reports no commit hash" >&2
+                exit 1
+            }
             ls /usr/lib/tng/libtng_hook.so
             '
 
