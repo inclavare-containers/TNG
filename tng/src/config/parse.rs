@@ -227,4 +227,68 @@ mod tests {
             "unexpected message: {error:#}"
         );
     }
+
+    fn ingress_with_aead_suites(aead_suites: &str) -> String {
+        format!(
+            r#"{{
+                "add_ingress": [{{
+                    "mapping": {{
+                        "in": {{"port": 10001}},
+                        "out": {{"host": "127.0.0.1", "port": 20001}}
+                    }},
+                    "ohttp": {{"aead_suites": {aead_suites}}},
+                    "no_ra": true
+                }}]
+            }}"#
+        )
+    }
+
+    fn egress_with_aead_suites(aead_suites: &str) -> String {
+        format!(
+            r#"{{
+                "add_egress": [{{
+                    "mapping": {{
+                        "in": {{"host": "0.0.0.0", "port": 20001}},
+                        "out": {{"host": "127.0.0.1", "port": 30001}}
+                    }},
+                    "ohttp": {{"aead_suites": {aead_suites}}},
+                    "no_ra": true
+                }}]
+            }}"#
+        )
+    }
+
+    #[test]
+    fn aead_suites_parse_on_both_sides_in_order() -> anyhow::Result<()> {
+        use crate::config::ohttp_aead::AeadSuite;
+
+        let config = parse_config_str(&ingress_with_aead_suites(
+            r#"["aes256_gcm", "chacha20_poly1305"]"#,
+        ))?;
+        assert_eq!(
+            config.add_ingress[0]
+                .common
+                .ohttp
+                .as_ref()
+                .unwrap()
+                .aead_suites
+                .as_ref()
+                .map(|suites| suites.as_slice()),
+            Some([AeadSuite::Aes256Gcm, AeadSuite::ChaCha20Poly1305].as_slice())
+        );
+
+        let config = parse_config_str(&egress_with_aead_suites(r#"["aes256_gcm"]"#))?;
+        assert_eq!(
+            config.add_egress[0]
+                .common
+                .ohttp
+                .as_ref()
+                .unwrap()
+                .aead_suites
+                .as_ref()
+                .map(|suites| suites.as_slice()),
+            Some([AeadSuite::Aes256Gcm].as_slice())
+        );
+        Ok(())
+    }
 }

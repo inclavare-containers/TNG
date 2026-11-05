@@ -19,8 +19,14 @@ impl TngInstance {
             ])
             .args([
                 "-v", "/tmp/:/tmp/"
-            ])
-            .arg(image_url)
+            ]);
+        // Forward the log filter into the container: the suite policy tests
+        // assert on tng debug logs, and the container inherits neither the
+        // parent environment nor the testsuite subscriber.
+        if let Ok(rust_log) = std::env::var("RUST_LOG") {
+            cmd.arg("-e").arg(format!("RUST_LOG={rust_log}"));
+        }
+        cmd.arg(image_url)
             .arg("tng")
             .arg("launch")
             .arg("--config-content")

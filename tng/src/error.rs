@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::AsRefStr;
 use thiserror::Error;
 
+use crate::config::ohttp_aead::AeadSuite;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 
 /// Custom error type
@@ -180,6 +181,20 @@ pub enum TngError {
 
     #[error("Status path not found")]
     StatusPathNotFound,
+
+    /// The request header names an AEAD suite the egress policy does not
+    /// allow. The variant carries no details: they go to the log, never into
+    /// the HTTP response body.
+    #[error("OHTTP request uses an AEAD suite that the egress policy does not allow")]
+    OHttpSuiteNotAllowed,
+
+    #[error(
+        "No OHTTP AEAD suite is acceptable to both sides: server advertises {server:?}, ingress allows {ingress:?}"
+    )]
+    OHttpNoAcceptableSuite {
+        server: Vec<AeadSuite>,
+        ingress: Vec<AeadSuite>,
+    },
 }
 
 /// Error response structure
@@ -273,6 +288,11 @@ impl IntoResponse for TngError {
             | TngError::ClaimsEncodeError(..)
             | TngError::TngEvidenceDecodeError(..)
             | TngError::EvidenceVerifyError(..) => StatusCode::INTERNAL_SERVER_ERROR,
+
+            // A disallowed AEAD suite must read as "refetch the key config":
+            // the ingress only invalidates its cache on 422.
+            TngError::OHttpSuiteNotAllowed => StatusCode::UNPROCESSABLE_ENTITY,
+            TngError::OHttpNoAcceptableSuite { .. } => StatusCode::INTERNAL_SERVER_ERROR,
 
             // See the RFC 9458 section 6.4. Key Management
             // The client should request new KeyConfig from server when got UNPROCESSABLE_ENTITY from server.

@@ -1120,6 +1120,7 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
 |---|---|---|---|
 | `path_rewrites` | array [[PathRewrite](#pathrewrite)] | `[]` | Path 重写规则列表，按顺序匹配 |
 | `path_default` | string | `"root"` | 当没有 `path_rewrites` 规则命中（未设置/为空/未匹配）时的外层路径回退值。`"root"` → `/`；`"original"` → 内层请求的原始 path |
+| `aead_suites` | array [string] | — | 该 ingress 可使用的 HPKE AEAD 套件，按偏好顺序排列。详见下文 `aead_suites`。 |
 
 #### PathRewrite
 
@@ -1212,6 +1213,20 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 
 当 `tls: true` 时，用于校验上游 TLS 证书的可信 CA 证书 PEM 文件路径。每个文件可以是单张证书，也可以是 PEM bundle（多张拼接证书）。适用于自签或内网 CA 网关。默认为空，使用内置 webpki 根。仅在 `tls: true` 时生效。
 
+#### `aead_suites`（可选，字符串数组）
+
+限定该 ingress 可使用的 HPKE AEAD 套件，列表顺序即偏好顺序。合法值为 `aes128_gcm`、`aes256_gcm`、`chacha20_poly1305`，大小写敏感，不接受别名。省略该字段时保持原有行为：不做过滤，直接使用服务端第一份 key config 广告的第一个套件。这是合规开关，不是性能调优选项。
+
+配置后，ingress 把每份服务端 key config 的广告套件与本列表求交集，按服务端 key config 的顺序选择第一份交集非空的 config，再在这份 config 内按本列表的顺序选择第一个可用套件。以客户端顺序优先而不是取服务端广告的第一个套件，是对 RFC 9458 字面规则的刻意偏离。只有 TNG 作为 ingress 时如此，标准 OHTTP 服务端不受影响。
+
+如果所有服务端 key config 的交集都为空，key 拉取失败，请求以错误结束，不会回退到默认套件。空数组或重复项在配置加载阶段即报错。策略只在启动时读取，修改后需要重启 ingress。
+
+该字段只约束配置它的这个 TNG ingress。要约束某个 egress 的所有客户端，必须同时在 egress 上配置 `aead_suites`。
+
+在 `peer_shared` 集群中，每个节点各自应用自己的策略。请在所有节点上使用相同的列表：策略不一致的节点会拒绝其他节点广告的套件，客户端在重新拉取到可用的 key config 之前会持续失败。
+
+收紧为只允许 AES-256-GCM 时，先把 egress 和所有 ingress 升级到支持 AES-256-GCM 的版本，再下发限制策略。仍持有旧 key config 的客户端会持续失败，直到重新拉取；egress 返回的 HTTP 422 会让 ingress 失效缓存，并在下一次请求时重新拉取。
+
 
 <a name="ohttp-egress-侧配置"></a>
 
@@ -1224,6 +1239,7 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 | `cors` | [CorsConfig](#corsconfig) | 无 | CORS 配置，用于浏览器端访问 OHTTP 端点 |
 | `key` | [KeyConfig](#密钥管理) | 无 | 密钥管理配置（见下方 [密钥管理](#密钥管理)） |
 | `forward_client_ip` | bool | `true` | 为 `true` 时，egress 在转发解密后的内层请求给上游前，注入 `X-Real-IP`（设为直连 TCP 对端）与 `X-Forwarded-For`（追加直连对端）。直连对端是投递 OHTTP POST 的一方，在 relay 拓扑里即 relay，而非真实客户端。设为 `false` 关闭。 |
+| `aead_suites` | array [string] | `["aes128_gcm", "aes256_gcm", "chacha20_poly1305"]` | 广告并接受的 HPKE AEAD 套件。详见下文 `aead_suites`。 |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` 在 2.2.4+ 已弃用，请使用 `direct_forward` 替代。
@@ -1296,6 +1312,18 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
   }
 }
 ```
+
+#### `aead_suites`（可选，字符串数组）
+
+该 egress 在 key config 中广告、并在解封请求时接受的 HPKE AEAD 套件。合法值与默认值和 ingress 侧一致：`aes128_gcm`、`aes256_gcm`、`chacha20_poly1305`，默认按此顺序全部启用。
+
+广告与接受由同一份列表决定。新生成和从文件加载的 key config 只广告这些套件，每次解封都会检查请求头中的套件，包括用旧 key config 或从 `peer_shared` 对端同步来的 key 封装的请求。不在列表内的套件返回 HTTP 422，并在日志中记录套件名、key id 和对端地址；响应体不包含套件细节。422 会让 TNG ingress 失效缓存的 key config，并在下一次请求时重新拉取。
+
+不会回退到默认列表。空数组或重复项在配置加载阶段即报错。策略只在启动时读取，修改后需要重启 egress。
+
+在 `peer_shared` 集群中，key config 同步阶段不做过滤，因此策略不同的节点会广告其邻居会拒绝的套件。请在同一群组的所有节点上配置相同的 `aead_suites` 列表。
+
+下发限制策略前，先升级 egress 和预期客户端到支持目标套件的版本。仍缓存改动前 key config 的客户端会被拒绝，直到重新拉取；422 响应会在其下一次请求时触发重新拉取。
 
 
 <a name="ohttp-密钥管理"></a>

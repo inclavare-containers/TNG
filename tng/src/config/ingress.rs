@@ -7,6 +7,7 @@ use crate::tunnel::access_log::IngressAccessMode;
 
 use super::mapping_rule::MappingDe;
 use super::match_rule::{HostMatchConfig, PortMatchConfig};
+use super::ohttp_aead::AeadSuites;
 use super::{ra::RaArgsUnchecked, Endpoint, UdpQuicArgs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,6 +484,24 @@ pub struct OHttpArgs {
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tls_ca_certs: Vec<String>,
+
+    /// OHTTP HPKE AEAD suites this ingress is willing to use, in preference
+    /// order. Legal values: `aes128_gcm`, `aes256_gcm`, `chacha20_poly1305`.
+    ///
+    /// After fetching the server's key configs, the ingress intersects each
+    /// config's advertised suites with this list, picks the first server config
+    /// (server order) with a non-empty intersection, then picks the first suite
+    /// in *this list's* order. This preference order is a deliberate deviation
+    /// from RFC 9458's literal "first advertised suite" rule.
+    ///
+    /// Unset means no filtering and no preference: the ingress keeps the
+    /// historical behavior of using the first server config's first advertised
+    /// suite. An empty list, a duplicate entry, or an unknown value is a config
+    /// error. If no server config intersects this list, the key fetch fails and
+    /// requests error out; the ingress never falls back to the default suites.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aead_suites: Option<AeadSuites>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

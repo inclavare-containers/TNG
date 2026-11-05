@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::config::egress::KeyArgs;
+use crate::config::ohttp_aead::AeadSuite;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::file::FileBasedKeyManager;
@@ -58,6 +59,10 @@ pub struct OhttpServerApi {
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Whether to inject X-Real-IP / X-Forwarded-For from the direct peer.
     forward_client_ip: bool,
+    /// AEAD suites accepted when decapsulating a request. Checked against the
+    /// suite in every request header, including requests sealed under an old
+    /// key config or one synced from a peer.
+    aead_suites: Arc<[AeadSuite]>,
 }
 
 impl OhttpServerApi {
@@ -71,18 +76,23 @@ impl OhttpServerApi {
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         forward_client_ip: bool,
+        aead_suites: Vec<AeadSuite>,
     ) -> Result<Self, TngError> {
         // Create key manager based on configuration
         let key_manager: Arc<dyn KeyManager> = match key {
-            KeyArgs::SelfGenerated { rotation_interval } => Arc::new(
-                SelfGeneratedKeyManager::new_with_auto_refresh(runtime, rotation_interval)?,
-            ),
+            KeyArgs::SelfGenerated { rotation_interval } => {
+                Arc::new(SelfGeneratedKeyManager::new_with_auto_refresh(
+                    runtime,
+                    rotation_interval,
+                    aead_suites.clone(),
+                )?)
+            }
             KeyArgs::File { path } => {
-                Arc::new(FileBasedKeyManager::new(runtime, path.into()).await?)
+                Arc::new(FileBasedKeyManager::new(runtime, path.into(), aead_suites.clone()).await?)
             }
-            KeyArgs::PeerShared(peer_shared_args) => {
-                Arc::new(PeerSharedKeyManager::new(runtime, peer_shared_args).await?)
-            }
+            KeyArgs::PeerShared(peer_shared_args) => Arc::new(
+                PeerSharedKeyManager::new(runtime, peer_shared_args, aead_suites.clone()).await?,
+            ),
         };
 
         Ok(OhttpServerApi {
@@ -93,6 +103,7 @@ impl OhttpServerApi {
             passthrough_request_headers,
             passthrough_response_headers,
             forward_client_ip,
+            aead_suites: aead_suites.into(),
         })
     }
 }

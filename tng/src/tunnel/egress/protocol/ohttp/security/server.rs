@@ -53,6 +53,15 @@ impl OhttpServer {
         runtime: TokioRuntime,
     ) -> Result<Self> {
         let forward_client_ip = ohttp_args.forward_client_ip;
+        let aead_suites = ohttp_args.resolved_aead_suites();
+        // One line per egress OHTTP instance: the list is both the advertised
+        // set and the decapsulation allowlist, so both are stated.
+        tracing::info!(
+            aead_suites = ?aead_suites.as_slice(),
+            default = ohttp_args.aead_suites.is_none(),
+            advertised_aead_suites = ?aead_suites.as_slice(),
+            "OHTTP egress AEAD suite policy in effect"
+        );
         let (passthrough_request_headers, passthrough_response_headers) = (
             Arc::new(
                 ohttp_args
@@ -79,6 +88,7 @@ impl OhttpServer {
                     passthrough_request_headers,
                     passthrough_response_headers,
                     forward_client_ip,
+                    aead_suites.as_slice().to_vec(),
                 )
                 .await?,
             ),

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
+use crate::config::ohttp_aead::AeadSuite;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
     KeyInfo, KeyManager, KeyStatus,
@@ -71,6 +72,9 @@ struct FileBasedKeyManagerInner {
     /// Protected by a write lock during updates; readers can concurrently access the current key.
     /// When the file is modified, a new `KeyInfo` replaces the old one atomically.
     key: RwLock<(PublicKeyData, KeyInfo)>,
+
+    /// AEAD suites advertised in the loaded key config, in order.
+    aead_suites: Vec<AeadSuite>,
 }
 impl FileBasedKeyManager {
     /// Create a new FileBasedKeyManager and start watching the file.
@@ -93,6 +97,7 @@ impl FileBasedKeyManager {
     ///
     /// * `runtime` - The Tokio runtime used to spawn the background watch task.
     /// * `path` - Path to the PEM-encoded PKCS#8 private key file.
+    /// * `aead_suites` - The AEAD suites to advertise, in order.
     ///
     /// # Returns
     ///
@@ -105,11 +110,16 @@ impl FileBasedKeyManager {
     /// - `TngError::LoadPrivateKeyFailed` if the initial PEM file cannot be read or parsed.
     /// - `TngError::WatchFileFailed` if the file watcher cannot be initialized.
     ///
-    pub async fn new(runtime: TokioRuntime, path: PathBuf) -> Result<Self, TngError> {
-        let key_info = Self::load_key_from_pem(&path).await?;
+    pub async fn new(
+        runtime: TokioRuntime,
+        path: PathBuf,
+        aead_suites: Vec<AeadSuite>,
+    ) -> Result<Self, TngError> {
+        let key_info = Self::load_key_from_pem(&path, &aead_suites).await?;
 
         let inner = Arc::new(FileBasedKeyManagerInner {
             key: RwLock::new((key_info.key_config.public_key()?, key_info)),
+            aead_suites,
         });
 
         let inner_clone = inner.clone();
@@ -124,7 +134,7 @@ impl FileBasedKeyManager {
                     Ok(()) => {
                         tracing::info!(?path, "Key file changed, attempting to reload OHTTP key");
 
-                        match Self::load_key_from_pem(&path).await {
+                        match Self::load_key_from_pem(&path, &inner_clone.aead_suites).await {
                             Ok(new_key_info) => {
                                 let mut write = inner_clone.key.write().await;
                                 let public_key = match new_key_info.key_config.public_key() {
@@ -163,12 +173,15 @@ impl FileBasedKeyManager {
     }
 
     /// Loads and parses a PEM-encoded PKCS#8 private key into a usable `KeyInfo` structure.
-    async fn load_key_from_pem(path: &Path) -> Result<KeyInfo, TngError> {
+    async fn load_key_from_pem(
+        path: &Path,
+        aead_suites: &[AeadSuite],
+    ) -> Result<KeyInfo, TngError> {
         let pem_data = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| TngError::LoadPrivateKeyFailed(path.into(), anyhow::Error::from(e)))?;
 
-        KeyInfo::from_pkcs8_pem(&pem_data)
+        KeyInfo::from_pkcs8_pem(&pem_data, aead_suites)
     }
 }
 

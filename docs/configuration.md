@@ -1120,6 +1120,7 @@ Enable OHTTP in `add_ingress` by specifying the `ohttp` field.
 |---|---|---|---|
 | `path_rewrites` | array [[PathRewrite](#pathrewrite)] | `[]` | Path rewrite rule list, matched in order |
 | `path_default` | string | `"root"` | Fallback outer path when no `path_rewrites` rule matches (unset/empty/no match). `"root"` → `/`; `"original"` → the inner request's original path |
+| `aead_suites` | array [string] | — | HPKE AEAD suites this ingress may use, in preference order. See `aead_suites` below. |
 
 #### PathRewrite
 
@@ -1224,6 +1225,19 @@ Whether to wrap the OHTTP-encrypted request in TLS (HTTPS) when forwarding to th
 
 PEM file paths of trusted CA certificates used to verify the upstream's TLS certificate when `tls: true`. Each file may contain a single certificate or a PEM bundle (multiple concatenated certs). Useful for self-signed or internal-CA gateways. Empty (the default) relies on the built-in webpki roots. Ignored unless `tls: true`.
 
+#### `aead_suites` (optional, list of string)
+
+Restricts the HPKE AEAD suites this ingress may use, in preference order. Legal values are `aes128_gcm`, `aes256_gcm` and `chacha20_poly1305`; matching is case-sensitive and aliases are rejected. Omit the field to keep the historical behavior: no filtering, and the first suite advertised by the server's first key config. This is a compliance control, not a performance tuning option.
+
+When set, the ingress intersects each server key config's advertised suites with this list, picks the first server key config (in server order) with a non-empty intersection, then picks the first suite in this list's order. Taking the client's order rather than the server's first advertised suite is a deliberate deviation from RFC 9458. Only TNG as ingress behaves this way; standard OHTTP servers are unaffected.
+
+If no server key config intersects the list, the key fetch fails and requests error out. The ingress never falls back to the default suites. An empty list or a duplicate entry is rejected at config load. The policy is read once at startup, so changing it requires restarting the ingress.
+
+This field only constrains the TNG ingress that carries it. To constrain every client of an egress, configure `aead_suites` on the egress as well.
+
+In a `peer_shared` cluster, each node applies its own policy. Use the same list on every node: a node whose policy differs rejects the suites its peers advertise, and clients keep failing until they refetch a key config they can use.
+
+When tightening to AES-256-GCM only, first upgrade the egress and every ingress to a version that supports AES-256-GCM, then roll out the restrictive policy. A client still holding a cached key config with an older suite keeps failing until it refetches; the egress's HTTP 422 response makes the ingress invalidate its cache and refetch on the next request.
 
 <a name="ohttp-egress-side-configuration"></a>
 
@@ -1236,6 +1250,7 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 | `cors` | [CorsConfig](#corsconfig) | None | CORS configuration for browser access to OHTTP endpoints |
 | `key` | [KeyConfig](#key-management) | None | Key management configuration (see [Key Management](#key-management) below) |
 | `forward_client_ip` | bool | `true` | When `true`, the egress injects `X-Real-IP` (set to the direct TCP peer) and `X-Forwarded-For` (append the direct peer) into the decrypted inner request before forwarding upstream. The direct peer is whoever delivered the OHTTP POST, which in the relay topology is the relay, not the real client. Set `false` to disable. |
+| `aead_suites` | array [string] | `["aes128_gcm", "aes256_gcm", "chacha20_poly1305"]` | HPKE AEAD suites to advertise and accept. See `aead_suites` below. |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` is deprecated since 2.2.4; use `direct_forward` instead.
@@ -1314,6 +1329,18 @@ Example:
   }
 }
 ```
+
+#### `aead_suites` (optional, list of string)
+
+The HPKE AEAD suites this egress advertises in its key config and accepts when decapsulating a request. Legal values and defaults match the ingress side: `aes128_gcm`, `aes256_gcm` and `chacha20_poly1305`, defaulting to all three in that order.
+
+Both halves are driven by the same list. Newly generated and file-loaded key configs advertise only these suites, and every decapsulation checks the suite in the request header, including requests sealed under an older key config or under a key synced from a `peer_shared` peer. A disallowed suite is rejected with HTTP 422 and logged with the suite, key id and peer address; the response body carries no suite details. The 422 makes a TNG ingress discard its cached key config and fetch a new one on the next request.
+
+There is no fallback to the default list. An empty list or a duplicate entry is rejected at config load. The policy is read once at startup, so changing it requires restarting the egress.
+
+In a `peer_shared` cluster, key configs are synced without filtering, so nodes with different policies advertise suites their peers reject. Configure the same `aead_suites` list on every node of the group.
+
+Roll out a restrictive policy after upgrading the egress and the expected clients to a version that supports the suite being kept. A client caching a key config from before the change is rejected until it refetches, which the 422 response drives on its next request.
 
 <a name="ohttp-key-management"></a>
 

@@ -12,6 +12,7 @@ pub mod ingress;
 pub mod mapping_rule;
 pub mod match_rule;
 pub mod observability;
+pub(crate) mod ohttp_aead;
 pub mod parse;
 pub mod ra;
 
@@ -130,6 +131,7 @@ pub mod tests {
                         }),
                         tls: None,
                         tls_ca_certs: vec![],
+                        aead_suites: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -182,6 +184,7 @@ pub mod tests {
                             ]),
                         }),
                         forward_client_ip: true,
+                        aead_suites: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -252,6 +255,7 @@ pub mod tests {
                         }),
                         tls: None,
                         tls_ca_certs: vec![],
+                        aead_suites: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -308,6 +312,7 @@ pub mod tests {
                             ]),
                         }),
                         forward_client_ip: true,
+                        aead_suites: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -361,6 +366,7 @@ pub mod tests {
                             response_headers: HeaderPassthroughSpec::default(),
                         }),
                         forward_client_ip: true,
+                        aead_suites: None,
                     }),
                     rats_tls: None,
                     quic: None,

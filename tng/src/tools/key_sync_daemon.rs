@@ -26,6 +26,7 @@
 //! key set itself keys by.
 
 use crate::config::egress::PeerSharedArgs;
+use crate::config::ohttp_aead::DEFAULT_OHTTP_AEAD_SUITES;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::PeerSharedKeyManager;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyStatus};
 use crate::tunnel::ohttp::key_config::PublicKeyData;
@@ -75,7 +76,8 @@ impl KeySyncDaemon {
         }
 
         let rotation_interval = args.rotation_interval;
-        let mgr = PeerSharedKeyManager::new(runtime, args).await?;
+        let mgr =
+            PeerSharedKeyManager::new(runtime, args, DEFAULT_OHTTP_AEAD_SUITES.to_vec()).await?;
         let daemon = Self {
             mgr,
             out_dir,
@@ -407,17 +409,31 @@ mod tests {
     /// `new`/`insert_key_from_peer` constructors (no serf needed).
     fn make_test_keyset() -> ClusterKeySet {
         let now = SystemTime::get();
-        let active = KeyInfo::generate(1, KeyStatus::Active, now, 300).unwrap();
-        let pending =
-            KeyInfo::generate(2, KeyStatus::Pending, now + Duration::from_secs(100), 300).unwrap();
-        let stale =
-            KeyInfo::generate(3, KeyStatus::Stale, now - Duration::from_secs(1000), 300).unwrap();
+        let active =
+            KeyInfo::generate(1, KeyStatus::Active, now, 300, &DEFAULT_OHTTP_AEAD_SUITES).unwrap();
+        let pending = KeyInfo::generate(
+            2,
+            KeyStatus::Pending,
+            now + Duration::from_secs(100),
+            300,
+            &DEFAULT_OHTTP_AEAD_SUITES,
+        )
+        .unwrap();
+        let stale = KeyInfo::generate(
+            3,
+            KeyStatus::Stale,
+            now - Duration::from_secs(1000),
+            300,
+            &DEFAULT_OHTTP_AEAD_SUITES,
+        )
+        .unwrap();
 
         let pk_active = active.key_config.public_key().unwrap();
         let pk_pending = pending.key_config.public_key().unwrap();
         let pk_stale = stale.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pk_active, active, 300);
+        let mut cks =
+            ClusterKeySet::new(pk_active, active, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
         assert!(cks.insert_key_from_peer(pk_pending, pending));
         assert!(cks.insert_key_from_peer(pk_stale, stale));
         cks
@@ -513,8 +529,14 @@ mod tests {
         // First snapshot: one active key in current.
         let cks_before = {
             let now = SystemTime::get();
-            let k = KeyInfo::generate(1, KeyStatus::Active, now, 300).unwrap();
-            ClusterKeySet::new(k.key_config.public_key().unwrap(), k, 300)
+            let k = KeyInfo::generate(1, KeyStatus::Active, now, 300, &DEFAULT_OHTTP_AEAD_SUITES)
+                .unwrap();
+            ClusterKeySet::new(
+                k.key_config.public_key().unwrap(),
+                k,
+                300,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
         };
         export_keyset(dir.path(), &cks_before).await.unwrap();
         let before = list_key_stems(&dir.path().join("current"));
@@ -523,8 +545,14 @@ mod tests {
         // Second snapshot: a different active key (old one is gone).
         let cks_after = {
             let now = SystemTime::get();
-            let k = KeyInfo::generate(2, KeyStatus::Active, now, 300).unwrap();
-            ClusterKeySet::new(k.key_config.public_key().unwrap(), k, 300)
+            let k = KeyInfo::generate(2, KeyStatus::Active, now, 300, &DEFAULT_OHTTP_AEAD_SUITES)
+                .unwrap();
+            ClusterKeySet::new(
+                k.key_config.public_key().unwrap(),
+                k,
+                300,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
         };
         export_keyset(dir.path(), &cks_after).await.unwrap();
         let after = list_key_stems(&dir.path().join("current"));
@@ -550,10 +578,22 @@ mod tests {
 
         // Re-export with no stale key -> expired/ must vanish.
         let now = SystemTime::get();
-        let active = KeyInfo::generate(1, KeyStatus::Active, now, 300).unwrap();
-        let pending =
-            KeyInfo::generate(2, KeyStatus::Pending, now + Duration::from_secs(100), 300).unwrap();
-        let mut cks2 = ClusterKeySet::new(active.key_config.public_key().unwrap(), active, 300);
+        let active =
+            KeyInfo::generate(1, KeyStatus::Active, now, 300, &DEFAULT_OHTTP_AEAD_SUITES).unwrap();
+        let pending = KeyInfo::generate(
+            2,
+            KeyStatus::Pending,
+            now + Duration::from_secs(100),
+            300,
+            &DEFAULT_OHTTP_AEAD_SUITES,
+        )
+        .unwrap();
+        let mut cks2 = ClusterKeySet::new(
+            active.key_config.public_key().unwrap(),
+            active,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
         cks2.insert_key_from_peer(pending.key_config.public_key().unwrap(), pending);
         export_keyset(dir.path(), &cks2).await.unwrap();
         assert!(
@@ -862,6 +902,7 @@ mod tests {
                     KeyStatus::Pending,
                     now + Duration::from_secs(100),
                     600,
+                    &DEFAULT_OHTTP_AEAD_SUITES,
                 )
                 .context("generate pending key")?;
                 let pk = pending

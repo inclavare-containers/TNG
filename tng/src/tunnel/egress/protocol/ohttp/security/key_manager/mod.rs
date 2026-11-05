@@ -5,6 +5,7 @@
 //! and requires [`StatusProvider`] as a supertrait so every key manager can respond
 //! to `/status/egress/<id>` queries with its current key state.
 
+use crate::config::ohttp_aead::AeadSuite;
 use crate::status::StatusProvider;
 use crate::tunnel::ohttp::key_config::PublicKeyData;
 use crate::{error::TngError, tunnel::ohttp::key_config::KeyConfigExtend};
@@ -57,11 +58,13 @@ impl KeyInfo {
     /// * `status` - The initial status (Pending, Active, or Stale)
     /// * `actived_at` - The time when the key will be activated
     /// * `rotation_interval` - The rotation interval in seconds
+    /// * `aead_suites` - The AEAD suites to advertise, in order
     pub fn generate(
         key_id: u8,
         status: KeyStatus,
         actived_at: SystemTime,
         rotation_interval: u64,
+        aead_suites: &[AeadSuite],
     ) -> Result<Self, TngError> {
         let stale_at = actived_at + std::time::Duration::from_secs(rotation_interval);
         let expire_at = stale_at + std::time::Duration::from_secs(rotation_interval);
@@ -69,25 +72,10 @@ impl KeyInfo {
         let key_config = ohttp::KeyConfig::new(
             key_id,
             ohttp::hpke::Kem::X25519Sha256,
-            vec![
-                // The client picks the first suite it supports from this list.
-                // AES-128-GCM runs on AES-NI/VAES + CLMUL and seals 64 KiB
-                // responses several times faster than the software AVX2
-                // ChaCha20Poly1305 backend, so it goes first; ChaCha stays
-                // advertised for clients that only implement it.
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::Aes128Gcm,
-                ),
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::Aes256Gcm,
-                ),
-                ohttp::SymmetricSuite::new(
-                    ohttp::hpke::Kdf::HkdfSha256,
-                    ohttp::hpke::Aead::ChaCha20Poly1305,
-                ),
-            ],
+            aead_suites
+                .iter()
+                .map(|suite| suite.to_symmetric_suite())
+                .collect(),
         )
         .map_err(TngError::from)?;
 
@@ -111,20 +99,17 @@ impl KeyInfo {
     ///
     /// # Arguments
     /// * `pem_data` - The PEM-encoded PKCS#8 private key data
-    pub fn from_pkcs8_pem(pem_data: &str) -> Result<Self, TngError> {
+    /// * `aead_suites` - The AEAD suites to advertise, in order
+    pub fn from_pkcs8_pem(pem_data: &str, aead_suites: &[AeadSuite]) -> Result<Self, TngError> {
         use ohttp::hpke;
 
         let key_config = ohttp::KeyConfig::new_from_pkcs8_pem(
             0,
             hpke::Kem::X25519Sha256,
-            vec![
-                // Suite order matches `generate()`: the client selects the
-                // first suite it supports, and AES-128-GCM is the
-                // hardware-accelerated one.
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes128Gcm),
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::Aes256Gcm),
-                ohttp::SymmetricSuite::new(hpke::Kdf::HkdfSha256, hpke::Aead::ChaCha20Poly1305),
-            ],
+            aead_suites
+                .iter()
+                .map(|suite| suite.to_symmetric_suite())
+                .collect(),
             pem_data,
         )
         .map_err(TngError::from)?;
@@ -197,6 +182,7 @@ pub trait KeyManager: StatusProvider + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ohttp_aead::DEFAULT_OHTTP_AEAD_SUITES;
     use web_time_compat::Duration;
 
     fn make_test_key_info(key_id: u8) -> KeyInfo {
@@ -227,21 +213,59 @@ mod tests {
         assert!(debug.contains("expire_at"));
     }
 
-    /// The client selects `symmetric[0]`, so the advertised order is the
-    /// negotiated suite. AES-128-GCM must come first; AES-256-GCM is stripped
-    /// by the rust-hpke backend, leaving AES-128-GCM then ChaCha20Poly1305.
+    /// The default policy advertises all three suites, AES-128-GCM first so
+    /// the historical negotiation stays the same.
     #[test]
-    fn generated_key_config_advertises_aes128_gcm_first() {
-        let info = KeyInfo::generate(7, KeyStatus::Active, SystemTime::get(), 300)
-            .expect("generate key info");
+    fn generated_key_config_advertises_default_suites() {
+        let info = KeyInfo::generate(
+            7,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &DEFAULT_OHTTP_AEAD_SUITES,
+        )
+        .expect("generate key info");
         let suites = info.key_config.symmetric();
-        assert!(!suites.is_empty());
-        assert_eq!(suites[0].aead(), ohttp::hpke::Aead::Aes128Gcm);
-        assert!(
+        assert_eq!(
             suites
                 .iter()
-                .any(|s| s.aead() == ohttp::hpke::Aead::ChaCha20Poly1305),
-            "ChaCha20Poly1305 must stay advertised for old clients"
+                .map(|s| s.aead())
+                .collect::<Vec<ohttp::hpke::Aead>>(),
+            vec![
+                ohttp::hpke::Aead::Aes128Gcm,
+                ohttp::hpke::Aead::Aes256Gcm,
+                ohttp::hpke::Aead::ChaCha20Poly1305,
+            ]
         );
+    }
+
+    /// A configured policy is the only thing advertised.
+    #[test]
+    fn generated_key_config_advertises_only_configured_suites() {
+        let info = KeyInfo::generate(
+            7,
+            KeyStatus::Active,
+            SystemTime::get(),
+            300,
+            &[AeadSuite::Aes256Gcm],
+        )
+        .expect("generate key info");
+        let suites = info.key_config.symmetric();
+        assert_eq!(suites.len(), 1);
+        assert_eq!(suites[0].aead(), ohttp::hpke::Aead::Aes256Gcm);
+    }
+
+    /// Loading a PEM file applies the same policy as generation.
+    #[test]
+    fn file_key_config_advertises_only_configured_suites() {
+        const PEM: &str = "-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VuBCIEIOixlJE0Ykdc4ePwmaf2LLAea8Lfkfb+SARsKYmCBRpR
+-----END PRIVATE KEY-----";
+
+        let info =
+            KeyInfo::from_pkcs8_pem(PEM, &[AeadSuite::Aes256Gcm]).expect("load key info from pem");
+        let suites = info.key_config.symmetric();
+        assert_eq!(suites.len(), 1);
+        assert_eq!(suites[0].aead(), ohttp::hpke::Aead::Aes256Gcm);
     }
 }

@@ -1,4 +1,5 @@
 use crate::config::egress::PeerSharedArgs;
+use crate::config::ohttp_aead::AeadSuite;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::cluster_key_set::ClusterKeySet;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::peer_shared::memberlist_rats_quic::RatsQuic;
@@ -69,7 +70,11 @@ pub(super) struct PeerSharedKeyManagerInner {
 }
 
 impl PeerSharedKeyManager {
-    pub async fn new(runtime: TokioRuntime, peer_shared: PeerSharedArgs) -> Result<Self, TngError> {
+    pub async fn new(
+        runtime: TokioRuntime,
+        peer_shared: PeerSharedArgs,
+        aead_suites: Vec<AeadSuite>,
+    ) -> Result<Self, TngError> {
         // Step 1: Initialize Serf node and network transport
         let (serf, subscriber) = Self::setup_serf(&runtime, &peer_shared).await?;
 
@@ -81,6 +86,7 @@ impl PeerSharedKeyManager {
             &serf,
             peer_shared.rotation_interval,
             Duration::from_secs(peer_shared.preboot_timeout),
+            &aead_suites,
         )
         .await?;
 
@@ -309,6 +315,7 @@ impl PeerSharedKeyManager {
         serf: &Serf,
         rotation_interval: u64,
         preboot_timeout: Duration,
+        aead_suites: &[AeadSuite],
     ) -> Result<ClusterKeySet, TngError> {
         tracing::info!("Starting preboot phase: synchronizing cluster key set");
 
@@ -392,7 +399,10 @@ impl PeerSharedKeyManager {
                     }
                 }
 
-                if let Some(key_set) = merged_key_set {
+                if let Some(mut key_set) = merged_key_set {
+                    // A key set decoded from a peer carries no local policy;
+                    // attach ours before it generates any key.
+                    key_set.set_aead_suites(aead_suites.to_vec());
                     let key_hex: Vec<String> = key_set
                         .iter_keys()
                         .map(|(pk, _)| hex::encode(pk.as_ref()))
@@ -423,14 +433,18 @@ impl PeerSharedKeyManager {
         }
 
         // Bootstrap: create initial active key
-        let initial_key =
-            KeyInfo::generate(0, KeyStatus::Active, SystemTime::get(), rotation_interval).map_err(
-                |e| {
-                    TngError::KeyUpdateMessageDecodeError(
-                        anyhow::Error::from(e).context("Failed to generate initial key"),
-                    )
-                },
-            )?;
+        let initial_key = KeyInfo::generate(
+            0,
+            KeyStatus::Active,
+            SystemTime::get(),
+            rotation_interval,
+            aead_suites,
+        )
+        .map_err(|e| {
+            TngError::KeyUpdateMessageDecodeError(
+                anyhow::Error::from(e).context("Failed to generate initial key"),
+            )
+        })?;
         let public_key = initial_key.key_config.public_key()?;
         tracing::info!(
             public_key_hex = %hex::encode(public_key.as_ref()),
@@ -440,6 +454,7 @@ impl PeerSharedKeyManager {
             public_key,
             initial_key,
             rotation_interval,
+            aead_suites.to_vec(),
         ))
     }
 
@@ -1261,6 +1276,7 @@ impl Drop for SerfGracefulShutdown {
 mod tests {
     use super::*;
     use crate::config::egress::PeerSharedArgs;
+    use crate::config::ohttp_aead::DEFAULT_OHTTP_AEAD_SUITES;
     use crate::config::ra::RaArgsUnchecked;
     use crate::tests::run_test_with_tokio_runtime;
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyManager;
@@ -1600,7 +1616,9 @@ mod tests {
             let port = portpicker::pick_unused_port().unwrap();
             let args = make_peer_shared_args(port, vec![], 300);
 
-            let manager = PeerSharedKeyManager::new(runtime, args).await?;
+            let manager =
+                PeerSharedKeyManager::new(runtime, args, DEFAULT_OHTTP_AEAD_SUITES.to_vec())
+                    .await?;
 
             // Verify the manager was created and has at least one key (bootstrapped)
             let cks = manager.inner.cluster_key_set.read().await;
@@ -1627,7 +1645,7 @@ mod tests {
 
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
-                PeerSharedKeyManager::new(runtime, args),
+                PeerSharedKeyManager::new(runtime, args, DEFAULT_OHTTP_AEAD_SUITES.to_vec()),
             )
             .await
             .expect("startup must honor the join deadline, not hang");
@@ -1670,7 +1688,12 @@ mod tests {
 
             // A is a healthy, fully started cluster member.
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let _manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let _manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // B joins A successfully but enters preboot with zero budget: the
             // visible member must not be waited on.
@@ -1680,7 +1703,11 @@ mod tests {
 
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
-                PeerSharedKeyManager::new(runtime.clone(), args_b),
+                PeerSharedKeyManager::new(
+                    runtime.clone(),
+                    args_b,
+                    DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+                ),
             )
             .await
             .expect("preboot deadline must be honored, not hang");
@@ -1729,7 +1756,12 @@ mod tests {
 
             // Start bootstrap node A
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Get A's active key public key
             let a_pk = {
@@ -1744,7 +1776,9 @@ mod tests {
 
             // Start node B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime, args_b).await?;
+            let manager_b =
+                PeerSharedKeyManager::new(runtime, args_b, DEFAULT_OHTTP_AEAD_SUITES.to_vec())
+                    .await?;
 
             // Wait for B to receive A's key
             wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
@@ -1786,7 +1820,13 @@ mod tests {
                 .spawn_supervised_task_current_span(async move {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     let args_a = make_peer_shared_args(port_a, vec![], 300);
-                    let manager_a = PeerSharedKeyManager::new(runtime_a, args_a).await.unwrap();
+                    let manager_a = PeerSharedKeyManager::new(
+                        runtime_a,
+                        args_a,
+                        DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+                    )
+                    .await
+                    .unwrap();
                     // Report A's active public key to the test body.
                     let a_pk = manager_a
                         .get_client_visible_key()
@@ -1804,7 +1844,9 @@ mod tests {
             // B points at A. PeerSharedKeyManager::new must block (retry) until A is up,
             // then return — rather than bootstrap standalone on the first failed attempt.
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime, args_b).await?;
+            let manager_b =
+                PeerSharedKeyManager::new(runtime, args_b, DEFAULT_OHTTP_AEAD_SUITES.to_vec())
+                    .await?;
 
             // After B joined A, B must NOT have bootstrapped its own key — it should
             // have synced A's key set (members.len() > 1 at preboot).
@@ -1842,12 +1884,22 @@ mod tests {
 
             // Start A first (bootstrap), then B joins
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for convergence
             wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
@@ -1877,25 +1929,45 @@ mod tests {
 
             // Start A (bootstrap)
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start C joining A
             let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start D joining A
             let args_d = make_peer_shared_args(port_d, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_d = PeerSharedKeyManager::new(runtime.clone(), args_d).await?;
+            let manager_d = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_d,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // D should have at least 1 active key
             wait_for_active_key_count(&manager_d, 1, Duration::from_secs(15)).await?;
@@ -1941,7 +2013,12 @@ mod tests {
 
             // Start A with 2-second rotation interval
             let args_a = make_peer_shared_args(port_a, vec![], 2);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Get initial key
             let initial_pk = manager_a
@@ -1954,7 +2031,12 @@ mod tests {
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // B should have A's initial key
             wait_for_key_in_cks(&manager_b, &initial_pk, Duration::from_secs(10)).await?;
@@ -2013,7 +2095,12 @@ mod tests {
 
             // Single node with 2-second rotation interval
             let args = make_peer_shared_args(port, vec![], 2);
-            let manager = PeerSharedKeyManager::new(runtime.clone(), args).await?;
+            let manager = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Get initial key
             let initial_pk = manager
@@ -2061,8 +2148,12 @@ mod tests {
 
             // Start bootstrap node
             let args_bootstrap = make_peer_shared_args(port_bootstrap, vec![], 300);
-            let bootstrap_manager =
-                PeerSharedKeyManager::new(runtime.clone(), args_bootstrap).await?;
+            let bootstrap_manager = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_bootstrap,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let bootstrap_pk = bootstrap_manager
                 .get_client_visible_key()
@@ -2078,7 +2169,12 @@ mod tests {
                 let port = portpicker::pick_unused_port().unwrap();
                 let args =
                     make_peer_shared_args(port, vec![format!("127.0.0.1:{}", port_bootstrap)], 300);
-                let manager = PeerSharedKeyManager::new(runtime.clone(), args).await?;
+                let manager = PeerSharedKeyManager::new(
+                    runtime.clone(),
+                    args,
+                    DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+                )
+                .await?;
                 managers.push(manager);
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
@@ -2119,7 +2215,12 @@ mod tests {
 
             // Start A with 2-second rotation interval
             let args_a = make_peer_shared_args(port_a, vec![], 2);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Get initial key
             let key1_pk = manager_a
@@ -2132,7 +2233,12 @@ mod tests {
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 2);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // B should have key1
             wait_for_key_in_cks(&manager_b, &key1_pk, Duration::from_secs(10)).await?;
@@ -2180,7 +2286,12 @@ mod tests {
 
             // Start A (bootstrap)
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let a_pk = manager_a
                 .get_client_visible_key()
@@ -2192,7 +2303,12 @@ mod tests {
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // B should have A's key
             wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
@@ -2228,7 +2344,12 @@ mod tests {
 
             // Start A (bootstrap)
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let a_pk = manager_a
                 .get_client_visible_key()
@@ -2240,7 +2361,12 @@ mod tests {
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for B to have A's key via normal sync
             wait_for_key_in_cks(&manager_b, &a_pk, Duration::from_secs(10)).await?;
@@ -2280,13 +2406,23 @@ mod tests {
 
             // Start A (bootstrap)
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for convergence
             wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;
@@ -2334,19 +2470,34 @@ mod tests {
 
             // Start A (bootstrap)
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start C joining A
             let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for all to converge
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -2411,7 +2562,12 @@ mod tests {
 
             let port_a = portpicker::pick_unused_port().unwrap();
             let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let a_pk = manager_a
                 .get_client_visible_key()
@@ -2421,7 +2577,12 @@ mod tests {
 
             let port_b = portpicker::pick_unused_port().unwrap();
             let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let b_pk = manager_b
                 .get_client_visible_key()
@@ -2445,7 +2606,12 @@ mod tests {
                 ],
                 rotation_interval,
             );
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // --- Phase 3: Verify cross-node key accessibility ---
 
@@ -2493,7 +2659,12 @@ mod tests {
 
             let port_a = portpicker::pick_unused_port().unwrap();
             let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let a_pk = manager_a
                 .get_client_visible_key()
@@ -2503,7 +2674,12 @@ mod tests {
 
             let port_b = portpicker::pick_unused_port().unwrap();
             let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let b_pk = manager_b
                 .get_client_visible_key()
@@ -2513,7 +2689,12 @@ mod tests {
 
             let port_c = portpicker::pick_unused_port().unwrap();
             let args_c = make_peer_shared_args(port_c, vec![], rotation_interval);
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let c_pk = manager_c
                 .get_client_visible_key()
@@ -2567,7 +2748,12 @@ mod tests {
             // Start A as bootstrap (creates its own key)
             let port_a = portpicker::pick_unused_port().unwrap();
             let args_a = make_peer_shared_args(port_a, vec![], rotation_interval);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let a_pk = manager_a
                 .get_client_visible_key()
@@ -2578,7 +2764,12 @@ mod tests {
             // Start B as bootstrap too (creates its own DIFFERENT key)
             let port_b = portpicker::pick_unused_port().unwrap();
             let args_b = make_peer_shared_args(port_b, vec![], rotation_interval);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             let b_pk = manager_b
                 .get_client_visible_key()
@@ -2602,7 +2793,12 @@ mod tests {
                 ],
                 rotation_interval,
             );
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for C to get keys from both A and B via preboot merge
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -2668,9 +2864,13 @@ mod tests {
                 .spawn_supervised_task_current_span(async move {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     let args_a = make_peer_shared_args(port_a, vec![], 300);
-                    let _manager_a = PeerSharedKeyManager::new(runtime_for_a, args_a)
-                        .await
-                        .expect("A should start");
+                    let _manager_a = PeerSharedKeyManager::new(
+                        runtime_for_a,
+                        args_a,
+                        DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+                    )
+                    .await
+                    .expect("A should start");
                     // Keep A alive for the rest of the test.
                     std::future::pending::<()>().await;
                 });
@@ -2683,7 +2883,12 @@ mod tests {
 
             let mut args_b = make_peer_shared_args(port_b, vec![], 300);
             args_b.peers_file = Some(peers_file.to_string_lossy().to_string());
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Now write A's address into the file. The watcher should pick it up
             // and spawn a background retry_join_peer task that retries until A
@@ -2735,19 +2940,34 @@ mod tests {
             // complete and the new key would activate before the final assertion,
             // causing the "Key should remain the same" check to fail.
             let args_a = make_peer_shared_args(port_a, vec![], 300);
-            let manager_a = PeerSharedKeyManager::new(runtime.clone(), args_a).await?;
+            let manager_a = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_a,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start B joining A
             let args_b = make_peer_shared_args(port_b, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_b = PeerSharedKeyManager::new(runtime.clone(), args_b).await?;
+            let manager_b = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_b,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             // Start C joining A (to create multiple leave events later)
             let args_c = make_peer_shared_args(port_c, vec![format!("127.0.0.1:{}", port_a)], 300);
-            let manager_c = PeerSharedKeyManager::new(runtime.clone(), args_c).await?;
+            let manager_c = PeerSharedKeyManager::new(
+                runtime.clone(),
+                args_c,
+                DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+            )
+            .await?;
 
             // Wait for convergence
             wait_for_active_key_count(&manager_b, 1, Duration::from_secs(10)).await?;

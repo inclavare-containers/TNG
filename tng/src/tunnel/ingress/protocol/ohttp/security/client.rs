@@ -45,18 +45,7 @@ use crate::tunnel::ohttp::protocol::userdata::ClientUserData;
 #[cfg(unix)]
 use crate::tunnel::ra_context::AttestContext;
 use crate::{
-    error::CheckErrorResponse as _,
-    tunnel::{
-        ohttp::protocol::{
-            metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
-            userdata::ServerUserData,
-            AttestationChallengeResponse, AttestationRequest, AttestationVerifyRequest,
-            AttestationVerifyResponse, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
-        },
-        utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
-    },
-};
-use crate::{
+    config::ohttp_aead::{AeadSuite, AeadSuites},
     error::TngError,
     tunnel::{
         ohttp::{
@@ -72,6 +61,18 @@ use crate::{
         ra_context::{RaContext, VerifyContext},
     },
     AttestationResult, TokioRuntime,
+};
+use crate::{
+    error::CheckErrorResponse as _,
+    tunnel::{
+        ohttp::protocol::{
+            metadata::{metadata::ClientAuth, Metadata, NoAuth, METADATA_MAX_LEN},
+            userdata::ServerUserData,
+            AttestationChallengeResponse, AttestationRequest, AttestationVerifyRequest,
+            AttestationVerifyResponse, KeyConfigRequest, KeyConfigResponse, ServerAttestationInfo,
+        },
+        utils::maybe_cached::{Expire, MaybeCached, RefreshStrategy},
+    },
 };
 
 const DEFAULT_KEY_CONFIG_REFRESH_SECOND: u64 = 5 * 60; // 5 minutes
@@ -95,15 +96,18 @@ pub struct OHttpClientInner {
     /// Headers to copy from the outer OHTTP response to the inner (plaintext) response.
     #[allow(unused)]
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// The configured AEAD allowlist and preference order. `None` keeps the
+    /// historical server-order behavior with no filtering.
+    aead_suites: Option<AeadSuites>,
 }
 
 struct KeyStoreValue {
     /// The outer-POST metadata frame (big-endian length + prost-encoded
     /// Metadata) for this key generation. Both of its inputs - `client_auth`
-    /// and the selected (first) server key config's public key - are fixed
-    /// per store generation, so the frame is built once here instead of per
-    /// request. `None` when the server returned an empty key-config list:
-    /// the request path then reports the same
+    /// and the selected server key config's public key - are fixed per store
+    /// generation, so the frame is built once here instead of per request.
+    /// `None` when the server returned an empty key-config list with no
+    /// policy configured: the request path then reports the same
     /// `ClientSelectHpkeConfigurationFailed` as before.
     outer_metadata: Option<Bytes>,
 
@@ -112,11 +116,86 @@ struct KeyStoreValue {
         <X25519HkdfSha256 as Kem>::PublicKey,
     )>,
 
-    /// A base64 encoded list of key configurations, each entry is a Individual key configuration entry. Defined in Section 3.1 of RFC 9458.
-    server_key_config_list: Vec<KeyConfig>,
+    /// The server key config selected for this generation: the first one with
+    /// a non-empty intersection when `aead_suites` is configured, otherwise
+    /// the server's first config. The metadata hint and `server_status()` are
+    /// both derived from this config, never from the list's first entry.
+    selected_key_config: Option<KeyConfig>,
+
+    /// The suite chosen by the ingress policy. `None` when no policy is
+    /// configured, so the request path keeps the historical
+    /// `KeyConfig::symmetric[0]` selection.
+    selected_suite: Option<ohttp::SymmetricSuite>,
 
     /// Server attestation information. This is only represented if the server attestation is required.
     server_attestation_result: Option<AttestationResult>,
+}
+
+/// Result of the ingress key-config selection.
+#[derive(Debug)]
+struct SelectedServerKeyConfig {
+    key_config: KeyConfig,
+    /// `None` when no policy is configured: the request path keeps the
+    /// historical `KeyConfig::symmetric[0]` selection.
+    suite: Option<ohttp::SymmetricSuite>,
+}
+
+/// Pick the server key config and suite for one key-store generation.
+///
+/// Without a policy this returns the server's first config (or `None` for an
+/// empty list, preserving the request-time error). With a policy: iterate the
+/// server configs in server order and take the first one whose advertised
+/// suites intersect the allowlist, then take the first suite in the
+/// *ingress's* configured order inside it. Ingress order wins over server
+/// order, which is the documented deviation from RFC 9458.
+fn select_server_key_config(
+    server_key_config_list: &[KeyConfig],
+    aead_suites: Option<&[AeadSuite]>,
+) -> Result<Option<SelectedServerKeyConfig>, TngError> {
+    let Some(aead_suites) = aead_suites else {
+        return Ok(server_key_config_list.first().cloned().map(|key_config| {
+            SelectedServerKeyConfig {
+                key_config,
+                suite: None,
+            }
+        }));
+    };
+
+    for key_config in server_key_config_list {
+        let advertised = key_config.symmetric();
+        // Compare the full (KDF, AEAD) pair: the policy only selects the
+        // AEAD, and the constructed suite must exist verbatim in the config.
+        if let Some(allowed) = aead_suites
+            .iter()
+            .find(|allowed| advertised.contains(&allowed.to_symmetric_suite()))
+        {
+            return Ok(Some(SelectedServerKeyConfig {
+                key_config: key_config.clone(),
+                suite: Some(allowed.to_symmetric_suite()),
+            }));
+        }
+    }
+
+    // Report every suite the server advertised across all configs, in server
+    // order, so the operator sees both sides of the failed intersection.
+    let mut server: Vec<AeadSuite> = Vec::new();
+    for key_config in server_key_config_list {
+        for suite in key_config.symmetric() {
+            let suite = AeadSuite::from_ohttp_aead(suite.aead());
+            if !server.contains(&suite) {
+                server.push(suite);
+            }
+        }
+    }
+    tracing::warn!(
+        server_advertised = ?server,
+        ingress_allowed = ?aead_suites,
+        "OHTTP AEAD suite policy has no intersection between server and ingress"
+    );
+    Err(TngError::OHttpNoAcceptableSuite {
+        server,
+        ingress: aead_suites.to_vec(),
+    })
 }
 
 /// A single entry in the status API response for an upstream OHTTP server.
@@ -139,8 +218,8 @@ impl OHttpClient {
         Some(ServerStatusEntry {
             url: self.inner.base_url.to_string(),
             server_public_key: ksv
-                .server_key_config_list
-                .first()
+                .selected_key_config
+                .as_ref()
                 .and_then(|kc| kc.public_key().ok().map(|pk| hex::encode(pk.as_ref()))),
             server_attestation: ksv
                 .server_attestation_result
@@ -156,6 +235,7 @@ impl OHttpClient {
         runtime: TokioRuntime,
         passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
         passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+        aead_suites: Option<AeadSuites>,
     ) -> Result<Self> {
         // Parsed once per client, not per forwarded request. The error keeps
         // the context text the per-request parse produced before; the caller
@@ -191,6 +271,7 @@ impl OHttpClient {
             runtime: runtime.clone(),
             passthrough_request_headers,
             passthrough_response_headers,
+            aead_suites,
         });
 
         let key_store_value = MaybeCached::new(runtime.clone(), refresh_strategy, {
@@ -219,7 +300,8 @@ impl OHttpClient {
         match self
             .inner
             .send_encrypted_request(
-                &key_store_value.server_key_config_list,
+                key_store_value.selected_key_config.as_ref(),
+                key_store_value.selected_suite,
                 key_store_value.outer_metadata.as_ref(),
                 key_store_value.client_key.as_ref(),
                 request,
@@ -327,20 +409,32 @@ impl OHttpClientInner {
                 .as_ref(),
         )?;
 
-        // Fixed inputs (client auth + the selected first key config's public
-        // key), so the outer-POST metadata frame is built once per generation
-        // rather than re-encoded per request. An empty list keeps the
+        // Selection happens once per key-store generation, not per request.
+        // With a policy this is the first config with a non-empty
+        // intersection and the first allowed suite in ingress order; without
+        // one it is the server's first config and the historical
+        // `symmetric[0]` choice. An empty list with no policy keeps the
         // request-time `ClientSelectHpkeConfigurationFailed` behavior.
-        let outer_metadata = match server_key_config_list.first() {
-            Some(key_config) => Some(Self::build_metadata_block(&client_auth, key_config)?),
-            None => None,
-        };
+        let selected = select_server_key_config(
+            &server_key_config_list,
+            self.aead_suites.as_ref().map(|suites| suites.as_slice()),
+        )?;
+
+        let outer_metadata = selected
+            .as_ref()
+            .map(|selected| Self::build_metadata_block(&client_auth, &selected.key_config))
+            .transpose()?;
+        let selected_key_config = selected
+            .as_ref()
+            .map(|selected| selected.key_config.clone());
+        let selected_suite = selected.and_then(|selected| selected.suite);
 
         Ok((
             KeyStoreValue {
                 outer_metadata,
                 client_key,
-                server_key_config_list,
+                selected_key_config,
+                selected_suite,
                 server_attestation_result,
             },
             expire,
@@ -491,7 +585,8 @@ impl OHttpClientInner {
     /// response.
     async fn send_encrypted_request(
         &self,
-        server_key_config_list: &[KeyConfig],
+        selected_key_config: Option<&KeyConfig>,
+        selected_suite: Option<ohttp::SymmetricSuite>,
         outer_metadata: Option<&Bytes>,
         client_key: Option<&(
             <X25519HkdfSha256 as Kem>::PrivateKey,
@@ -505,8 +600,9 @@ impl OHttpClientInner {
         // Encode the request to bhttp message
         let bhttp_encoder = BhttpEncoder::from_request(request);
 
-        // Select the server key config and build the HPKE request encapsulator
-        let client = Self::build_request_encapsulator(server_key_config_list, client_key)?;
+        // Build the HPKE request encapsulator from the pre-selected config
+        let client =
+            Self::build_request_encapsulator(selected_key_config, selected_suite, client_key)?;
 
         // Seal stage: encrypt the bhttp stream into the ohttp envelope that
         // becomes the outer body, with a per-platform strategy because the
@@ -597,9 +693,10 @@ impl OHttpClientInner {
             .await
     }
 
-    /// Select the server's first advertised key config and build the HPKE
-    /// request encapsulator. (The metadata hint for the selected config is
-    /// precomputed per key generation in `create_key_store_value`.)
+    /// Build the HPKE request encapsulator from the key config selected in
+    /// `create_key_store_value`. When `selected_suite` is `Some`, that exact
+    /// suite is used; when it is `None` the historical first-advertised-suite
+    /// selection is kept.
     ///
     /// With an attested client key (native RA mode) the seal runs in HPKE
     /// Auth mode using that key, so the envelope's sender matches the `pk_s`
@@ -607,17 +704,16 @@ impl OHttpClientInner {
     /// Without one -- and always on wasm, where the client has no attester --
     /// HPKE Base mode generates an ephemeral sender key.
     fn build_request_encapsulator(
-        server_key_config_list: &[KeyConfig],
+        selected_key_config: Option<&KeyConfig>,
+        selected_suite: Option<ohttp::SymmetricSuite>,
         client_key: Option<&(
             <X25519HkdfSha256 as Kem>::PrivateKey,
             <X25519HkdfSha256 as Kem>::PublicKey,
         )>,
     ) -> Result<ohttp::ClientRequest, TngError> {
-        let mut key_config = server_key_config_list
-            .first()
+        let key_config = selected_key_config
             .context("No key config found")
-            .map_err(TngError::ClientSelectHpkeConfigurationFailed)?
-            .clone();
+            .map_err(TngError::ClientSelectHpkeConfigurationFailed)?;
 
         tracing::debug!(
             public_key = ?key_config.public_key(),
@@ -625,20 +721,32 @@ impl OHttpClientInner {
         );
 
         #[cfg(unix)]
-        let client = match client_key {
-            Some((sk, _pk)) => {
-                let sk_bytes = hpke::Serializable::to_bytes(sk);
-                ohttp::ClientRequest::from_config_with_client_key_bytes(
-                    &mut key_config,
+        let client = if let Some((sk, _pk)) = client_key {
+            let sk_bytes = hpke::Serializable::to_bytes(sk);
+            match selected_suite {
+                Some(suite) => ohttp::ClientRequest::from_config_with_client_key_bytes_and_suite(
+                    key_config,
+                    suite,
                     sk_bytes.as_ref(),
-                )?
+                )?,
+                None => ohttp::ClientRequest::from_config_with_client_key_bytes(
+                    &mut key_config.clone(),
+                    sk_bytes.as_ref(),
+                )?,
             }
-            None => ohttp::ClientRequest::from_config(&mut key_config)?,
+        } else {
+            match selected_suite {
+                Some(suite) => ohttp::ClientRequest::from_config_with_suite(key_config, suite)?,
+                None => ohttp::ClientRequest::from_config(&mut key_config.clone())?,
+            }
         };
         #[cfg(not(unix))]
         let client = {
             let _ = client_key; // unused on wasm
-            ohttp::ClientRequest::from_config(&mut key_config)?
+            match selected_suite {
+                Some(suite) => ohttp::ClientRequest::from_config_with_suite(key_config, suite)?,
+                None => ohttp::ClientRequest::from_config(&mut key_config.clone())?,
+            }
         };
 
         Ok(client)
@@ -1063,6 +1171,125 @@ pub(crate) async fn verify_keyconfig_attestation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use ohttp::hpke::Aead;
+
+    fn key_config(key_id: u8, aeads: &[Aead]) -> KeyConfig {
+        ohttp::KeyConfig::new(
+            key_id,
+            ohttp::hpke::Kem::X25519Sha256,
+            aeads
+                .iter()
+                .map(|aead| ohttp::SymmetricSuite::new(ohttp::hpke::Kdf::HkdfSha256, *aead))
+                .collect(),
+        )
+        .expect("build key config")
+    }
+
+    #[test]
+    fn selection_prefers_ingress_order_over_server_order() {
+        // The server advertises AES-128 first; the ingress prefers ChaCha.
+        let list = vec![key_config(1, &[Aead::Aes128Gcm, Aead::ChaCha20Poly1305])];
+        let selected = select_server_key_config(
+            &list,
+            Some(&[AeadSuite::ChaCha20Poly1305, AeadSuite::Aes128Gcm]),
+        )
+        .expect("selection succeeds")
+        .expect("a config is selected");
+
+        assert_eq!(selected.key_config.key_id(), 1);
+        assert_eq!(
+            selected.suite.expect("suite selected").aead(),
+            Aead::ChaCha20Poly1305
+        );
+    }
+
+    #[test]
+    fn selection_takes_first_config_with_intersection() {
+        // Config 1 advertises only ChaCha, which is not allowed; config 2 is
+        // the first one with an intersection.
+        let list = vec![
+            key_config(1, &[Aead::ChaCha20Poly1305]),
+            key_config(2, &[Aead::Aes256Gcm, Aead::Aes128Gcm]),
+        ];
+        let selected = select_server_key_config(&list, Some(&[AeadSuite::Aes256Gcm]))
+            .expect("selection succeeds")
+            .expect("a config is selected");
+
+        assert_eq!(selected.key_config.key_id(), 2);
+        assert_eq!(
+            selected.suite.expect("suite selected").aead(),
+            Aead::Aes256Gcm
+        );
+    }
+
+    #[test]
+    fn selected_config_drives_metadata_hint() {
+        let list = vec![
+            key_config(1, &[Aead::ChaCha20Poly1305]),
+            key_config(2, &[Aead::Aes256Gcm]),
+        ];
+        let selected = select_server_key_config(&list, Some(&[AeadSuite::Aes256Gcm]))
+            .expect("selection succeeds")
+            .expect("a config is selected");
+
+        let block = OHttpClientInner::build_metadata_block(
+            &ClientAuth::NoAuth(NoAuth {}),
+            &selected.key_config,
+        )
+        .expect("build metadata");
+        let metadata = Metadata::decode(&block[4..]).expect("decode metadata");
+        let hint = metadata
+            .key_config_hint
+            .expect("metadata carries a hint")
+            .public_key;
+
+        let selected_pk = selected.key_config.public_key().unwrap().into_vec();
+        let first_pk = list[0].public_key().unwrap().into_vec();
+        assert_eq!(hint, selected_pk, "hint must name the selected config");
+        assert_ne!(
+            hint, first_pk,
+            "hint must not name the server's first config"
+        );
+    }
+
+    #[test]
+    fn selection_reports_empty_intersection_with_both_lists() {
+        let list = vec![
+            key_config(1, &[Aead::ChaCha20Poly1305]),
+            key_config(2, &[Aead::Aes128Gcm]),
+        ];
+        let error = select_server_key_config(&list, Some(&[AeadSuite::Aes256Gcm]))
+            .expect_err("no intersection must fail");
+
+        match error {
+            TngError::OHttpNoAcceptableSuite { server, ingress } => {
+                assert_eq!(
+                    server,
+                    vec![AeadSuite::ChaCha20Poly1305, AeadSuite::Aes128Gcm]
+                );
+                assert_eq!(ingress, vec![AeadSuite::Aes256Gcm]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unset_policy_keeps_first_config_and_no_explicit_suite() {
+        let list = vec![
+            key_config(1, &[Aead::Aes128Gcm]),
+            key_config(2, &[Aead::Aes256Gcm]),
+        ];
+        let selected = select_server_key_config(&list, None)
+            .expect("selection succeeds")
+            .expect("a config is selected");
+
+        assert_eq!(selected.key_config.key_id(), 1);
+        assert!(selected.suite.is_none());
+        assert!(select_server_key_config(&[], None)
+            .expect("empty list is not an error without a policy")
+            .is_none());
+    }
 
     #[test]
     fn test_server_status_entry_full() {

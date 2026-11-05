@@ -12,6 +12,7 @@ use crate::tunnel::provider::{ProviderType, TngToken};
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::TokioAsyncReadCompatExt as _;
 
+use crate::config::ohttp_aead::AeadSuite;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::api::OhttpServerApi;
 use crate::tunnel::egress::protocol::ohttp::security::context::TngStreamContext;
@@ -78,8 +79,9 @@ impl OhttpServerApi {
 
         // Decapsulate stage: open the sealed inner request and open the
         // response seal bound to this request's HPKE context.
-        let (mut request, response_seal, sealed_sink) =
-            self.decapsulate_request(reader.compat(), metadata).await?;
+        let (mut request, response_seal, sealed_sink) = self
+            .decapsulate_request(reader.compat(), metadata, context.peer_addr)
+            .await?;
 
         // Rewrite stage: copy the configured outer request headers onto the
         // inner request and annotate it with the relay peer's client IP.
@@ -148,6 +150,7 @@ impl OhttpServerApi {
         &self,
         sealed_body: S,
         metadata: Metadata,
+        peer_addr: Option<std::net::SocketAddr>,
     ) -> Result<
         (
             http::Request<
@@ -171,9 +174,25 @@ impl OhttpServerApi {
                 e
             })?;
 
+        // The suite check must run before either `into_server_request` variant:
+        // it is the single enforcement point for both Base and Auth mode, and
+        // it also covers requests sealed under an old key config or one synced
+        // from a peer (those are never filtered on the way in).
+        let suite = header_decoded.symmetric_suite().map_err(TngError::from)?;
+        if !aead_suite_allowed(&self.aead_suites, suite) {
+            tracing::warn!(
+                aead = ?suite.aead(),
+                key_id = header_decoded.key_id(),
+                peer = ?peer_addr,
+                "Rejected OHTTP request: AEAD suite is not allowed by the egress policy"
+            );
+            return Err(TngError::OHttpSuiteNotAllowed);
+        }
+
         tracing::debug!(
             ?metadata,
             key_id = header_decoded.key_id(),
+            aead = ?suite.aead(),
             "Received OHTTP request"
         );
 
@@ -305,6 +324,14 @@ impl OhttpServerApi {
 
         Ok(())
     }
+}
+
+/// Whether `suite` is in the egress allowlist. Only the AEAD is selectable:
+/// HKDF-SHA256 is the sole KDF TNG advertises, so a header naming any other
+/// KDF is never allowed.
+fn aead_suite_allowed(allowed: &[AeadSuite], suite: ohttp::SymmetricSuite) -> bool {
+    suite.kdf() == ohttp::hpke::Kdf::HkdfSha256
+        && allowed.iter().any(|a| a.to_ohttp_aead() == suite.aead())
 }
 
 /// Front gate: the outer POST must carry the streaming ohttp request
@@ -457,5 +484,96 @@ mod forwarded_client_ip_tests {
             "198.51.100.1, 203.0.113.7"
         );
         assert_eq!(h.get("x-real-ip").unwrap().to_str().unwrap(), "203.0.113.7");
+    }
+}
+
+/// The egress allowlist is checked against the suite carried in the request
+/// header, which is identical for Base and Auth mode. Both client
+/// constructors are exercised so a regression in either one is caught.
+#[cfg(test)]
+mod aead_suite_policy_tests {
+    use super::aead_suite_allowed;
+    use crate::config::ohttp_aead::AeadSuite;
+    use hpke::{kem::X25519HkdfSha256, Kem as _, Serializable as _};
+    use ohttp::hpke::{Aead, Kdf, Kem};
+    use ohttp::{ClientRequest, KeyConfig, SymmetricSuite};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
+
+    const KEY_ID: u8 = 7;
+
+    fn suite(aead: Aead) -> SymmetricSuite {
+        SymmetricSuite::new(Kdf::HkdfSha256, aead)
+    }
+
+    /// A public key config a client can use, built from a server key config.
+    fn client_view(aead: Aead) -> KeyConfig {
+        let server = KeyConfig::new(KEY_ID, Kem::X25519Sha256, vec![suite(aead)])
+            .expect("server key config");
+        let encoded = server.encode().expect("encode key config");
+        KeyConfig::decode(&encoded).expect("decode public key config")
+    }
+
+    /// Decode the 7-byte header of an encapsulated request.
+    async fn header_suite(
+        request: ClientRequest,
+    ) -> Result<(ohttp::SymmetricSuite, u8), ohttp::Error> {
+        let (enc_request, _response) = request.encapsulate(b"").expect("encapsulate request");
+        let header = ohttp::Server::decode_header(futures::io::Cursor::new(enc_request)).await?;
+        Ok((header.symmetric_suite()?, header.key_id()))
+    }
+
+    #[tokio::test]
+    async fn base_mode_allowed_suite_passes() {
+        let config = client_view(Aead::Aes256Gcm);
+        let request = ClientRequest::from_config_with_suite(&config, suite(Aead::Aes256Gcm))
+            .expect("build request");
+        let (suite, key_id) = header_suite(request).await.expect("decode header");
+
+        assert!(aead_suite_allowed(&[AeadSuite::Aes256Gcm], suite));
+        assert_eq!(key_id, KEY_ID);
+    }
+
+    #[tokio::test]
+    async fn base_mode_disallowed_suite_is_rejected() {
+        let config = client_view(Aead::Aes256Gcm);
+        let request = ClientRequest::from_config_with_suite(&config, suite(Aead::Aes256Gcm))
+            .expect("build request");
+        let (suite, _key_id) = header_suite(request).await.expect("decode header");
+
+        assert!(!aead_suite_allowed(&[AeadSuite::ChaCha20Poly1305], suite));
+        assert!(!aead_suite_allowed(&[], suite));
+    }
+
+    #[tokio::test]
+    async fn auth_mode_allowed_suite_passes() {
+        let config = client_view(Aead::ChaCha20Poly1305);
+        let mut rng = ChaCha12Rng::from_os_rng();
+        let (client_sk, _client_pk) = X25519HkdfSha256::gen_keypair(&mut rng);
+        let request = ClientRequest::from_config_with_client_key_bytes_and_suite(
+            &config,
+            suite(Aead::ChaCha20Poly1305),
+            client_sk.to_bytes().as_ref(),
+        )
+        .expect("build request");
+        let (suite, _key_id) = header_suite(request).await.expect("decode header");
+
+        assert!(aead_suite_allowed(&[AeadSuite::ChaCha20Poly1305], suite));
+    }
+
+    #[tokio::test]
+    async fn auth_mode_disallowed_suite_is_rejected() {
+        let config = client_view(Aead::Aes128Gcm);
+        let mut rng = ChaCha12Rng::from_os_rng();
+        let (client_sk, _client_pk) = X25519HkdfSha256::gen_keypair(&mut rng);
+        let request = ClientRequest::from_config_with_client_key_bytes_and_suite(
+            &config,
+            suite(Aead::Aes128Gcm),
+            client_sk.to_bytes().as_ref(),
+        )
+        .expect("build request");
+        let (suite, _key_id) = header_suite(request).await.expect("decode header");
+
+        assert!(!aead_suite_allowed(&[AeadSuite::Aes256Gcm], suite));
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{formats::PreferMany, serde_as, OneOrMany};
 
 use super::mapping_rule::MappingDe;
+use super::ohttp_aead::AeadSuites;
 use super::ra::RaArgsUnchecked;
 use super::UdpQuicArgs;
 use crate::config::egress_hook::EgressHookArgs;
@@ -382,6 +383,29 @@ pub struct OHttpArgs {
     /// Default true. Set false to disable.
     #[serde(default = "default_true")]
     pub forward_client_ip: bool,
+
+    /// OHTTP HPKE AEAD suites to advertise in this egress's key config and
+    /// accept when decapsulating requests. Legal values: `aes128_gcm`,
+    /// `aes256_gcm`, `chacha20_poly1305`. Order is the advertised order.
+    ///
+    /// The same list is enforced on every decapsulation, including requests
+    /// sealed under an older key config or one synced from a `peer_shared`
+    /// peer, so a peer whose policy differs cannot slip a disallowed suite
+    /// through. Unset advertises and accepts `aes128_gcm`, `aes256_gcm`,
+    /// `chacha20_poly1305`. An empty list, a duplicate entry, or an unknown
+    /// value is a config error. A rejected request returns HTTP 422, which
+    /// makes a TNG ingress refetch the key config.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aead_suites: Option<AeadSuites>,
+}
+
+impl OHttpArgs {
+    /// The suites that are both advertised and accepted: the configured
+    /// allowlist, or `DEFAULT_OHTTP_AEAD_SUITES` when unset.
+    pub(crate) fn resolved_aead_suites(&self) -> AeadSuites {
+        self.aead_suites.clone().unwrap_or_default()
+    }
 }
 
 /// Defines the strategy for obtaining the HPKE private key used in OHTTP decryption.

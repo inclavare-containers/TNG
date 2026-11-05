@@ -1,3 +1,4 @@
+use crate::config::ohttp_aead::AeadSuite;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{
@@ -51,6 +52,9 @@ pub struct RandomKeyManagerInner {
     keys: tokio::sync::RwLock<HashMap<PublicKeyData, KeyInfo>>,
 
     rotation_interval: u64,
+
+    /// AEAD suites advertised in generated key configs, in order.
+    aead_suites: Vec<AeadSuite>,
 }
 
 impl SelfGeneratedKeyManager {
@@ -61,10 +65,12 @@ impl SelfGeneratedKeyManager {
     pub fn new_with_auto_refresh(
         runtime: TokioRuntime,
         rotation_interval: u64,
+        aead_suites: Vec<AeadSuite>,
     ) -> Result<Self, TngError> {
         let inner = Arc::new(RandomKeyManagerInner {
             keys: tokio::sync::RwLock::new(HashMap::new()),
             rotation_interval,
+            aead_suites,
         });
 
         let inner_clone = inner.clone();
@@ -158,8 +164,13 @@ impl RandomKeyManagerInner {
                     0
                 });
 
-            let key_info =
-                KeyInfo::generate(new_key_id, KeyStatus::Active, now, self.rotation_interval)?;
+            let key_info = KeyInfo::generate(
+                new_key_id,
+                KeyStatus::Active,
+                now,
+                self.rotation_interval,
+                &self.aead_suites,
+            )?;
             tracing::info!(?key_info, "New OHTTP key generated");
             keys.insert(key_info.key_config.public_key()?, key_info);
         }

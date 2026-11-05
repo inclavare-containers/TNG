@@ -1,3 +1,4 @@
+use crate::config::ohttp_aead::AeadSuite;
 use crate::error::TngError;
 use crate::tunnel::egress::protocol::ohttp::security::key_manager::{KeyInfo, KeyStatus};
 use crate::tunnel::ohttp::key_config::{KeyConfigExtend, PublicKeyData};
@@ -19,6 +20,12 @@ pub struct ClusterKeySet {
     rotation_interval: u64,
     /// Notify key watcher to check immediately when key set changes
     notify: Option<Arc<tokio::sync::Notify>>,
+    /// AEAD suites advertised by keys this node generates, in order.
+    ///
+    /// A key set decoded from a peer starts empty and has the local list
+    /// attached by the preboot phase; the suites of synced key configs are
+    /// never rewritten.
+    aead_suites: Vec<AeadSuite>,
 }
 
 impl ClusterKeySet {
@@ -26,14 +33,26 @@ impl ClusterKeySet {
     ///
     /// Note that there must be at least one active key.
     /// This constructor is used during Bootstrap when the first active key is created.
-    pub fn new(public_key: PublicKeyData, active_key: KeyInfo, rotation_interval: u64) -> Self {
+    pub fn new(
+        public_key: PublicKeyData,
+        active_key: KeyInfo,
+        rotation_interval: u64,
+        aead_suites: Vec<AeadSuite>,
+    ) -> Self {
         let mut keys = HashMap::new();
         keys.insert(public_key, active_key);
         Self {
             keys,
             rotation_interval,
             notify: None,
+            aead_suites,
         }
+    }
+
+    /// Attach the local AEAD suite policy after decoding a key set from a
+    /// peer. The policy is local: synced key configs keep their own suites.
+    pub fn set_aead_suites(&mut self, aead_suites: Vec<AeadSuite>) {
+        self.aead_suites = aead_suites;
     }
 
     /// Set the notify handle for key watcher.
@@ -246,6 +265,7 @@ impl ClusterKeySet {
             KeyStatus::Pending,
             actived_at,
             self.rotation_interval,
+            &self.aead_suites,
         )
         .map_err(|e| anyhow::anyhow!("Failed to generate pending key: {}", e))?;
 
@@ -409,6 +429,9 @@ impl TryFrom<super::serf_message::pb::ClusterKeySet> for super::cluster_key_set:
             keys,
             rotation_interval: value.rotation_interval,
             notify: None,
+            // The peer's policy is not ours to adopt; local generation uses
+            // the policy attached by the preboot phase before any key is made.
+            aead_suites: Vec::new(),
         })
     }
 }
@@ -416,11 +439,12 @@ impl TryFrom<super::serf_message::pb::ClusterKeySet> for super::cluster_key_set:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ohttp_aead::DEFAULT_OHTTP_AEAD_SUITES;
     use crate::tunnel::egress::protocol::ohttp::security::key_manager::KeyStatus;
 
     fn create_test_key(key_id: u8, status: KeyStatus, actived_at_offset: u64) -> KeyInfo {
         let actived_at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(actived_at_offset);
-        KeyInfo::generate(key_id, status, actived_at, 300).unwrap()
+        KeyInfo::generate(key_id, status, actived_at, 300, &DEFAULT_OHTTP_AEAD_SUITES).unwrap()
     }
 
     #[test]
@@ -428,7 +452,12 @@ mod tests {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+        let mut cks = ClusterKeySet::new(
+            public_key.clone(),
+            key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         let key2 = create_test_key(2, KeyStatus::Active, 2000);
         cks.keys.insert(key2.key_config.public_key().unwrap(), key2);
@@ -442,7 +471,12 @@ mod tests {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key().unwrap();
 
-        let cks = ClusterKeySet::new(public_key.clone(), key, 300);
+        let cks = ClusterKeySet::new(
+            public_key.clone(),
+            key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         let visible = cks.get_client_visible_key().unwrap();
         assert_eq!(visible.key_config.public_key().unwrap(), public_key);
@@ -469,8 +503,12 @@ mod tests {
             expire_at: now + std::time::Duration::from_secs(1000),
         };
 
-        let mut cks =
-            ClusterKeySet::new(active_key.key_config.public_key().unwrap(), active_key, 300);
+        let mut cks = ClusterKeySet::new(
+            active_key.key_config.public_key().unwrap(),
+            active_key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // Create a pending key that is expired
         let expired_pending = KeyInfo {
@@ -506,7 +544,12 @@ mod tests {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+        let mut cks = ClusterKeySet::new(
+            public_key.clone(),
+            key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // Transition the only active key to stale
         if let Some(k) = cks.keys.get_mut(&public_key) {
@@ -560,7 +603,8 @@ mod tests {
         let pk1 = key1.key_config.public_key().unwrap();
         let pk2 = key2.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        let mut cks =
+            ClusterKeySet::new(pk1.clone(), key1, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
         cks.keys.insert(pk2.clone(), key2);
 
         // Should return key2 (later expire_at)
@@ -621,7 +665,12 @@ mod tests {
         };
 
         let active_pk = active_key.key_config.public_key().unwrap();
-        let mut cks = ClusterKeySet::new(active_pk.clone(), active_key, 300);
+        let mut cks = ClusterKeySet::new(
+            active_pk.clone(),
+            active_key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
         cks.keys
             .insert(pending_key.key_config.public_key().unwrap(), pending_key);
         cks.keys
@@ -637,11 +686,12 @@ mod tests {
     fn test_merge_disjoint_keys() {
         let key1 = create_test_key(1, KeyStatus::Active, 1000);
         let pk1 = key1.key_config.public_key().unwrap();
-        let mut cks_a = ClusterKeySet::new(pk1.clone(), key1, 300);
+        let mut cks_a =
+            ClusterKeySet::new(pk1.clone(), key1, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
 
         let key2 = create_test_key(2, KeyStatus::Active, 2000);
         let pk2 = key2.key_config.public_key().unwrap();
-        let cks_b = ClusterKeySet::new(pk2, key2, 300);
+        let cks_b = ClusterKeySet::new(pk2, key2, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
 
         cks_a.merge(cks_b);
 
@@ -694,8 +744,18 @@ mod tests {
         let pk1 = key1_old.key_config.public_key().unwrap();
 
         // Local has stale version, remote has active version
-        let mut cks_local = ClusterKeySet::new(pk1.clone(), key1_old, 300);
-        let mut cks_remote = ClusterKeySet::new(pk1.clone(), key1_new, 300);
+        let mut cks_local = ClusterKeySet::new(
+            pk1.clone(),
+            key1_old,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
+        let mut cks_remote = ClusterKeySet::new(
+            pk1.clone(),
+            key1_new,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // Add a second key to remote to verify it still gets merged
         let key2 = create_test_key(2, KeyStatus::Active, 2000);
@@ -720,11 +780,13 @@ mod tests {
             keys: HashMap::new(),
             rotation_interval: 300,
             notify: None,
+            aead_suites: DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
         };
         let cks_b = ClusterKeySet {
             keys: HashMap::new(),
             rotation_interval: 300,
             notify: None,
+            aead_suites: DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
         };
 
         cks_a.merge(cks_b);
@@ -737,6 +799,7 @@ mod tests {
             keys: HashMap::new(),
             rotation_interval: 300,
             notify: None,
+            aead_suites: DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
         };
 
         assert!(cks.next_deadline().is_none());
@@ -798,7 +861,12 @@ mod tests {
         let active_pk = active_key.key_config.public_key().unwrap();
         let stale_pk = stale_key_info.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pending_pk, pending_key, 300);
+        let mut cks = ClusterKeySet::new(
+            pending_pk,
+            pending_key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
         cks.keys.insert(active_pk, active_key);
         cks.keys.insert(stale_pk, stale_key_info);
 
@@ -815,7 +883,12 @@ mod tests {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+        let mut cks = ClusterKeySet::new(
+            public_key.clone(),
+            key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // First call should generate a pending key
         let result = cks.generate_pending_key_if_none();
@@ -837,6 +910,7 @@ mod tests {
             keys: HashMap::new(),
             rotation_interval: 300,
             notify: None,
+            aead_suites: DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
         };
 
         // Should still generate a pending key (actived_at defaults to SystemTime::get)
@@ -872,7 +946,12 @@ mod tests {
         };
 
         let pk = active_key.key_config.public_key().unwrap();
-        let mut cks = ClusterKeySet::new(pk.clone(), active_key, 300);
+        let mut cks = ClusterKeySet::new(
+            pk.clone(),
+            active_key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // Should NOT transition the only active key to stale
         let transitioned = cks.transition_active_to_stale(now);
@@ -937,7 +1016,8 @@ mod tests {
         let pk2 = key2.key_config.public_key().unwrap();
         let pk3 = key3.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        let mut cks =
+            ClusterKeySet::new(pk1.clone(), key1, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
         cks.keys.insert(pk2.clone(), key2);
         cks.keys.insert(pk3.clone(), key3);
 
@@ -1006,7 +1086,12 @@ mod tests {
         let pending_pk2 = pending_key_future.key_config.public_key().unwrap();
         let active_pk = active_key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pending_pk1.clone(), pending_key_at_boundary, 300);
+        let mut cks = ClusterKeySet::new(
+            pending_pk1.clone(),
+            pending_key_at_boundary,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
         cks.keys.insert(pending_pk2.clone(), pending_key_future);
         cks.keys.insert(active_pk.clone(), active_key);
 
@@ -1057,7 +1142,8 @@ mod tests {
         let pk1 = key1.key_config.public_key().unwrap();
         let pk2 = key2.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(pk1.clone(), key1, 300);
+        let mut cks =
+            ClusterKeySet::new(pk1.clone(), key1, 300, DEFAULT_OHTTP_AEAD_SUITES.to_vec());
         cks.keys.insert(pk2.clone(), key2);
 
         // All active keys are expired. Should preserve the one with latest stale_at (key2)
@@ -1074,7 +1160,12 @@ mod tests {
         let key = create_test_key(1, KeyStatus::Active, 1000);
         let public_key = key.key_config.public_key().unwrap();
 
-        let mut cks = ClusterKeySet::new(public_key.clone(), key, 300);
+        let mut cks = ClusterKeySet::new(
+            public_key.clone(),
+            key,
+            300,
+            DEFAULT_OHTTP_AEAD_SUITES.to_vec(),
+        );
 
         // Insert a new key
         let new_key = create_test_key(2, KeyStatus::Active, 2000);

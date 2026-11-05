@@ -11,6 +11,7 @@ use crate::tunnel::utils::socket::{
 };
 use crate::{
     config::ingress::{OHttpArgs, PathDefault},
+    config::ohttp_aead::AeadSuites,
     error::TngError,
     tunnel::{
         endpoint::TngEndpoint,
@@ -182,6 +183,8 @@ pub struct OHttpSecurityLayer {
     passthrough_request_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// Headers to copy from the outer (ciphertext) response to the inner (plaintext) response.
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
+    /// AEAD allowlist and preference order; `None` means no policy.
+    aead_suites: Option<AeadSuites>,
 }
 
 impl OHttpSecurityLayer {
@@ -226,6 +229,16 @@ impl OHttpSecurityLayer {
 
         let ohttp_clients: OhttpClientCache = Default::default();
 
+        let aead_suites = ohttp_args.aead_suites.clone();
+        // One line per ingress OHTTP instance. `default = true` means no
+        // filter and no preference: the server's first config and its first
+        // advertised suite are used.
+        tracing::info!(
+            aead_suites = ?aead_suites.as_ref().map(|suites| suites.as_slice()),
+            default = aead_suites.is_none(),
+            "OHTTP ingress AEAD suite policy in effect"
+        );
+
         let passthrough_request_headers = Arc::new(
             ohttp_args
                 .header_passthrough
@@ -252,6 +265,7 @@ impl OHttpSecurityLayer {
             runtime,
             passthrough_request_headers,
             passthrough_response_headers,
+            aead_suites,
         })
     }
 
@@ -351,6 +365,7 @@ impl OHttpSecurityLayer {
                         self.runtime.clone(),
                         self.passthrough_request_headers.clone(),
                         self.passthrough_response_headers.clone(),
+                        self.aead_suites.clone(),
                     )
                     .await
                     .map_err(TngError::CreateOHttpClientFailed)?,
