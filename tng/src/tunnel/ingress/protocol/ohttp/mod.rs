@@ -1,6 +1,8 @@
 pub mod security;
 
 #[cfg(not(wasm))]
+mod ws;
+#[cfg(not(wasm))]
 pub use ohttp_stream_forwarder::*;
 #[cfg(not(wasm))]
 mod ohttp_stream_forwarder {
@@ -70,24 +72,40 @@ mod ohttp_stream_forwarder {
             async {
                 let endpoint = Arc::new(endpoint.clone());
                 let security_layer = self.security_layer.clone();
+                let ws_runtime = self.runtime.clone();
 
                 let hyper_service = hyper::service::service_fn(
                     move |request: http::Request<hyper::body::Incoming>| {
                         let security_layer = security_layer.clone();
                         let endpoint = endpoint.clone();
+                        let ws_runtime = ws_runtime.clone();
                         async move {
-                            Ok::<_, Infallible>(
-                                match security_layer
-                                    .forward_http_request(
+                            if crate::tunnel::ohttp::protocol::header::is_websocket_upgrade(
+                                &request,
+                            ) {
+                                Ok::<_, Infallible>(
+                                    super::ws::handle_ws_upgrade(
+                                        request,
                                         &endpoint,
-                                        request.map(axum::body::Body::new),
+                                        &security_layer,
+                                        ws_runtime,
                                     )
-                                    .await
-                                {
-                                    Ok((response, _attestation_result)) => response,
-                                    Err(error) => error.into_response(),
-                                },
-                            )
+                                    .await,
+                                )
+                            } else {
+                                Ok::<_, Infallible>(
+                                    match security_layer
+                                        .forward_http_request(
+                                            &endpoint,
+                                            request.map(axum::body::Body::new),
+                                        )
+                                        .await
+                                    {
+                                        Ok((response, _attestation_result)) => response,
+                                        Err(error) => error.into_response(),
+                                    },
+                                )
+                            }
                         }
                     },
                 );
