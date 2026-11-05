@@ -285,7 +285,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **场景 3：模块化校验规则（`modules`）**
 
-目标：对端的平台姿态、启动链、工作负载制品或 GPU 提出具体、可校验的要求。设 `attestation_policy.type` 为 `"modules"`：每个条目声明一项具类型校验，可信基线直接钉在策略里。组内同一 AR4SI 维度的条目 AND；每个维度在携带该维度条目的组之间 OR，不含某维度条目的组不约束该维度；空列表除硬件 TEE 识别外不设要求；每项校验都 fail-closed：证据缺少被测值、或与钉住的基线不符，评定即非 affirming。`modules` 类型把每个钉住的值作为字面量嵌入生成的规则，并在加载期拒绝非空 `reference_values` 列表。条目类型、各模块字段、以及从已删除的固定策略变体迁移，见 [`modules` 证明策略](attestation_modules_zh.md)。
+目标：对端的平台姿态、启动链、工作负载制品或 GPU 提出具体、可校验的要求。设 `attestation_policy.type` 为 `"modules"`：每个条目声明一项具类型校验，可信基线直接钉在策略里。组内同一 AR4SI 维度的条目 AND；每个维度在携带该维度条目的组之间 OR，不含某维度条目的组不约束该维度，但 `hardware` 例外，它要求条目证据所属的 TDX 平台被识别；空列表不做任何断言，`hardware` 保持非 affirming；每项校验都 fail-closed：证据缺少被测值、或与钉住的基线不符，评定即非 affirming。`modules` 类型把每个钉住的值作为字面量嵌入生成的规则，并在加载期拒绝非空 `reference_values` 列表。条目类型、各模块字段、以及从已删除的固定策略变体迁移，见 [`modules` 证明策略](attestation_modules_zh.md)。
 
 <details>
 <summary>示例 3a：单组钉住姿态、GPU 与度量</summary>

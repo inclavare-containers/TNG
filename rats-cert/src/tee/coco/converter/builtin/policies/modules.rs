@@ -59,6 +59,38 @@ impl Module {
             Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => Dimension::Hardware,
         }
     }
+
+    /// The TEE platform this entry's evidence is rooted at. Every current
+    /// variant reads from `input.tdx`: the quote and event-log measurements,
+    /// the AAEL event-log families, and the evaluated `nvidia_gpu.*` claims.
+    fn platform(&self) -> Platform {
+        Platform::Tdx
+    }
+}
+
+/// TEE platforms a module entry can depend on. Only TDX exists today; the
+/// generated policy uses the platform's recognition predicate as the hardware
+/// base, and a second platform would add its own variant and predicate.
+enum Platform {
+    Tdx,
+}
+
+impl Platform {
+    /// The predicate that recognises this platform in the appraisal input.
+    fn recognition(&self) -> &'static str {
+        match self {
+            Platform::Tdx => "tdx_recognized",
+        }
+    }
+
+    /// The Rego helper that defines [`Self::recognition`].
+    fn recognition_rule(&self) -> &'static str {
+        match self {
+            Platform::Tdx => {
+                "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
+            }
+        }
+    }
 }
 
 /// A module entry type, parsed from the raw `type` string in one place.
@@ -351,11 +383,13 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// affirming default, so a failing posture cannot drag down `executables` and
 /// vice versa.
 ///
-/// `hardware` is additionally gated on `tee_recognized`, the fixed platform
-/// recognition baseline shared with `hardware_only`. With no posture entries,
-/// `hardware := 2 if { tee_recognized }` reproduces `hardware_only`, and an
-/// empty module list leaves every dimension affirming except hardware
-/// recognition, exactly the `hardware_only` posture.
+/// Every entry declares the TEE platform its evidence is rooted at, and
+/// `hardware` affirms only when that platform is recognised and the group's
+/// posture entries pass. With entries but no posture entries, hardware
+/// requires platform recognition alone. An empty module list declares no
+/// dependency, so it emits no recognition rule and `hardware` stays
+/// non-affirming (97); `executables`, `configuration`, and `file_system` keep
+/// their affirming defaults.
 pub(super) fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
     build_modules_policy_inner(config).map_err(Error::BuiltinPolicyTemplateFailed)
 }
@@ -368,6 +402,11 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
     let mut executables_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
     let mut has_executables = false;
+    // The platform the policy depends on. No entry means no dependency and no
+    // recognition predicate is emitted. While only one platform exists, one
+    // shared recognition block covers every group; when a second platform
+    // lands, the block must be emitted once per distinct platform in use.
+    let mut policy_platform: Option<Platform> = None;
     // Whether the policy references the pull-image repo-name extractor; defined
     // once when any container.image entry appears.
     let mut need_repo_name = false;
@@ -377,6 +416,7 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
         let mut hardware_preds: Vec<String> = Vec::new();
         for (j, module) in group.iter().enumerate() {
             let pred = format!("m_{gi}_{j}");
+            policy_platform.get_or_insert_with(|| module.platform());
             let body = match module {
                 Module::Tdx(cfg) => {
                     let (body, extra) = tdx_posture_rule(cfg, &pred)?;
@@ -412,9 +452,15 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
                 "group_{gi}_hardware_ok if {{\n{}\n}}",
                 indent(&hardware_preds)
             ));
-            hardware_rules.push(format!(
-                "hardware := 2 if {{\n\ttee_recognized\n\tgroup_{gi}_hardware_ok\n}}"
-            ));
+            // One shared recognition predicate covers every group while only
+            // one platform exists. With multiple platforms this per-group rule
+            // must select the group's own platform predicate.
+            if let Some(platform) = policy_platform.as_ref() {
+                hardware_rules.push(format!(
+                    "hardware := 2 if {{\n\t{}\n\tgroup_{gi}_hardware_ok\n}}",
+                    platform.recognition()
+                ));
+            }
         }
     }
 
@@ -423,11 +469,21 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
     // in the wrong direction.
     let executables_default = if has_executables { 97 } else { 2 };
 
-    // With no posture entries the hardware dimension reduces to platform
-    // recognition, the `hardware_only` posture.
+    // With entries but no posture entries, hardware reduces to recognition of
+    // the platform the entries depend on. With no entries at all, no
+    // recognition rule is emitted and the non-affirming default applies.
     if hardware_rules.is_empty() {
-        hardware_rules.push("hardware := 2 if {\n\ttee_recognized\n}".to_string());
+        if let Some(platform) = policy_platform.as_ref() {
+            hardware_rules.push(format!(
+                "hardware := 2 if {{\n\t{}\n}}",
+                platform.recognition()
+            ));
+        }
     }
+    let recognition_block = match policy_platform.as_ref() {
+        Some(platform) => format!("\n\n{}", platform.recognition_rule()),
+        None => String::new(),
+    };
 
     let helper_block = if helpers.is_empty() {
         String::new()
@@ -458,8 +514,10 @@ import rego.v1
 # gates `hardware`. Within a group the entries of one dimension AND; a
 # dimension is OR-ed over the groups that carry entries of it, so a group
 # without entries of a dimension does not constrain it. A dimension with no
-# entries stays affirming. `hardware` is additionally gated on the fixed TEE
-# recognition baseline below. Empty module list => equivalent to hardware_only.
+# entries stays affirming, except `hardware`, which depends on the platform
+# every entry's evidence comes from: it affirms only when that platform is
+# recognised. An empty module list declares no dependency and emits no
+# recognition rule, so `hardware` stays at its non-affirming default.
 default configuration := 2
 default file_system := 2
 default hardware := 97
@@ -467,27 +525,7 @@ default executables := {executables_default}
 
 {helper_block}{repo_name_block}{dimension_block}{executables_block}
 
-{hardware_block}
-
-# Fixed platform-recognition baseline, shared with hardware_only. These paths
-# identify the TEE; the hardware dimension's posture entries add constraints
-# on top of them.
-tee_recognized if {{
-	input.tdx.quote.header.tee_type == "81000000"
-	input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607"
-}}
-
-tee_recognized if {{
-	input.csv.version in ["1", "2"]
-}}
-
-tee_recognized if {{
-	input.tpm
-}}
-
-tee_recognized if {{
-	input.system
-}}
+{hardware_block}{recognition_block}
 "#,
         hardware_block = hardware_rules.join("\n\n"),
     );
@@ -1157,6 +1195,22 @@ mod tests {
     }
 
     #[test]
+    fn platform_recognition_predicate_matches_its_rule() {
+        // Every Platform variant must be listed here. The rule text has to
+        // define the predicate that recognition() names, so a second platform
+        // cannot ship with a mismatched helper name.
+        for platform in [Platform::Tdx] {
+            let name = platform.recognition();
+            let rule = platform.recognition_rule();
+            let expected = format!("{name} if {{");
+            assert!(
+                rule.starts_with(&expected),
+                "platform rule must define {name:?}: {rule}"
+            );
+        }
+    }
+
+    #[test]
     fn modules_entry_type_parse_accepts_every_accepted_spelling() {
         // Every accepted spelling must parse, and the unknown-type diagnostic
         // must list every canonical display form including the two aliases.
@@ -1272,8 +1326,15 @@ mod tests {
         assert!(policy.contains("group_0_hardware_ok if {"));
         // executables ORs the measurement groups; hardware requires recognition
         assert!(policy.contains("executables := 2 if {\n\tgroup_0_executables_ok\n}"));
-        assert!(policy.contains("hardware := 2 if {\n\ttee_recognized\n\tgroup_0_hardware_ok\n}"));
-        assert!(policy.contains("tee_recognized if {"));
+        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
+        assert!(policy.contains("tdx_recognized if {"));
+        assert!(policy.contains(r#"input.tdx.quote.header.tee_type == "81000000""#));
+        assert!(policy
+            .contains(r#"input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607""#));
+        // Only TDX is recognised; the legacy CSV/TPM/system paths are gone.
+        assert!(!policy.contains("input.csv"));
+        assert!(!policy.contains("input.tpm"));
+        assert!(!policy.contains("input.system"));
         // tdx posture default: debug regex + eventlog count
         assert!(policy
             .contains("regex.match(\"^[0-9a-f][02468ace]\", input.tdx.quote.body.td_attributes)"));
@@ -1290,22 +1351,26 @@ mod tests {
         assert!(!policy.contains("group_0_executables_ok"));
         // No measurement entries, so hardware reduces to recognition plus the
         // posture group.
-        assert!(policy.contains("hardware := 2 if {\n\ttee_recognized\n\tgroup_0_hardware_ok\n}"));
+        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
     }
 
     #[test]
-    fn modules_policy_no_posture_uses_tee_recognition_only() {
+    fn modules_policy_no_posture_uses_tdx_recognition_only() {
         let ovmf = hex96('1');
         let policy = build_modules_policy(&modules_cfg(&format!(
             r#"[{{"type":"tdx.ovmf","value":"{ovmf}"}}]"#
         )))
         .expect("build");
         assert!(!policy.contains("group_0_hardware_ok"));
-        assert!(policy.contains("hardware := 2 if {\n\ttee_recognized\n}"));
-        // The empty list also reduces hardware to recognition.
+        assert!(policy.contains("tdx_recognized if {"));
+        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
+        // The empty list declares no dependency: no recognition rule and no
+        // hardware-affirming rule, so the default hardware := 97 applies.
         let empty = build_modules_policy(&modules_cfg("[]")).expect("build");
         assert!(empty.contains("default executables := 2"));
-        assert!(empty.contains("hardware := 2 if {\n\ttee_recognized\n}"));
+        assert!(empty.contains("default hardware := 97"));
+        assert!(!empty.contains("tdx_recognized"));
+        assert!(!empty.contains("hardware := 2 if {"));
     }
 
     #[test]
@@ -1544,20 +1609,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modules_empty_list_equals_hardware_only() {
-        // An empty module list must behave exactly like hardware_only for the
-        // same evidence, not merely look similar in the generated text.
+    async fn modules_empty_list_asserts_nothing() {
+        // An empty module list declares no dependency, so the appraisal asserts
+        // nothing: executables/configuration/file_system stay affirming while
+        // hardware stays at its non-affirming default (97), whatever the
+        // evidence form.
         let policy = build_modules_policy(&modules_cfg("[]")).expect("build");
-        let hardware_only = include_str!("static/hardware_only.rego");
-
         let tdx = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
-        let tdx_bad_vendor = tdx.replace(
-            "939a7233f79c4ca9940a0db3957f0607",
-            "00000000000000000000000000000000",
-        );
         let evidence = [
-            tdx,
-            tdx_bad_vendor,
+            tdx.clone(),
             json!({ "csv": { "version": "2" } }).to_string(),
             json!({ "tpm": true }).to_string(),
             json!({ "system": { "cpu": "x" } }).to_string(),
@@ -1566,10 +1626,35 @@ mod tests {
         for input in evidence {
             assert_eq!(
                 eval_policy_vector(&policy, &input).await,
-                eval_policy_vector(hardware_only, &input).await,
-                "modules [] must match hardware_only for input {input}"
+                (2, 97, 2, 2),
+                "empty modules list must assert nothing for input {input}"
             );
         }
+
+        // Documented difference from hardware_only: on TDX evidence the empty
+        // list still does not recognise the platform, while hardware_only does.
+        let hardware_only = include_str!("static/hardware_only.rego");
+        assert_eq!(
+            eval_policy_vector(hardware_only, &tdx).await,
+            (2, 2, 2, 2),
+            "hardware_only recognises TDX"
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &tdx).await,
+            (2, 97, 2, 2),
+            "an empty modules list does not recognise TDX"
+        );
+        let csv = json!({ "csv": { "version": "2" } }).to_string();
+        assert_eq!(
+            eval_policy_vector(hardware_only, &csv).await,
+            (2, 2, 2, 2),
+            "hardware_only recognises CSV"
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &csv).await,
+            (2, 97, 2, 2),
+            "an empty modules list does not recognise CSV either"
+        );
     }
 
     #[tokio::test]
@@ -1737,12 +1822,12 @@ mod tests {
             "debug-enabled TDX must reject the hardware dimension"
         );
 
-        // Omitting the tdx entry imposes no posture requirement: same debug
-        // input affirms like hardware_only.
+        // An empty module list declares no dependency: it ignores the debug bit
+        // but also does not recognise TDX, so hardware stays non-affirming.
         assert_eq!(
             eval_modules("[]", &debug).await,
-            (2, 2, 2, 2),
-            "empty modules ignores the debug bit (hardware_only equivalence)"
+            (2, 97, 2, 2),
+            "empty modules ignores the debug bit and recognises no platform"
         );
     }
 
@@ -2176,16 +2261,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modules_hardware_recognition_without_executables() {
-        // With no posture entries, hardware affirms on any recognized TEE, not
-        // only TDX. A measurement entry still has to pass for executables; the
-        // hardware dimension must not be dragged along with it.
+    async fn modules_measurement_only_hardware_depends_on_tdx() {
+        // A measurement-only policy still declares TDX as its platform, so
+        // hardware affirms on TDX evidence and never on another platform's
+        // evidence, even though the measurement itself only gates executables.
         let cfg = format!(r#"[{{"type":"tdx.ovmf","value":"{}"}}]"#, hex96('1'));
-        let csv = json!({ "csv": { "version": "2" } }).to_string();
+        let tdx = tdx_input(json!({ "mr_td": hex96('1') }), &[json!({ "event": "ok" })]);
         assert_eq!(
-            eval_modules(&cfg, &csv).await,
-            (97, 2, 2, 2),
-            "CSV recognition affirms hardware while the missing TDX measurement rejects executables"
+            eval_modules(&cfg, &tdx).await,
+            (2, 2, 2, 2),
+            "TDX evidence affirms hardware for a measurement-only policy"
         );
+
+        // The measurement passes, but the quote header does not identify TDX:
+        // hardware stays non-affirming while executables is unaffected.
+        let bad_vendor = tdx.replace(
+            "939a7233f79c4ca9940a0db3957f0607",
+            "00000000000000000000000000000000",
+        );
+        assert_eq!(
+            eval_modules(&cfg, &bad_vendor).await,
+            (2, 97, 2, 2),
+            "a wrong TDX vendor id must reject the hardware dimension"
+        );
+
+        for input in [
+            json!({ "csv": { "version": "2" } }).to_string(),
+            json!({ "tpm": true }).to_string(),
+            json!({ "system": { "cpu": "x" } }).to_string(),
+            "{}".to_string(),
+        ] {
+            assert_eq!(
+                eval_modules(&cfg, &input).await,
+                (97, 97, 2, 2),
+                "non-TDX evidence must not affirm hardware for input {input}"
+            );
+        }
     }
 }

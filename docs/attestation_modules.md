@@ -48,7 +48,7 @@ Entries within one group AND when they belong to the same AR4SI dimension. A lis
 The first group accepts an OVMF-booted VM, the second a td-shim-booted confidential container.
 </details>
 
-An omitted or empty `modules` list (`{"type": "modules"}`, `[]`, or `[[]]`) is one empty group: no requirements beyond hardware-TEE recognition.
+An omitted or empty `modules` list (`{"type": "modules"}`, `[]`, or `[[]]`) is one empty group and asserts nothing: every dimension keeps its default, so `hardware` stays at 97 (non-affirming) whatever the evidence form. To assert hardware recognition, add a `tdx` entry or use the `hardware_only` policy.
 
 Omitting a module type imposes nothing on that part of the evidence. Listing one is fail-closed: when the evidence lacks the measured value, or the value differs from the pinned baseline, the appraisal is non-affirming and TNG refuses the tunnel.
 
@@ -67,11 +67,11 @@ Each module type gates one AR4SI trustworthiness dimension:
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
 
-Within one group, the entries of a dimension AND with each other, and each dimension is OR-ed over the groups that carry entries of it. A dimension with no entries stays affirming (2), and `configuration` and `file_system` have no module types at all, so they also stay affirming. As a result a failing measurement moves `executables` only and leaves `hardware` at its recognition result, while a failing posture entry moves `hardware` only and leaves `executables` affirming.
+Within one group, the entries of a dimension AND with each other, and each dimension is OR-ed over the groups that carry entries of it. A dimension with no entries of it stays affirming (2), with one exception: `hardware` depends on the platform the entries' evidence comes from. With at least one entry in the policy, `hardware` requires that platform to be recognised even when there are no posture entries; with no entries at all it stays non-affirming. `configuration` and `file_system` have no module types at all, so they always stay affirming. As a result a failing measurement moves `executables` only, while a failing posture entry moves `hardware` only and leaves `executables` affirming.
 
-The `hardware` dimension is additionally gated on a fixed TEE-recognition baseline: the same four platform identification paths as `hardware_only` (a TDX quote header with the Intel quoting-enclave tee type and vendor id, a Hygon CSV version, a TPM, or the generic system attester). Posture entries add constraints on top of recognition; they do not replace it. An entry such as `{"type": "tdx", "value": {}}` requires both a recognized TDX platform and the posture checks, so it fails closed on non-TDX evidence.
+The `hardware` dimension is gated on the TEE platform every entry's evidence comes from. Every current entry reads evidence under `input.tdx` (the quote and event-log measurements, the AAEL event-log families, and the evaluated GPU claims), so a modules policy recognises only TDX: the quote header with the Intel quoting-enclave tee type `81000000` and vendor id `939a7233f79c4ca9940a0db3957f0607`. The CSV, TPM, and system recognition paths of `hardware_only` are not part of a modules policy, and their evidence is never consumed by an entry. Posture entries add constraints on top of recognition; they do not replace it. An entry such as `{"type": "tdx", "value": {}}` requires both a recognized TDX platform and the posture checks, so it fails closed on non-TDX evidence.
 
-An empty module list is exactly the `hardware_only` posture: `executables`, `configuration`, and `file_system` affirm, and `hardware` is decided by TEE recognition alone.
+An empty module list declares no platform dependency, so no recognition rule is emitted: `executables`, `configuration`, and `file_system` affirm, while `hardware` stays at its non-affirming default (97). This differs from `hardware_only`, which recognises TDX and the legacy platforms; to assert hardware recognition with modules, add a `tdx` entry, or use the `hardware_only` policy directly.
 
 ## Configuration errors
 
@@ -260,4 +260,4 @@ The whitelist fields compare exact strings; an empty list means no restriction. 
 | `hardware_strict_with_reference_values` | the same entries plus `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` to match the old strict posture on TDX evidence |
 | `hardware_strict_with_measurements` | `com.alibabacloud.ai.model.<model-id>` and `com.alibabacloud.container.image.<repo>` entries pinning the same baselines inline, plus a `tdx` entry with `sept_ve_disable`, `perfmon`, and `service_td` set to `allow` to match the old strict posture on TDX evidence; the separate `reference_values` list is dropped |
 
-Among the types that remain, `hardware_only` equals `{"type": "modules", "modules": []}`. On TDX evidence, `hardware_only_strict` is reproduced by a single `{"type": "tdx", "value": {}}` entry only after setting `sept_ve_disable`, `perfmon`, and `service_td` to `allow`: the `tdx` defaults also gate those three attributes, so the plain entry is stricter than `hardware_only_strict`. The equivalence is limited to TDX evidence, because the `tdx` entry fails closed on any other platform.
+On TDX evidence, `hardware_only_strict` is reproduced by a single `{"type": "tdx", "value": {}}` entry only after setting `sept_ve_disable`, `perfmon`, and `service_td` to `allow`: the `tdx` defaults also gate those three attributes, so the plain entry is stricter than `hardware_only_strict`. The equivalence is limited to TDX evidence, because the `tdx` entry fails closed on any other platform. An empty modules list is not equivalent to `hardware_only`: it asserts nothing and leaves `hardware` non-affirming.

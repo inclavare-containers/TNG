@@ -190,7 +190,7 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
 
 #[cfg(test)]
 mod tests {
-    use super::super::policy_config::ModuleGroupsConfig;
+    use super::super::policy_config::{ModuleEntryConfig, ModuleGroupsConfig};
     use super::*;
 
     #[tokio::test]
@@ -259,7 +259,10 @@ default file_system := 2"#;
     #[tokio::test]
     async fn test_load_modules_policy() {
         let policy_config = PolicyConfig::Modules {
-            modules: ModuleGroupsConfig::Single(Vec::new()),
+            modules: ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
+                module_type: "tdx".to_string(),
+                value: serde_json::json!({}),
+            }]),
         };
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
@@ -272,7 +275,10 @@ default file_system := 2"#;
         let content = String::from_utf8(decoded).expect("Invalid UTF-8");
         assert!(content.contains("package policy"));
         assert!(content.contains("default hardware := 97"));
-        assert!(content.contains("tee_recognized"));
+        assert!(content.contains("tdx_recognized if {"));
+        assert!(!content.contains("input.csv"));
+        assert!(!content.contains("input.tpm"));
+        assert!(!content.contains("input.system"));
     }
 
     #[tokio::test]

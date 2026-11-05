@@ -48,7 +48,7 @@
 第一组接受 OVMF 启动的虚机，第二组接受 td-shim 启动的机密容器。
 </details>
 
-省略 `modules` 字段或给空列表（`{"type": "modules"}`、`[]`、`[[]]`）都是一个空组：除硬件 TEE 识别外不设要求。
+省略 `modules` 字段或给空列表（`{"type": "modules"}`、`[]`、`[[]]`）都是一个空组，不做任何断言：各维度保持默认值，`hardware` 在任何证据形态下都为 97（非 affirming）。要断言硬件识别，请写 `tdx` 条目或直接使用 `hardware_only` 策略。
 
 不写某类模块即对该部分证据不设要求；写了即 fail-closed：证据缺少被测值、或测得值与钉住的基线不符，评定即非 affirming，TNG 拒绝建隧道。
 
@@ -67,11 +67,11 @@
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
 
-同一组内同一维度的条目彼此 AND，每个维度再在带有该维度条目的组之间 OR。没有条目的维度保持 affirming（2），`configuration` 与 `file_system` 没有对应模块类型，同样保持 affirming。因此度量条目失败只影响 `executables`，`hardware` 仍取 TEE 识别结果；姿态条目失败只影响 `hardware`，`executables` 仍为 affirming。
+同一组内同一维度的条目彼此 AND，每个维度再在带有该维度条目的组之间 OR。没有条目的维度保持 affirming（2），但 `hardware` 例外：它依赖条目证据所属的平台。策略里至少有一个条目时，即使没有姿态条目，`hardware` 也要求该平台被识别；完全没有条目时保持非 affirming。`configuration` 与 `file_system` 没有对应模块类型，始终为 affirming。因此度量条目失败只影响 `executables`，姿态条目失败只影响 `hardware`，`executables` 仍为 affirming。
 
-`hardware` 维度还额外门控在固定的 TEE 识别基线上，即与 `hardware_only` 相同的四条平台识别路径（TDX quote 头部的 Intel quoting-enclave tee type 与 vendor id、Hygon CSV 版本、TPM、通用 system attester）。姿态条目在识别之上叠加约束，不替代识别。`{"type": "tdx", "value": {}}` 这类条目同时要求平台被识别为 TDX 且姿态检查通过，因此在非 TDX 证据上 fail-closed。
+`hardware` 维度门控在条目证据所属的 TEE 平台上。现有每个条目的证据都位于 `input.tdx` 下（quote 与事件日志度量、AAEL 事件日志家族、经评定的 GPU claims），因此 modules 策略只识别 TDX：quote 头部 tee type 为 `81000000`、vendor id 为 `939a7233f79c4ca9940a0db3957f0607`。`hardware_only` 的 CSV、TPM、system 识别路径不属于 modules 策略，这些平台的证据也不会被任何条目消费。姿态条目在识别之上叠加约束，不替代识别。`{"type": "tdx", "value": {}}` 这类条目同时要求平台被识别为 TDX 且姿态检查通过，因此在非 TDX 证据上 fail-closed。
 
-空 modules 列表与 `hardware_only` 完全等价：`executables`、`configuration`、`file_system` 为 affirming，`hardware` 仅由 TEE 识别决定。
+空 modules 列表不声明任何平台依赖，因此不生成识别规则：`executables`、`configuration`、`file_system` 为 affirming，`hardware` 保持非 affirming 默认值（97）。这与 `hardware_only` 不同，后者会识别 TDX 及遗留平台；要在 modules 中断言硬件识别，请写 `tdx` 条目，或直接使用 `hardware_only` 策略。
 
 ## 配置错误
 
@@ -260,4 +260,4 @@
 | `hardware_strict_with_reference_values` | 同上，另加 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}`，在 TDX 证据上对齐旧的 strict 姿态 |
 | `hardware_strict_with_measurements` | `com.alibabacloud.ai.model.<model-id>` 与 `com.alibabacloud.container.image.<repo>` 条目把同样的基线内联钉住，另加 `sept_ve_disable`、`perfmon`、`service_td` 均设为 `allow` 的 `tdx` 条目，在 TDX 证据上对齐旧的 strict 姿态；独立的 `reference_values` 列表不再需要 |
 
-保留的类型中，`hardware_only` 等价于 `{"type": "modules", "modules": []}`。在 TDX 证据上，把单个 `{"type": "tdx", "value": {}}` 条目的 `sept_ve_disable`、`perfmon`、`service_td` 三项都设为 `allow` 才与 `hardware_only_strict` 一致：`tdx` 的默认还会门控这三个属性，因此原样写该条目比 `hardware_only_strict` 更严。该等价关系只对 TDX 证据成立，因为 `tdx` 条目在其它平台上会 fail-closed。
+在 TDX 证据上，把单个 `{"type": "tdx", "value": {}}` 条目的 `sept_ve_disable`、`perfmon`、`service_td` 三项都设为 `allow` 才与 `hardware_only_strict` 一致：`tdx` 的默认还会门控这三个属性，因此原样写该条目比 `hardware_only_strict` 更严。该等价关系只对 TDX 证据成立，因为 `tdx` 条目在其它平台上会 fail-closed。空 modules 列表不等价于 `hardware_only`：它不做任何断言，`hardware` 保持非 affirming。
