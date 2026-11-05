@@ -94,11 +94,13 @@ fn default_schema_version() -> String {
 
 /// One entry in a `modules` attestation-policy group. `type` selects the
 /// module family; `value` is a measurement string for the measurement families
-/// (`tdx.*`, `container.image.*`, `ai.model.*`) and a posture object for the
-/// posture families (`tdx`, `nvidia`). The `value` shape is
-/// validated against the family at load time (see [`ModuleEntryConfig`]); an
-/// unrecognized type, a malformed value, or a name-segment charset violation is
-/// a configuration error rejected before any appraisal runs, never silently
+/// (`tdx.*`, `com.alibabacloud.container.image.*`, `com.alibabacloud.ai.model.*`,
+/// with the unprefixed `container.image.*` and `ai.model.*` spellings as
+/// permanent aliases) and a posture object for the posture families (`tdx`,
+/// `nvidia`, `com.alibabacloud.gpu`; the last takes an empty object). The
+/// `value` shape is validated against the family at load time; an unrecognized
+/// type, a malformed value, or a name-segment charset violation is a
+/// configuration error rejected before any appraisal runs, never silently
 /// ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModuleEntryConfig {
@@ -245,48 +247,42 @@ pub struct TdxCollateralConfig {
     pub max_collateral_age_days: Option<u32>,
 }
 
-/// An `nvidia` GPU-appraisal module. Absent from a group, GPUs are not
-/// appraised; present, `verify` selects the strength and fail-closes.
+/// An `nvidia` GPU-appraisal module: the standard NVIDIA appraisal over the
+/// evaluated per-GPU `nvidia_gpu.<i>` claims. Absent from a group, GPUs are not
+/// appraised; present, the checks fail closed. The Alibaba AAEL attestation
+/// event check is a separate `com.alibabacloud.gpu` entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct NvidiaPostureConfig {
-    /// `local` trusts only the guest-reported AAEL attestation result codes;
-    /// `remote` actively appraises the per-GPU `nvidia_gpu.<i>` claims.
-    pub verify: NvidiaVerify,
-    /// Remote-only: require every enumerated GPU to report `cc_enabled`.
+    /// Require every enumerated GPU to report `cc_enabled`.
     #[serde(default = "nvidia_default_true")]
     pub require_cc_mode: bool,
-    /// Remote-only: require every GPU to carry an evaluated `measurement`.
+    /// Require every GPU to carry an evaluated `measurement`.
     #[serde(default = "nvidia_default_true")]
     pub require_report: bool,
-    /// Remote-only: minimum number of enumerated GPUs.
+    /// Minimum number of enumerated GPUs.
     #[serde(default = "nvidia_default_min_count")]
     pub min_count: u64,
-    /// Remote-only: allowed GPU UUIDs (empty = no whitelist).
+    /// Allowed GPU UUIDs (empty = no whitelist).
     #[serde(default)]
     pub allow_uuids: Vec<String>,
-    /// Remote-only: allowed driver versions (empty = no whitelist).
+    /// Allowed driver versions (empty = no whitelist).
     #[serde(default)]
     pub allow_driver_versions: Vec<String>,
-    /// Remote-only: allowed VBIOS versions (empty = no whitelist).
+    /// Allowed VBIOS versions (empty = no whitelist).
     #[serde(default)]
     pub allow_vbios_versions: Vec<String>,
-    /// Remote-only: allowed per-GPU measurement digests, each 96 lowercase hex
+    /// Allowed per-GPU measurement digests, each 96 lowercase hex
     /// (empty = no whitelist).
     #[serde(default)]
     pub measurement_digest: Vec<String>,
 }
 
-/// The `nvidia` verification strength. No default: it is required, and an
-/// unrecognized value is rejected at deserialization.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum NvidiaVerify {
-    /// Trust the guest-reported AAEL gpu/attestation result codes.
-    Local,
-    /// Actively appraise the per-GPU `nvidia_gpu.<i>` evaluated claims.
-    Remote,
-}
+/// A `com.alibabacloud.gpu` module. It has no fields; the empty-object value is
+/// enforced by `deny_unknown_fields`, which rejects any supplied field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GpuPostureConfig {}
 
 fn nvidia_default_true() -> bool {
     true

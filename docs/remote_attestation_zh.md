@@ -298,11 +298,11 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
             "type": "modules",
             "modules": [
                 { "type": "tdx", "value": {} },
-                { "type": "nvidia", "value": { "verify": "local" } },
+                { "type": "com.alibabacloud.gpu", "value": {} },
                 { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
                 { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-                { "type": "container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-                { "type": "ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+                { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
+                { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
             ]
         }
     }
@@ -560,7 +560,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 - `"model"`：每条 `alibabacloud.com` `pai/load-model` AAEL 事件都须与以 `measurement.model.<model-id>` 注册的参考值匹配。key 由事件自身的 `model-id` 决定，且至少要存在一条 load-model 事件，参考值未注册或事件缺失都会拒绝。key 命名沿用 upstream trustee 默认策略（`measurement.model.<model-id>`），将来外部 Trustee AS 可以用同名参考值无缝接替。
 - `"container.image.<repo>"`：镜像 reference 的 repo 尾段等于 `<repo>` 的每条 `kangaroo/pull-image` 事件，都须与以 `measurement.container.image.<repo>` 注册的 digest 匹配。`<repo>` 段是自由命名：它就是你所钉镜像 reference 的 repo 尾段（路径最后一段，registry 主机、路径前缀、tag/digest 都剥掉），任何名字都行、没有任何名字有特殊地位；钉了没有对应 pull-image 事件的 repo 会 fail-closed（拒绝而非跳过）。参考值名是 trustee 风格的 `measurement.` 前缀加上 manifest 度量类型 `container.image.<repo>` 组合而成。
 
-每个静态检查与透明日志检查共同 AND 门控 `measurements_verified`（与 primary 解析、以及配置时的 fallback 解析一起）：透明日志检查与全部静态检查都通过才通过，否则评定拒绝。`staticReferenceMeasurements` 不得与 `publishedMeasurements` / `fallbackPublishedMeasurements` 重复；加载期校验会拒绝不支持的类型、重复项和重叠。同一套校验也可作为 `modules` 度量条目独立使用（不需要透明日志服务）：`ai.model.<model-id>` 与 `container.image.<repo>` 条目把同样的基线直接钉在策略里。
+每个静态检查与透明日志检查共同 AND 门控 `measurements_verified`（与 primary 解析、以及配置时的 fallback 解析一起）：透明日志检查与全部静态检查都通过才通过，否则评定拒绝。`staticReferenceMeasurements` 不得与 `publishedMeasurements` / `fallbackPublishedMeasurements` 重复；加载期校验会拒绝不支持的类型、重复项和重叠。同一套校验也可作为 `modules` 度量条目独立使用（不需要透明日志服务）：`com.alibabacloud.ai.model.<model-id>` 与 `com.alibabacloud.container.image.<repo>` 条目把同样的基线直接钉在策略里。
 
 </details>
 

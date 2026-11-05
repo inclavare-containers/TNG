@@ -2,7 +2,7 @@
 //! generation.
 
 use super::super::policy_config::{
-    value_shape, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig, NvidiaVerify,
+    value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
     TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
     TdxTcbConfig,
 };
@@ -41,6 +41,8 @@ pub(crate) enum Module {
     },
     Tdx(TdxPostureConfig),
     Nvidia(NvidiaPostureConfig),
+    /// `com.alibabacloud.gpu`: the guest-reported AAEL attestation event.
+    Gpu,
 }
 
 impl Module {
@@ -54,9 +56,103 @@ impl Module {
             | Module::Uki { .. }
             | Module::ContainerImage { .. }
             | Module::AiModel { .. } => Dimension::Executables,
-            Module::Tdx(_) | Module::Nvidia(_) => Dimension::Hardware,
+            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => Dimension::Hardware,
         }
     }
+}
+
+/// One accepted module family. Vendor-coupled families live under the
+/// `com.alibabacloud.` prefix; the two measurement families also accept an
+/// unprefixed permanent alias.
+struct ModuleFamily {
+    /// Canonical type spelling, or the prefix of a suffixed family.
+    canonical: &'static str,
+    /// Placeholder for a free-form name segment that follows `canonical`.
+    placeholder: Option<&'static str>,
+    /// Permanent unprefixed alias prefix, when one exists.
+    unprefixed_alias: Option<&'static str>,
+}
+
+const MODULE_FAMILIES: &[ModuleFamily] = &[
+    ModuleFamily {
+        canonical: "tdx",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "nvidia",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "tdx.td-shim",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "tdx.ovmf",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "tdx.kernel",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "tdx.uki",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "com.alibabacloud.gpu",
+        placeholder: None,
+        unprefixed_alias: None,
+    },
+    ModuleFamily {
+        canonical: "com.alibabacloud.container.image.",
+        placeholder: Some("<repo>"),
+        unprefixed_alias: Some("container.image."),
+    },
+    ModuleFamily {
+        canonical: "com.alibabacloud.ai.model.",
+        placeholder: Some("<model-id>"),
+        unprefixed_alias: Some("ai.model."),
+    },
+];
+
+fn unknown_module_type(raw: &str) -> anyhow::Error {
+    let known = MODULE_FAMILIES
+        .iter()
+        .map(|f| match f.placeholder {
+            Some(placeholder) => match f.unprefixed_alias {
+                Some(alias) => format!("{}{placeholder} (alias {alias}{placeholder})", f.canonical),
+                None => format!("{}{placeholder}", f.canonical),
+            },
+            None => f.canonical.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::anyhow!("unknown module type {raw:?}; known types: {known}")
+}
+
+/// Normalize an entry type to its canonical spelling. A permanent alias is
+/// rewritten to its canonical `com.alibabacloud.` form; any type not described
+/// by [`MODULE_FAMILIES`] is rejected, which is also where prefix legality is
+/// enforced.
+fn normalized_module_type(raw: &str) -> anyhow::Result<String> {
+    for family in MODULE_FAMILIES {
+        if family.placeholder.is_some() {
+            for prefix in std::iter::once(family.canonical).chain(family.unprefixed_alias) {
+                if let Some(suffix) = raw.strip_prefix(prefix) {
+                    return Ok(format!("{}{suffix}", family.canonical));
+                }
+            }
+        } else if raw == family.canonical {
+            return Ok(family.canonical.to_string());
+        }
+    }
+    Err(unknown_module_type(raw))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +188,7 @@ impl ModuleEntryConfig {
     /// Parse and validate one entry into a concrete [`Module`]. Rejects unknown
     /// types, malformed values, and bad name segments as configuration errors.
     fn to_module(&self) -> anyhow::Result<Module> {
+        let module_type = normalized_module_type(&self.module_type)?;
         let value_str = || match &self.value {
             serde_json::Value::String(s) => Ok(s.clone()),
             other => anyhow::bail!(
@@ -109,7 +206,7 @@ impl ModuleEntryConfig {
             ),
         };
 
-        match self.module_type.as_str() {
+        match module_type.as_str() {
             "tdx" => {
                 value_obj()?;
                 let cfg: TdxPostureConfig = serde_json::from_value(self.value.clone())
@@ -122,6 +219,12 @@ impl ModuleEntryConfig {
                     }
                 }
                 Ok(Module::Tdx(cfg))
+            }
+            "com.alibabacloud.gpu" => {
+                value_obj()?;
+                let _: GpuPostureConfig = serde_json::from_value(self.value.clone())
+                    .context("invalid com.alibabacloud.gpu config")?;
+                Ok(Module::Gpu)
             }
             "nvidia" => {
                 value_obj()?;
@@ -184,34 +287,36 @@ impl ModuleEntryConfig {
             }
             other => {
                 // Extensible, name-bearing families.
-                if let Some(repo) = other.strip_prefix("container.image.") {
+                if let Some(repo) = other.strip_prefix("com.alibabacloud.container.image.") {
                     if !is_valid_module_name(repo) {
                         anyhow::bail!("container.image name {repo:?} has an invalid character");
                     }
                     let digest = value_str()?;
                     if !is_sha256_digest(&digest) {
                         anyhow::bail!(
-                            "container.image.{repo} value must be sha256:<64 lowercase hex>"
+                            "com.alibabacloud.container.image.{repo} value must be sha256:<64 lowercase hex>"
                         );
                     }
                     Ok(Module::ContainerImage {
                         repo: repo.to_string(),
                         digest,
                     })
-                } else if let Some(model_id) = other.strip_prefix("ai.model.") {
+                } else if let Some(model_id) = other.strip_prefix("com.alibabacloud.ai.model.") {
                     if !is_valid_module_name(model_id) {
                         anyhow::bail!("ai.model name {model_id:?} has an invalid character");
                     }
                     let digest = value_str()?;
                     if !is_lower_hex(&digest, 64) {
-                        anyhow::bail!("ai.model.{model_id} value must be 64 lowercase hex chars");
+                        anyhow::bail!(
+                            "com.alibabacloud.ai.model.{model_id} value must be 64 lowercase hex chars"
+                        );
                     }
                     Ok(Module::AiModel {
                         model_id: model_id.to_string(),
                         digest,
                     })
                 } else {
-                    anyhow::bail!("unknown module type {:?}", self.module_type)
+                    Err(unknown_module_type(&self.module_type))
                 }
             }
         }
@@ -229,11 +334,11 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
         // malformed.
         let mut seen = std::collections::HashSet::new();
         for entry in group {
-            if !seen.insert(entry.module_type.as_str()) {
-                anyhow::bail!(
-                    "duplicate module type {:?} within group {gi}",
-                    entry.module_type
-                );
+            // Duplicate detection is normalized so the canonical spelling and
+            // its alias collide within one group.
+            let canonical = normalized_module_type(&entry.module_type)?;
+            if !seen.insert(canonical.clone()) {
+                anyhow::bail!("duplicate module type {canonical:?} within group {gi}");
             }
         }
         let mut parsed = Vec::new();
@@ -290,6 +395,7 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
                     body
                 }
                 Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
+                Module::Gpu => gpu_posture_rule(&pred),
                 measurement => measurement_rule(measurement, &pred)?,
             };
             if matches!(module, Module::ContainerImage { .. }) {
@@ -484,7 +590,7 @@ fn measurement_rule(module: &Module, pred: &str) -> anyhow::Result<String> {
         ),
         // Posture variants are emitted by `tdx_posture_rule` /
         // `nvidia_posture_rule`; the caller never passes them here.
-        Module::Tdx(_) | Module::Nvidia(_) => {
+        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => {
             anyhow::bail!("posture module passed to the measurement emitter")
         }
     })
@@ -588,11 +694,12 @@ fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(Strin
     Ok((format!("{name} if {{\n{}\n}}", body.join("\n")), extra))
 }
 
-/// Emit the `nvidia` posture rule.
-fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
-    if cfg.verify == NvidiaVerify::Local {
-        return format!(
-            r#"{pred} if {{
+/// Emit the `com.alibabacloud.gpu` rule: the guest-reported AAEL GPU
+/// attestation event must exist and every such event must report zero for both
+/// result codes.
+fn gpu_posture_rule(pred: &str) -> String {
+    format!(
+        r#"{pred} if {{
 	events := [e |
 		some e in input.tdx.uefi_event_logs
 		e.type_name == "EV_EVENT_TAG"
@@ -606,11 +713,13 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
 		e.details.data.content["gpu-attest-result-code"] == 0
 	}}
 }}"#
-        );
-    }
+    )
+}
 
-    // remote: appraise the evaluated per-GPU claims, rejecting the raw/skip
-    // passthrough form (which carries attestation_report and lacks measurement).
+/// Emit the `nvidia` posture rule: the standard trustee NVIDIA appraisal over
+/// the evaluated per-GPU claims, rejecting the raw/skip passthrough form (which
+/// carries attestation_report and lacks measurement).
+fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
     let mut gpu_body: Vec<String> = Vec::new();
     gpu_body.push("\t\tnot g.attestation_report".to_string());
     if cfg.require_report {
@@ -776,6 +885,24 @@ mod tests {
             ("tdx.ovmf", ok_hex96.clone()),
             ("tdx.kernel", ok_hex96.clone()),
             ("tdx.uki", ok_hex96.clone()),
+            (
+                "com.alibabacloud.container.image.model-server",
+                ok_sha.clone(),
+            ),
+            (
+                "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+                ok_hex64.clone(),
+            ),
+        ] {
+            let entry = ModuleEntryConfig {
+                module_type: t.to_string(),
+                value: json!(v),
+            };
+            assert!(entry.to_module().is_ok(), "expected ok for {t}");
+        }
+        // The unprefixed spellings are permanent aliases of the two
+        // Alibaba-coupled measurement families.
+        for (t, v) in [
             ("container.image.model-server", ok_sha.clone()),
             ("ai.model.Qwen/Qwen3.8-27B", ok_hex64.clone()),
         ] {
@@ -815,9 +942,29 @@ mod tests {
         .to_module()
         .is_err());
 
-        // Unknown type rejected.
+        // Unprefixed `gpu` has no alias and is rejected, as is the vendor
+        // prefix on a type that is not Alibaba-coupled.
         assert!(ModuleEntryConfig {
             module_type: "gpu".to_string(),
+            value: json!({}),
+        }
+        .to_module()
+        .is_err());
+        assert!(ModuleEntryConfig {
+            module_type: "com.alibabacloud.tdx.ovmf".to_string(),
+            value: json!(ok_hex96.clone()),
+        }
+        .to_module()
+        .is_err());
+        assert!(ModuleEntryConfig {
+            module_type: "com.alibabacloud.nvidia".to_string(),
+            value: json!({}),
+        }
+        .to_module()
+        .is_err());
+        // Unknown type rejected.
+        assert!(ModuleEntryConfig {
+            module_type: "cpu".to_string(),
             value: json!("x"),
         }
         .to_module()
@@ -894,7 +1041,7 @@ mod tests {
         // nvidia measurement_digest entries must be 96 lowercase hex chars.
         assert!(ModuleEntryConfig {
             module_type: "nvidia".to_string(),
-            value: json!({ "verify": "remote", "measurement_digest": ["tooshort"] }),
+            value: json!({ "measurement_digest": ["tooshort"] }),
         }
         .to_module()
         .is_err());
@@ -903,7 +1050,7 @@ mod tests {
         // rejected (omitting the entry is how GPU appraisal is disabled).
         let err = ModuleEntryConfig {
             module_type: "nvidia".to_string(),
-            value: json!({ "verify": "remote", "min_count": 0 }),
+            value: json!({ "min_count": 0 }),
         }
         .to_module()
         .unwrap_err()
@@ -911,45 +1058,88 @@ mod tests {
         assert!(err.contains("min_count must be at least 1"), "{err}");
         assert!(ModuleEntryConfig {
             module_type: "nvidia".to_string(),
-            value: json!({ "verify": "remote", "min_count": 1 }),
+            value: json!({ "min_count": 1 }),
         }
         .to_module()
         .is_ok());
     }
 
     #[test]
-    fn modules_nvidia_verify_validated() {
-        // verify is required: an empty object fails deserialization.
-        assert!(ModuleEntryConfig {
+    fn modules_nvidia_standard_appraisal_only() {
+        // `nvidia` now always means the standard trustee appraisal; an empty
+        // object is valid and takes the documented defaults.
+        let module = ModuleEntryConfig {
             module_type: "nvidia".to_string(),
             value: json!({}),
         }
         .to_module()
-        .is_err());
-        // Only local/remote are accepted (the enum rejects anything else at
-        // deserialization, with a good error).
+        .expect("empty nvidia value must parse");
+        let Module::Nvidia(cfg) = module else {
+            panic!("expected Nvidia");
+        };
+        assert!(cfg.require_cc_mode);
+        assert!(cfg.require_report);
+        assert_eq!(cfg.min_count, 1);
+        assert!(cfg.allow_uuids.is_empty());
+
+        // The removed `verify` switch is now an unknown field.
         let err = ModuleEntryConfig {
             module_type: "nvidia".to_string(),
-            value: json!({"verify": "strict"}),
+            value: json!({ "verify": "local" }),
         }
         .to_module()
         .unwrap_err();
-        // The context wrapper must preserve the serde source chain.
         let err = format!("{err:#}");
-        assert!(
-            err.contains("unknown variant `strict`, expected `local` or `remote`"),
-            "{err}"
-        );
-        for ok in ["local", "remote"] {
-            assert!(
-                ModuleEntryConfig {
-                    module_type: "nvidia".to_string(),
-                    value: json!({"verify": ok}),
-                }
-                .to_module()
-                .is_ok(),
-                "{ok} must parse"
+        assert!(err.contains("unknown field `verify`"), "{err}");
+    }
+
+    #[test]
+    fn modules_vendor_namespace_aliases() {
+        let digest = format!("sha256:{}", "c".repeat(64));
+        let hash = "b".repeat(64);
+        for (canonical, alias, value) in [
+            (
+                "com.alibabacloud.container.image.model-server",
+                "container.image.model-server",
+                json!(digest),
+            ),
+            (
+                "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+                "ai.model.Qwen/Qwen3.8-27B",
+                json!(hash),
+            ),
+        ] {
+            let canonical_module = ModuleEntryConfig {
+                module_type: canonical.to_string(),
+                value: value.clone(),
+            }
+            .to_module()
+            .expect("canonical parses");
+            let alias_module = ModuleEntryConfig {
+                module_type: alias.to_string(),
+                value: value.clone(),
+            }
+            .to_module()
+            .expect("alias parses");
+            assert_eq!(
+                canonical_module, alias_module,
+                "{canonical} and {alias} must parse identically"
             );
+
+            // Both spellings must generate byte-identical rego.
+            let canonical_policy =
+                build_modules_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
+                    module_type: canonical.to_string(),
+                    value: value.clone(),
+                }]))
+                .expect("build canonical");
+            let alias_policy =
+                build_modules_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
+                    module_type: alias.to_string(),
+                    value,
+                }]))
+                .expect("build alias");
+            assert_eq!(canonical_policy, alias_policy);
         }
     }
 
@@ -971,6 +1161,33 @@ mod tests {
             hex96('b')
         ));
         assert!(parse_module_groups(&dup_cross_group).is_ok());
+
+        // Mixed spellings of a canonical type collide after normalization.
+        for (canonical, alias, value) in [
+            (
+                "com.alibabacloud.container.image.model-server",
+                "container.image.model-server",
+                format!("sha256:{}", hex64('c')),
+            ),
+            (
+                "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+                "ai.model.Qwen/Qwen3.8-27B",
+                hex64('d'),
+            ),
+        ] {
+            let mixed = ModuleGroupsConfig::Single(vec![
+                ModuleEntryConfig {
+                    module_type: canonical.to_string(),
+                    value: json!(value),
+                },
+                ModuleEntryConfig {
+                    module_type: alias.to_string(),
+                    value: json!(value),
+                },
+            ]);
+            let err = parse_module_groups(&mixed).unwrap_err().to_string();
+            assert!(err.contains("duplicate"), "{canonical}/{alias}: {err}");
+        }
     }
 
     #[test]
@@ -1301,7 +1518,7 @@ mod tests {
         let digest = format!("sha256:{}", hex64('a'));
         let model_hash = hex64('b');
         let cfg = format!(
-            r#"[{{"type":"container.image.model-server","value":"{digest}"}},{{"type":"ai.model.Qwen/Qwen3.8-27B","value":"{model_hash}"}}]"#
+            r#"[{{"type":"com.alibabacloud.container.image.model-server","value":"{digest}"}},{{"type":"com.alibabacloud.ai.model.Qwen/Qwen3.8-27B","value":"{model_hash}"}}]"#
         );
         let pull_event = |d: &str| {
             json!({
@@ -1700,33 +1917,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modules_nvidia_local_pass_and_reject() {
-        let cfg = r#"[{"type":"nvidia","value":{"verify":"local"}}]"#;
-        let gpu_event = |code: i64| {
+    async fn modules_gpu_aael_attestation_codes() {
+        let cfg = r#"[{"type":"com.alibabacloud.gpu","value":{}}]"#;
+        let gpu_event = |collect: i64, attest: i64| {
             json!({
                 "type_name": "EV_EVENT_TAG",
                 "details": { "unicode_name": "AAEL", "data": {
                     "domain": "alibabacloud.com",
                     "operation": "gpu/attestation",
                     "content": {
-                        "gpu-collect-evidence-result-code": 0,
-                        "gpu-attest-result-code": code,
+                        "gpu-collect-evidence-result-code": collect,
+                        "gpu-attest-result-code": attest,
                     }
                 } }
             })
         };
-        let input = tdx_input(serde_json::Value::Null, &[gpu_event(0)]);
+        let input = tdx_input(serde_json::Value::Null, &[gpu_event(0, 0)]);
         assert_eq!(
             eval_modules(cfg, &input).await,
             (2, 2, 2, 2),
-            "local attest result codes 0 affirm"
+            "both result codes 0 affirm hardware"
         );
 
-        let bad = tdx_input(serde_json::Value::Null, &[gpu_event(5)]);
+        let bad_collect = tdx_input(serde_json::Value::Null, &[gpu_event(3, 0)]);
         assert_eq!(
-            eval_modules(cfg, &bad).await,
+            eval_modules(cfg, &bad_collect).await,
             (2, 97, 2, 2),
-            "non-zero gpu attest result code rejects hardware"
+            "non-zero evidence-collection code rejects hardware"
+        );
+        let bad_attest = tdx_input(serde_json::Value::Null, &[gpu_event(0, 5)]);
+        assert_eq!(
+            eval_modules(cfg, &bad_attest).await,
+            (2, 97, 2, 2),
+            "non-zero attestation code rejects hardware"
+        );
+
+        // Every event must pass, not just one of several.
+        let one_bad = tdx_input(serde_json::Value::Null, &[gpu_event(0, 0), gpu_event(0, 5)]);
+        assert_eq!(
+            eval_modules(cfg, &one_bad).await,
+            (2, 97, 2, 2),
+            "an extra failing gpu event rejects hardware"
         );
 
         let none = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
@@ -1735,13 +1966,22 @@ mod tests {
             (2, 97, 2, 2),
             "missing gpu event rejects hardware (fail-closed)"
         );
+
+        // The value is an empty object; any field is an unknown-field error.
+        let err = ModuleEntryConfig {
+            module_type: "com.alibabacloud.gpu".to_string(),
+            value: json!({ "verify": "local" }),
+        }
+        .to_module()
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("unknown field"), "{err:#}");
     }
 
     #[tokio::test]
-    async fn modules_nvidia_remote_pass_and_skip_reject() {
+    async fn modules_nvidia_standard_appraisal_pass_and_skip_reject() {
         let m = hex96('3');
         let cfg = format!(
-            r#"[{{"type":"nvidia","value":{{"verify":"remote","min_count":1,"allow_uuids":["GPU-x"],"measurement_digest":["{m}"]}}}}]"#
+            r#"[{{"type":"nvidia","value":{{"min_count":1,"allow_uuids":["GPU-x"],"measurement_digest":["{m}"]}}}}]"#
         );
         let event = json!({ "event": "ok" });
         // Evaluated GPU claim (measurement present, no attestation_report).
@@ -1760,7 +2000,7 @@ mod tests {
         );
 
         // Skip-mode raw passthrough: attestation_report + index present, no
-        // measurement -> remote must reject hardware.
+        // measurement -> the nvidia appraisal must reject hardware.
         let raw = tdx_input_full(
             serde_json::Value::Null,
             json!({ "nvidia_gpu.0": {
@@ -1772,7 +2012,7 @@ mod tests {
         assert_eq!(
             eval_modules(&cfg, &raw).await,
             (2, 97, 2, 2),
-            "skip passthrough (raw attestation_report) must reject under remote"
+            "skip passthrough (raw attestation_report) must reject under the nvidia appraisal"
         );
 
         // No GPU claims at all -> min_count fail-closed.
@@ -1780,11 +2020,11 @@ mod tests {
         assert_eq!(
             eval_modules(&cfg, &no_gpu).await,
             (2, 97, 2, 2),
-            "remote with no GPU evidence rejects hardware (fail-closed)"
+            "nvidia with no GPU evidence rejects hardware (fail-closed)"
         );
 
         // Driver/VBIOS allow-lists gate the evaluated claims.
-        let cfg_pinned = r#"[{"type":"nvidia","value":{"verify":"remote","min_count":1,"allow_driver_versions":["570.148.05"],"allow_vbios_versions":["96.00.f4"]}}]"#;
+        let cfg_pinned = r#"[{"type":"nvidia","value":{"min_count":1,"allow_driver_versions":["570.148.05"],"allow_vbios_versions":["96.00.f4"]}}]"#;
         assert_eq!(
             eval_modules(&cfg_pinned, &evaluated).await,
             (2, 2, 2, 2),

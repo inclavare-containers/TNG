@@ -298,11 +298,11 @@ Goal: pin concrete, checkable requirements on the peer's platform posture, boot 
             "type": "modules",
             "modules": [
                 { "type": "tdx", "value": {} },
-                { "type": "nvidia", "value": { "verify": "local" } },
+                { "type": "com.alibabacloud.gpu", "value": {} },
                 { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
                 { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-                { "type": "container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-                { "type": "ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+                { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
+                { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
             ]
         }
     }
@@ -560,7 +560,7 @@ The `transparency_log` policy anchors the trusted measurement set to an authenti
 - `"model"`: every `alibabacloud.com` `pai/load-model` AAEL event must match the reference value registered under `measurement.model.<model-id>`. The key is selected by the event's own `model-id`, and at least one load-model event must exist; none registered, or no event at all, rejects. The key name follows the upstream trustee default policy (`measurement.model.<model-id>`), so an external Trustee AS can serve the same reference-value name later.
 - `"container.image.<repo>"`: every `kangaroo/pull-image` event whose image reference's repo tail equals `<repo>` must match the digest registered under `measurement.container.image.<repo>`. The `<repo>` segment is free-form: it is the repo tail of the image you are pinning (the last path segment of the reference, registry host, path prefix and tag/digest stripped), so any name works and nothing is special about it; a pinned repo with no matching pull-image event fails closed (reject, not skip). The reference-value name is the trustee-style `measurement.` prefix composed with the manifest measurement type `container.image.<repo>`.
 
-Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) as `modules` measurement entries: `ai.model.<model-id>` and `container.image.<repo>` pin those baselines directly in the policy.
+Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) as `modules` measurement entries: `com.alibabacloud.ai.model.<model-id>` and `com.alibabacloud.container.image.<repo>` pin those baselines directly in the policy.
 
 </details>
 
