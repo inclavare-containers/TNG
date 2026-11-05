@@ -6839,8 +6839,8 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
-source = "git+https://github.com/inclavare-containers/rustls.git?branch=v%2F0.23.45-patched#9b1e82050653e312ce997ccf99e68accfde004b4"
+version = "0.23.46"
+source = "git+https://github.com/inclavare-containers/rustls.git?branch=v%2F0.23.46-patched#4c1d9d52d7c39c20ebebc649ff52211746701dbb"
 dependencies = [
  "aws-lc-rs",
  "brotli",
