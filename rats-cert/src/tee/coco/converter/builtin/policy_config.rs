@@ -93,15 +93,17 @@ fn default_schema_version() -> String {
 }
 
 /// One entry in a `modules` attestation-policy group. `type` selects the
-/// module family; `value` is a measurement string for the measurement families
-/// (`tdx.*`, `com.alibabacloud.container.image.*`, `com.alibabacloud.ai.model.*`,
-/// with the unprefixed `container.image.*` and `ai.model.*` spellings as
-/// permanent aliases) and a posture object for the posture families (`tdx`,
-/// `nvidia`, `com.alibabacloud.gpu`; the last takes an empty object). The
-/// `value` shape is validated against the family at load time; an unrecognized
-/// type, a malformed value, or a name-segment charset violation is a
-/// configuration error rejected before any appraisal runs, never silently
-/// ignored.
+/// module family; it is parsed once into a canonical entry-type enum at load
+/// time, so a canonical `com.alibabacloud.` spelling and its permanent
+/// unprefixed alias resolve to the same family. `value` is a measurement
+/// string for the measurement families (`tdx.*`,
+/// `com.alibabacloud.container.image.*`, `com.alibabacloud.ai.model.*`, with
+/// the unprefixed `container.image.*` and `ai.model.*` spellings as
+/// aliases) and a posture object for the posture families (`tdx`, `nvidia`,
+/// `com.alibabacloud.gpu`; the last takes an empty object). The `value` shape is
+/// validated against the parsed family at load time; an unrecognized type, a
+/// malformed value, or a name-segment charset violation is a configuration
+/// error rejected before any appraisal runs, never silently ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModuleEntryConfig {
     #[serde(rename = "type")]
