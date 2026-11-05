@@ -13,6 +13,7 @@ use crate::config::egress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
+use crate::tunnel::connection_fault::DownstreamSetupError;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::upstream::UpstreamConnector;
@@ -179,10 +180,22 @@ impl EgressFlow {
             // connection and every protocol handler dials its backend legs
             // through this connector.
             if let Err(error) = trusted_stream_manager
-                .handle_connection(stream, Some(src), connector, runtime_cloned)
+                .handle_connection(stream, Some(src), &connector, runtime_cloned)
                 .await
             {
-                tracing::error!(?error, "Failed to consume stream from client");
+                match DownstreamSetupError::find(&error) {
+                    Some(setup) => {
+                        connector.record_fault(setup.fault()).await;
+                        if setup.fault().ended_without_verdict() {
+                            tracing::debug!(?error, "Downstream connection ended before the protocol handshake completed")
+                        } else {
+                            tracing::error!(?error, "Failed to consume stream from client")
+                        }
+                    }
+                    // Not a downstream setup failure: keep it loud rather than
+                    // guessing from the error kind.
+                    None => tracing::error!(?error, "Failed to consume stream from client"),
+                }
             }
         });
     }

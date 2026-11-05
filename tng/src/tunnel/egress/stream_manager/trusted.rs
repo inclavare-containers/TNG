@@ -131,7 +131,7 @@ impl TrustedStreamManager {
         &self,
         in_stream: Box<dyn CommonStreamTrait + Sync + 'static>,
         peer: Option<std::net::SocketAddr>,
-        connector: Arc<UpstreamConnector>,
+        connector: &Arc<UpstreamConnector>,
         forward_runtime: TokioRuntime,
     ) -> Result<()> {
         let maybe_direct_forward = self
@@ -149,6 +149,9 @@ impl TrustedStreamManager {
                 // `connector`.
                 EgressProtocol::OHttp(security_layer) => {
                     let security_layer = security_layer.clone();
+                    // The spawned task outlives this call, so it takes its own
+                    // handle.
+                    let connector = Arc::clone(connector);
                     let handle = self.runtime.spawn_supervised_task(async move {
                         if let Err(error) =
                             security_layer.handle_stream(stream, connector, peer).await
@@ -165,7 +168,7 @@ impl TrustedStreamManager {
                 }
                 EgressProtocol::RatsTls(handler) => {
                     handler
-                        .handle_stream(stream, peer, connector, forward_runtime)
+                        .handle_stream(stream, peer, Arc::clone(connector), forward_runtime)
                         .await
                 }
             },

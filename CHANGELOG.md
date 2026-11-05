@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Egress logs a downstream that resets or closes before the TLS handshake completes at debug instead of error; the access-log `accepted only` line is still emitted for such connections, now at debug, while a session that completes the handshake but dials no backend keeps logging it at error.
 - The ohttp tunnel's keep-alive throughput rises at every measured concurrency (RA, 64 KiB body, alternating two-host A/B: +3..+14% RPS at c=1..32, +2..+3% at c=64..128, egress CPU per request down 6..23%), and no-keep-alive rises up to +9% at c<=32 with a small disclosed regression (-3..-4%) at c=64..128; the egress backend leg no longer relays through the per-request duplex pipe and dials the backend directly.
 - Policies whose verification rules do not consume reference values now reject a non-empty `reference_values` list at load instead of silently ignoring it: `trust_all`, `hardware_only` (including the `default` alias), and `hardware_only_strict`. An empty list remains accepted, and the policies that consume reference values (`hardware_with_reference_values`, `hardware_strict_with_reference_values`, `hardware_strict_with_measurements`, `inline`, `path`, `transparency_log`) continue to accept them.
 - Linux binary release tarballs are now built against the glibc 2.17 baseline, so they run on distributions from 2014 onward instead of requiring glibc 2.29.

@@ -1,6 +1,8 @@
 use std::fmt::Display;
 use std::net::SocketAddr;
 
+use crate::tunnel::connection_fault::ConnectionFault;
+
 /// The type of ingress that accepted the downstream connection.
 #[derive(Debug, Clone, Copy)]
 pub enum IngressAccessMode {
@@ -69,14 +71,30 @@ impl Display for AccessMode {
 
 // --- State 1: AccessAccepted ---
 
-/// Downstream connection accepted, but routing to upstream not yet determined.
-/// Drop logs at ERROR level.
+/// Downstream connection accepted, routing to an upstream not yet determined.
+///
+/// Dropping this state emits the connection's access-log line, always one line
+/// per connection. The level depends on how the connection ended:
+///
+/// - ERROR when it became a session but never dialled any backend. That is the
+///   anomaly this state exists to surface.
+/// - DEBUG when the protocol handshake with the downstream never completed
+///   because the peer went away or stayed silent. That connection never became
+///   a session: a health-check probe or an aborted client, a per-connection
+///   event rather than a tunnel fault.
+///
+/// `need_print` is cleared on every transition and on each multiplexed clone,
+/// so only the handle that owns the end of this state logs.
 #[cfg_attr(wasm, allow(dead_code))]
 pub struct AccessAccepted {
     downstream_remote: SocketAddr,
     downstream_local: SocketAddr,
     mode: AccessMode,
     need_print: bool,
+    /// Set by the egress flow when a classified downstream setup failure ended
+    /// this connection before the protocol handshake completed. `None` keeps
+    /// the default ERROR level.
+    fault: Option<ConnectionFault>,
 }
 
 #[cfg_attr(wasm, allow(dead_code))]
@@ -91,6 +109,7 @@ impl AccessAccepted {
             downstream_local,
             mode: AccessMode::Ingress(mode),
             need_print: true,
+            fault: None,
         }
     }
 
@@ -104,6 +123,7 @@ impl AccessAccepted {
             downstream_local,
             mode: AccessMode::Egress(mode),
             need_print: true,
+            fault: None,
         }
     }
 
@@ -127,7 +147,15 @@ impl AccessAccepted {
             downstream_local: self.downstream_local,
             mode: self.mode,
             need_print: true,
+            fault: None,
         }
+    }
+
+    /// Record the failure that ended the connection before it became a TNG
+    /// session. Only the level of this state's drop line follows it; the line
+    /// itself is always emitted.
+    pub fn record_fault(&mut self, fault: ConnectionFault) {
+        self.fault = Some(fault);
     }
 }
 
@@ -143,7 +171,15 @@ impl Display for AccessAccepted {
 
 impl Drop for AccessAccepted {
     fn drop(&mut self) {
-        if self.need_print {
+        if !self.need_print {
+            return;
+        }
+        if self
+            .fault
+            .is_some_and(ConnectionFault::ended_without_verdict)
+        {
+            tracing::debug!("{}", self);
+        } else {
             tracing::error!("{}", self);
         }
     }
@@ -249,6 +285,8 @@ impl Drop for AccessEstablished {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[test]
@@ -323,5 +361,95 @@ mod tests {
     fn test_egress_mode_display() {
         assert_eq!(format!("{}", EgressAccessMode::Mapping), "mapping");
         assert_eq!(format!("{}", EgressAccessMode::Hook), "hook");
+    }
+
+    #[derive(Clone, Default)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Drop `accepted` under a private subscriber and return the formatted
+    /// access-log line. A thread-local default keeps the crate's global test
+    /// subscriber out of the way.
+    fn captured_drop(accepted: AccessAccepted) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(CaptureWriter(buffer.clone()))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || drop(accepted));
+        let guard = buffer.lock().unwrap();
+        String::from_utf8(guard.clone()).unwrap()
+    }
+
+    fn accepted() -> AccessAccepted {
+        AccessAccepted::new_egress(
+            "10.0.0.1:54321".parse().unwrap(),
+            "0.0.0.0:8080".parse().unwrap(),
+            EgressAccessMode::Mapping,
+        )
+    }
+
+    #[test]
+    fn peer_vanished_drops_at_debug() {
+        let mut accepted = accepted();
+        accepted.record_fault(ConnectionFault::PeerVanished);
+        let line = captured_drop(accepted);
+        assert!(line.contains("DEBUG"), "expected a DEBUG line, got: {line}");
+        assert!(line.contains("accepted only"), "unexpected line: {line}");
+    }
+
+    #[test]
+    fn silent_peer_drops_at_debug() {
+        let mut accepted = accepted();
+        accepted.record_fault(ConnectionFault::SilentPeer);
+        let line = captured_drop(accepted);
+        assert!(line.contains("DEBUG"), "expected a DEBUG line, got: {line}");
+    }
+
+    #[test]
+    fn protocol_violation_stays_error() {
+        let mut accepted = accepted();
+        accepted.record_fault(ConnectionFault::ProtocolViolation);
+        let line = captured_drop(accepted);
+        assert!(
+            line.contains("ERROR"),
+            "expected an ERROR line, got: {line}"
+        );
+    }
+
+    #[test]
+    fn unrecorded_fault_stays_error() {
+        let line = captured_drop(accepted());
+        assert!(
+            line.contains("ERROR"),
+            "expected an ERROR line, got: {line}"
+        );
+    }
+
+    #[test]
+    fn transitioned_state_does_not_log() {
+        let mut accepted = accepted();
+        let _clone = accepted.clone_for_multiplexing();
+        let line = captured_drop(accepted);
+        assert!(line.is_empty(), "expected no line, got: {line}");
     }
 }

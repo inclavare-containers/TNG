@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use rustls::ServerConfig;
 
+use crate::tunnel::connection_fault::DownstreamSetupError;
 #[cfg(unix)]
 use crate::tunnel::utils::rustls::config::resolver::SnapshotCertResolver;
 use crate::tunnel::utils::rustls::{
@@ -109,10 +110,11 @@ impl LazyOnetimeTlsServerConfig {
     {
         use std::io::Read as _;
         let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(self.0));
-        let mut tls_stream = tls_acceptor
-            .accept(stream)
-            .await
-            .context("Failed to accept TLS connection")?;
+        let mut tls_stream = tls_acceptor.accept(stream).await.map_err(|e| {
+            DownstreamSetupError::tag(
+                anyhow::Error::from(e).context("Failed to accept TLS connection"),
+            )
+        })?;
 
         // Drain accepted 0-RTT early data. tokio-rustls's server AsyncRead does
         // not deliver accepted early-data bytes, so without this the client's

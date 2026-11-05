@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::{
     config::egress::{DirectForwardRules, OHttpArgs},
     tunnel::{
+        connection_fault::DownstreamSetupError,
         stream::{CommonStreamTrait, FirstByteReadTimeoutStream},
         utils::{
             http_inspector::{HttpRequestInspector, InspectionResult},
@@ -89,8 +90,9 @@ impl TransportLayer {
                     inspected_stream,
                     result,
                 } = HttpRequestInspector::inspect_stream(in_stream).await;
-                let request_info =
-                    result.context("Failed during inspecting http request from downstream")?;
+                let request_info = result
+                    .context("Failed during inspecting http request from downstream")
+                    .map_err(DownstreamSetupError::tag)?;
 
                 let inspected_stream =
                     Box::new(inspected_stream) as Box<dyn CommonStreamTrait + Sync>;

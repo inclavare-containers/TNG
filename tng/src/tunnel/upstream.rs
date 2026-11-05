@@ -24,6 +24,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::error::TngError;
 use crate::tunnel::access_log::AccessAccepted;
+use crate::tunnel::connection_fault::ConnectionFault;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::service_metrics::{
     ActiveConnectionCounter, ByteCountOrientation, ServiceMetrics,
@@ -133,6 +134,13 @@ impl UpstreamConnector {
     /// on the same service the flow legs would have used.
     pub(crate) fn metrics(&self) -> &ServiceMetrics {
         &self.metrics
+    }
+
+    /// Record the classified failure that ended this connection before the
+    /// protocol handshake completed. The accept-time access-log handle keeps
+    /// the fault so its drop line logs at the same severity as the error line.
+    pub(crate) async fn record_fault(&self, fault: ConnectionFault) {
+        self.access_accepted.lock().await.record_fault(fault);
     }
 
     /// Dials one backend connection, transitioning the access log through

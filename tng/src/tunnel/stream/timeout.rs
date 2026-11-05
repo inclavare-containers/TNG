@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use anyhow::anyhow;
 #[cfg(not(wasm))]
 use tokio::time as tokio_time;
 #[cfg(wasm)]
@@ -86,9 +85,10 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> t
             match Future::poll(sleep.as_mut(), cx) {
                 std::task::Poll::Ready(()) => {
                     // Timeout expired.
-                    return std::task::Poll::Ready(Err(std::io::Error::other(anyhow!(
-                        "first byte read timeout"
-                    ))));
+                    return std::task::Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "first byte read timeout",
+                    )));
                 }
                 std::task::Poll::Pending => { /* The timeout is not expired, let's continue. */ }
             }

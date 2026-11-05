@@ -86,6 +86,10 @@ name = "direct_forward"
 path = "tests/basic/direct_forward.rs"
 
 [[test]]
+name = "egress_handshake_probe_logging"
+path = "tests/basic/egress_handshake_probe_logging.rs"
+
+[[test]]
 name = "egress_netfilter_capture"
 path = "tests/netfilter/egress_netfilter_capture.rs"
 
