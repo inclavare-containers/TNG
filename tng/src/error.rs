@@ -195,6 +195,14 @@ pub enum TngError {
         server: Vec<AeadSuite>,
         ingress: Vec<AeadSuite>,
     },
+    #[error("Failed to connect to upstream WebSocket")]
+    WsUpstreamConnectFailed(#[source] anyhow::Error),
+
+    #[error("WebSocket upgrade handshake failed: {0}")]
+    WsUpgradeFailed(#[source] anyhow::Error),
+
+    #[error("WebSocket frame relay error: {0}")]
+    WsFrameRelayError(#[source] anyhow::Error),
 }
 
 /// Error response structure
@@ -274,6 +282,9 @@ impl IntoResponse for TngError {
             TngError::InvalidParameter(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::WatchFileFailed(..) => StatusCode::INTERNAL_SERVER_ERROR,
             TngError::StatusPathNotFound => StatusCode::NOT_FOUND,
+            TngError::WsUpstreamConnectFailed(..)
+            | TngError::WsUpgradeFailed(..)
+            | TngError::WsFrameRelayError(..) => StatusCode::BAD_GATEWAY,
             #[cfg(feature = "__egress-common")]
             TngError::SerfCrateError(..)
             | TngError::SerfJoinTimeout { .. }
