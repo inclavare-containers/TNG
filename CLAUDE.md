@@ -239,6 +239,26 @@ on:
       - "master"
 ```
 
+## Naming
+
+A name is a promise about scope. It must match what the field actually selects, no wider and no narrower.
+
+- Derive the noun from the value space. If only AEADs are selectable, `aead_suites` is right; `cipher_suites` (RFC 9180 defines it as KEM + KDF + AEAD) and `hpke_suites` (suggests the KEM is selectable) over-promise.
+- Do not borrow a standard term whose meaning spans more than the knob does. In RFC 9458, `symmetric_algorithms` covers KDF and AEAD, so an AEAD-only list must not use `symmetric`.
+- Avoid collisions with established terms from adjacent layers (TLS `cipher_suites`) even when the familiar name reads better.
+- Design for the growth axis. If KDF or KEM may become configurable later, add a sibling field (`kdf`) instead of widening the existing name. Additive beats redefinition.
+- Values must deliver what the name promises. If the name needs a sentence explaining what it does not cover, it is the wrong name.
+
+## Validation
+
+Validate a value where it is created, in the layer that owns the invariant. A pass over the whole config is a last resort, not the default.
+
+- Prefer a type that cannot hold an invalid value (a newtype with a fallible constructor or a custom deserializer) over a later `validate()` pass. Every consumer then receives an already-valid value.
+- Keep the check in the module that owns the type. A feature-specific field does not belong in a global aggregate's validation hook; a shared entry point should not enumerate each module's rules.
+- Do not hand-build location strings for error messages. Parsing and type errors already carry the location; a hand-written path rots when the shape changes.
+- Put one feature's types in a module named for what they own, not in the generic entry module.
+- Why: a global pass couples every feature to the entry point and is easy to bypass when a new construction path appears. An invariant held by the type cannot be bypassed.
+
 ## API Compatibility
 
 When designing public APIs (REST endpoints, config fields, trait methods, public structs/traits), always design the full namespace structure upfront — do not defer naming decisions. Retrofitting a namespace layer later (e.g. inserting `/ohttp/` into an existing path like `/status/egress/<id>/keys` → `/status/egress/<id>/ohttp/keys`) breaks backward compatibility and is extremely costly. If a category of resources might grow multiple sub-resources in the future, include that category's namespace from day one.
