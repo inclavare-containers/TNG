@@ -70,6 +70,11 @@ name = "builtin_tdx_carry_collateral"
 path = "tests/basic/builtin_tdx_carry_collateral.rs"
 
 [[test]]
+name = "modules_policy_startup"
+path = "tests/modules_policy_startup.rs"
+required-features = ["on-bin"]
+
+[[test]]
 name = "allow_non_tng_traffic"
 path = "tests/ohttp/allow_non_tng_traffic.rs"
 

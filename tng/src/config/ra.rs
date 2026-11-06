@@ -1212,6 +1212,102 @@ mod tests {
 
     #[cfg(feature = "__builtin-as")]
     #[test]
+    fn test_builtin_verify_with_modules_policy_parses() {
+        let json = json!(
+            {
+                "verify": {
+                    "model": "background_check",
+                    "as_type": "builtin",
+                    "attestation_policy": {
+                        "type": "modules",
+                        "modules": [
+                            { "type": "tdx", "value": {} },
+                            {
+                                "type": "com.alibabacloud.container.image.example",
+                                "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            }
+                        ]
+                    }
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked = serde_json::from_value(json).expect("Failed to deserialize");
+
+        match &ra_args.verify {
+            Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
+                ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                    attestation_policy, ..
+                }) => {
+                    let PolicyConfig::Modules { modules } = attestation_policy else {
+                        panic!("Expected Modules policy");
+                    };
+                    let groups = modules.as_groups();
+                    assert_eq!(groups.len(), 1);
+                    assert_eq!(groups[0].len(), 2);
+                    assert_eq!(groups[0][0].module_type, "tdx");
+                    assert_eq!(
+                        groups[0][1].module_type,
+                        "com.alibabacloud.container.image.example"
+                    );
+                    assert_eq!(
+                        groups[0][1].value,
+                        json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    );
+                }
+                _ => panic!("Expected Coco/Builtin converter"),
+            },
+            _ => panic!("Expected BackgroundCheck variant"),
+        }
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    async fn test_builtin_modules_policy_unknown_type_rejected_on_construction() {
+        // Drive the same JSON path as the positive parse test: the raw module
+        // type is kept as a string during deserialization, so the unchecked
+        // config accepts it and construction is where the unknown type fails.
+        let json = json!(
+            {
+                "verify": {
+                    "model": "background_check",
+                    "as_type": "builtin",
+                    "attestation_policy": {
+                        "type": "modules",
+                        "modules": [
+                            { "type": "tdx", "value": {} },
+                            { "type": "not.a.module", "value": {} }
+                        ]
+                    }
+                }
+            }
+        );
+
+        let ra_args: RaArgsUnchecked =
+            serde_json::from_value(json).expect("unknown module type survives deserialization");
+        let policy = match &ra_args.verify {
+            Some(VerifyArgs::BackgroundCheck { converter, .. }) => match converter {
+                ConverterArgs::Coco(CocoConverterArgs::Builtin {
+                    attestation_policy, ..
+                }) => attestation_policy.clone(),
+                _ => panic!("Expected Coco/Builtin converter"),
+            },
+            _ => panic!("Expected BackgroundCheck variant"),
+        };
+
+        let err =
+            match rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter::new(&policy, &[])
+                .await
+            {
+                Ok(_) => panic!("unknown module type must be rejected when the policy is built"),
+                Err(e) => e,
+            };
+        let debug = format!("{err:?}");
+        assert!(debug.contains("unknown module type"), "{debug}");
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[test]
     fn test_builtin_verify_with_sample_reference() {
         let json = json!(
             {
