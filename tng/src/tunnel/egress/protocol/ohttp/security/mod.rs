@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use hyper_util::rt::TokioIo;
 use tower::Service;
@@ -11,6 +11,7 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::OHttpArgs,
     tunnel::{
+        connection_fault::{ConnectionFault, DownstreamSetupError},
         egress::protocol::ohttp::security::{context::TngStreamContext, server::OhttpServer},
         ra_context::RaContext,
         upstream::UpstreamConnector,
@@ -48,6 +49,7 @@ impl OHttpSecurityLayer {
         peer: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         async {
+            let access_connector = Arc::clone(&connector);
             let state = TngStreamContext {
                 runtime: self.runtime.clone(),
                 connector,
@@ -69,8 +71,24 @@ impl OHttpSecurityLayer {
                 .serve_connection_with_upgrades(TokioIo::new(stream), hyper_service)
                 .await
                 .map_err(|error| {
-                    anyhow!("failed to serve egress OHTTP security layer connection: {error:?}")
-                })
+                    // Keep the boxed chain: the classification walks it to tell
+                    // a vanished peer from a protocol disagreement. Formatting
+                    // the error into a string would erase that.
+                    DownstreamSetupError::tag_boxed(error)
+                        .context("failed to serve egress OHTTP security layer connection")
+                })?;
+
+            // The HTTP connection ended normally. That covers an idle close, a
+            // key-config request, and a completed exchange; hyper reports Ok
+            // for all of them. Record it as a per-connection event so the
+            // access-log line stays at debug. A connection that dialled a
+            // backend has already emitted its own access-log line, so this
+            // fault no longer prints.
+            access_connector
+                .record_fault(ConnectionFault::PeerVanished)
+                .await;
+
+            Ok(())
         }
         .instrument(tracing::info_span!("security"))
         .await
