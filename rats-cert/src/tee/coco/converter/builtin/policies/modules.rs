@@ -2298,4 +2298,91 @@ mod tests {
             );
         }
     }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn modules_rego_appraises_real_pai_event_log() {
+        // The real PAI AAEL kangaroo/pull-image event resolves to repo
+        // `busybox` carrying this digest. Pinned from cmaas's
+        // `TestExtractAAELContainerEvents`, same as the transparency_log test.
+        const REAL_BUSYBOX_DIGEST: &str =
+            "sha256:16ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+        // The real PAI td_payload measurement: the SHA-384 digest on the
+        // `EV_EFI_PLATFORM_FIRMWARE_BLOB2` event whose details string is
+        // `td_payload` (index 2) in this fixture.
+        const REAL_KERNEL_DIGEST: &str =
+            "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+        const TAMPERED_BUSYBOX_DIGEST: &str =
+            "sha256:26ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+        const TAMPERED_KERNEL_DIGEST: &str =
+            "95619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+
+        // Parse the real CC event log through the production `eventlog` crate.
+        // `CcEventLog` serializes with the `uefi_event_logs` field name, so its
+        // JSON IS the Rego input's `tdx.uefi_event_logs` array.
+        let ccel_bytes =
+            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
+                .expect("read real PAI event-log fixture");
+        let ccel: eventlog::CcEventLog =
+            ccel_bytes.try_into().expect("parse real PAI CC event log");
+        let parsed = serde_json::to_value(&ccel)
+            .expect("serialize parsed CC event log")
+            .as_object()
+            .expect("parsed event log is an object")
+            .clone();
+
+        // Mirror the synthetic tests' quote shape: recognized TDX header and
+        // non-debug attributes, with the parsed event log spliced in.
+        let mut tdx = serde_json::Map::new();
+        tdx.insert(
+            "quote".to_string(),
+            serde_json::json!({
+                "header": {
+                    "tee_type": "81000000",
+                    "vendor_id": "939a7233f79c4ca9940a0db3957f0607",
+                },
+                "body": { "td_attributes": "0000001000000000" },
+            }),
+        );
+        tdx.insert(
+            "uefi_event_logs".to_string(),
+            parsed["uefi_event_logs"].clone(),
+        );
+        let input = serde_json::json!({ "tdx": tdx }).to_string();
+
+        // A policy pinning the real busybox digest affirms; a tampered pin
+        // rejects on the executables dimension.
+        let image_cfg = format!(
+            r#"[{{"type":"com.alibabacloud.container.image.busybox","value":"{REAL_BUSYBOX_DIGEST}"}}]"#
+        );
+        assert_eq!(
+            eval_modules(&image_cfg, &input).await,
+            (2, 2, 2, 2),
+            "the real PAI busybox pull event must affirm against its pinned digest"
+        );
+        let bad_image_cfg = format!(
+            r#"[{{"type":"com.alibabacloud.container.image.busybox","value":"{TAMPERED_BUSYBOX_DIGEST}"}}]"#
+        );
+        assert_eq!(
+            eval_modules(&bad_image_cfg, &input).await,
+            (97, 2, 2, 2),
+            "a tampered busybox digest must reject executables"
+        );
+
+        // A policy pinning the real td_payload digest affirms; a tampered pin
+        // rejects on the executables dimension.
+        let kernel_cfg = format!(r#"[{{"type":"tdx.kernel","value":"{REAL_KERNEL_DIGEST}"}}]"#);
+        assert_eq!(
+            eval_modules(&kernel_cfg, &input).await,
+            (2, 2, 2, 2),
+            "the real PAI td_payload measurement must affirm against its pinned digest"
+        );
+        let bad_kernel_cfg =
+            format!(r#"[{{"type":"tdx.kernel","value":"{TAMPERED_KERNEL_DIGEST}"}}]"#);
+        assert_eq!(
+            eval_modules(&bad_kernel_cfg, &input).await,
+            (97, 2, 2, 2),
+            "a tampered kernel digest must reject executables"
+        );
+    }
 }
