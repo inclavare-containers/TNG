@@ -21,6 +21,7 @@
 | HPKE | RFC 9180 混合公钥加密，ohttp 封装的密码学基础 |
 | KeyConfig | RFC 9458 定义的 HPKE 公钥配置，egress 分发给 ingress 用于加密 |
 | 元数据帧 (metadata frame) | TNG 在 ohttp 密文前附加的一段自定义元数据（见[加密请求的封装](#加密请求的封装)） |
+| WS 隧道标记 (TNG WS marker) | 保留的 WebSocket subprotocol token `tng-ohttp-ws`，是 egress 侧隧道分发的唯一信号：ingress 中继握手里由 ingress 追加，浏览器直连形态由浏览器自己带上（见 [WebSocket over ohttp](#websocket-over-ohttp)） |
 | DICE 证书 (DiceCert) | 被证明端自签的 X.509 证书，自定义扩展携带 RA 证明材料，随 TLS 握手出示（见[DICE 证书](#dice-证书证明材料的载体)） |
 | ALPN | TLS 应用层协议协商，TNG 用它在 `rats-tls`（非多路复用）与 `h2`（多路复用）间选择数据面 |
 
@@ -28,7 +29,7 @@
 
 ### 角色与协议分层
 
-ohttp 隧道把 RFC 9458 的三个角色压缩为两个端点：TNG Ingress 同时充当协议中的 oblivious client（封装请求、解封响应），TNG Egress 同时充当 oblivious gateway 与 resource server（解封请求、转发给真实上游、封装响应）。协议约束落在 ingress 与 egress 之间这一跳：这一跳上的消息是标准 OHTTP 封装，中间的七层负载均衡器或 relay 只能看到固定形状的外层 POST，无法解密或改写业务内容。
+ohttp 隧道把 RFC 9458 的三个角色压缩为两个端点：TNG Ingress 同时充当协议中的 oblivious client（封装请求、解封响应），TNG Egress 同时充当 oblivious gateway 与 resource server（解封请求、转发给真实上游、封装响应）。协议约束落在 ingress 与 egress 之间这一跳：普通 HTTP 请求在这一跳上以标准 OHTTP 封装传输，中间的七层负载均衡器或 relay 只能看到固定形状的外层 POST，无法解密或改写业务内容。WebSocket 会话是这条封装规则唯一成文的例外：其握手沿一条 WebSocket 连接逐跳透明透传，密钥协商在该流内部完成，数据面是这条连接上的逐记录 AEAD（见 [WebSocket over ohttp](#websocket-over-ohttp)）。
 
 外层传输是普通 HTTP（HTTP/1.1 或 HTTP/2，依客户端协商），保持协议外观为 HTTP 以兼容七层网关；ingress 侧可选配置 `ohttp.tls` 将外层 POST 升级为 HTTPS。与 rats-tls 的连接级加密不同，ohttp 以**单个 HTTP 请求**为加密粒度：每个请求独立做一次 HPKE 封装，不依赖此前任何会话状态，因此请求本身是 0-RTT 的，天然适配无状态集群与任意七层负载均衡。
 
@@ -60,7 +61,7 @@ sequenceDiagram
 
 ### 外层请求路由
 
-egress 不按 URL 路径区分 API：它对外层路径不做匹配，而是把所有请求交给同一个处理器，按 **`x-tng-ohttp-api` 请求头**的取值分发。头取值是形如 `/tng/key-config` 的路径样式常量，但它只是 API 选择器，与请求的实际 URL 无关。不带该头的请求被拒绝（403，`RejectNonTngRequest`）。
+egress 不按 URL 路径区分 API：它对外层路径不做匹配，而是把所有请求交给同一个处理器，按 **`x-tng-ohttp-api` 请求头**的取值分发。头取值是形如 `/tng/key-config` 的路径样式常量，但它只是 API 选择器，与请求的实际 URL 无关。不带该头的请求被拒绝（403，`RejectNonTngRequest`）。WebSocket 隧道是唯一不由该头选择的 API：它在头分发**之前**由握手里的 `tng-ohttp-ws` 标记 subprotocol 选中，让无法设置自定义头的浏览器与 native ingress 共用一个信号；它同样不按 URL 路径匹配（见 [WebSocket over ohttp](#websocket-over-ohttp)）。
 
 ingress 把所有外层请求 POST 到**同一个 URL**（`base_url`）：外层路径来自 `path_rewrites` 的正则改写，或 `path_default`（默认 `root` 即 `/`，可设为 `original` 跟随业务请求路径）。key-config 获取、隧道请求、RA 转发全部走这个 URL，仅靠 `x-tng-ohttp-api` 头区分。
 
@@ -448,13 +449,119 @@ ohttp 数据面出错时，egress 返回 JSON 体 `{"code": "<机器可读错误
 
 | HTTP 状态 | 触发条件 |
 |---|---|
-| 400 | Content-Type 不是 `message/ohttp-chunked-req`；元数据帧解码失败；缺少 key_config_hint |
-| 403 | 请求缺少 `x-tng-ohttp-api` 头 |
+| 400 | Content-Type 不是 `message/ohttp-chunked-req`；元数据帧解码失败；缺少 key_config_hint；带标记但缺 `Sec-WebSocket-Key`/`Sec-WebSocket-Version` 或未指明 backend 目标的升级 |
+| 403 | 请求缺少 `x-tng-ohttp-api` 头（不带标记的 WebSocket 升级也落到这条分发被拒） |
 | 413 | 元数据帧超过 32 MiB |
 | 422 | key_config_hint 指向的密钥不存在或已过期（RFC 9458 §6.4） |
 | 500 / 502 / 504 | 内部错误 / 上游不可达 / 上游超时 |
 
 客户端证明不通过（`verify` 侧校验令牌失败）同样落入上述 JSON 错误通道返回。
+
+### WebSocket over ohttp
+
+ohttp 的数据面以单个请求为单位：每个加密请求都是一次独立的 HPKE 封装，由一条 POST 承载。这契合无状态的 HTTP，却不契合 WebSocket。WS 会话是有状态的长连接，其 backend 连接必然固定在某一台 egress 实例上。TNG 用 **WebSocket 隧道**让 WS 会话穿过 ohttp：ingress 与 egress 之间不再把消息封装成请求，而是用两者之间的一条 WebSocket 连接中继整个会话。这条连接依次是：逐跳透传的标准握手、流内的密钥协商、以及两个方向的逐消息 AEAD。密钥材料复用与常规请求同一套 HPKE 机制、同一个元数据帧、同一条响应密钥派生，但把 RFC 9458 的一次性请求封装扩展成了流式形态：**这是一个自定义的集成协议，不是标准 OHTTP 行为**。它不涉及任何配置：ingress 检测到 WebSocket 升级即自动走这条路径，非 WS 请求不受影响。
+
+**可见性。** 每一跳上的握手都是一条最普通的 WebSocket 升级，因此中间七层设备能看到协商头与 backend 目标，也能观察到「正在发起一条连接」。威胁模型接受这种连接发起层面的可见性：业务负载仍在 ingress 与 egress 之间逐记录加密，受保护的范围与普通请求一致。中跳可以用与把外层 POST 升级为 HTTPS 相同的 `ohttp.tls` 配置加上 TLS。
+
+#### 握手透传与 TNG 标记
+
+ingress 收到一个 GET 请求、且其 `Upgrade` 头带 `websocket` token、`Connection` 头带 `upgrade` token 时，把该请求路由到隧道路径。随后握手是被**中继而非重新协商**：app 的 `Sec-WebSocket-Key`、`Sec-WebSocket-Version` 与业务 `Sec-WebSocket-Protocol` 原样穿过每一跳，没有任何一跳重算 key 或 accept，backend 的 101（连同它的 `Sec-WebSocket-Accept` 与协商选定的业务 subprotocol）沿链原样回传。app 最终校验到的就是 backend 的真实 101；各跳上的中间设备看到的仍是一次标准的 RFC 6455 版本 13 升级，且每一跳切换协议后各自终结自己的 WebSocket 帧。
+
+中继请求自身以代理方式指明 backend：authority 取自绝对形式的请求 URI，origin 形式请求则取 `Host` 头；path 是 app 路径经 ingress 的 `path_rewrites`/`path_default` 规则改写后的结果（与外层 POST 路径同款规则），app 的查询串原样保留。不存在落地的端点路径、query 参数或任何路径匹配：egress 的唯一分发器把 WS 隧道放在 `x-tng-ohttp-api` 头匹配**之前**、以标记 subprotocol 选中（见下）。
+
+隧道借 WebSocket subprotocol 协商选项声明自己，使用保留 token **`tng-ohttp-ws`**（TNG WS 标记）。之所以用 subprotocol 而不是自定义头：浏览器 WebSocket API 无法设置握手头，却能设置 subprotocol 列表，于是一个信号同时服务两种形态：native ingress 中继时追加标记，浏览器直接扮演 client 角色时自己带标记。标记的语义如下：
+
+- ingress 把标记追加在 app 的业务 subprotocol 之后（app 没有业务 subprotocol 时只带标记），egress 以「协商列表里存在精确、区分大小写的 `tng-ohttp-ws` token」识别 TNG 隧道，这一检查在 `x-tng-ohttp-api` 头分发之前执行。不带标记的 WebSocket 升级会落到普通头分发，因缺少头而被 403 拒绝（`RejectNonTngRequest`，与任何非 TNG 请求同一姿态）。带标记但缺 `Sec-WebSocket-Key` 或 `Sec-WebSocket-Version`、或未指明 backend 目标的升级得到 400。
+- 标记只存在于请求方向。egress 把列表交给 backend 之前会剥掉标记，因此 backend 永远看不到 TNG 的内部标记、也不可能协商出它，回程的 101 也永不回显标记。被回传的唯一 `Sec-WebSocket-Protocol` 取值是 backend 从（剥离后的）列表里选定的那个业务 subprotocol，逐跳原样传回 app。
+- `Sec-WebSocket-Extensions` 的提议像其他握手头一样照常中继：数据面是一条字节管道（见下节），client 与 backend 可以端到端协商任何扩展（含压缩）。TNG 从不解析帧，扩展帧以不透明字节穿过隧道。
+- 若某个 app 自己就把 `tng-ohttp-ws` 当作业务 subprotocol 使用，剥离动作会破坏它的协商。这个命名冲突已知，且有意不做处理。
+
+协议切换之前的任何失败（backend 拒绝、链上任何一跳没返回 101、带标记的请求无法完成）都会以普通 HTTP 错误响应回到 app，隧道不建立。链上每一次拨号与握手、以及协商中的每一段等待，都以 10 秒为预算。这个阶段有一个次序上的性质值得注意：egress 在下面的密钥协商校验任何东西之前就已经在握手里拨向 backend，所以一个能够触达 egress 的客户端可以让 egress 对指定目标发起连接。数据面仍然必须等协商成功才能打通，而始终不协商的会话会被下述的超时拆掉。
+
+#### 流内密钥协商
+
+三跳 101 链路建立后，ingress（扮演 RFC 9458 的 client 角色）立刻在中跳发出第一条 WebSocket 二进制消息。它携带的内容，正是一个普通加密请求体开头那段逐字节相同的前缀：
+
+```text
+[4 字节大端长度 N][N 字节 prost 编码的 Metadata][ohttp 请求头]
+```
+
+即与[加密请求的封装](#加密请求的封装)一节相同的元数据帧（同样的内容、同样的 32 MiB 上限），后接 RFC 9458 请求头（key id、KEM/KDF/AEAD 三个标识符、以及 HPKE 的 `enc`）。没有消息体：这条消息只为建立密钥材料而存在，其字节与普通请求前缀放到线上的完全一致。
+
+egress 按与普通请求相同的顺序校验它：先元数据里的客户端证明一致性，再按 `key_config_hint` 定位密钥，然后解码请求头、建立 HPKE 上下文。校验失败、首条消息不是二进制控制消息（协议违例，比如普通 WebSocket 流量误打到隧道端点）、或控制消息在 **10 秒**内未到，都会结束会话：egress 把两跳一起关掉。
+
+校验通过后，egress 回第二条控制消息：一条二进制 WebSocket 消息，携带 `response_nonce`，即一个 `max(Nk, Nn)` 字节的 CSPRNG 随机值。它明文传输，因为 nonce 本身就是下面响应密钥派生的公开输入，而且每个会话都新生成一个。
+
+此后会话会短暂地处于**半开**状态：ingress 可以立刻密封上行分块（client-to-server 状态完全来自它发出控制消息时建立的 HPKE 发送方上下文），但在 nonce 到达之前无法打开下行分块。让这一点成立的安全前提是 WebSocket 单连接内的严格有序交付：nonce 必然是第一条下行消息（egress 在启动下行中继之前先发它），任何其他的首条消息都是终止会话的协议违例。两边都不需要缓冲未决消息。
+
+#### 数据面：不透明帧字节承载于分块记录流
+
+app 与 backend 之间的 WebSocket 帧对 TNG **完全不透明**：opcode、保留位、分片、ping/pong、close、压缩扩展产生的帧，一概不解析、不解释、不重写。app 跳（client 到 ingress）与 backend 跳（egress 到 backend）在 101 之后就是纯字节管道；只有中跳是 TNG 自己的 WebSocket 连接，其 binary 消息承载密文。
+
+加密层逐字节复用普通 chunked-OHTTP 的记录机制，没有任何自己的协议增项：
+
+- 明文字节流就是中继的帧字节流。它按 16 KiB 分块、逐块独立密封；附加认证数据与 chunked 报体完全一致（数据块为空、终止块为 `"final"`）。
+- 逐块 nonce 为 `base_nonce XOR seq`，序号由密封普通 chunked 报体的同一套机制维护，每块自增一次。
+- 字节管道结束时流终止：结束方发出 `"final"` 终止块，接收方将其视为流结束并关闭对侧。除终止块外，没有任何记录携带流语义。
+- 中跳一条 binary 消息承载一个密封块，消息边界即块边界。记录里没有类型字节、没有方向标记、没有协议版本。
+
+两个方向的 AEAD 状态与常规响应来自同一处：
+
+- **client 到 server**：HPKE 发送方上下文自带的 AEAD 状态，其 `SetupBaseS` / `SetupBaseR` key schedule 在两端派生出相同的 key 与 base nonce。配置了客户端证明时，ingress 以 HPKE 发送方认证模式密封，与普通请求同一条规则。
+- **server 到 client**：OHTTP 响应派生，HPKE exporter 给出 `secret = Export(response label, max(Nk, Nn))`，随后 `prk = HKDF-Extract(salt = enc || response_nonce, ikm = secret)`、`key = HKDF-Expand(prk, "key", Nk)`、`base_nonce = HKDF-Expand(prk, "nonce", Nn)`。
+- 两个方向的 AEAD 套件（算法、`Nk`、`Nn`）整体继承所选 KeyConfig 的 HPKE 套件，两端自动一致，没有单独的算法协商。
+
+任何 AEAD 校验失败都会让会话当场作废：一个块解不开就意味着两端已经失步，没有可恢复的价值，于是隧道和 backend 连接立即一起关闭。
+
+#### 会话状态机
+
+两端各自在会话上跑一个很小的状态机：
+
+- **ingress**：中继握手，发出控制消息后进入 **HalfOpen**（上行可自由密封分块，下行只接受 nonce），随后进入 **Established**（双向密封与打开分块）。握手链中的失败会在任何 101 之前把错误回给 app；从 HalfOpen 起，任一方向的断开或 AEAD 失败都会把流结束传播到下游的 app。
+- **egress**：中继与 backend 的握手并回 101，然后进入 **Handshake** 等待控制消息（10 秒预算；违例或超时会把 backend 跳与隧道跳一起关掉），随后进入 **Ready**，双向中继分块记录。backend 断开、上游断开或某个块校验失败都会关掉另一侧。
+
+误打到端点的普通 WebSocket 流量不会留下半开会话：不带标记的握手被直接拒绝，首条消息类型不对即协议违例，始终不协商的连接被 10 秒超时拆掉。
+
+#### 生命周期与用量上限
+
+- **连接即会话。** 没有 session id，没有会话表，也没有负载均衡亲和规则。中跳就是一条标准的长生命周期 WebSocket 连接，连接路由把它钉在一台 egress 实例上，所有会话状态（两个 AEAD 状态与 backend 连接）都随这条连接上的中继任务同生共死。
+- **拆链随流。** close 帧就是普通帧：以不透明字节穿过隧道，close 握手在 app 与 backend 之间端到端完成。字节管道结束（close 握手完成、TCP EOF 或出错）时，结束方发出 `"final"` 块，接收方关闭对侧。任一方向结束都带走整个会话，因为对向无法单独推进。
+- **TNG 不设自己的 keepalive。** app 的 ping 与其他帧一样穿透隧道，所以上层心跳让每一跳都保持存活，与经过普通代理完全一致。空闲会话被中间设备空闲超时掐断属上层职责，与普通代理的取舍相同。
+- **不自动重连。** 中跳断开时错误直接抵达 app，是否重连由 app 决定。重连即一条全新隧道：新握手、新 HPKE 上下文、新 `response_nonce`，所以从旧会话截获的块无法重放进新会话（它们过不了 AEAD 校验）。
+- **用量上限。** 每个方向的序号受限于单把密钥下 AEAD 套件的安全块数，AES-128-GCM 按 2^24 块计。会话内不重设密钥（rekey）：超出预算想继续用，就得重连一条全新隧道。
+
+整条会话用一张图概括（记号沿用[时间点与消息记号](#时间点与消息记号)）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as App（WS 客户端）
+    participant I as TNG Ingress（ohttp client 角色）
+    participant E as TNG Egress（ohttp server 角色）
+    participant S as Backend（WS 服务端）
+    C->>I: GET, Upgrade websocket（明文，带业务 subprotocol）
+    Note over I: backend 目标取自绝对 URI authority 或 Host 头
+    I->>E: 中继 GET（保留 app 的 Sec-WebSocket-Key）<br/>path 经 path_rewrites/path_default 改写,<br/>Sec-WebSocket-Protocol: 协商列表 + tng-ohttp-ws
+    E->>S: 中继 GET（剥离标记，扩展头照常中继）
+    S-->>E: 101（backend 用 app 的 key 算出的 accept, 带协商选定的业务 subprotocol）
+    E-->>I: 101 原样中继
+    I-->>C: 101 原样中继
+    Note over I: time(OP2_r): 建立 HPKE 发送方上下文
+    I->>E: 控制消息: [u32 长度][Metadata{...}] + 请求头（key_id, 三个标识符, enc），明文
+    Note over E: 证明一致性校验, 按 hint 定位密钥,<br/>解码头部, 派生响应密钥
+    E-->>I: 控制消息: response_nonce，明文
+    loop 数据面（帧字节不透明，按 16 KiB 分块）
+        C->>I: 帧字节（任意 opcode）
+        I->>E: Enc(chunk)，C2S 密钥, AAD 为空
+        E->>S: 同样的帧字节
+        S-->>E: 帧字节（任意 opcode）
+        E-->>I: Enc(chunk)，S2C 密钥, AAD 为空
+        I-->>C: 同样的帧字节
+    end
+    C-->>I: close 帧（不透明，与其他帧同样穿过）
+    I->>E: close 帧字节，随后 Enc(final 终止块)
+    E-->>S: close 帧
+```
 
 ## RATS-TLS 隧道协议
 

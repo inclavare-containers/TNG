@@ -290,6 +290,98 @@ impl OHttpClient {
     }
 }
 
+/// Everything one WebSocket tunnel session needs from the client side,
+/// assembled once per session from the cached key store.
+#[cfg(not(wasm))]
+pub struct WsSessionMaterial {
+    /// `http(s)://egress:port` origin the ws hop dials.
+    pub egress_base: String,
+    /// Whether the egress origin uses TLS; mirrors the outer-POST scheme.
+    pub scheme_tls: bool,
+    /// Metadata block prefixed to the in-stream control message, the same
+    /// frame the outer POST body carries before the sealed request.
+    pub outer_metadata: Bytes,
+    /// The ohttp request header carried as the control message suffix.
+    pub header: Vec<u8>,
+    /// C2S record sealer, used by the uplink immediately.
+    pub c2s_sealer: ohttp::chunk::ClientSealer,
+    /// S2C record opener, keyed once the egress's response nonce arrives.
+    pub s2c_pending: ohttp::chunk::PendingClientOpener,
+}
+
+/// Split the cached client's base URL into the ws hop origin and the
+/// TLS flag: scheme + authority, path and query dropped (the ws hop dials
+/// the origin; the relayed handshake request itself carries the backend
+/// target, so the outer-POST path is irrelevant here).
+#[cfg(not(wasm))]
+fn ws_base_parts(base_url: &Url) -> (String, bool) {
+    (
+        base_url.origin().ascii_serialization(),
+        base_url.scheme() == "https",
+    )
+}
+
+impl OHttpClient {
+    /// Build the per-session WebSocket tunnel material: crypto seeded from
+    /// the selected key config (HPKE Auth when the client is attested) and
+    /// the metadata block for the control message.
+    #[cfg(not(wasm))]
+    pub async fn ws_session_material(&self) -> Result<WsSessionMaterial, TngError> {
+        let key_store_value = self.key_store_value.get_latest().await?;
+        // Same selection the ordinary request path uses, so the ws tunnel
+        // honors the ingress's AEAD suite policy: the pre-selected config and
+        // suite come from the key store, and `select` yields the matching
+        // HPKE config for the chunk session constructor.
+        let key_config = key_store_value
+            .selected_key_config
+            .as_ref()
+            .context("No key config found")
+            .map_err(TngError::ClientSelectHpkeConfigurationFailed)?;
+        let config = match key_store_value.selected_suite {
+            Some(suite) => key_config.select(suite)?,
+            None => {
+                let suite = *key_config.symmetric().first().ok_or_else(|| {
+                    TngError::ClientSelectHpkeConfigurationFailed(anyhow!(
+                        "Selected key config has no symmetric suite"
+                    ))
+                })?;
+                key_config.select(suite)?
+            }
+        };
+        let key_id = key_config.key_id();
+        let pk = ohttp::PublicKey::from_x25519_bytes(&key_config.pk_data()?)?;
+
+        #[cfg(unix)]
+        let (header, c2s_sealer, s2c_pending) = match key_store_value.client_key.as_ref() {
+            Some((sk, _pk)) => {
+                let sk_bytes = hpke::Serializable::to_bytes(sk);
+                let sk = ohttp::PrivateKey::from_x25519_bytes(sk_bytes.as_ref())?;
+                ohttp::ClientRequest::start_without_body_with_client_key(config, key_id, &pk, &sk)?
+            }
+            None => ohttp::ClientRequest::start_without_body(config, key_id, &pk)?,
+        };
+        #[cfg(not(unix))]
+        let (header, c2s_sealer, s2c_pending) = {
+            let _ = &key_store_value.client_key; // never present without an attester
+            ohttp::ClientRequest::start_without_body(config, key_id, &pk)?
+        };
+
+        let outer_metadata = key_store_value.outer_metadata.clone().ok_or_else(|| {
+            TngError::ClientSelectHpkeConfigurationFailed(anyhow!("No key config found"))
+        })?;
+        let (egress_base, scheme_tls) = ws_base_parts(&self.inner.base_url);
+
+        Ok(WsSessionMaterial {
+            egress_base,
+            scheme_tls,
+            outer_metadata,
+            header,
+            c2s_sealer,
+            s2c_pending,
+        })
+    }
+}
+
 impl OHttpClient {
     pub async fn forward_request(
         &self,
@@ -1289,6 +1381,90 @@ mod tests {
         assert!(select_server_key_config(&[], None)
             .expect("empty list is not an error without a policy")
             .is_none());
+    }
+
+    // scheme_from_tls is native-only (#[cfg(not(wasm))]); gate the ws helpers to match.
+    #[cfg(not(wasm))]
+    #[test]
+    fn ws_base_parts_maps_scheme() {
+        let https = Url::parse("https://egress.example:8443/tng/key-config").unwrap();
+        let (base, tls) = ws_base_parts(&https);
+        assert_eq!(base, "https://egress.example:8443");
+        assert!(tls);
+
+        let http = Url::parse("http://10.0.0.1:8080/some/path").unwrap();
+        let (base, tls) = ws_base_parts(&http);
+        assert_eq!(base, "http://10.0.0.1:8080");
+        assert!(!tls);
+    }
+
+    /// End-to-end-ish unit test for the ws session material: a one-shot mock
+    /// egress answers the key-config POST with a fresh generated KeyConfig,
+    /// and `ws_session_material` must return usable crypto plus the metadata
+    /// frame without any attestation involved (`RaContext::NoRa`).
+    #[cfg(not(wasm))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_session_material_builds_from_mock_key_config() -> Result<()> {
+        use crate::tests::run_test_with_tokio_runtime;
+        use crate::tunnel::ra_context::RaContext;
+        use std::io::{Read, Write};
+
+        let key_config = ohttp::KeyConfig::new(
+            7,
+            ohttp::hpke::Kem::X25519Sha256,
+            vec![ohttp::SymmetricSuite::new(
+                ohttp::hpke::Kdf::HkdfSha256,
+                ohttp::hpke::Aead::ChaCha20Poly1305,
+            )],
+        )?;
+        let encoded = key_config.encode()?;
+        let mut encoded_list = Vec::new();
+        encoded_list.extend_from_slice(&(encoded.len() as u16).to_be_bytes());
+        encoded_list.extend_from_slice(&encoded);
+        let body = format!(
+            "{{\"hpke_key_config\":{{\"expire_timestamp\":4102444800,\"encoded_key_config_list\":\"{}\"}},\"attestation_info\":null}}",
+            BASE64_STANDARD.encode(&encoded_list)
+        );
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut request = [0u8; 8192];
+                let _ = stream.read(&mut request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        run_test_with_tokio_runtime(async move |runtime| {
+            let client = OHttpClient::new(
+                Arc::new(RaContext::NoRa),
+                Arc::new(reqwest::Client::new()),
+                format!("http://127.0.0.1:{port}/"),
+                runtime,
+                Default::default(),
+                Default::default(),
+                None,
+            )
+            .await?;
+
+            let material = client.ws_session_material().await?;
+            assert!(
+                !material.outer_metadata.is_empty(),
+                "metadata frame missing"
+            );
+            assert!(!material.header.is_empty(), "ws header missing");
+            assert_eq!(material.egress_base, format!("http://127.0.0.1:{port}"));
+            assert!(!material.scheme_tls);
+            Ok(())
+        })
+        .await
     }
 
     #[test]

@@ -27,10 +27,13 @@ pub async fn launch_tls_tcp_proxy(
         .ok_or_else(|| anyhow::anyhow!("No PKCS#8 key found in gateway key PEM"))?
         .context("Failed to parse gateway TLS key PEM")?;
 
-    let server_config = ServerConfig::builder()
+    let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert, rustls::pki_types::PrivateKeyDer::Pkcs8(key))
         .map_err(|e| anyhow::Error::from(e).context("Failed to build rustls ServerConfig"))?;
+    // The OHTTP websocket hop advertises ALPN http/1.1 (a 101 upgrade cannot
+    // ride h2); advertise it here too so that offer always has a match.
+    server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], listen_port));

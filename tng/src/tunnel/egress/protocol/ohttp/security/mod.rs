@@ -24,6 +24,7 @@ pub mod cors_fallback;
 #[allow(dead_code)]
 pub mod key_manager;
 pub mod server;
+pub mod ws;
 
 pub struct OHttpSecurityLayer {
     runtime: TokioRuntime,

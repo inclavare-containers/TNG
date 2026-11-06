@@ -11,6 +11,7 @@ again = {workspace = true}
 anyhow = {workspace = true}
 async-http-proxy = {workspace = true}
 async-trait = {workspace = true}
+async-tungstenite = {workspace = true}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
 axum-extra = {workspace = true}
 chromedriver-manager = {workspace = true, optional = true}
@@ -236,6 +237,10 @@ path = "tests/ohttp/ohttp_stream_bodies.rs"
 [[test]]
 name = "ohttp_tls"
 path = "tests/ohttp/ohttp_tls.rs"
+
+[[test]]
+name = "ohttp_ws"
+path = "tests/ohttp/ohttp_ws.rs"
 
 [[test]]
 name = "ohttp_tls_wasm"

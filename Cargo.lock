@@ -530,7 +530,9 @@ dependencies = [
  "futures-util",
  "log",
  "pin-project-lite",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls 0.25.0",
  "tungstenite 0.21.0",
 ]
 
@@ -784,7 +786,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 [[package]]
 name = "bhttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=2ec8816bcd82291feed34dc8d1135c6108cefd7e#2ec8816bcd82291feed34dc8d1135c6108cefd7e"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=99e254f75e7bfad79224d7fa5e2f04cd1e42d045#99e254f75e7bfad79224d7fa5e2f04cd1e42d045"
 dependencies = [
  "async-stream",
  "bytes",
@@ -3608,9 +3610,9 @@ dependencies = [
  "http 1.5.0",
  "hyper 1.11.1",
  "hyper-util",
- "rustls",
+ "rustls 0.23.46",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tower-service",
  "webpki-roots",
 ]
@@ -4568,7 +4570,7 @@ dependencies = [
  "peekable 0.5.0",
  "pin-project",
  "quinn",
- "rustls",
+ "rustls 0.23.46",
  "scopeguard",
  "serde",
  "smol_str 0.3.6",
@@ -5061,7 +5063,7 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 [[package]]
 name = "ohttp"
 version = "0.7.0"
-source = "git+https://github.com/inclavare-containers/ohttp.git?rev=2ec8816bcd82291feed34dc8d1135c6108cefd7e#2ec8816bcd82291feed34dc8d1135c6108cefd7e"
+source = "git+https://github.com/inclavare-containers/ohttp.git?rev=99e254f75e7bfad79224d7fa5e2f04cd1e42d045#99e254f75e7bfad79224d7fa5e2f04cd1e42d045"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -6132,7 +6134,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.3",
- "rustls",
+ "rustls 0.23.46",
  "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
@@ -6154,7 +6156,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash 2.1.3",
- "rustls",
+ "rustls 0.23.46",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.21",
@@ -6389,7 +6391,7 @@ dependencies = [
  "rsa",
  "rstest",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.15",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -6663,7 +6665,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls",
+ "rustls 0.23.46",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -6671,7 +6673,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tower",
  "tower-http",
  "tower-service",
@@ -6708,7 +6710,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls",
+ "rustls 0.23.46",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
@@ -6716,7 +6718,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tokio-util",
  "tower",
  "tower-http",
@@ -6917,6 +6919,20 @@ dependencies = [
 
 [[package]]
 name = "rustls"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf4ef73721ac7bcd79b2b315da7779d8fc09718c6b3d2d1b2d94850eb8c18432"
+dependencies = [
+ "log",
+ "ring",
+ "rustls-pki-types",
+ "rustls-webpki 0.102.8",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "rustls"
 version = "0.23.46"
 source = "git+https://github.com/inclavare-containers/rustls.git?branch=v%2F0.23.46-patched#4c1d9d52d7c39c20ebebc649ff52211746701dbb"
 dependencies = [
@@ -6927,7 +6943,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki",
+ "rustls-webpki 0.103.15",
  "subtle",
  "zeroize",
 ]
@@ -6983,10 +6999,10 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls",
+ "rustls 0.23.46",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki",
+ "rustls-webpki 0.103.15",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -6998,6 +7014,17 @@ name = "rustls-platform-verifier-android"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
+
+[[package]]
+name = "rustls-webpki"
+version = "0.102.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "untrusted 0.9.0",
+]
 
 [[package]]
 name = "rustls-webpki"
@@ -8210,7 +8237,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.5",
  "ring",
- "rustls",
+ "rustls 0.23.46",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
  "scopeguard",
@@ -8234,7 +8261,7 @@ dependencies = [
  "tng-hook-types",
  "tokio",
  "tokio-graceful",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tokio-util",
  "tokio_with_wasm",
  "tonic",
@@ -8293,6 +8320,7 @@ dependencies = [
  "anyhow",
  "async-http-proxy",
  "async-trait",
+ "async-tungstenite",
  "axum",
  "axum-extra",
  "chromedriver-manager",
@@ -8310,7 +8338,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.5",
  "rtnetlink",
- "rustls",
+ "rustls 0.23.46",
  "rustls-pemfile 2.2.0",
  "scopeguard",
  "serde_json",
@@ -8320,7 +8348,7 @@ dependencies = [
  "thirtyfour",
  "tng",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tokio-util",
  "tower-http",
  "tracing",
@@ -8420,11 +8448,22 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "775e0c0f0adb3a2f22a00c4745d728b479985fc15ee7ca6a2608388c5569860f"
+dependencies = [
+ "rustls 0.22.4",
+ "rustls-pki-types",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-rustls"
 version = "0.26.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0c85f2c3ef0b1cd58b36682f4b17aaa995f0e5db534d85692b4903abce21f67"
 dependencies = [
- "rustls",
+ "rustls 0.23.46",
  "tokio",
 ]
 
@@ -8596,7 +8635,7 @@ dependencies = [
  "socket2 0.6.5",
  "sync_wrapper 1.0.2",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.26.5",
  "tokio-stream",
  "tower",
  "tower-layer",
@@ -8996,6 +9035,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.8",
+ "rustls 0.22.4",
+ "rustls-pki-types",
  "sha1",
  "thiserror 1.0.69",
  "url",

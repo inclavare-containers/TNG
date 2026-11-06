@@ -21,6 +21,7 @@ Terminology: this document calls the two endpoints **TNG Ingress** (the tunnel e
 | HPKE | RFC 9180 Hybrid Public-Key Encryption, the cryptographic basis of the ohttp encapsulation |
 | KeyConfig | The HPKE public-key configuration defined by RFC 9458 that the egress distributes to the ingress for encryption |
 | Metadata frame | A custom metadata blob TNG prepends to the ohttp ciphertext (see [Encapsulating the encrypted request](#encapsulating-the-encrypted-request)) |
+| TNG WS marker | The reserved WebSocket subprotocol token `tng-ohttp-ws` that is the tunnel's single dispatch signal on the relayed handshake, used identically by the ingress-relayed form and the browser direct form (see [WebSocket over ohttp](#websocket-over-ohttp)) |
 | DICE certificate (DiceCert) | A self-signed X.509 certificate the proven side generates, carrying the RA material in a custom extension and presented during the TLS handshake (see [DICE certificate](#dice-certificate-the-carrier-of-the-attested-material)) |
 | ALPN | TLS Application-Layer Protocol Negotiation; TNG uses it to select the data plane between `rats-tls` (non-multiplexed) and `h2` (multiplexed) |
 
@@ -28,7 +29,7 @@ Terminology: this document calls the two endpoints **TNG Ingress** (the tunnel e
 
 ### Roles and Protocol Layering
 
-The ohttp tunnel collapses RFC 9458's three roles into two endpoints: the TNG Ingress acts as the protocol's oblivious client (encapsulating requests, decapsulating responses) while the TNG Egress acts as both the oblivious gateway and the resource server (decapsulating requests, forwarding to the real upstream, encapsulating responses). The protocol constraint falls on the hop between ingress and egress: messages on that hop are standard OHTTP encapsulations, and any L7 load balancer or relay in between only sees a fixed-shape outer POST, unable to decrypt or rewrite the business payload.
+The ohttp tunnel collapses RFC 9458's three roles into two endpoints: the TNG Ingress acts as the protocol's oblivious client (encapsulating requests, decapsulating responses) while the TNG Egress acts as both the oblivious gateway and the resource server (decapsulating requests, forwarding to the real upstream, encapsulating responses). The protocol constraint falls on the hop between ingress and egress: plain HTTP requests travel as standard OHTTP encapsulations, and any L7 load balancer or relay in between only sees a fixed-shape outer POST, unable to decrypt or rewrite the business payload. WebSocket sessions are the one documented exception to the encapsulation rule: their handshake is transparently relayed hop by hop over a WebSocket connection, the key negotiation runs inside that stream, and the data plane relays the app's frames as opaque bytes sealed with the same chunked-record mechanism ordinary OHTTP bodies use (see [WebSocket over ohttp](#websocket-over-ohttp)).
 
 The outer transport is plain HTTP (HTTP/1.1 or HTTP/2, negotiated by the client), keeping the protocol's outward appearance HTTP for L7 gateway compatibility; the ingress can optionally set `ohttp.tls` to upgrade the outer POST to HTTPS. Unlike rats-tls's connection-level encryption, ohttp encrypts at the granularity of a **single HTTP request**: every request gets its own HPKE encapsulation with no dependency on prior session state. Requests are therefore 0-RTT, which fits stateless clusters and arbitrary L7 load balancing naturally.
 
@@ -60,7 +61,7 @@ sequenceDiagram
 
 ### Outer Request Routing
 
-The egress does not select APIs by URL path: it does not match the outer path at all. All requests go to a single handler that dispatches on the **`x-tng-ohttp-api` request header**. The header's values are path-shaped constants such as `/tng/key-config`, but they are only API selectors and have nothing to do with the request's actual URL. A request without the header is rejected (403, `RejectNonTngRequest`).
+The egress does not select APIs by URL path: it does not match the outer path at all. All requests go to a single handler that dispatches on the **`x-tng-ohttp-api` request header**. The header's values are path-shaped constants such as `/tng/key-config`, but they are only API selectors and have nothing to do with the request's actual URL. A request without the header is rejected (403, `RejectNonTngRequest`). The WebSocket tunnel is the one API not selected by this header: it is checked **ahead of** the header dispatch by the `tng-ohttp-ws` marker subprotocol on the handshake, so a browser that cannot set custom headers and a native ingress share one dispatch signal; no URL path is matched for it either (see [WebSocket over ohttp](#websocket-over-ohttp)).
 
 The ingress POSTs every outer request to **the same URL** (`base_url`): the outer path comes from `path_rewrites` regex substitution, or from `path_default` (default `root`, meaning `/`; can be set to `original` to follow the business request path). Key-config fetches, tunnel requests, and RA forwarding all go to this URL and are distinguished solely by the `x-tng-ohttp-api` header.
 
@@ -448,13 +449,119 @@ On data-plane errors the egress returns a JSON body `{"code": "<machine-readable
 
 | HTTP status | Trigger |
 |---|---|
-| 400 | Content-Type is not `message/ohttp-chunked-req`; metadata frame decoding failed; key_config_hint missing |
-| 403 | The request lacks the `x-tng-ohttp-api` header |
+| 400 | Content-Type is not `message/ohttp-chunked-req`; metadata frame decoding failed; key_config_hint missing; a marked WebSocket upgrade missing `Sec-WebSocket-Key`/`Sec-WebSocket-Version` or naming no backend target |
+| 403 | The request lacks the `x-tng-ohttp-api` header (a WebSocket upgrade without the marker also lands in this dispatch) |
 | 413 | The metadata frame exceeds 32 MiB |
 | 422 | The key pointed to by key_config_hint does not exist or has expired (RFC 9458 §6.4) |
 | 500 / 502 / 504 | Internal error / upstream unreachable / upstream timeout |
 
 A failed client attestation (the verify side's token check failing) flows through the same JSON error channel.
+
+### WebSocket over ohttp
+
+The ohttp data plane is per-request: every encrypted request is a standalone HPKE encapsulation carried by a POST. That fits stateless HTTP, but not WebSocket, whose sessions are stateful and long-lived and whose backend connection necessarily pins to one egress instance. TNG carries WebSocket sessions across the tunnel with a **WebSocket tunnel**: the ingress and the egress relay the session over a WebSocket connection between themselves instead of encapsulating its messages as requests. The connection is a hop-by-hop relayed standard handshake, then an in-stream key negotiation, then per-message AEAD in both directions. The key material reuses the same HPKE machinery, the same metadata frame and the same response-key derivation as ordinary requests, but the tunnel extends RFC 9458's one-shot request encapsulation into a streaming form: **it is a custom integration protocol, not standard OHTTP behavior**. No configuration is involved: an ingress that sees a WebSocket upgrade takes this path automatically, and non-WebSocket requests are unaffected.
+
+**Visibility.** The handshake is an ordinary WebSocket upgrade on every hop, so intermediate L7 devices see the negotiation headers and the backend target, and observe that a session is being opened. The threat model accepts connection-initiation visibility: what stays protected is exactly what ordinary requests already protect, namely the business payload, encrypted chunk by chunk between the ingress and the egress. The middle hop can be TLS-protected by the same `ohttp.tls` configuration that upgrades outer POSTs to HTTPS.
+
+#### Handshake passthrough and the TNG marker
+
+An ingress routes a request onto the tunnel path when it is a GET whose `Upgrade` header carries the `websocket` token and whose `Connection` header carries `upgrade`. The handshake is then **relayed, not re-handshaked**: the app's `Sec-WebSocket-Key`, `Sec-WebSocket-Version` and business `Sec-WebSocket-Protocol` pass through every hop untouched, no hop computes a key or an accept, and the backend's 101 (with its `Sec-WebSocket-Accept` and negotiated subprotocol) travels back verbatim. What the app ultimately verifies is the backend's real handshake; intermediaries on each hop still see a standard RFC 6455 version-13 upgrade, and each hop terminates its own WebSocket framing after the switch.
+
+The relayed request itself names the backend, proxy style: the authority comes from an absolute-form request URI or, for an origin-form request, from the `Host` header; the path is the app's path after the ingress's `path_rewrites`/`path_default` rule (the same rule as the outer POST path), with the app's query carried over intact. There is no landing endpoint, no query parameter and no path matching; dispatch happens in the egress's single handler, and the marker below is the only selector.
+
+The tunnel claims the handshake through the WebSocket subprotocol offer, using the reserved token **`tng-ohttp-ws`** (the TNG WS marker). A subprotocol is used because the browser WebSocket API cannot set custom handshake headers but can set the subprotocol list: one signal serves both forms, the native ingress appending the marker when it relays, a browser offering it directly. The marker's semantics:
+
+- The ingress appends the marker after the app's business subprotocols (the marker alone when the app offered none), and the egress recognizes a TNG tunnel by an exact, case-sensitive `tng-ohttp-ws` token in the offer list, checked ahead of the `x-tng-ohttp-api` dispatch. A WebSocket upgrade without the marker flows into the ordinary header dispatch and is rejected with 403 (`RejectNonTngRequest`, the same posture as any non-TNG request). A marked upgrade missing `Sec-WebSocket-Key` or `Sec-WebSocket-Version`, or naming no backend target, gets 400.
+- The marker exists in the request direction only. The egress strips it before handing the offer list to the backend, so the backend never sees TNG's internal marker and can never negotiate it, and the 101 traveling back up the chain never echoes it. The only `Sec-WebSocket-Protocol` value relayed back is the business subprotocol the backend picked from the stripped list, relayed verbatim hop by hop to the app.
+- `Sec-WebSocket-Extensions` offers are relayed like any other handshake header: the data plane is a byte pipe (see below), so the client and the backend may negotiate any extension, including compression, end to end. TNG never parses a frame, so extension frames cross the tunnel as opaque bytes.
+- If an app offers `tng-ohttp-ws` itself as a business subprotocol, the stripping breaks that negotiation. This naming collision is known and deliberately not handled.
+
+Any failure before the protocol switch (backend refusal, a non-101 anywhere in the chain, a marked request that cannot be completed) surfaces to the app as a plain HTTP error response and the tunnel is not established. Every dial and handshake in the chain, and each wait during negotiation, is bounded by a 10-second budget. One ordering property of this stage deserves note: the egress dials the backend as part of the handshake, before the key negotiation below has validated anything, so a client that can reach the egress can make it open a connection to the requested target. The data plane still requires the negotiation to succeed, and a session that never negotiates is torn down by the timeout below.
+
+#### In-stream key negotiation
+
+Once the three-hop 101 chain is up, the ingress (playing the RFC 9458 client role) sends the first binary WebSocket message on the middle hop. It carries exactly the prefix an ordinary encrypted request body starts with:
+
+```text
+[4-byte big-endian length N][N bytes of prost-encoded Metadata][ohttp request header]
+```
+
+That is the same metadata frame as in [Encapsulating the Encrypted Request](#encapsulating-the-encrypted-request) (same contents, same 32 MiB cap), followed by the RFC 9458 request header (key id, the KEM/KDF/AEAD identifiers, and the HPKE `enc` value). There is no body: the message exists only to establish key material, and its bytes are identical to what a normal request prefix puts on the wire.
+
+The egress checks the message in the same order as an ordinary request: client attestation consistency from the metadata, key lookup by `key_config_hint`, request header decode, HPKE context setup. A validation failure, a first message that is not a binary control message (a protocol violation, e.g. ordinary WebSocket traffic hitting the endpoint), or the control message failing to arrive within **10 seconds** ends the session: the egress closes both hops.
+
+On success the egress replies with a second control message: one binary WebSocket message carrying the `response_nonce`, a CSPRNG value of `max(Nk, Nn)` bytes. It travels in the clear because the nonce is itself a public input to the response key derivation below, and every session generates a fresh one.
+
+The session then runs **half-open** for a short window: the ingress can seal uplink chunks immediately (the client-to-server state derives entirely from the HPKE sender context it created when sending the control message), but cannot open downlink chunks until the nonce arrives. The ordering that makes this safe is WebSocket's per-connection in-order delivery: the nonce is necessarily the first downlink message (the egress sends it before starting its downlink relay), and a different first message is a protocol violation that terminates the session. Neither side needs to buffer undecided messages.
+
+#### Data plane: opaque frame bytes over the chunked record stream
+
+The app-to-backend WebSocket frames are fully opaque to TNG: opcodes, reserved bits, fragmentation, ping/pong, close and compression-extension frames are never parsed, interpreted or rewritten. The app hop (client to ingress) and the backend hop (egress to backend) are plain byte pipes after the 101; only the middle hop is a WebSocket connection of TNG's own, whose binary messages carry ciphertext.
+
+The crypto layer reuses the ordinary chunked-OHTTP record machinery byte for byte, with no protocol additions of its own:
+
+- The plaintext byte stream is the relayed frame stream. It is split into 16 KiB chunks, each independently sealed; the additional authenticated data is exactly the chunked body's (`empty` for data chunks, `"final"` for the terminating chunk).
+- The per-chunk nonce is `base_nonce XOR seq`, with the sequence number maintained by the same machinery that seals ordinary chunked bodies, incrementing once per chunk.
+- The stream ends when the byte pipe ends: the closing side emits the `"final"` terminating chunk, and the receiver treats it as end of stream and closes the opposite side. No other record carries stream semantics.
+- One middle-hop binary message carries one sealed chunk; the message boundary is the chunk boundary. There is no type byte, no direction tag and no protocol version inside the records.
+
+The two AEAD states come from the same places ordinary responses do:
+
+- **Client to server**: the AEAD state of the HPKE sender context itself, whose `SetupBaseS` / `SetupBaseR` key schedules yield the same key and base nonce on both ends. With client attestation configured the ingress seals in HPKE sender-authenticated mode, the same rule as ordinary requests.
+- **Server to client**: the OHTTP response derivation, where the HPKE exporter yields `secret = Export(response label, max(Nk, Nn))`, then `prk = HKDF-Extract(salt = enc || response_nonce, ikm = secret)`, `key = HKDF-Expand(prk, "key", Nk)` and `base_nonce = HKDF-Expand(prk, "nonce", Nn)`.
+- The AEAD suite in both directions (algorithm, `Nk`, `Nn`) is inherited wholesale from the HPKE suite of the selected KeyConfig, so the two ends agree automatically and there is no separate algorithm negotiation.
+
+Any AEAD check failure is fatal to the session: a failed chunk means the two ends are out of sync and there is nothing to recover, so both the tunnel and the backend connection close immediately.
+
+#### Session state machines
+
+Both ends run small state machines over the session:
+
+- **Ingress**: relay the handshake, then **HalfOpen** after sending the control message (seal uplink freely, accept only the nonce on the downlink), then **Established** with both directions sealing and opening chunks. A failure in the handshake chain returns the error to the app before any 101; from HalfOpen on, a teardown in either direction or an AEAD failure propagates the end of stream down to the app.
+- **Egress**: relay the handshake with the backend and answer the 101, then **Handshake** while waiting for the control message (10-second budget; a violation or timeout closes the backend hop and the tunnel hop together), then **Ready**, relaying chunk records in both directions. A backend disconnect, an upstream disconnect or a failed chunk closes the other side.
+
+Ordinary WebSocket traffic that reaches the endpoint by mistake cannot leave a half-open session behind: a handshake without the marker is rejected outright, a first message of the wrong kind is a protocol violation, and a connection that never negotiates is torn down by the 10-second timeout.
+
+#### Lifecycle and usage budget
+
+- **The connection is the session.** There is no session id, no session table and no load-balancer affinity rule. The middle hop is a standard long-lived WebSocket connection, connection routing pins it to one egress instance, and all session state (the two AEAD states and the backend connection) lives and dies with the relay tasks on that connection.
+- **Teardown follows the stream.** A close frame is an ordinary frame: it crosses the tunnel as opaque bytes, so the close handshake runs end to end between the app and the backend. When a byte pipe ends (close handshake completed, TCP EOF or error), the closing side emits the `"final"` chunk and the receiver closes the opposite side. Either relay direction ending takes the whole session down, since the peer direction cannot make progress alone.
+- **No keepalive of TNG's own.** App pings cross the tunnel like every other frame, so the app's heartbeat keeps every hop alive exactly as it would through a plain proxy. An idle session dying to an intermediary idle timeout is the upper layer's concern, the same tradeoff an ordinary proxy makes.
+- **No automatic reconnect.** If the middle hop dies the error reaches the app, and reconnecting is the app's decision. A reconnect is a brand-new tunnel: new handshake, new HPKE context, new `response_nonce`, so chunks captured from an old session cannot be replayed into a new one (they fail the AEAD check).
+- **Usage budget.** The per-direction sequence numbers are bounded by the AEAD suite's safe record count under a single key, computed as 2^24 chunks for AES-128-GCM. There is no in-session rekey: continuing past the budget means reconnecting through a brand-new tunnel.
+
+The whole session in one diagram (notation follows [Timestamp and Message Notation](#timestamp-and-message-notation)):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as App (WS client)
+    participant I as TNG Ingress (ohttp client role)
+    participant E as TNG Egress (ohttp server role)
+    participant S as Backend (WS server)
+    C->>I: GET, Upgrade websocket (plaintext, business subprotocols offered)
+    Note over I: Backend target from absolute URI authority or Host header
+    I->>E: Relayed GET, app's Sec-WebSocket-Key kept,<br/>path after path_rewrites/path_default,<br/>Sec-WebSocket-Protocol: offer list + tng-ohttp-ws
+    E->>S: Relayed GET (marker stripped, extension offers relayed)
+    S-->>E: 101 (backend accept over the app's key, negotiated subprotocol)
+    E-->>I: 101 relayed verbatim
+    I-->>C: 101 relayed verbatim
+    Note over I: time(OP2_r): HPKE sender context established
+    I->>E: control message: [u32 length][Metadata{...}] + request header (key_id, ids, enc), plaintext
+    Note over E: RA consistency check, key lookup by hint,<br/>header decode, response key derivation
+    E-->>I: control message: response_nonce, plaintext
+    loop Data plane (frame bytes, opaque, 16 KiB chunks)
+        C->>I: frame bytes (any opcode)
+        I->>E: Enc(chunk) with C2S key, AAD empty
+        E->>S: the same frame bytes
+        S-->>E: frame bytes (any opcode)
+        E-->>I: Enc(chunk) with S2C key, AAD empty
+        I-->>C: the same frame bytes
+    end
+    C-->>I: close frame (opaque, crosses like any frame)
+    I->>E: close frame bytes, then Enc(final chunk)
+    E-->>S: close frame
+```
 
 ## RATS-TLS Tunnel Protocol
 
