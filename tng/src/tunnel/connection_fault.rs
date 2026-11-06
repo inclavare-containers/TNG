@@ -31,12 +31,18 @@ impl ConnectionFault {
 /// tokio-rustls wraps protocol errors in `InvalidData`. Anything unrecognised
 /// stays `ProtocolViolation` so an unknown failure is never silently muted.
 pub(crate) fn classify_connection_failure(error: &anyhow::Error) -> ConnectionFault {
-    for cause in error.chain() {
-        if let Some(fault) = fault_of(cause) {
-            return fault;
-        }
-    }
-    ConnectionFault::ProtocolViolation
+    error
+        .chain()
+        .next()
+        .and_then(fault_of)
+        .unwrap_or(ConnectionFault::ProtocolViolation)
+}
+
+/// Classify a type-erased error by walking its own source chain. Hyper's own
+/// verdicts are not known here; the producer that owns that error type adds
+/// them before tagging.
+pub(crate) fn classify_boxed_failure(error: &(dyn std::error::Error + 'static)) -> ConnectionFault {
+    fault_of(error).unwrap_or(ConnectionFault::ProtocolViolation)
 }
 
 fn fault_of(mut node: &(dyn std::error::Error + 'static)) -> Option<ConnectionFault> {
@@ -81,15 +87,15 @@ impl DownstreamSetupError {
         anyhow::Error::new(Self { fault, source })
     }
 
-    /// Tag an error that arrives as a boxed trait object, common for errors
-    /// returned by a third-party server loop.
+    /// Tag a type-erased error whose fault the producer already classified.
     ///
-    /// Classify before wrapping: `anyhow::Error::from_boxed` forwards
-    /// `source()` to the boxed error's own source, skipping the boxed error
-    /// itself. A bare `io::Error::TimedOut` has no source, so classification
-    /// over the wrapped chain would miss its kind.
-    pub(crate) fn tag_boxed(source: Box<dyn std::error::Error + Send + Sync>) -> anyhow::Error {
-        let fault = fault_of(&*source).unwrap_or(ConnectionFault::ProtocolViolation);
+    /// `anyhow::Error::from_boxed` forwards `source()` to the boxed error's
+    /// own source, skipping the boxed error itself, so the fault must be
+    /// classified before wrapping.
+    pub(crate) fn tag_boxed_with_fault(
+        fault: ConnectionFault,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    ) -> anyhow::Error {
         anyhow::Error::new(Self {
             fault,
             source: anyhow::Error::from_boxed(source),
@@ -122,6 +128,33 @@ impl std::error::Error for DownstreamSetupError {
         Some(self.source.as_ref())
     }
 }
+
+/// The message both egress protocols use when a downstream ended before the
+/// protocol exchange completed.
+pub(crate) const DOWNSTREAM_ENDED_MESSAGE: &str =
+    "Downstream connection ended before the protocol handshake completed";
+
+/// Record and report a downstream setup failure at the severity its fault
+/// implies. A macro so `tracing` keeps the caller's module as the event
+/// target. `failure_message` is used for anything that is not a benign end.
+macro_rules! report_downstream_failure {
+    ($connector:expr, $error:ident, $failure:expr) => {{
+        let fault = $crate::tunnel::connection_fault::DownstreamSetupError::find(&$error)
+            .map($crate::tunnel::connection_fault::DownstreamSetupError::fault)
+            .unwrap_or($crate::tunnel::connection_fault::ConnectionFault::ProtocolViolation);
+        $connector.record_fault(fault).await;
+        if fault.ended_without_verdict() {
+            tracing::debug!(
+                ?$error,
+                "{}",
+                $crate::tunnel::connection_fault::DOWNSTREAM_ENDED_MESSAGE
+            );
+        } else {
+            tracing::error!(?$error, "{}", $failure);
+        }
+    }};
+}
+pub(crate) use report_downstream_failure;
 
 #[cfg(test)]
 mod tests {
@@ -164,6 +197,16 @@ mod tests {
             rustls::Error::NoCertificatesPresented,
         ))
         .context("Failed to accept TLS connection");
+        assert_eq!(
+            classify_connection_failure(&error),
+            ConnectionFault::ProtocolViolation
+        );
+    }
+
+    #[test]
+    fn bare_rustls_error_is_protocol_violation() {
+        let error = anyhow::Error::new(rustls::Error::NoCertificatesPresented)
+            .context("Failed to accept TLS connection");
         assert_eq!(
             classify_connection_failure(&error),
             ConnectionFault::ProtocolViolation
@@ -215,7 +258,9 @@ mod tests {
     fn boxed_reset_is_peer_vanished() {
         let boxed: Box<dyn std::error::Error + Send + Sync> =
             Box::new(io::Error::from(io::ErrorKind::ConnectionReset));
-        let error = DownstreamSetupError::tag_boxed(boxed).context("Failed to serve OHTTP");
+        let fault = classify_boxed_failure(&*boxed);
+        let error = DownstreamSetupError::tag_boxed_with_fault(fault, boxed)
+            .context("Failed to serve OHTTP");
         let tag = DownstreamSetupError::find(&error).expect("tag must be found");
         assert_eq!(tag.fault(), ConnectionFault::PeerVanished);
     }
@@ -224,7 +269,9 @@ mod tests {
     fn boxed_timeout_is_silent_peer() {
         let boxed: Box<dyn std::error::Error + Send + Sync> =
             Box::new(io::Error::from(io::ErrorKind::TimedOut));
-        let error = DownstreamSetupError::tag_boxed(boxed).context("Failed to serve OHTTP");
+        let fault = classify_boxed_failure(&*boxed);
+        let error = DownstreamSetupError::tag_boxed_with_fault(fault, boxed)
+            .context("Failed to serve OHTTP");
         let tag = DownstreamSetupError::find(&error).expect("tag must be found");
         assert_eq!(tag.fault(), ConnectionFault::SilentPeer);
     }

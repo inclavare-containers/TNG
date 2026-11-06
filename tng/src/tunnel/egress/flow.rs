@@ -13,7 +13,7 @@ use crate::config::egress::CommonArgs;
 use crate::error::TngError;
 use crate::status::{StatusProvider, StatusQueryResult};
 use crate::tunnel::access_log::{AccessAccepted, EgressAccessMode};
-use crate::tunnel::connection_fault::DownstreamSetupError;
+use crate::tunnel::connection_fault::report_downstream_failure;
 use crate::tunnel::service_metrics::ServiceMetrics;
 use crate::tunnel::service_metrics::ServiceMetricsCreator;
 use crate::tunnel::upstream::UpstreamConnector;
@@ -22,6 +22,8 @@ use crate::{service::RegistedService, CommonStreamTrait};
 use super::stream_manager::trusted::TrustedStreamManager;
 use crate::tunnel::endpoint::TngEndpoint;
 use crate::tunnel::utils::runtime::TokioRuntime;
+
+const CONSUME_FAILURE_MESSAGE: &str = "Failed to consume stream from client";
 
 pub struct EgressFlow {
     egress: Box<dyn EgressTrait>,
@@ -183,19 +185,7 @@ impl EgressFlow {
                 .handle_connection(stream, Some(src), &connector, runtime_cloned)
                 .await
             {
-                match DownstreamSetupError::find(&error) {
-                    Some(setup) => {
-                        connector.record_fault(setup.fault()).await;
-                        if setup.fault().ended_without_verdict() {
-                            tracing::debug!(?error, "Downstream connection ended before the protocol handshake completed")
-                        } else {
-                            tracing::error!(?error, "Failed to consume stream from client")
-                        }
-                    }
-                    // Not a downstream setup failure: keep it loud rather than
-                    // guessing from the error kind.
-                    None => tracing::error!(?error, "Failed to consume stream from client"),
-                }
+                report_downstream_failure!(connector, error, CONSUME_FAILURE_MESSAGE);
             }
         });
     }

@@ -5,7 +5,7 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
-        connection_fault::DownstreamSetupError,
+        connection_fault::report_downstream_failure,
         egress::protocol::{
             common::transport::{MaybeDirectlyForward, TransportLayer},
             ohttp::security::OHttpSecurityLayer,
@@ -21,6 +21,8 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use async_trait::async_trait;
+
+const OHTTP_FAILURE_MESSAGE: &str = "Failed to handle OHTTP stream";
 
 /// The protocol this egress terminates, decided once from the config. Each
 /// accepted connection is claimed by exactly one of these handlers for its
@@ -158,21 +160,7 @@ impl TrustedStreamManager {
                             .handle_stream(stream, Arc::clone(&connector), peer)
                             .await
                         {
-                            match DownstreamSetupError::find(&error) {
-                                Some(setup) => {
-                                    connector.record_fault(setup.fault()).await;
-                                    if setup.fault().ended_without_verdict() {
-                                        tracing::debug!(?error, "Downstream connection ended before the protocol handshake completed")
-                                    } else {
-                                        tracing::error!(?error, "Failed to handle OHTTP stream")
-                                    }
-                                }
-                                // Not a downstream setup failure: keep it loud
-                                // rather than guessing from the error kind.
-                                None => {
-                                    tracing::error!(?error, "Failed to handle OHTTP stream")
-                                }
-                            }
+                            report_downstream_failure!(connector, error, OHTTP_FAILURE_MESSAGE);
                         }
                     });
                     // Isolation stays on the dedicated runtime; awaiting the
