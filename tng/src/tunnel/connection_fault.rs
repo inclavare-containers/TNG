@@ -62,10 +62,11 @@ fn fault_of(mut node: &(dyn std::error::Error + 'static)) -> Option<ConnectionFa
 /// A failure while setting up the downstream side of an egress connection,
 /// before it became a TNG session.
 ///
-/// The type is the side marker: only the two downstream producers (the TLS
-/// server handshake and the direct-forward request inspection) construct it.
-/// It carries the classified fault so the report site does not re-derive it
-/// from the chain, and an untagged error therefore stays loud by default.
+/// The type is the side marker: only the downstream producers (the TLS server
+/// handshake, the direct-forward request inspection, and the OHTTP outer HTTP
+/// server) construct it. It carries the classified fault so the report site
+/// does not re-derive it from the chain, and an untagged error therefore stays
+/// loud by default.
 #[derive(Debug)]
 pub(crate) struct DownstreamSetupError {
     fault: ConnectionFault,
@@ -78,6 +79,21 @@ impl DownstreamSetupError {
     pub(crate) fn tag(source: anyhow::Error) -> anyhow::Error {
         let fault = classify_connection_failure(&source);
         anyhow::Error::new(Self { fault, source })
+    }
+
+    /// Tag an error that arrives as a boxed trait object, common for errors
+    /// returned by a third-party server loop.
+    ///
+    /// Classify before wrapping: `anyhow::Error::from_boxed` forwards
+    /// `source()` to the boxed error's own source, skipping the boxed error
+    /// itself. A bare `io::Error::TimedOut` has no source, so classification
+    /// over the wrapped chain would miss its kind.
+    pub(crate) fn tag_boxed(source: Box<dyn std::error::Error + Send + Sync>) -> anyhow::Error {
+        let fault = fault_of(&*source).unwrap_or(ConnectionFault::ProtocolViolation);
+        anyhow::Error::new(Self {
+            fault,
+            source: anyhow::Error::from_boxed(source),
+        })
     }
 
     pub(crate) fn fault(&self) -> ConnectionFault {
@@ -190,6 +206,27 @@ mod tests {
             DownstreamSetupError::tag(contextual_reset()).context("Failed to decode stream");
         let tag = DownstreamSetupError::find(&error).expect("tag must survive context layers");
         assert_eq!(tag.fault(), ConnectionFault::PeerVanished);
+    }
+
+    /// The OHTTP path receives hyper's error as a boxed trait object. A bare
+    /// io error has no source, so the classification must run on the boxed
+    /// error itself.
+    #[test]
+    fn boxed_reset_is_peer_vanished() {
+        let boxed: Box<dyn std::error::Error + Send + Sync> =
+            Box::new(io::Error::from(io::ErrorKind::ConnectionReset));
+        let error = DownstreamSetupError::tag_boxed(boxed).context("Failed to serve OHTTP");
+        let tag = DownstreamSetupError::find(&error).expect("tag must be found");
+        assert_eq!(tag.fault(), ConnectionFault::PeerVanished);
+    }
+
+    #[test]
+    fn boxed_timeout_is_silent_peer() {
+        let boxed: Box<dyn std::error::Error + Send + Sync> =
+            Box::new(io::Error::from(io::ErrorKind::TimedOut));
+        let error = DownstreamSetupError::tag_boxed(boxed).context("Failed to serve OHTTP");
+        let tag = DownstreamSetupError::find(&error).expect("tag must be found");
+        assert_eq!(tag.fault(), ConnectionFault::SilentPeer);
     }
 
     #[test]

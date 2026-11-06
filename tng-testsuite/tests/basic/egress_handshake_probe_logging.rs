@@ -82,6 +82,73 @@ async fn test_egress_probe_logs_at_debug() -> Result<()> {
     Ok(())
 }
 
+/// The OHTTP egress terminates plain HTTP, so a bare TCP probe never becomes a
+/// session either. Its setup failures come from the outer HTTP server instead
+/// of a TLS handshake, and a clean close before any request reaches that
+/// server as a successful serve with zero requests.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_ohttp_egress_probe_logs_at_debug() -> Result<()> {
+    let logs = capture_logs().await;
+    let probe_logs = Arc::clone(&logs);
+
+    run_test!(vec![
+        TngInstance::TngServer(
+            r#"
+            {
+                "add_egress": [
+                    {
+                        "mapping": {
+                            "in": { "host": "0.0.0.0", "port": 20001 },
+                            "out": { "host": "127.0.0.1", "port": 30001 }
+                        },
+                        "ohttp": {},
+                        "no_ra": true
+                    }
+                ]
+            }
+            "#
+        )
+        .boxed(),
+        FunctionTask {
+            name: "tcp_probe".to_owned(),
+            node_type: NodeType::Client,
+            func: Box::new(move |token| ohttp_probe_call(token, Arc::clone(&probe_logs))),
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    let captured = logs.lock().unwrap();
+    let joined = captured.join("\n");
+    assert!(
+        captured
+            .iter()
+            .any(|line| line.contains("DEBUG") && line.contains("accepted only")),
+        "expected the probe's access-log line at DEBUG; captured:\n{joined}"
+    );
+    assert!(
+        captured.iter().any(|line| line.contains("DEBUG")
+            && line
+                .contains("Downstream connection ended before the protocol handshake completed")),
+        "expected the OHTTP setup failure to be classified; captured:\n{joined}"
+    );
+    assert!(
+        !captured
+            .iter()
+            .any(|line| line.contains("ERROR") && line.contains("accepted only")),
+        "the probe's access-log line must not be ERROR; captured:\n{joined}"
+    );
+    assert!(
+        !captured
+            .iter()
+            .any(|line| line.contains("ERROR") && line.contains("Failed to handle OHTTP stream")),
+        "the probe must not log an OHTTP tunnel-level ERROR; captured:\n{joined}"
+    );
+
+    Ok(())
+}
+
 // tokio deprecated set_linger because a nonzero SO_LINGER can block the thread
 // on drop; a zero timeout only turns the close into an immediate RST.
 #[allow(deprecated)]
@@ -105,6 +172,45 @@ fn probe_call(
         let closed = TcpStream::connect("192.168.1.1:20001").await?;
         tokio::time::sleep(Duration::from_millis(100)).await;
         drop(closed);
+
+        wait_for_lines(
+            &logs,
+            &[
+                "Downstream connection ended before the protocol handshake completed",
+                "accepted only",
+            ],
+        )
+        .await;
+
+        Ok(())
+    }))
+}
+
+/// Cover the three probe shapes an SLB produces: reset while the outer HTTP
+/// server is reading, clean close before any request, and silent until the
+/// transport-layer first-byte timeout fires.
+#[allow(deprecated)]
+fn ohttp_probe_call(
+    token: CancellationToken,
+    logs: Arc<Mutex<Vec<String>>>,
+) -> Result<JoinHandle<Result<()>>> {
+    Ok(tokio::spawn(async move {
+        let _drop_guard = token.drop_guard();
+
+        let reset = TcpStream::connect("192.168.1.1:20001").await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        reset.set_linger(Some(Duration::ZERO))?;
+        drop(reset);
+
+        let closed = TcpStream::connect("192.168.1.1:20001").await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(closed);
+
+        // Held past the 5s first-byte timeout so the server side has already
+        // classified the silent peer when the client finally closes.
+        let silent = TcpStream::connect("192.168.1.1:20001").await?;
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        drop(silent);
 
         wait_for_lines(
             &logs,
