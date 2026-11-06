@@ -5,7 +5,7 @@ use crate::status::{StatusProvider, StatusQueryResult};
 use crate::{
     config::egress::CommonArgs,
     tunnel::{
-        connection_fault::DownstreamSetupError,
+        connection_fault::{ConnectionFault, DownstreamSetupError},
         egress::protocol::{
             common::transport::{MaybeDirectlyForward, TransportLayer},
             ohttp::security::OHttpSecurityLayer,
@@ -158,20 +158,16 @@ impl TrustedStreamManager {
                             .handle_stream(stream, Arc::clone(&connector), peer)
                             .await
                         {
-                            match DownstreamSetupError::find(&error) {
-                                Some(setup) => {
-                                    connector.record_fault(setup.fault()).await;
-                                    if setup.fault().ended_without_verdict() {
-                                        tracing::debug!(?error, "Downstream connection ended before the protocol handshake completed")
-                                    } else {
-                                        tracing::error!(?error, "Failed to handle OHTTP stream")
-                                    }
-                                }
-                                // Not a downstream setup failure: keep it loud
-                                // rather than guessing from the error kind.
-                                None => {
-                                    tracing::error!(?error, "Failed to handle OHTTP stream")
-                                }
+                            // An untagged failure did not come from downstream
+                            // setup, so it stays loud.
+                            let fault = DownstreamSetupError::find(&error)
+                                .map(DownstreamSetupError::fault)
+                                .unwrap_or(ConnectionFault::ProtocolViolation);
+                            connector.record_fault(fault).await;
+                            if fault.ended_without_verdict() {
+                                tracing::debug!(?error, "Downstream connection ended before the protocol handshake completed")
+                            } else {
+                                tracing::error!(?error, "Failed to handle OHTTP stream")
                             }
                         }
                     });

@@ -1,5 +1,6 @@
 #![cfg_attr(wasm, allow(dead_code))]
 
+#[cfg(not(wasm))]
 use std::io;
 
 /// How a connection ended during setup, before it became a TNG session.
@@ -28,8 +29,12 @@ impl ConnectionFault {
 ///
 /// The top-level kind is not enough: `ContextualStream` re-boxes socket errors
 /// with `io::Error::other`, which flattens the kind to `Other`, and
-/// tokio-rustls wraps protocol errors in `InvalidData`. Anything unrecognised
-/// stays `ProtocolViolation` so an unknown failure is never silently muted.
+/// tokio-rustls wraps protocol errors in `InvalidData`. Hyper reports an
+/// incomplete message when a request was only partially read, which has no io
+/// source of its own, so the walk checks that verdict before the io kinds.
+/// Anything unrecognised stays `ProtocolViolation` so an unknown failure is
+/// never silently muted.
+#[cfg(not(wasm))]
 pub(crate) fn classify_connection_failure(error: &anyhow::Error) -> ConnectionFault {
     for cause in error.chain() {
         if let Some(fault) = fault_of(cause) {
@@ -39,8 +44,16 @@ pub(crate) fn classify_connection_failure(error: &anyhow::Error) -> ConnectionFa
     ConnectionFault::ProtocolViolation
 }
 
+#[cfg(not(wasm))]
 fn fault_of(mut node: &(dyn std::error::Error + 'static)) -> Option<ConnectionFault> {
     loop {
+        if let Some(hyper_error) = node.downcast_ref::<hyper::Error>() {
+            // A request that was partially read when the peer went away. Its
+            // io source, if any, is checked below; this verdict has none.
+            if hyper_error.is_incomplete_message() {
+                return Some(ConnectionFault::PeerVanished);
+            }
+        }
         if let Some(io) = node.downcast_ref::<io::Error>() {
             match io.kind() {
                 io::ErrorKind::ConnectionReset
@@ -67,12 +80,14 @@ fn fault_of(mut node: &(dyn std::error::Error + 'static)) -> Option<ConnectionFa
 /// server) construct it. It carries the classified fault so the report site
 /// does not re-derive it from the chain, and an untagged error therefore stays
 /// loud by default.
+#[cfg(not(wasm))]
 #[derive(Debug)]
 pub(crate) struct DownstreamSetupError {
     fault: ConnectionFault,
     source: anyhow::Error,
 }
 
+#[cfg(not(wasm))]
 impl DownstreamSetupError {
     /// Tag an error with its classified fault. Call this where the side is
     /// known, while the original io error chain is still intact.
@@ -111,19 +126,21 @@ impl DownstreamSetupError {
     }
 }
 
+#[cfg(not(wasm))]
 impl std::fmt::Display for DownstreamSetupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "downstream connection setup failed")
     }
 }
 
+#[cfg(not(wasm))]
 impl std::error::Error for DownstreamSetupError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(self.source.as_ref())
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(wasm)))]
 mod tests {
     use super::*;
 
@@ -164,6 +181,16 @@ mod tests {
             rustls::Error::NoCertificatesPresented,
         ))
         .context("Failed to accept TLS connection");
+        assert_eq!(
+            classify_connection_failure(&error),
+            ConnectionFault::ProtocolViolation
+        );
+    }
+
+    #[test]
+    fn bare_rustls_error_is_protocol_violation() {
+        let error = anyhow::Error::new(rustls::Error::NoCertificatesPresented)
+            .context("Failed to accept TLS connection");
         assert_eq!(
             classify_connection_failure(&error),
             ConnectionFault::ProtocolViolation
