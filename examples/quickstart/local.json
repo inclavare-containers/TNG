@@ -1,0 +1,22 @@
+{
+  "add_ingress": [
+    {
+      "mapping": {
+        "in": { "host": "127.0.0.1", "port": 38082 },
+        "out": { "host": "127.0.0.1", "port": 38081 }
+      },
+      "rats_tls": { "multiplex": false },
+      "no_ra": true
+    }
+  ],
+  "add_egress": [
+    {
+      "mapping": {
+        "in": { "host": "127.0.0.1", "port": 38081 },
+        "out": { "host": "127.0.0.1", "port": 38080 }
+      },
+      "rats_tls": { "multiplex": false },
+      "no_ra": true
+    }
+  ]
+}
