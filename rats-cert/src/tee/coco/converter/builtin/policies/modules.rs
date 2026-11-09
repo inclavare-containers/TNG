@@ -163,12 +163,8 @@ impl<'a> EntryType<'a> {
     }
 }
 
-/// Display-only list for unknown-type errors. `EntryType::parse` is the
-/// authority on what is accepted.
-const KNOWN_MODULE_TYPES: &str = "tdx, nvidia, com.alibabacloud.gpu, tdx.td-shim, tdx.ovmf, tdx.kernel, tdx.uki, com.alibabacloud.container.image.<repo> (alias container.image.<repo>), com.alibabacloud.ai.model.<model-id> (alias ai.model.<model-id>)";
-
 fn unknown_module_type(raw: &str) -> anyhow::Error {
-    anyhow::anyhow!("unknown module type {raw:?}; known types: {KNOWN_MODULE_TYPES}")
+    anyhow::anyhow!("unknown module type {raw:?}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1212,8 +1208,8 @@ mod tests {
 
     #[test]
     fn modules_entry_type_parse_accepts_every_accepted_spelling() {
-        // Every accepted spelling must parse, and the unknown-type diagnostic
-        // must list every canonical display form including the two aliases.
+        // Every accepted spelling must parse; the diagnostic reports the
+        // rejected string alone.
         let accepted = [
             "tdx",
             "nvidia",
@@ -1234,26 +1230,9 @@ mod tests {
             );
         }
 
-        let display = [
-            "tdx",
-            "nvidia",
-            "com.alibabacloud.gpu",
-            "tdx.td-shim",
-            "tdx.ovmf",
-            "tdx.kernel",
-            "tdx.uki",
-            "com.alibabacloud.container.image.<repo>",
-            "container.image.<repo>",
-            "com.alibabacloud.ai.model.<model-id>",
-            "ai.model.<model-id>",
-        ];
+        // The diagnostic no longer enumerates the accepted types.
         let err = unknown_module_type("not.a.module").to_string();
-        for form in display {
-            assert!(
-                err.contains(form),
-                "diagnostic must mention {form:?}: {err}"
-            );
-        }
+        assert_eq!(err, "unknown module type \"not.a.module\"");
     }
 
     #[test]
