@@ -376,8 +376,8 @@ import rego.v1
 | `modules` | 由模块表生成 Rego | 无 |
 | `inline` | 解码标准 base64 内容，结果必须是 UTF-8 文本 | 无 |
 | `path` | 读取配置中指定的文件 | 本地文件 |
-| `transparency_log`，artifact-server primary | 生成 Rego；artifact server 在评估时才解析 | 无 |
-| `transparency_log`，rekor-v1 primary | 导出时联网拉取并验证 Rekor 条目 | 网络与信任锚 |
+| 带 `artifact-server` `transparency_log` 条目的 `modules` | 生成 Rego；artifact server 在评估时才解析 | 无 |
+| 带 `rekor-v1` `transparency_log` 条目的 `modules` | 导出时联网拉取并验证 Rekor 条目 | 网络与信任锚 |
 
 工具只渲染策略，不校验整份配置能否启动；被内置 converter 在启动期拒绝的配置照样会导出它的 Rego。`tng tools` 的日志写到 stderr，stdout 只承载命令输出。
 

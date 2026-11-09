@@ -1,10 +1,10 @@
 # `modules` 证明策略
 
-`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动度量（客户机固件、内核、UKI、容器镜像、模型）、GPU 评定或 TDX 平台姿态。证据来自阿里云 AAEL 事件的条目带 `com.alibabacloud.` 厂商前缀；两个度量家族保留无前缀写法作为永久别名。每个条目把预期值内联钉住，生成的校验规则直接用该常量比对证据。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
+`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动度量（客户机固件、内核、UKI、容器镜像、模型）、GPU 评定、TDX 平台姿态，或锚定在透明日志中的度量基线。证据来自阿里云 AAEL 事件的条目带 `com.alibabacloud.` 厂商前缀；两个度量家族保留无前缀写法作为永久别名。每个条目把预期值内联钉住，生成的校验规则直接用该常量比对证据。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
 
 ## 策略形态
 
-每个条目形如 `{"type": "<类型>", "value": <取值>}`。度量类条目的取值是钉住的摘要字符串；姿态类条目（`tdx`、`nvidia`）的取值是配置对象，`com.alibabacloud.gpu` 的取值是空对象。
+每个条目形如 `{"type": "<类型>", "value": <取值>}`。度量类条目的取值是钉住的摘要字符串；姿态类条目（`tdx`、`nvidia`）的取值是配置对象，`com.alibabacloud.gpu` 的取值是空对象，`transparency_log` 的取值是描述日志锚定基线的配置对象。
 
 扁平列表即单组：
 
@@ -63,6 +63,7 @@
 | `tdx.td-shim`、`tdx.ovmf`、`tdx.kernel`、`tdx.uki` | `executables` |
 | `com.alibabacloud.container.image.<repo>` | `executables` |
 | `com.alibabacloud.ai.model.<model-id>` | `executables` |
+| `transparency_log` | `executables` |
 | `tdx` | `hardware` |
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
@@ -78,13 +79,14 @@
 以下情况在策略加载期即被拒绝，不会进入运行期：
 
 - 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
-- 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）；
+- 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象或姿态类给了字符串；
+- `transparency_log` 条目的取值不符合条目 schema：`publishedMeasurements` 为空或含不支持的类型、度量类型重复、`services` 为空或不止一个 service、`artifact-server` primary 不是唯一 service、取值对象里出现未知字段、fallback 字段配对不全，或 fallback 为空、不是 `rekor-v1`、不是 `publishedMeasurements` 的子集（详见下方条目说明）；
 - 名字段（`<repo>`、`<model-id>`）含 `[A-Za-z0-9._/@:+-]` 之外的字符；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
 - `nvidia` 条目的 `min_count` 小于 1（要关闭 GPU 评定就不写该条目）；
 - `tdx` 的 `collateral.min_tcb_date` 不是 `YYYY-MM-DD`；
-- `modules` 策略同时提供非空 `reference_values` 列表：生成的规则拿证据与钉住的常量比对，从不读取参考值，因此加载期直接拒绝。空列表（`[]`）放行。只有 `inline`、`path`、`transparency_log` 三种策略接受非空列表，它们的规则会消费参考值。
+- `modules` 策略同时提供非空 `reference_values` 列表：生成的规则拿证据与钉住的常量比对，从不读取参考值，因此加载期直接拒绝。空列表（`[]`）放行。只有 `inline`、`path` 两种策略接受非空列表，它们的规则会消费参考值。
 
 ## 模块类型
 
@@ -96,6 +98,7 @@
 | `tdx.uki` | 96 位小写 hex | UEFI 事件日志的 UKI 启动应用事件（SHA-384） |
 | `com.alibabacloud.container.image.<repo>` | `sha256:<64 位小写 hex>` | repo 尾段为 `<repo>` 的 AAEL `kangaroo/pull-image` 事件 |
 | `com.alibabacloud.ai.model.<model-id>` | 64 位小写 hex | 该模型的 AAEL `pai/load-model` 事件 |
+| `transparency_log` | 配置对象 | 记录在透明日志中的 ReleaseManifest（rekor-v1 或 artifact-server primary） |
 | `tdx` | 配置对象 | quote 属性位与事件日志（平台姿态） |
 | `nvidia` | 配置对象 | 经评定的逐 GPU claims（标准 NVIDIA 验证） |
 | `com.alibabacloud.gpu` | 空对象 `{}` | AAEL `gpu/attestation` 事件及其结果码 |
@@ -252,10 +255,66 @@
 
 **当前强度上限。** 该评定比对的是经评定的设备 claims。GPU 证明报告的签名、GPU 证书链、驱动 RIM 文件的密码学校验属验证器侧后续工作；补齐之前，评定反映的是验证器解析报告时记录的 claims，而非报告本体的真实性。
 
+### 透明日志：`transparency_log`
+
+```json
+{ "type": "transparency_log", "value": {
+    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+    "schemaVersion": "1.0.0",
+    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944 }]
+} }
+```
+
+把可信度量集锚定到记录在透明日志中的 ReleaseManifest，而不是把摘要内联钉住。appraisal 时条目用实际 TDX 度量值重建 manifest 并与日志记录的参考比对，因此可信基线存放在日志里，策略只携带指向它的指针。这是 `modules` 的条目类型；早期版本顶层 `attestation_policy.type = "transparency_log"` 的写法已不存在。
+
+**加载期与 appraisal 期。** primary 为 `rekor-v1` 时条目在策略加载时拉取并认证：按 `logIndex` 取出日志条目，验证其签名检查点、Merkle 包含证明与 Signed Entry Timestamp，并把条目的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供公钥。primary 为 `artifact-server` 时策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用（`ok` 与 `revoked` 都不会触发），primary 失败且没有 fallback 即拒绝。
+
+**校验内容。** 条目从 TDX quote 与 UEFI 事件日志提取实际度量值，按 `publishedMeasurements` 给定的顺序重建 manifest，并将其 SHA-256 与日志记录的 `payloadHash` 比对。类型、顺序、值或 `schemaVersion` 不匹配即拒绝。DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
+
+**维度与 hardware。** 条目只门控 `executables`。平台姿态仍由独立的 `tdx` 条目表达：加上 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` 即保留旧的 non-debug 与事件日志检查，同时不引入新的属性位要求。TDX 平台识别是自动的。只有 `transparency_log` 条目时，`hardware` 仅要求该识别。
+
+**重复语义。** `transparency_log` 是唯一可以在同一组内出现多次的条目类型。同一组内两个条目 AND，两条日志锚定基线都必须通过；分属两组的两个条目 OR，任一基线通过即可。前者用于要求多条日志同时成立，后者用于接受多个可接受版本中的任一个。
+
+```json
+"modules": [
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } },
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200 }] } }
+]
+```
+
+```json
+"modules": [
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } }],
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200 }] } }]
+]
+```
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表，按 manifest 顺序；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复 |
+| `schemaVersion` | string | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
+| `services` | 列表 | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
+| `services[].type` | string | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
+| `services[].logUrl` | string | — | （`rekor-v1` 必填）Rekor v1 日志基地址 |
+| `services[].logIndex` | int | — | （`rekor-v1` 必填）要拉取并认证的 Rekor v1 条目索引；必须 `>= 0` |
+| `services[].rekorPublicKeyPem` | string | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）；省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥，其他日志必须提供 |
+| `services[].publisherPublicKeyPem` | string | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
+| `services[].url` | string | — | （`artifact-server` 必填）Artifact-server 基地址 |
+| `services[].logServices` | 列表 | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
+| `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；须与 `fallbackServices` 同时出现，非空，且是 `publishedMeasurements` 的子集 |
+| `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用 |
+
+`publishedMeasurements` 比模块的度量类型更窄：只接受上述三种类型，也就是 cmaas release manifest 发布的形状。`tdx.ovmf`、`tdx.uki` 以及任意的 `container.image.<repo>` 都不接受。
+
+条目的度量提取沿用已删除顶层策略的规则，尚未与其他条目的 `tdx.*`、`container.image.*` 度量谓词统一；例如 `tdx.kernel` 的提取还额外要求 RTMR 索引为 2、blob 长度为 32 MiB。统一两者是后续独立改动。
+
+**从顶层类型迁移。** 把旧策略的取值包进一个 `modules` 条目：`{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`。若需要旧的 non-debug 与事件日志检查，再加一个 `tdx` 条目（TDX 识别是自动的）；只有 `transparency_log` 条目时 `hardware` 退化为仅要求该识别。删除任何非空 `reference_values`，新策略会在加载期拒绝它。
+
 ## 从固定策略类型迁移
 
 | 已删除类型 | `modules` 等价写法 |
 |---|---|
+| `transparency_log`（顶层 `attestation_policy.type`） | 用 `modules` 策略承载一个 `transparency_log` 条目；需要旧平台检查时再加 `tdx` 条目；删除任何非空 `reference_values` |
 | `hardware_with_reference_values` | 启动度量类条目（`tdx.td-shim`/`tdx.ovmf`、`tdx.kernel`、`tdx.uki`）把预期摘要直接钉在策略里；需要日志锚定基线则用 `transparency_log` |
 | `hardware_strict_with_reference_values` | 同上，另加 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}`，在 TDX 证据上对齐旧的 strict 姿态 |
 | `hardware_strict_with_measurements` | `com.alibabacloud.ai.model.<model-id>` 与 `com.alibabacloud.container.image.<repo>` 条目把同样的基线内联钉住，另加 `sept_ve_disable`、`perfmon`、`service_td` 均设为 `allow` 的 `tdx` 条目，在 TDX 证据上对齐旧的 strict 姿态；独立的 `reference_values` 列表不再需要 |

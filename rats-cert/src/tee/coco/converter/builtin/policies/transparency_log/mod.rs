@@ -205,7 +205,7 @@ pub(super) fn measurement_extraction_rules() -> &'static str {
 # require 96 lowercase hex chars; container.image.* require sha256:+64 lowercase
 # hex. A value that fails the format check makes the rule undefined → the
 # measurement is dropped from the reconstructed manifest → its hash mismatches
-# payload_hash → measurements_verified fails → reject (fail-closed).
+# t_<group>_<index>_payload_hash → the m_<group>_<index> entry predicate fails → reject (fail-closed).
 actual_measurement("tdx.td-shim") := digest if {
     digest := input.tdx.quote.body.mr_td
     regex.match("^[0-9a-f]{96}$", digest)
@@ -242,7 +242,7 @@ actual_measurement("tdx.kernel") := digest if {
     # is a violation. Without this guard the
     # `some d2 ... d2.alg == "SHA-384"` filter inside the comprehensions below
     # would silently exclude such an event from the conflict set rather than
-    # rejecting. The 96-hex regex on the extracted value (#7) already enforces
+    # rejecting. The 96-hex regex on the extracted value already enforces
     # the 48-byte length on matching events; this guard rejects events that
     # have NO SHA-384 digest at all. Compare the distinct set of
     # descriptor-matching index-2 events (by `event` body) against the subset
@@ -2263,6 +2263,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[allow(clippy::disallowed_methods)]
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
+    #[serial]
     async fn transparency_log_artifact_server_does_not_call_fallback_when_primary_ok() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;

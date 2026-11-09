@@ -1,10 +1,10 @@
 # The `modules` Attestation Policy
 
-`modules` is a builtin attestation policy type that expresses verification as a modular list of rules. Each entry is one typed check over one part of the evidence: a boot measurement (guest firmware, kernel, UKI, container image, model), a GPU appraisal, or the TDX platform posture. Entry types whose evidence comes from Alibaba AAEL events carry the `com.alibabacloud.` vendor prefix; the two measurement families keep their unprefixed spellings as permanent aliases. Each entry pins its expected value inline, and the generated verification rule compares the evidence against that constant directly. Set it on the verify side under `as_type: "builtin"` in `attestation_policy`; placement and the other policy types are covered in [Remote Attestation](remote_attestation.md).
+`modules` is a builtin attestation policy type that expresses verification as a modular list of rules. Each entry is one typed check over one part of the evidence: a boot measurement (guest firmware, kernel, UKI, container image, model), a GPU appraisal, the TDX platform posture, or a measurement baseline anchored in a transparency log. Entry types whose evidence comes from Alibaba AAEL events carry the `com.alibabacloud.` vendor prefix; the two measurement families keep their unprefixed spellings as permanent aliases. Each entry pins its expected value inline, and the generated verification rule compares the evidence against that constant directly. Set it on the verify side under `as_type: "builtin"` in `attestation_policy`; placement and the other policy types are covered in [Remote Attestation](remote_attestation.md).
 
 ## Policy shape
 
-Every entry is `{"type": "<type>", "value": <value>}`. Measurement types take a string value, the pinned digest; the posture types (`tdx`, `nvidia`) take an options object, and `com.alibabacloud.gpu` takes an empty object.
+Every entry is `{"type": "<type>", "value": <value>}`. Measurement types take a string value, the pinned digest; the posture types (`tdx`, `nvidia`) take an options object, `com.alibabacloud.gpu` takes an empty object, and `transparency_log` takes an options object describing the log-anchored baseline.
 
 A flat list is one group:
 
@@ -63,6 +63,7 @@ Each module type gates one AR4SI trustworthiness dimension:
 | `tdx.td-shim`, `tdx.ovmf`, `tdx.kernel`, `tdx.uki` | `executables` |
 | `com.alibabacloud.container.image.<repo>` | `executables` |
 | `com.alibabacloud.ai.model.<model-id>` | `executables` |
+| `transparency_log` | `executables` |
 | `tdx` | `hardware` |
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
@@ -78,13 +79,14 @@ An empty module list declares no platform dependency, so no recognition rule is 
 These are rejected when the policy loads, before any appraisal runs:
 
 - an entry `type` outside the set listed below, including a mistyped family prefix; the `com.alibabacloud.` prefix is only legal on `container.image.`, `ai.model.`, and the exact type `gpu`, and unprefixed `gpu` is not a type;
-- the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines);
+- the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines). `transparency_log` is the one exception: it may repeat within a group so several log-anchored baselines must all verify;
 - a value in the wrong shape or format: wrong digest length or uppercase hex (all digests are lowercase), a `com.alibabacloud.container.image.*` value without the `sha256:` prefix, an object given where the type expects a string or the reverse;
+- a `transparency_log` entry whose value violates the entry schema: an empty or unsupported `publishedMeasurements` list, a duplicate measurement type, an empty `services` list or more than one service, an `artifact-server` primary that is not the only service, an unknown field in the value object, an unfilled fallback pairing, or a fallback that is empty, not `rekor-v1`, or not a subset of `publishedMeasurements` (see the entry section below);
 - a name segment (`<repo>`, `<model-id>`) containing characters outside `[A-Za-z0-9._/@:+-]`;
 - an unknown field inside a `tdx`, `nvidia`, or `com.alibabacloud.gpu` options object; the `com.alibabacloud.gpu` value must be the empty object `{}`;
 - an `nvidia` entry whose `min_count` is below 1 (omit the entry to disable GPU appraisal);
 - a `tdx` `collateral.min_tcb_date` that is not `YYYY-MM-DD`;
-- a non-empty `reference_values` list supplied alongside a `modules` policy: the generated rules compare the evidence against the pinned constants and never read reference values, so the list is refused at load. An empty list (`[]`) is accepted. Non-empty lists are accepted only by the `inline`, `path`, and `transparency_log` policies, whose rules do consume reference values.
+- a non-empty `reference_values` list supplied alongside a `modules` policy: the generated rules compare the evidence against the pinned constants and never read reference values, so the list is refused at load. An empty list (`[]`) is accepted. Non-empty lists are accepted only by the `inline` and `path` policies, whose rules do consume reference values.
 
 ## Module types
 
@@ -96,6 +98,7 @@ These are rejected when the policy loads, before any appraisal runs:
 | `tdx.uki` | 96 lowercase hex | the UKI boot-application event of the UEFI event log (SHA-384) |
 | `com.alibabacloud.container.image.<repo>` | `sha256:<64 lowercase hex>` | AAEL `kangaroo/pull-image` events for repo tail `<repo>` |
 | `com.alibabacloud.ai.model.<model-id>` | 64 lowercase hex | AAEL `pai/load-model` events for that model |
+| `transparency_log` | options object | a ReleaseManifest recorded in a transparency log (rekor-v1 or artifact-server primary) |
 | `tdx` | options object | quote attributes and event log (platform posture) |
 | `nvidia` | options object | appraised per-GPU claims (standard NVIDIA appraisal) |
 | `com.alibabacloud.gpu` | empty object `{}` | AAEL `gpu/attestation` events and their result codes |
@@ -252,10 +255,66 @@ The whitelist fields compare exact strings; an empty list means no restriction. 
 
 **Current strength limit.** The appraisal compares the appraised device claims. Cryptographic verification of the GPU attestation report's signature, the GPU certificate chain, and the driver RIM file is verifier-side follow-up work; until it lands, appraisal reflects the claims recorded when the verifier parses the report, not the report's own authenticity.
 
+### Transparency log: `transparency_log`
+
+```json
+{ "type": "transparency_log", "value": {
+    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+    "schemaVersion": "1.0.0",
+    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944 }]
+} }
+```
+
+Anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log instead of pinning the digests inline. At appraisal the entry reconstructs the manifest from the actual TDX measurement values and compares it to the logged reference, so the trusted baseline lives in the log and the policy carries only the pointer to it. This is a `modules` entry type; the top-level `attestation_policy.type = "transparency_log"` of earlier releases no longer exists.
+
+**Load time and appraisal time.** With a `rekor-v1` primary the entry is fetched and authenticated when the policy loads: the log entry is looked up by `logIndex`, its signed checkpoint, Merkle inclusion proof, and Signed Entry Timestamp are verified, and the entry's `payloadHash` and DSSE publisher signature are baked into the generated rule. Omitting `rekorPublicKeyPem` uses the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; other logs must supply their key. With an `artifact-server` primary the policy loads without network access and the entry is resolved at appraisal time. The optional fallback is consulted only when the primary returns `fail` (`ok` and `revoked` never trigger it), and a failed primary with no fallback rejects.
+
+**What it verifies.** The entry extracts the actual measurement values from the TDX quote and the UEFI event log, reconstructs the manifest in the order given by `publishedMeasurements`, and compares its SHA-256 with the logged `payloadHash`. A mismatch (wrong type, wrong order, wrong value, or wrong `schemaVersion`) rejects. The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
+
+**Dimension and hardware.** The entry gates `executables` only. Platform posture stays a separate `tdx` entry: add `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` to keep the old non-debug and event-log checks without imposing the newer attribute gates. TDX platform recognition is automatic. With only `transparency_log` entries, `hardware` requires that recognition alone.
+
+**Repeat semantics.** `transparency_log` is the one entry type that may appear more than once in the same group. Two entries in one group AND, so both log-anchored baselines must verify; two entries in separate groups OR, so either baseline suffices. Use the first shape to require several logs, the second to accept any of several versions.
+
+```json
+"modules": [
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } },
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200 }] } }
+]
+```
+
+```json
+"modules": [
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } }],
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200 }] } }]
+]
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types in manifest order; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and a type may not repeat |
+| `schemaVersion` | string | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
+| `services` | list | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
+| `services[].type` | string | — | (required) `"rekor-v1"` or `"artifact-server"` |
+| `services[].logUrl` | string | — | (required for `rekor-v1`) Rekor v1 log base URL |
+| `services[].logIndex` | int | — | (required for `rekor-v1`) Rekor v1 entry index to fetch and authenticate; must be `>= 0` |
+| `services[].rekorPublicKeyPem` | string | built-in | Optional log public key PEM (verifies checkpoint/SET); omit for the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key, required for other logs |
+| `services[].publisherPublicKeyPem` | string | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
+| `services[].url` | string | — | (required for `artifact-server`) Artifact-server base URL |
+| `services[].logServices` | list | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
+| `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; required with `fallbackServices`, non-empty, and a subset of `publishedMeasurements` |
+| `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary |
+
+`publishedMeasurements` is narrower than the module measurement types: it accepts only the three types above, which is the shape the cmaas release manifest publishes. `tdx.ovmf`, `tdx.uki`, and arbitrary `container.image.<repo>` are not accepted.
+
+The entry extracts measurements with the same rules the removed top-level policy used, which are not yet unified with the `tdx.*` and `container.image.*` measurement predicates of the other entries; for example, the `tdx.kernel` extraction also pins RTMR index 2 and the 32 MiB blob length. Unifying them is a separate change.
+
+**Migrating from the top-level type.** Wrap the old policy value in a `modules` entry: `{"type": "modules", "modules": [{"type": "transparency_log", "value": <old value>}]}`. Add a `tdx` entry if the old non-debug and event-log checks are wanted (TDX recognition is automatic); with only the `transparency_log` entry, `hardware` reduces to that recognition. Delete any non-empty `reference_values`, which the new policy rejects at load.
+
 ## Migrating from the fixed policy types
 
 | Removed type | `modules` equivalent |
 |---|---|
+| `transparency_log` (top-level `attestation_policy.type`) | a `modules` policy with a `transparency_log` entry, plus a `tdx` entry when the old platform checks are wanted; drop any non-empty `reference_values` |
 | `hardware_with_reference_values` | boot-measurement entries (`tdx.td-shim`/`tdx.ovmf`, `tdx.kernel`, `tdx.uki`) with the expected digests pinned inline; or `transparency_log` for log-anchored baselines |
 | `hardware_strict_with_reference_values` | the same entries plus `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` to match the old strict posture on TDX evidence |
 | `hardware_strict_with_measurements` | `com.alibabacloud.ai.model.<model-id>` and `com.alibabacloud.container.image.<repo>` entries pinning the same baselines inline, plus a `tdx` entry with `sept_ve_disable`, `perfmon`, and `service_td` set to `allow` to match the old strict posture on TDX evidence; the separate `reference_values` list is dropped |

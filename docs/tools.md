@@ -376,8 +376,8 @@ Every policy type is supported:
 | `modules` | Generates the Rego from the module table | none |
 | `inline` | Decodes the standard base64 content; the result must be UTF-8 text | none |
 | `path` | Reads the file named in the config | the local file |
-| `transparency_log`, artifact-server primary | Generates the Rego; the artifact server is resolved at appraisal time | none |
-| `transparency_log`, rekor-v1 primary | Fetches and verifies the Rekor entry at export time | network and a trust anchor |
+| `modules` with an `artifact-server` `transparency_log` entry | Generates the Rego; the artifact server is resolved at appraisal time | none |
+| `modules` with a `rekor-v1` `transparency_log` entry | Fetches and verifies the Rekor entry at export time | network and a trust anchor |
 
 The tool renders the policy and does not validate that the whole config would start; a config the builtin converter rejects at startup still exports its Rego. `tng tools` writes its logs to stderr, so stdout carries only the command output.
 

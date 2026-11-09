@@ -20,12 +20,14 @@ pub enum PolicyConfig {
     HardwareOnlyStrict,
     /// Modular verification rules: a list of module entries, each declaring a
     /// verification requirement over one part of the evidence (platform
-    /// posture, firmware/kernel/image/model measurement, GPU).
-    /// Entries within one group are AND-ed; multiple groups are alternative
-    /// baselines evaluated with OR. Measurement values are pinned inline in
-    /// the entries, so this type must not be combined with external
+    /// posture, firmware/kernel/image/model measurement, GPU, transparency
+    /// log). Entries within one group are AND-ed; multiple groups are
+    /// alternative baselines evaluated with OR. Measurement values are pinned
+    /// inline in the entries, so this type must not be combined with external
     /// `reference_values`. Omitting a module type imposes no requirement on
-    /// that part; listing one is fail-closed.
+    /// that part; listing one is fail-closed. A `transparency_log` entry takes
+    /// an options object and anchors its baseline in a transparency log
+    /// instead of pinning a digest in the policy.
     Modules {
         /// Either a flat list (a single group, entries AND-ed) or a list of
         /// lists (one acceptable baseline per inner list). An empty list
@@ -83,11 +85,14 @@ pub struct TransparencyLogEntryConfig {
 /// string for the measurement families (`tdx.*`,
 /// `com.alibabacloud.container.image.*`, `com.alibabacloud.ai.model.*`, with
 /// the unprefixed `container.image.*` and `ai.model.*` spellings as
-/// aliases) and a posture object for the posture families (`tdx`, `nvidia`,
-/// `com.alibabacloud.gpu`; the last takes an empty object). The `value` shape is
-/// validated against the parsed family at load time; an unrecognized type, a
-/// malformed value, or a name-segment charset violation is a configuration
-/// error rejected before any appraisal runs, never silently ignored.
+/// aliases), a posture object for the posture families (`tdx`, `nvidia`,
+/// `com.alibabacloud.gpu`; the last takes an empty object), and a
+/// `TransparencyLogEntryConfig` object for `transparency_log`, whose trusted
+/// baseline is a transparency-logged manifest rather than an inlined digest.
+/// The `value` shape is validated against the parsed family at load time; an
+/// unrecognized type, a malformed value, or a name-segment charset violation
+/// is a configuration error rejected before any appraisal runs, never silently
+/// ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModuleEntryConfig {
     #[serde(rename = "type")]

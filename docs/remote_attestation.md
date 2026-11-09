@@ -101,10 +101,10 @@ For the specific field configuration of each model, see [Configuration](#configu
 - **Trustee**: the Attestation Service reference implementation maintained by OpenAnolis; can be deployed as an external AS.
 - **CoCo**: Confidential Containers; the AA/AS reference implementation TNG targets by default.
 - **ITA**: Intel Trust Authority, Intel's online remote attestation service.
-- **Rekor**: sigstore's transparency-log service; v1 is used for the transparency_log policy anchor, v2 for signer_transparency certificate binding. They are two independent mechanisms.
+- **Rekor**: sigstore's transparency-log service; v1 is used for the `transparency_log` module entry anchor, v2 for signer_transparency certificate binding. They are two independent mechanisms.
 - **OPA / rego**: Open Policy Agent and its policy language rego; the built-in AS uses it to express custom verification policies.
 - **SLSA**: a software supply-chain provenance standard; `reference_values` can obtain reference values from SLSA provenance.
-- **DSSE**: a signed-payload envelope format; the transparency_log policy can verify an entry's DSSE publisher signature.
+- **DSSE**: a signed-payload envelope format; a `transparency_log` module entry verifies the entry's DSSE publisher signature.
 - **PCCS**: Provisioning Certificate Caching Service, the SGX/TDX certificate caching service; verifying TDX evidence requires fetching collateral from it.
 - **RATS-TLS**: a protocol that carries remote-attestation evidence inside the TLS 1.3 handshake; TNG's default communication protocol.
 
@@ -136,7 +136,7 @@ Adopt remote attestation progressively, from the simplest link to a production-g
 }
 ```
 
-**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then pin concrete checks (boot measurements, container images, models, GPU, TDX platform posture) with the modular `modules` policy, whose entry types and semantics are in [Modules Attestation Policy](attestation_modules.md); write a custom policy (`inline`/`path` rego) with reference values when you need fully custom decision logic; for advanced cases use `transparency_log` to anchor to a Rekor transparency log. See Scenarios 1 to 4 under the built-in AS in [Background Check Mode](#background-check-mode).
+**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then pin concrete checks (boot measurements, container images, models, GPU, TDX platform posture) with the modular `modules` policy, whose entry types and semantics are in [Modules Attestation Policy](attestation_modules.md); write a custom policy (`inline`/`path` rego) with reference values when you need fully custom decision logic; for advanced cases use a `modules` policy with a `transparency_log` entry to anchor to a Rekor transparency log. See Scenarios 1 to 4 under the built-in AS in [Background Check Mode](#background-check-mode).
 
 **4. Use an external AS for large-scale / centralized cases.** If you have a high volume of remote-attestation verifications and need centralized verification and configuration management, switch to an externally deployed Attestation Service ([Trustee](https://github.com/openanolis/trustee)) and set the verify side to `as_type: "restful"`/`"grpc"` + `as_addr`. See the External AS section under [Background Check Mode](#background-check-mode).
 
@@ -214,7 +214,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `model` | string | — | Set to `"background_check"` to enable explicitly (omitting it defaults to this mode) |
 | `as_type` | string | `"builtin"` | Set to `"builtin"` to enable the built-in AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | Built-in AS verification policy. Defaults to `{"type": "hardware_only"}` if omitted (the alias `{"type": "default"}` resolves to the same). `type` values are shown in the scenarios and the cheat-sheet at the end |
-| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `inline`, `path`, and `transparency_log` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules`, because their verification rules do not consume reference values. An empty list is accepted for every policy |
+| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `inline` and `path` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` (including a policy whose entries include `transparency_log`), because their verification rules do not consume reference values. An empty list is accepted for every policy |
 
 **PCCS configuration**
 
@@ -230,14 +230,13 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 
 **Verification strategies**
 
-Compare the four strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
+Compare the three strategies below, then pick one matching your goal; the `type` value of `attestation_policy` varies by scenario.
 
 | Strategy (`type`) | Hardware TEE check | Compare measurements | Requires user input | `reference_values` | Use case |
 |---|---|---|---|---|---|
 | `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | rejected when non-empty | Only confirm the peer is a genuine TEE |
-| `modules` | ✅ | ✅ values pinned in the policy | ✅ module list | rejected when non-empty | Pin checks on boot measurements, images, models, GPUs, and TDX posture |
+| `modules` | ✅ | ✅ values pinned in the policy, or a transparency-log anchor | ✅ module list | rejected when non-empty | Pin checks on boot measurements, images, models, GPUs, and TDX posture; anchor baselines to a transparency log with a `transparency_log` entry (Scenario 4) |
 | `inline` / `path` | ✅ | depends on policy | ✅ rego policy | accepted | Custom decision logic |
-| `transparency_log` | ✅ | ✅ Rekor-anchored | ✅ log entry | accepted | Supply-chain transparency anchoring |
 
 > `trust_all` is debug-only (affirms every dimension) and rejects a non-empty `reference_values`; an empty list is accepted by every policy. See the cheat-sheet at the end.
 
@@ -341,7 +340,7 @@ The group requires the strict TDX posture, a successful guest-reported GPU attes
 The appraisal passes when either group passes in full: an OVMF-booted VM matching the first baseline, or a td-shim-booted confidential container matching the second. Measurements mixed across the two baselines pass neither.
 </details>
 
-The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2 and the `transparency_log` static measurements of Scenario 4. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values. An empty list is accepted by every policy.
+The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values; this includes a `modules` policy whose entries include `transparency_log`. An empty list is accepted by every policy.
 
 Each `reference_values[]` entry has two `type` fields: the outer one selects the reference-value **source**, the inner `payload.type` selects the **loading method**.
 
@@ -505,26 +504,31 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 
 **Scenario 4: transparency_log anchoring (advanced)**
 
-Goal: anchor the trusted measurement set to an authenticated Rekor v1 transparency-log entry, and at appraisal compare the actual measurements against the recorded reference. Set `attestation_policy.type` to `"transparency_log"`. Requires `schemaVersion` and one `rekor-v1` service; `publishedMeasurements` is optional (absent → skip the measurement check).
+Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and at appraisal compare the actual measurements against that recorded reference. Add a `transparency_log` entry to a `modules` policy; `publishedMeasurements`, `schemaVersion`, and exactly one service are required. The entry gates `executables` only, so add a `tdx` entry to keep the platform posture checks.
 
 <details>
-<summary>Example: transparency_log policy</summary>
+<summary>Example: modules policy with a transparency_log entry</summary>
 
 ```json
 {
     "verify": {
         "as_type": "builtin",
         "attestation_policy": {
-            "type": "transparency_log",
-            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-            "schemaVersion": "1.0.0",
-            "services": [
-                {
-                    "type": "rekor-v1",
-                    "logUrl": "https://rekor.sigstore.dev",
-                    "logIndex": 2279770888,
-                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
-                }
+            "type": "modules",
+            "modules": [
+                { "type": "tdx", "value": { "sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow" } },
+                { "type": "transparency_log", "value": {
+                    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+                    "schemaVersion": "1.0.0",
+                    "services": [
+                        {
+                            "type": "rekor-v1",
+                            "logUrl": "https://rekor.sigstore.dev",
+                            "logIndex": 2279770888,
+                            "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                        }
+                    ]
+                } }
             ]
         }
     }
@@ -532,91 +536,50 @@ Goal: anchor the trusted measurement set to an authenticated Rekor v1 transparen
 ```
 </details>
 
-**transparency_log policy: field reference**
+**transparency_log entry: field reference**
 
 <details>
-<summary>What the <code>transparency_log</code> policy verifies</summary>
+<summary>What the <code>transparency_log</code> entry verifies</summary>
 
-The `transparency_log` policy anchors the trusted measurement set to an authenticated Rekor v1 transparency-log entry, then checks the running TDX hardware's actual measurements against that recorded reference.
+The entry anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log, then checks the running TDX hardware's actual measurements against that recorded reference.
 
-**At init (policy load):**
+**At init (policy load), with a `rekor-v1` primary:**
 
-- Fetch the Rekor v1 entry by `logIndex` from the configured `logUrl`.
-- Authenticate the entry: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). If `rekorPublicKeyPem` is omitted, the well-known public key for `rekor.sigstore.dev` / `rekor.openanolis.cn` is used; other logs must supply their key.
-- Record the trusted reference (the entry's `payloadHash` and, when a publisher key is configured, the DSSE publisher signature) for use at appraisal.
+- Fetch the entry by `logIndex` from the configured `logUrl`.
+- Authenticate it: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). If `rekorPublicKeyPem` is omitted, the well-known public key for `rekor.sigstore.dev` / `rekor.openanolis.cn` is used; other logs must supply their key.
+- Bake the trusted reference (the entry's `payloadHash` and the DSSE publisher signature) into the generated rule.
 
 **At appraisal (evidence verification):**
 
-- Extract the actual measurement values from the TDX quote (e.g. `mr_td` for `tdx.td-shim`) and the UEFI event log (e.g. the image digest from an AAEL `kangaroo/pull-image` event for a `container.image.*` measurement).
+- Extract the actual measurement values from the TDX quote (e.g. `mr_td` for `tdx.td-shim`) and the UEFI event log (e.g. the image digest from an AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`).
 - Reconstruct the release manifest from those actual values, in the order given by `publishedMeasurements`, and compare its hash to the recorded `payloadHash`. A mismatch (wrong type, wrong order, wrong value, or wrong `schemaVersion`) rejects.
-- Enforce the TDX platform checks (non-debug, event log present, canonical Intel quoting-enclave vendor) regardless of the measurement check.
+- The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise, binding the entry to a trusted publisher (defense against a substituted `logIndex`).
 
-**Optional DSSE publisher verification:** When `publisherPublicKeyPem` is configured, the entry's DSSE publisher signature is also verified at appraisal, binding the entry to a trusted publisher (defense against a substituted `logIndex`). Without it, trust is anchored in the configured `logIndex` alone. Configuring it on an entry that carries no DSSE signature is a config/entry mismatch and errors at init.
+**With an `artifact-server` primary:** the policy loads without network access, and the entry is resolved at appraisal time by sending the reconstructed manifest to the configured `url`. The optional fallback is a tri-state decision: it is consulted only when the primary returns `fail`; `ok` and `revoked` never fall back. A failed primary with no fallback rejects.
 
-**When `publishedMeasurements` is absent:** the measurement reconstruction and hash comparison are skipped entirely; only the TDX platform checks run, and the executables trust dimension stays affirming. An explicit empty array (`[]`) is *not* the same: it still runs the check, which always rejects against a real logged reference. Use absence to opt out of measurement binding (e.g. when only platform attestation matters).
+**`publishedMeasurements` must be non-empty:** the measurement reconstruction and hash comparison always run; a missing field or an explicit empty array (`[]`) is rejected at load.
 
-**Static reference measurements (`staticReferenceMeasurements`):** measurement types appraised against reference values statically registered with the builtin AS (`reference_values`, RVPS `query_reference_value`) instead of the transparency log. Use it for user-owned artifacts the transparency service does not publish, typically the user's model and user-provided container images. Works with the rekor-v1 primary and the artifact-server primary alike. Two types are supported:
-
-- `"model"`: every `alibabacloud.com` `pai/load-model` AAEL event must match the reference value registered under `measurement.model.<model-id>`. The key is selected by the event's own `model-id`, and at least one load-model event must exist; none registered, or no event at all, rejects. The key name follows the upstream trustee default policy (`measurement.model.<model-id>`), so an external Trustee AS can serve the same reference-value name later.
-- `"container.image.<repo>"`: every `kangaroo/pull-image` event whose image reference's repo tail equals `<repo>` must match the digest registered under `measurement.container.image.<repo>`. The `<repo>` segment is free-form: it is the repo tail of the image you are pinning (the last path segment of the reference, registry host, path prefix and tag/digest stripped), so any name works and nothing is special about it; a pinned repo with no matching pull-image event fails closed (reject, not skip). The reference-value name is the trustee-style `measurement.` prefix composed with the manifest measurement type `container.image.<repo>`.
-
-Each static check AND-gates `measurements_verified` (together with the primary resolution and, when configured, the fallback resolution): the transparency-log check AND every static check must pass, otherwise the appraisal rejects. `staticReferenceMeasurements` must be disjoint from `publishedMeasurements` / `fallbackPublishedMeasurements`; load-time validation rejects unsupported types, duplicates, and overlap. The same checks are also available standalone (no transparency service) as `modules` measurement entries: `com.alibabacloud.ai.model.<model-id>` and `com.alibabacloud.container.image.<repo>` pin those baselines directly in the policy.
+**Dimension and hardware:** the entry gates `executables` only. Platform posture is a separate `tdx` entry. A policy with only `transparency_log` entries makes `hardware` depend on TDX platform recognition alone, so add the `tdx` entry (with its attribute gates set to `allow`) if you need the non-debug and event-log checks.
 
 </details>
 
 <details>
-<summary>Example: static user-owned measurements alongside the transparency log</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "transparency_log",
-            "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-            "schemaVersion": "1.0.0",
-            "services": [
-                {
-                    "type": "rekor-v1",
-                    "logUrl": "https://rekor.sigstore.dev",
-                    "logIndex": 2279770888
-                }
-            ],
-            "staticReferenceMeasurements": ["model", "container.image.model-server"]
-        },
-        "reference_values": [
-            {
-                "type": "sample",
-                "payload": {
-                    "type": "inline",
-                    "content": {
-                        "measurement.model.Qwen/Qwen3.8-27B": ["9a1472695255ed58fc92d48ab917368ffee91938004af06bc4a5690a33de1875"],
-                        "measurement.container.image.model-server": ["sha256:85a764064dc03efd98791ec3b30bb0607f5a8a82fc3ad9ca143069634edaeb3b"]
-                    }
-                }
-            }
-        ]
-    }
-}
-```
-
-`container.image.model-server` pins the image whose reference ends with repo `model-server` (e.g. `registry.example.com/my/model-server:v3`, where the registry host and tag are not part of the match). The model reference value is the root hash a measurement tool computed for the model; the image reference value is the image digest.
-
-</details>
-
-<details>
-<summary>transparency_log field table</summary>
+<summary>transparency_log entry field table</summary>
 
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | absent (`None`) | Measurement type list, must mirror the manifest's `measurements` array in order and set; absent skips the measurement check, explicit `[]` is not the same (see above) |
+| `publishedMeasurements` | — | (required) Non-empty measurement type list in manifest order; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`; a type may not repeat |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
-| `services[].type` | — | Must be `"rekor-v1"`; exactly one service is supported |
-| `services[].logUrl` | — | Rekor v1 log base URL (e.g. `https://rekor.sigstore.dev`, `https://rekor.openanolis.cn`) |
-| `services[].logIndex` | — | The Rekor v1 entry index to fetch and authenticate |
-| `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies checkpoint/SET); omit to use the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`, required for other logs |
-| `services[].publisherPublicKeyPem` | — | Optional trusted publisher public key PEM; when set, the DSSE publisher signature is verified at appraisal, binding the entry to this publisher |
-| `staticReferenceMeasurements` | absent (`None`) | Measurement types appraised against statically registered reference values instead of the transparency log: `"model"` or `"container.image.<repo>"`; AND-gates the measurement check (see above) |
+| `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
+| `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |
+| `services[].logUrl` | — | (required for `rekor-v1`) Rekor v1 log base URL (e.g. `https://rekor.sigstore.dev`, `https://rekor.openanolis.cn`) |
+| `services[].logIndex` | — | (required for `rekor-v1`) The Rekor v1 entry index to fetch and authenticate; must be `>= 0` |
+| `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies checkpoint/SET); omit for the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`, required for other logs |
+| `services[].url` | — | (required for `artifact-server`) Artifact-server base URL |
+| `services[].logServices` | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
+| `services[].publisherPublicKeyPem` | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
+| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; required with `fallbackServices`, non-empty, and a subset of `publishedMeasurements` |
+| `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary |
 
 </details>
 
@@ -640,7 +603,7 @@ Connect to an external Attestation Service (restful HTTP or gRPC). Verification 
 <details>
 <summary><code>verify_signer_transparency</code> background</summary>
 
-When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor **v2** transparency log (a separate mechanism from the Rekor **v1** transparency_log policy in Scenario 4). Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
+When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor **v2** transparency log (a separate mechanism from the Rekor **v1** `transparency_log` module entry in Scenario 4). Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
 </details>
 
 **Examples**
@@ -687,11 +650,10 @@ Basic example (Restful):
 |---|---|---|
 | `hardware_only` (alias `default`) | Only verifies hardware TEE recognition; rejects a non-empty `reference_values` (default) | Scenario 1 |
 | `hardware_only_strict` | Same, but TDX must be non-debug and include an event log | Scenario 1 note |
-| `modules` | Modular verification rules: per-module checks with baselines pinned inline; entries of one dimension AND within a group, and each dimension is OR-ed over the groups carrying it | Scenario 3 |
+| `modules` | Modular verification rules: per-module checks with baselines pinned inline, or a `transparency_log` entry anchored to a Rekor v1 log; entries of one dimension AND within a group, and each dimension is OR-ed over the groups carrying it | Scenario 3, Scenario 4 |
 | `trust_all` | Affirms every dimension unconditionally (debug/test only) and rejects a non-empty `reference_values` | — |
 | `inline` | Inline base64 rego | Scenario 2 |
 | `path` | rego file path | Scenario 2 |
-| `transparency_log` | Anchor to a Rekor v1 transparency log | Scenario 4 |
 
 #### ITA Provider
 
