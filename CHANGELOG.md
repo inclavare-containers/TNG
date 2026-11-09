@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A TNG verifier now accepts both the pre-draft-04 and the draft-04 EAR token claim layouts, so a token issued by an upstream Trustee AS that migrated to draft-04 ([confidential-containers/trustee#1614](https://github.com/confidential-containers/trustee/pull/1614)) no longer fails with a missing `runtime_data_claims` field. The builtin AS's pre-draft-04 tokens keep verifying unchanged.
 - Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
 - `/status/egress/{id}/` advertises only the configured protocol's subtree (`ohttp` or `rats_tls`); previously a rats_tls egress advertised an `ohttp` node whose every path 404s.
 

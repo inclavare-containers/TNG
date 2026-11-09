@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use std::collections::{HashMap, HashSet};
 
+use super::ear_layout;
 use super::token::{AttestationTokenVerifierConfig, TokenError, TokenVerifier};
 
 pub(super) struct CommonCocoVerifier {
@@ -58,12 +59,9 @@ impl CommonCocoVerifier {
         } else {
             let runtime_data_expected = crate::tee::wrap_runtime_data_as_structed(report_data)?;
             let runtime_data_in_token = if is_ear {
-                // EAR JWT route
-                claims_value
-                    .pointer("/submods/cpu0/ear.veraison.annotated-evidence/runtime_data_claims")
-                    .ok_or_else(|| Error::MissingTokenField {
-                        detail: "runtime_data_claims".to_string(),
-                    })?
+                // EAR JWT route. Both the draft-04 and the legacy claim
+                // layouts are accepted.
+                ear_layout::runtime_data(&claims_value)?
             } else {
                 // Standard CoCo AS token route
                 claims_value
@@ -105,55 +103,8 @@ impl CommonCocoVerifier {
 
         // Check expected policy-ids
         let allowed_policy_ids = if is_ear {
-            let submods = claims_value
-                .pointer("/submods")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| Error::MissingTokenField {
-                    detail: "/submods".to_string(),
-                })?;
-
-            let mut policy_ids = HashSet::new();
-            for (key, value) in submods {
-                let policy_id = value
-                    .pointer("/ear.appraisal-policy-id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::MissingTokenField {
-                        detail: format!("/submods/{}/ear.appraisal-policy-id", key),
-                    })?;
-
-                // Check ear.status and trustworthiness-vector, the value of ear.status should be one of (affirming, warning, contraindicated)
-                let status = value
-                    .pointer("/ear.status")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| Error::MissingTokenField {
-                        detail: format!("/submods/{}/ear.status", key),
-                    })?;
-
-                let trustworthiness_vector = value
-                    .pointer("/ear.trustworthiness-vector")
-                    .ok_or_else(|| Error::MissingTokenField {
-                        detail: format!("/submods/{}/ear.trustworthiness-vector", key),
-                    })?;
-
-                if status != "affirming" {
-                    return Err(Error::EarStatusNotAffirming {
-                        status: status.to_string(),
-                        tee_type: key.to_string(),
-                        trustworthiness: trustworthiness_vector.to_string(),
-                    });
-                }
-
-                policy_ids.insert(policy_id.to_owned());
-            }
-
-            if policy_ids.len() > 1 {
-                return Err(Error::MultiplePolicyIds);
-            }
-
-            if policy_ids.is_empty() {
-                return Err(Error::NoValidPolicyId);
-            }
-            policy_ids
+            // The claim layout is detected per submod.
+            ear_layout::appraisal_policy_ids(&claims_value)?
         } else {
             /*
              * The content format of evaluation-reports is documented here: https://github.com/confidential-containers/trustee/blob/43d56f3a4a92a1cc691f63a8e1311bcc0d2b3fc8/attestation-service/docs/example.token.json#L6

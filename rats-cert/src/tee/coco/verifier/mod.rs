@@ -1,6 +1,7 @@
 #[cfg(feature = "__builtin-as")]
 pub mod builtin;
 mod common;
+mod ear_layout;
 pub mod remote;
 pub mod token;
 #[cfg(feature = "crypto-rustcrypto")]

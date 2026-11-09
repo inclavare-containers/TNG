@@ -1,0 +1,74 @@
+{
+  "eat_profile": "tag:github.com,2024:confidential-containers/Trustee",
+  "iat": 1789109692,
+  "exp": 1789109992,
+  "iss": "CoCo-Attestation-Service",
+  "ear_status": "contraindicated",
+  "ear_verifier_id": {
+    "developer": "https://confidentialcontainers.org",
+    "build": "attestation-service 0.1.0"
+  },
+  "submods": {
+    "cpu0": {
+      "ear_status": "contraindicated",
+      "ear_trustworthiness_vector": {
+        "instance-identity": 0,
+        "configuration": 2,
+        "executables": 33,
+        "file-system": 0,
+        "hardware": 97,
+        "runtime-opaque": 0,
+        "storage-opaque": 0,
+        "sourced-data": 0
+      },
+      "ear_appraisal_policy_ids": [
+        "default"
+      ],
+      "ear_attester_claims": {
+        "init_data": "DezN7Q2H7ERwLHMw+sPrk2to3Mpcn2td8fs0gMC1Jaw=",
+        "report_data": "UQEgam5r5JUnmKHXAlgiRvOcGEBcD+f0F9TP9aOuJQqF9assOQqc8rjWQ5RUaNRF",
+        "tee": "sample",
+        "claims": {
+          "debug": false,
+          "launch_digest": "abcde",
+          "svn": "1",
+          "platform_version": {
+            "major": 1,
+            "minor": 4
+          }
+        }
+      },
+      "ear_verifier_claims": {
+        "init_data": {
+          "agent_policy_claims": {
+            "common": {},
+            "containers": [
+              "bitnami/nginx:latest"
+            ],
+            "request_defaults": {},
+            "sandbox": {}
+          }
+        },
+        "runtime_data": {
+          "additional-evidence": "",
+          "nonce": "CoE7ro/ze2tTD9oKWR9RA0a8FOiaPwFvC0dSsg/9nLE=",
+          "tee-pubkey": {
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ECDH-ES+A256KW",
+            "x": "_96Cp-fF8xuKdli6rt6HeKootgi_l93NoBo6NVlbbS0",
+            "y": "D54qqxF8CLoGalrnemVOwKd7p3-Mv5ihBpcBZZfu2-A"
+          }
+        }
+      },
+      "ear.trustee.identifiers": {
+        "validated": {
+          "container_images": [
+            "bitnami/nginx:latest"
+          ],
+          "container_uids": []
+        }
+      }
+    }
+  }
+}
