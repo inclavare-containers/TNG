@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+
 use std::io::IsTerminal;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -65,6 +68,37 @@ unsafe fn resolve_libc_symbol<T>(name: &str) -> Option<T> {
         None
     } else {
         Some(std::mem::transmute_copy(&sym))
+    }
+}
+
+/// Reads a real libc symbol resolved by the constructor. `None` means
+/// resolution failed at load time; the caller fails the intercepted call with
+/// EIO instead of panicking inside the host process.
+fn real_symbol<T: Copy>(cell: &OnceLock<T>) -> Option<T> {
+    cell.get().copied()
+}
+
+/// Fails an intercepted call whose real libc symbol is missing. The symbol is
+/// logged so the cause is not lost, and errno is `EIO` (an internal failure)
+/// rather than `ENOSYS`: an application that sees `ENOSYS` may treat the
+/// syscall as unsupported and fall back to a path that bypasses the hook.
+fn interposition_failed(symbol: &'static str) -> c_int {
+    tracing::error!(
+        symbol,
+        "real libc symbol unavailable; failing the intercepted call"
+    );
+    // SAFETY: errno is thread-local and always writable.
+    unsafe { *libc::__errno_location() = libc::EIO };
+    -1
+}
+
+/// Resolves `name` into `cell`, recording it when the symbol is unavailable.
+unsafe fn resolve_into<T>(cell: &OnceLock<T>, name: &'static str, missing: &mut Vec<&'static str>) {
+    match resolve_libc_symbol::<T>(name) {
+        Some(symbol) => {
+            let _ = cell.set(symbol);
+        }
+        None => missing.push(name),
     }
 }
 
@@ -283,21 +317,24 @@ fn init() {
     // routes through this library's own intercepted `connect` (the PLT
     // resolves to our exported symbol); that passthrough needs `REAL_CONNECT`
     // already set, so dlsym must precede any socket creation here.
+    //
+    // A missing symbol disables the affected interception: the hook functions
+    // below fail the call with EIO instead of panicking inside the host
+    // process, and the message below is the only place to report it before the
+    // log sinks are built.
+    let mut missing_symbols = Vec::new();
     unsafe {
-        let real_bind = resolve_libc_symbol::<BindFn>("bind").expect("Failed to resolve libc bind");
-        let _ = REAL_BIND.set(real_bind);
-
-        let real_getsockname = resolve_libc_symbol::<GetsocknameFn>("getsockname")
-            .expect("Failed to resolve libc getsockname");
-        let _ = REAL_GETSOCKNAME.set(real_getsockname);
-
-        let real_connect =
-            resolve_libc_symbol::<ConnectFn>("connect").expect("Failed to resolve libc connect");
-        let _ = REAL_CONNECT.set(real_connect);
-
-        let real_sendto =
-            resolve_libc_symbol::<SendtoFn>("sendto").expect("Failed to resolve libc sendto");
-        let _ = REAL_SENDTO.set(real_sendto);
+        resolve_into(&REAL_BIND, "bind", &mut missing_symbols);
+        resolve_into(&REAL_GETSOCKNAME, "getsockname", &mut missing_symbols);
+        resolve_into(&REAL_CONNECT, "connect", &mut missing_symbols);
+        resolve_into(&REAL_SENDTO, "sendto", &mut missing_symbols);
+    }
+    if !missing_symbols.is_empty() {
+        let _ = writeln!(
+            std::io::stderr(),
+            "tng-hook: could not resolve libc symbols {missing_symbols:?}; \
+             intercepted calls will fail with EIO"
+        );
     }
 
     // Route hook logs to one of three sinks per stream (info vs error):
@@ -520,7 +557,9 @@ unsafe fn sockaddr_to_connect_v4(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[no_mangle]
 pub extern "C" fn bind(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int {
-    let real_bind = REAL_BIND.get().expect("REAL_BIND not initialized");
+    let Some(real_bind) = real_symbol(&REAL_BIND) else {
+        return interposition_failed("bind");
+    };
 
     // Only intercept AF_INET (IPv4)
     if let Some(origin_addr) = unsafe { sockaddr_to_v4(addr) } {
@@ -572,9 +611,9 @@ pub extern "C" fn getsockname(
     addr: *mut sockaddr,
     addrlen: *mut socklen_t,
 ) -> c_int {
-    let real_getsockname = REAL_GETSOCKNAME
-        .get()
-        .expect("REAL_GETSOCKNAME not initialized");
+    let Some(real_getsockname) = real_symbol(&REAL_GETSOCKNAME) else {
+        return interposition_failed("getsockname");
+    };
 
     // Call the real getsockname first
     let result = unsafe { real_getsockname(sockfd, addr, addrlen) };
@@ -611,7 +650,9 @@ pub extern "C" fn getsockname(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[no_mangle]
 pub extern "C" fn connect(sockfd: c_int, addr: *const sockaddr, addrlen: socklen_t) -> c_int {
-    let real_connect = REAL_CONNECT.get().expect("REAL_CONNECT not initialized");
+    let Some(real_connect) = real_symbol(&REAL_CONNECT) else {
+        return interposition_failed("connect");
+    };
 
     // Only hijack TCP sockets (SOCK_STREAM).  UDP, RAW, etc. must pass through
     // to the real connect() — they don't speak HTTP CONNECT.
@@ -917,7 +958,9 @@ pub extern "C" fn sendto(
     dest_addr: *const sockaddr,
     addrlen: socklen_t,
 ) -> ssize_t {
-    let real_sendto = REAL_SENDTO.get().expect("REAL_SENDTO not initialized");
+    let Some(real_sendto) = real_symbol(&REAL_SENDTO) else {
+        return interposition_failed("sendto") as ssize_t;
+    };
 
     // Only intercept when MSG_FASTOPEN is set — otherwise pass through.
     if (flags & libc::MSG_FASTOPEN) == 0 {
