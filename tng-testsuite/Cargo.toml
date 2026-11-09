@@ -87,6 +87,10 @@ name = "client_netfilter_server_netfilter"
 path = "tests/netfilter/client_netfilter_server_netfilter.rs"
 
 [[test]]
+name = "client_reset_mid_response"
+path = "tests/basic/client_reset_mid_response.rs"
+
+[[test]]
 name = "client_socks5_server_netfilter"
 path = "tests/netfilter/client_socks5_server_netfilter.rs"
 
