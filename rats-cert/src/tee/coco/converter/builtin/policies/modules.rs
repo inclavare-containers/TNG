@@ -8,6 +8,7 @@ use super::super::policy_config::{
 };
 use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
+use crate::tee::coco::diagnostics::{APPRAISAL_DIAGNOSTICS_EXTENSION, APPRAISAL_DIAGNOSTICS_KEY};
 use anyhow::Context;
 
 /// A parsed, validated measurement/posture module: the concrete variant the
@@ -72,6 +73,38 @@ impl Module {
     fn platform(&self) -> Platform {
         Platform::Tdx
     }
+
+    /// The canonical type spelling, used as the diagnostic `check` name of a
+    /// measurement entry.
+    fn canonical_type(&self) -> String {
+        match self {
+            Module::TdShim { .. } => "tdx.td-shim".to_string(),
+            Module::Ovmf { .. } => "tdx.ovmf".to_string(),
+            Module::Kernel { .. } => "tdx.kernel".to_string(),
+            Module::Uki { .. } => "tdx.uki".to_string(),
+            Module::ContainerImage { repo, .. } => {
+                format!("com.alibabacloud.container.image.{repo}")
+            }
+            Module::AiModel { model_id, .. } => format!("com.alibabacloud.ai.model.{model_id}"),
+            Module::Tdx(_) => "tdx".to_string(),
+            Module::Nvidia(_) => "nvidia".to_string(),
+            Module::Gpu => "com.alibabacloud.gpu".to_string(),
+            Module::TransparencyLog(_) => "transparency_log".to_string(),
+        }
+    }
+
+    /// The pinned measurement value, or `None` for a posture entry, which has
+    /// no single expected value.
+    fn pinned_value(&self) -> Option<&str> {
+        match self {
+            Module::TdShim { value }
+            | Module::Ovmf { value }
+            | Module::Kernel { value }
+            | Module::Uki { value } => Some(value),
+            Module::ContainerImage { digest, .. } | Module::AiModel { digest, .. } => Some(digest),
+            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
+        }
+    }
 }
 
 /// TEE platforms a module entry can depend on. Only TDX exists today; the
@@ -95,6 +128,13 @@ impl Platform {
             Platform::Tdx => {
                 "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
             }
+        }
+    }
+
+    /// The diagnostic `check` name reported for the platform itself.
+    fn check_name(&self) -> &'static str {
+        match self {
+            Platform::Tdx => "tdx",
         }
     }
 }
@@ -180,6 +220,17 @@ fn unknown_module_type(raw: &str) -> anyhow::Error {
 enum Dimension {
     Executables,
     Hardware,
+}
+
+impl Dimension {
+    /// The AR4SI dimension name, as it appears in a diagnostic payload and in
+    /// the `dimension_value` lookup.
+    fn as_str(self) -> &'static str {
+        match self {
+            Dimension::Executables => "executables",
+            Dimension::Hardware => "hardware",
+        }
+    }
 }
 
 /// Name segment charset: letters, digits and `. _ / @ : + -`.
@@ -411,6 +462,13 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// A `transparency_log` entry with a rekor-v1 primary fetches and authenticates
 /// its log entry here, before rendering. An artifact-server primary defers to
 /// appraisal time and does no I/O at load.
+///
+/// Every entry also emits a diagnostic, and the policy carries a
+/// `tng.appraisal-diagnostics` extension listing the checks that failed. A
+/// posture entry is split into one diagnostic per enabled sub-check, so a
+/// failure names the specific check (`tdx.debug`, `nvidia.cc_enabled`)
+/// instead of the whole posture. The extension is undefined while nothing
+/// fails, so a successful appraisal's token is unchanged.
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
     let groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
 
@@ -465,6 +523,10 @@ fn render_modules_policy(
     }
     let mut resolved_entries = resolved.iter();
     let mut helpers: Vec<String> = Vec::new();
+    let mut entry_rules: Vec<String> = Vec::new();
+    // Diagnostic rule names, in emission order, for the `failed_checks`
+    // collector.
+    let mut diag_names: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
@@ -480,21 +542,38 @@ fn render_modules_policy(
     // Whether the policy references the pull-image repo-name extractor; defined
     // once when any container.image entry appears.
     let mut need_repo_name = false;
+    // GPU claim / event projections shared by the sub-checks of one posture
+    // family, defined once per policy when such an entry appears.
+    let mut need_nvidia_gpus = false;
+    let mut need_gpu_events = false;
 
     for (gi, group) in groups.iter().enumerate() {
         let mut executables_preds: Vec<String> = Vec::new();
         let mut hardware_preds: Vec<String> = Vec::new();
         for (j, module) in group.iter().enumerate() {
             let pred = format!("m_{gi}_{j}");
+            let diag = format!("diag_{gi}_{j}");
             policy_platform.get_or_insert_with(|| module.platform());
-            let body = match module {
+            let dimension = module.dimension().as_str();
+            let block = match module {
                 Module::Tdx(cfg) => {
-                    let (body, extra) = tdx_posture_rule(cfg, &pred)?;
+                    let (checks, extra) = tdx_posture_rule(cfg, &pred)?;
                     helpers.extend(extra);
-                    body
+                    diag_names.extend(checks.iter().map(|c| format!("{diag}_{}", c.suffix)));
+                    posture_rules(&pred, &diag, "tdx", dimension, &checks)
                 }
-                Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
-                Module::Gpu => gpu_posture_rule(&pred),
+                Module::Nvidia(cfg) => {
+                    need_nvidia_gpus = true;
+                    let checks = nvidia_posture_rule(cfg);
+                    diag_names.extend(checks.iter().map(|c| format!("{diag}_{}", c.suffix)));
+                    posture_rules(&pred, &diag, "nvidia", dimension, &checks)
+                }
+                Module::Gpu => {
+                    need_gpu_events = true;
+                    let checks = gpu_posture_rule();
+                    diag_names.extend(checks.iter().map(|c| format!("{diag}_{}", c.suffix)));
+                    posture_rules(&pred, &diag, "gpu", dimension, &checks)
+                }
                 Module::TransparencyLog(cfg) => {
                     // Every transparency entry consumes its own resolved slot,
                     // in flatten order, so multiple entries cannot share or
@@ -505,10 +584,24 @@ fn render_modules_policy(
                         )
                     })?;
                     has_transparency = true;
+                    diag_names.push(diag.clone());
                     let prefix = format!("t_{gi}_{j}");
-                    transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
+                    format!(
+                        "{}\n\n{}",
+                        transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?,
+                        transparency_log_diag_rules(&pred, &diag, dimension),
+                    )
                 }
-                measurement => measurement_rule(measurement, &pred)?,
+                measurement => {
+                    let observed = format!("observed_{gi}_{j}");
+                    diag_names.push(diag.clone());
+                    format!(
+                        "{}\n\n{}\n\n{}",
+                        measurement_rule(measurement, &pred)?,
+                        measurement_observed_rule(measurement, &observed)?,
+                        measurement_diag_rules(measurement, &pred, &diag, &observed, dimension)?,
+                    )
+                }
             };
             if matches!(module, Module::ContainerImage { .. }) {
                 need_repo_name = true;
@@ -517,7 +610,7 @@ fn render_modules_policy(
                 Dimension::Executables => executables_preds.push(pred),
                 Dimension::Hardware => hardware_preds.push(pred),
             }
-            helpers.push(body);
+            entry_rules.push(block);
         }
 
         if !executables_preds.is_empty() {
@@ -568,7 +661,7 @@ fn render_modules_policy(
         None => String::new(),
     };
 
-    // The shared transparency extraction rules are emitted once, ahead of the
+// The shared transparency extraction rules are emitted once, ahead of the
     // per-entry rules that call them. They use `image_repo_name`, so a
     // transparency entry needs that helper too.
     let mut helper_parts: Vec<String> = Vec::new();
@@ -580,7 +673,30 @@ fn render_modules_policy(
                 .to_string(),
         );
     }
+
+    // The platform's own diagnostic: without it a non-recognised platform only
+    // shows up as a silently non-affirming hardware dimension.
+    let diagnostics_block = match policy_platform.as_ref() {
+        Some(platform) => {
+            let mut names = diag_names;
+            names.push("diag_platform".to_string());
+            format!(
+                "\n\n{}\n\n{}",
+                platform_diagnostic_rule(platform),
+                failed_checks_block(&names)
+            )
+        }
+        None => String::new(),
+    };
+
+    if need_nvidia_gpus {
+        helpers.push(NVIDIA_GPUS_HELPER.to_string());
+    }
+    if need_gpu_events {
+        helpers.push(GPU_ATTESTATION_EVENTS_HELPER.to_string());
+    }
     helper_parts.extend(helpers);
+
     let helper_block = if helper_parts.is_empty() {
         String::new()
     } else {
@@ -592,6 +708,11 @@ fn render_modules_policy(
         "image_repo_name(ref) := name if {\n\tsegs := split(ref, \"/\")\n\tlast := segs[count(segs) - 1]\n\tname := split(split(last, \"@\")[0], \":\")[0]\n}\n\n".to_string()
     } else {
         String::new()
+    };
+    let entry_block = if entry_rules.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n\n", entry_rules.join("\n\n"))
     };
     let dimension_block = if group_dimension_rules.is_empty() {
         String::new()
@@ -619,9 +740,9 @@ default file_system := 2
 default hardware := 97
 default executables := {executables_default}
 
-{helper_block}{repo_name_block}{dimension_block}{executables_block}
+{helper_block}{repo_name_block}{entry_block}{dimension_block}{executables_block}
 
-{hardware_block}{recognition_block}
+{hardware_block}{recognition_block}{diagnostics_block}
 "#,
         hardware_block = hardware_rules.join("\n\n"),
     );
@@ -721,36 +842,286 @@ fn measurement_rule(module: &Module, pred: &str) -> anyhow::Result<String> {
     })
 }
 
-/// Emit the `name if { ... }` rule for a `tdx` posture entry plus helper rules
-/// for the disjunctive checks (service-TD zero, rejected advisories). Every
-/// field defaults to its strict choice; a field that "allows"/"optionals" adds
-/// no constraint. There is no `nonce_binding` field: the `report_data` session
+/// Emit the `<observed> := ...` projection rule for a measurement entry: what
+/// the evidence actually carries, with no pass/fail judgement. Diagnostics
+/// render it as `actual`.
+fn measurement_observed_rule(module: &Module, observed: &str) -> anyhow::Result<String> {
+    // Event-log families iterate over a defaulted list so the projection is
+    // `[]` rather than undefined when the evidence carries no event log.
+    let events = r#"object.get(object.get(input, "tdx", {}), "uefi_event_logs", [])"#;
+    Ok(match module {
+        Module::TdShim { .. } | Module::Ovmf { .. } => format!(
+            r#"{observed} := object.get(object.get(object.get(object.get(input, "tdx", {{}}), "quote", {{}}), "body", {{}}), "mr_td", null)"#
+        ),
+        Module::Kernel { .. } => format!(
+            r#"{observed} := [d.digest |
+	some e in {events}
+	e.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
+	e.details.string == "td_payload"
+	some d in e.digests
+	d.alg == "SHA-384"
+]"#
+        ),
+        Module::Uki { .. } => format!(
+            r#"{observed} := [d.digest |
+	some e in {events}
+	e.type_name == "EV_EFI_BOOT_SERVICES_APPLICATION"
+	some d in e.digests
+	d.alg == "SHA-384"
+]"#
+        ),
+        Module::ContainerImage { repo, .. } => format!(
+            r#"{observed} := [e.details.data.content.digest |
+	some e in {events}
+	e.type_name == "EV_EVENT_TAG"
+	e.details.unicode_name == "AAEL"
+	e.details.data.domain == "alibabacloud.com"
+	e.details.data.operation == "kangaroo/pull-image"
+	image_repo_name(e.details.data.content.reference) == {repo:?}
+]"#
+        ),
+        Module::AiModel { .. } => format!(
+            r#"{observed} := [{{"model-id": e.details.data.content["model-id"], "hash": e.details.data.content["hash"]}} |
+	some e in {events}
+	e.type_name == "EV_EVENT_TAG"
+	e.details.unicode_name == "AAEL"
+	e.details.data.domain == "alibabacloud.com"
+	e.details.data.operation == "pai/load-model"
+]"#
+        ),
+        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => {
+            anyhow::bail!("posture module passed to the measurement projection emitter")
+        }
+    })
+}
+
+/// Emit the matched/mismatch diagnostic pair for a measurement entry.
+fn measurement_diag_rules(
+    module: &Module,
+    pred: &str,
+    diag: &str,
+    observed: &str,
+    dimension: &str,
+) -> anyhow::Result<String> {
+    let Some(expected) = module.pinned_value() else {
+        anyhow::bail!("posture module passed to the measurement diagnostics emitter");
+    };
+    let check = module.canonical_type();
+    Ok(format!(
+        r#"{diag} := {{
+	"dimension": {dimension:?},
+	"check": {check:?},
+	"matched": true,
+	"expected": {expected:?},
+	"actual": {observed},
+}} if {{
+	{pred}
+}}
+
+{diag} := {{
+	"dimension": {dimension:?},
+	"check": {check:?},
+	"matched": false,
+	"expected": {expected:?},
+	"actual": {observed},
+	"reason": "mismatch",
+}} if {{
+	not {pred}
+}}"#
+    ))
+}
+
+/// Emit the matched/mismatch diagnostic pair for a `transparency_log` entry.
+///
+/// Its baseline is the manifest recorded in the transparency log, not a value
+/// from this config, so the diagnostic carries no `expected`/`actual`: the
+/// logged manifest is not ours to disclose, and reporting it would bloat the
+/// token. The reason alone still separates a mismatch from a missing check.
+fn transparency_log_diag_rules(pred: &str, diag: &str, dimension: &str) -> String {
+    format!(
+        r#"{diag} := {{
+	"dimension": {dimension:?},
+	"check": "transparency_log",
+	"matched": true,
+}} if {{
+	{pred}
+}}
+
+{diag} := {{
+	"dimension": {dimension:?},
+	"check": "transparency_log",
+	"matched": false,
+	"reason": "transparency-log-mismatch",
+}} if {{
+	not {pred}
+}}"#
+    )
+}
+
+/// Total projection of a quote-body field, used as a diagnostic `actual`. The
+/// outer `object.get` guard keeps the projection defined on evidence without a
+/// TDX block: an undefined `actual` would make the whole `failed_checks` list
+/// undefined.
+const TD_ATTRIBUTES_ACTUAL: &str = r#"object.get(object.get(object.get(object.get(input, "tdx", {}), "quote", {}), "body", {}), "td_attributes", null)"#;
+const MR_SERVICETD_ACTUAL: &str = r#"object.get(object.get(object.get(object.get(input, "tdx", {}), "quote", {}), "body", {}), "mr_servicetd", null)"#;
+
+/// Total projection of a `tcb_verification` field.
+fn tcb_actual(field: &str) -> String {
+    format!(
+        r#"object.get(object.get(object.get(input, "tdx", {{}}), "tcb_verification", {{}}), {field:?}, null)"#
+    )
+}
+
+/// The evaluated per-GPU claims: every `input.tdx.nvidia_gpu.*` value. Defined
+/// once per policy when an `nvidia` entry appears; both the sub-check
+/// predicates and their diagnostic projections read it.
+const NVIDIA_GPUS_HELPER: &str = r#"nvidia_gpus := [g |
+	tdx := object.get(input, "tdx", {})
+	some k, g in tdx
+	startswith(k, "nvidia_gpu.")
+]"#;
+
+/// The guest-reported AAEL GPU attestation events, defined once per policy when
+/// a `com.alibabacloud.gpu` entry appears.
+const GPU_ATTESTATION_EVENTS_HELPER: &str = r#"gpu_attestation_events := [e |
+	some e in object.get(object.get(input, "tdx", {}), "uefi_event_logs", [])
+	e.type_name == "EV_EVENT_TAG"
+	e.details.unicode_name == "AAEL"
+	e.details.data.domain == "alibabacloud.com"
+	e.details.data.operation == "gpu/attestation"
+]"#;
+
+/// One enabled sub-check of a posture entry. Each becomes its own predicate and
+/// its own diagnostic, so a failing posture reports which checks failed instead
+/// of one opaque verdict. The aggregate predicate still ANDs them for the
+/// dimension rule.
+struct PostureCheck {
+    /// Suffix of the sub-check: its predicate is `<pred>_<suffix>` and its
+    /// diagnostic check name is `<prefix>.<suffix>`.
+    suffix: &'static str,
+    /// What the check requires, rendered into the diagnostic.
+    expected: String,
+    /// Rego expression yielding the observed value, rendered as `actual`.
+    actual_expr: String,
+    /// Body lines of the sub-check predicate, unindented.
+    body: Vec<String>,
+}
+
+/// Emit a posture entry as one predicate per enabled sub-check, an aggregate
+/// predicate that ANDs them, and a matched/mismatch diagnostic pair per
+/// sub-check. A posture entry with no enabled sub-check keeps an unconditional
+/// predicate and contributes no diagnostic.
+fn posture_rules(
+    pred: &str,
+    diag: &str,
+    check_prefix: &str,
+    dimension: &str,
+    checks: &[PostureCheck],
+) -> String {
+    if checks.is_empty() {
+        return format!("{pred} if {{\n\ttrue\n}}");
+    }
+
+    let mut blocks: Vec<String> = checks
+        .iter()
+        .map(|check| {
+            format!(
+                "{pred}_{suffix} if {{\n{body}\n}}",
+                suffix = check.suffix,
+                body = indent(&check.body),
+            )
+        })
+        .collect();
+
+    let conjuncts = checks
+        .iter()
+        .map(|check| format!("\t{pred}_{}", check.suffix))
+        .collect::<Vec<_>>()
+        .join("\n");
+    blocks.push(format!("{pred} if {{\n{conjuncts}\n}}"));
+
+    for check in checks {
+        let sub_check = format!("{pred}_{}", check.suffix);
+        let check_name = format!("{check_prefix}.{}", check.suffix);
+        blocks.push(format!(
+            r#"{diag}_{suffix} := {{
+	"dimension": {dimension:?},
+	"check": {check_name:?},
+	"matched": true,
+	"expected": {expected:?},
+	"actual": {actual},
+}} if {{
+	{sub_check}
+}}
+
+{diag}_{suffix} := {{
+	"dimension": {dimension:?},
+	"check": {check_name:?},
+	"matched": false,
+	"expected": {expected:?},
+	"actual": {actual},
+	"reason": "mismatch",
+}} if {{
+	not {sub_check}
+}}"#,
+            suffix = check.suffix,
+            expected = check.expected,
+            actual = check.actual_expr,
+        ));
+    }
+    blocks.join("\n\n")
+}
+
+/// Emit the sub-checks of a `tdx` posture entry plus helper rules for the
+/// disjunctive checks (service-TD zero, rejected advisories). Every field
+/// defaults to its strict choice; a field that "allows"/"optionals" adds no
+/// sub-check. There is no `nonce_binding` field: the `report_data` session
 /// binding is enforced unconditionally by the verifier's `runtime_data` path,
 /// so it is not a policy knob and is not emitted here.
-fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let mut body: Vec<String> = Vec::new();
+fn tdx_posture_rule(
+    cfg: &TdxPostureConfig,
+    name: &str,
+) -> anyhow::Result<(Vec<PostureCheck>, Vec<String>)> {
+    let mut checks: Vec<PostureCheck> = Vec::new();
     let mut extra: Vec<String> = Vec::new();
 
     if cfg.debug == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f][02468ace]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
+        checks.push(PostureCheck {
+            suffix: "debug",
+            expected: "debug bit clear".to_string(),
+            actual_expr: TD_ATTRIBUTES_ACTUAL.to_string(),
+            body: vec![
+                r#"regex.match("^[0-9a-f][02468ace]", input.tdx.quote.body.td_attributes)"#
+                    .to_string(),
+            ],
+        });
     }
     if cfg.sept_ve_disable == TdxSeptVe::Require {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{6}[13579bdf]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
+        checks.push(PostureCheck {
+            suffix: "sept_ve_disable",
+            expected: "SEPT #VE disable bit set".to_string(),
+            actual_expr: TD_ATTRIBUTES_ACTUAL.to_string(),
+            body: vec![
+                r#"regex.match("^[0-9a-f]{6}[13579bdf]", input.tdx.quote.body.td_attributes)"#
+                    .to_string(),
+            ],
+        });
     }
     if cfg.perfmon == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{14}[0-7]\", input.tdx.quote.body.td_attributes)".to_string(),
-        );
+        checks.push(PostureCheck {
+            suffix: "perfmon",
+            expected: "perfmon bit clear".to_string(),
+            actual_expr: TD_ATTRIBUTES_ACTUAL.to_string(),
+            body: vec![
+                r#"regex.match("^[0-9a-f]{14}[0-7]", input.tdx.quote.body.td_attributes)"#
+                    .to_string(),
+            ],
+        });
     }
     if cfg.service_td == TdxBit::Deny {
+        // Zero and absent are both acceptable: a v4 quote carries a zero
+        // service-TD measurement, an older one omits the field.
         let helper = format!("{name}_svc_td");
-        body.push(format!("\t{helper}"));
         extra.push(format!(
             r#"{helper} if {{
 	not input.tdx.quote.body.mr_servicetd
@@ -760,23 +1131,40 @@ fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(Strin
 	regex.match("^0{{96}}$", input.tdx.quote.body.mr_servicetd)
 }}"#
         ));
+        checks.push(PostureCheck {
+            suffix: "service_td",
+            expected: "mr_servicetd zero or absent".to_string(),
+            actual_expr: MR_SERVICETD_ACTUAL.to_string(),
+            body: vec![helper],
+        });
     }
 
     // TCB gate (opt-in). A revoked status always rejects; `up_to_date` further
     // rejects the out-of-date ranks. `advisory_ids` is a comma-joined string.
     if let Some(tcb) = &cfg.tcb {
-        body.push("\tv := input.tdx.tcb_verification".to_string());
-        body.push("\tv.tcb_status != \"Revoked\"".to_string());
-        if tcb.min_status == TcbMinStatus::UpToDate {
+        let mut body = vec![
+            "v := input.tdx.tcb_verification".to_string(),
+            "v.tcb_status != \"Revoked\"".to_string(),
+        ];
+        let expected = if tcb.min_status == TcbMinStatus::UpToDate {
             body.push(
-                "\tv.tcb_status in [\"UpToDate\", \"ConfigurationNeeded\", \"SWHardeningNeeded\", \"ConfigurationAndSWHardeningNeeded\"]".to_string(),
+                "v.tcb_status in [\"UpToDate\", \"ConfigurationNeeded\", \"SWHardeningNeeded\", \"ConfigurationAndSWHardeningNeeded\"]".to_string(),
             );
-        }
+            "tcb_status != Revoked and tcb_status in [UpToDate, ConfigurationNeeded, SWHardeningNeeded, ConfigurationAndSWHardeningNeeded]".to_string()
+        } else {
+            "tcb_status != Revoked".to_string()
+        };
+        checks.push(PostureCheck {
+            suffix: "tcb_status",
+            expected,
+            actual_expr: tcb_actual("tcb_status"),
+            body,
+        });
+
         if !tcb.reject_advisories.is_empty() {
             let helper = format!("{name}_adv");
             let reject = rego_string_array(&tcb.reject_advisories);
             let allow = rego_string_array(&tcb.allow_advisories);
-            body.push(format!("\tnot {helper}"));
             extra.push(format!(
                 r#"{helper} if {{
 	some a in {reject}
@@ -784,6 +1172,12 @@ fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(Strin
 	not a in {allow}
 }}"#
             ));
+            checks.push(PostureCheck {
+                suffix: "tcb_advisories",
+                expected: format!("no advisory in {reject} unless allowed by {allow}"),
+                actual_expr: tcb_actual("advisory_ids"),
+                body: vec![format!("not {helper}")],
+            });
         }
     }
 
@@ -791,106 +1185,248 @@ fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(Strin
     // epoch-second fields that the native TDX verifier places in
     // `tcb_verification`.
     if let Some(coll) = &cfg.collateral {
-        body.push("\tvc := input.tdx.tcb_verification".to_string());
         if !coll.allow_expired {
-            body.push("\tvc.collateral_expired == false".to_string());
+            checks.push(PostureCheck {
+                suffix: "collateral_expired",
+                expected: "collateral not expired".to_string(),
+                actual_expr: tcb_actual("collateral_expired"),
+                body: vec![
+                    "vc := input.tdx.tcb_verification".to_string(),
+                    "vc.collateral_expired == false".to_string(),
+                ],
+            });
         }
         if let Some(date) = &coll.min_tcb_date {
             let epoch = iso_date_to_epoch_secs(date).with_context(|| {
                 format!("validated tdx collateral min_tcb_date {date:?} is not convertible to epoch seconds")
             })?;
-            body.push(format!("\tvc.tcb_level_date_tag >= {epoch}"));
+            checks.push(PostureCheck {
+                suffix: "collateral_min_tcb_date",
+                expected: format!("tcb_level_date_tag >= {date}"),
+                actual_expr: tcb_actual("tcb_level_date_tag"),
+                body: vec![
+                    "vc := input.tdx.tcb_verification".to_string(),
+                    format!("vc.tcb_level_date_tag >= {epoch}"),
+                ],
+            });
         }
         if let Some(days) = coll.max_collateral_age_days {
             let secs = days as i64 * 86400;
-            body.push(format!(
-                "\t(time.now_ns() / 1000000000) - vc.latest_issue_date <= {secs}"
-            ));
+            checks.push(PostureCheck {
+                suffix: "collateral_max_age",
+                expected: format!("collateral age <= {days} days"),
+                actual_expr: tcb_actual("latest_issue_date"),
+                body: vec![
+                    "vc := input.tdx.tcb_verification".to_string(),
+                    // No leading parenthesis: a newline followed by `(` would
+                    // parse as a call of the previous line's expression.
+                    format!("time.now_ns() / 1000000000 - vc.latest_issue_date <= {secs}"),
+                ],
+            });
         }
     }
 
     if cfg.eventlog == TdxEventlog::Required {
-        body.push("\tcount(input.tdx.uefi_event_logs) > 0".to_string());
+        checks.push(PostureCheck {
+            suffix: "eventlog",
+            expected: "non-empty event log".to_string(),
+            actual_expr:
+                r#"count(object.get(object.get(input, "tdx", {}), "uefi_event_logs", []))"#
+                    .to_string(),
+            body: vec!["count(input.tdx.uefi_event_logs) > 0".to_string()],
+        });
     }
 
-    if body.is_empty() {
-        return Ok((format!("{name} if {{\n\ttrue\n}}"), extra));
-    }
-    Ok((format!("{name} if {{\n{}\n}}", body.join("\n")), extra))
+    Ok((checks, extra))
 }
 
-/// Emit the `com.alibabacloud.gpu` rule: the guest-reported AAEL GPU
-/// attestation event must exist and every such event must report zero for both
-/// result codes.
-fn gpu_posture_rule(pred: &str) -> String {
+/// Emit the sub-checks of a `com.alibabacloud.gpu` entry: the guest-reported
+/// AAEL GPU attestation event must exist and every such event must report zero
+/// for both result codes.
+fn gpu_posture_rule() -> Vec<PostureCheck> {
+    vec![
+        PostureCheck {
+            suffix: "event_present",
+            expected: "gpu/attestation event present".to_string(),
+            actual_expr: "count(gpu_attestation_events)".to_string(),
+            body: vec!["count(gpu_attestation_events) > 0".to_string()],
+        },
+        PostureCheck {
+            suffix: "result_codes",
+            expected: "collect and attest result codes are 0".to_string(),
+            actual_expr: r#"[{"collect": e.details.data.content["gpu-collect-evidence-result-code"], "attest": e.details.data.content["gpu-attest-result-code"]} | some e in gpu_attestation_events]"#.to_string(),
+            body: vec![
+                "every e in gpu_attestation_events {".to_string(),
+                r#"	e.details.data.content["gpu-collect-evidence-result-code"] == 0"#.to_string(),
+                r#"	e.details.data.content["gpu-attest-result-code"] == 0"#.to_string(),
+                "}".to_string(),
+            ],
+        },
+    ]
+}
+
+/// Emit the sub-checks of an `nvidia` posture entry: the standard trustee
+/// NVIDIA appraisal over the evaluated per-GPU claims, rejecting the raw/skip
+/// passthrough form (which carries attestation_report and lacks measurement).
+fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
+    let mut checks = vec![
+        PostureCheck {
+            suffix: "count",
+            expected: format!(">= {} GPU(s)", cfg.min_count),
+            actual_expr: "count(nvidia_gpus)".to_string(),
+            body: vec![format!("count(nvidia_gpus) >= {}", cfg.min_count)],
+        },
+        PostureCheck {
+            suffix: "raw_form",
+            expected: "no raw/skip passthrough report".to_string(),
+            actual_expr: "[g | some g in nvidia_gpus; g.attestation_report]".to_string(),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                "\tnot g.attestation_report".to_string(),
+                "}".to_string(),
+            ],
+        },
+    ];
+
+    if cfg.require_report {
+        checks.push(PostureCheck {
+            suffix: "measurement",
+            expected: "measurement present".to_string(),
+            actual_expr: "[g | some g in nvidia_gpus; not g.measurement]".to_string(),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                "\tg.measurement".to_string(),
+                "}".to_string(),
+            ],
+        });
+    }
+    if cfg.require_cc_mode {
+        checks.push(PostureCheck {
+            suffix: "cc_enabled",
+            expected: "cc_enabled == true".to_string(),
+            actual_expr: "[g | some g in nvidia_gpus; g.cc_enabled != true]".to_string(),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                "\tg.cc_enabled == true".to_string(),
+                "}".to_string(),
+            ],
+        });
+    }
+    if !cfg.allow_uuids.is_empty() {
+        let allow = rego_string_array(&cfg.allow_uuids);
+        checks.push(PostureCheck {
+            suffix: "uuid",
+            expected: format!("uuid in {allow}"),
+            actual_expr: format!("[g.uuid | some g in nvidia_gpus; not g.uuid in {allow}]"),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                format!("\tg.uuid in {allow}"),
+                "}".to_string(),
+            ],
+        });
+    }
+    if !cfg.allow_driver_versions.is_empty() {
+        let allow = rego_string_array(&cfg.allow_driver_versions);
+        checks.push(PostureCheck {
+            suffix: "driver_version",
+            expected: format!("driver_version in {allow}"),
+            actual_expr: format!(
+                "[g.driver_version | some g in nvidia_gpus; not g.driver_version in {allow}]"
+            ),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                format!("\tg.driver_version in {allow}"),
+                "}".to_string(),
+            ],
+        });
+    }
+    if !cfg.allow_vbios_versions.is_empty() {
+        let allow = rego_string_array(&cfg.allow_vbios_versions);
+        checks.push(PostureCheck {
+            suffix: "vbios_version",
+            expected: format!("vbios_version in {allow}"),
+            actual_expr: format!(
+                "[g.vbios_version | some g in nvidia_gpus; not g.vbios_version in {allow}]"
+            ),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                format!("\tg.vbios_version in {allow}"),
+                "}".to_string(),
+            ],
+        });
+    }
+    if !cfg.measurement_digest.is_empty() {
+        let allow = rego_string_array(&cfg.measurement_digest);
+        checks.push(PostureCheck {
+            suffix: "measurement_digest",
+            expected: format!("measurement in {allow}"),
+            actual_expr: format!(
+                "[g.measurement | some g in nvidia_gpus; not g.measurement in {allow}]"
+            ),
+            body: vec![
+                "every g in nvidia_gpus {".to_string(),
+                format!("\tg.measurement in {allow}"),
+                "}".to_string(),
+            ],
+        });
+    }
+    checks
+}
+
+/// The platform's own diagnostic: reports evidence that does not identify the
+/// platform the policy's entries are rooted at.
+fn platform_diagnostic_rule(platform: &Platform) -> String {
+    let recognition = platform.recognition();
+    let check = platform.check_name();
     format!(
-        r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EVENT_TAG"
-		e.details.unicode_name == "AAEL"
-		e.details.data.domain == "alibabacloud.com"
-		e.details.data.operation == "gpu/attestation"
-	]
-	count(events) > 0
-	every e in events {{
-		e.details.data.content["gpu-collect-evidence-result-code"] == 0
-		e.details.data.content["gpu-attest-result-code"] == 0
-	}}
+        r#"diag_platform := {{
+	"dimension": "hardware",
+	"check": {check:?},
+	"matched": true,
+}} if {{
+	{recognition}
+}}
+
+diag_platform := {{
+	"dimension": "hardware",
+	"check": {check:?},
+	"matched": false,
+	"reason": "platform-not-recognized",
+}} if {{
+	not {recognition}
 }}"#
     )
 }
 
-/// Emit the `nvidia` posture rule: the standard trustee NVIDIA appraisal over
-/// the evaluated per-GPU claims, rejecting the raw/skip passthrough form (which
-/// carries attestation_report and lacks measurement).
-fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
-    let mut gpu_body: Vec<String> = Vec::new();
-    gpu_body.push("\t\tnot g.attestation_report".to_string());
-    if cfg.require_report {
-        gpu_body.push("\t\tg.measurement".to_string());
-    }
-    if cfg.require_cc_mode {
-        gpu_body.push("\t\tg.cc_enabled == true".to_string());
-    }
-    if !cfg.allow_uuids.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.uuid in {}",
-            rego_string_array(&cfg.allow_uuids)
-        ));
-    }
-    if !cfg.allow_driver_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.driver_version in {}",
-            rego_string_array(&cfg.allow_driver_versions)
-        ));
-    }
-    if !cfg.allow_vbios_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.vbios_version in {}",
-            rego_string_array(&cfg.allow_vbios_versions)
-        ));
-    }
-    if !cfg.measurement_digest.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.measurement in {}",
-            rego_string_array(&cfg.measurement_digest)
-        ));
-    }
-    let gpu_conj = gpu_body.join("\n");
+/// Emit the collector that turns the non-matching diagnostics into the
+/// extension payload. A check whose dimension still affirms is dropped: it
+/// failed only against a baseline that lost its OR group, or a posture that
+/// lost to another group, so reporting it would contradict the verdict.
+///
+/// The value is marshalled to a JSON string because the pinned `ear` crate
+/// serializes a map-valued extension as key/value pairs, not a JSON object.
+fn failed_checks_block(diag_names: &[String]) -> String {
     format!(
-        r#"{pred} if {{
-	gpus := [g |
-		g := input.tdx[k]
-		startswith(k, "nvidia_gpu.")
-	]
-	count(gpus) >= {min}
-	every g in gpus {{
-{inner}
-	}}
+        r#"dimension_value("executables") := executables
+dimension_value("hardware") := hardware
+
+failed_checks := [d |
+	some raw in [{names}]
+	not raw.matched
+	dimension_value(raw.dimension) != 2
+	d := object.remove(raw, ["matched"])
+]
+
+extensions := [{{
+	"name": {extension:?},
+	"key": {key},
+	"value": json.marshal({{"failed": failed_checks}}),
+}}] if {{
+	count(failed_checks) > 0
 }}"#,
-        min = cfg.min_count,
-        inner = gpu_conj
+        names = diag_names.join(", "),
+        extension = APPRAISAL_DIAGNOSTICS_EXTENSION,
+        key = APPRAISAL_DIAGNOSTICS_KEY,
     )
 }
 
@@ -952,7 +1488,9 @@ fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
-    use crate::tee::coco::converter::builtin::policies::transparency_log::eval_policy_vector;
+    use crate::tee::coco::converter::builtin::policies::transparency_log::{
+        eval_policy_extensions, eval_policy_vector,
+    };
     use crate::tee::coco::converter::builtin::policy_config::{
         PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     };
@@ -2503,6 +3041,437 @@ mod tests {
             eval_modules(&bad_kernel_cfg, &input).await,
             (97, 2, 2, 2),
             "a tampered kernel digest must reject executables"
+        );
+    }
+
+    /// The `failed` list of the policy's `tng.appraisal-diagnostics`
+    /// extension, or `None` when the policy emits no extension.
+    async fn eval_failed_checks(cfg_json: &str, input: &str) -> Option<Vec<serde_json::Value>> {
+        let cfg = modules_cfg(cfg_json);
+        let policy = build_policy(&cfg).expect("build modules policy");
+        let extensions = eval_policy_extensions(&policy, input).await?;
+        let entries = extensions
+            .as_array()
+            .unwrap_or_else(|| panic!("extensions is an array: {extensions}"));
+        let extension = entries
+            .iter()
+            .find(|e| e["name"] == APPRAISAL_DIAGNOSTICS_EXTENSION)
+            .expect("diagnostics extension present");
+        assert_eq!(extension["key"], APPRAISAL_DIAGNOSTICS_KEY);
+        // The pinned `ear` crate cannot carry a nested object as an extension
+        // value, so the policy marshals the payload to a JSON string.
+        let payload = extension["value"]
+            .as_str()
+            .expect("diagnostics value is a json string");
+        let payload: serde_json::Value = serde_json::from_str(payload).expect("payload parses");
+        Some(
+            payload["failed"]
+                .as_array()
+                .expect("failed is an array")
+                .clone(),
+        )
+    }
+
+    /// One `pai/load-model` AAEL event for `Qwen/Qwen3.8-27B`.
+    fn pai_load_model_event(hash: &str) -> serde_json::Value {
+        json!({
+            "type_name": "EV_EVENT_TAG",
+            "details": { "unicode_name": "AAEL", "data": {
+                "domain": "alibabacloud.com",
+                "operation": "pai/load-model",
+                "content": { "model-id": "Qwen/Qwen3.8-27B", "hash": hash }
+            } }
+        })
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_report_measurement_mismatches() {
+        let image = format!("sha256:{}", hex64('a'));
+        let kernel = hex96('1');
+        let model = hex64('b');
+        let cfg = format!(
+            r#"[{{"type":"com.alibabacloud.container.image.vllm","value":"{image}"}},{{"type":"tdx.kernel","value":"{kernel}"}},{{"type":"com.alibabacloud.ai.model.Qwen/Qwen3.8-27B","value":"{model}"}}]"#
+        );
+        let kernel_event = |d: &str| {
+            json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": { "string": "td_payload" },
+                "index": 2,
+                "digests": [ { "alg": "SHA-384", "digest": d } ],
+            })
+        };
+        let pull_event = |d: &str| {
+            json!({
+                "type_name": "EV_EVENT_TAG",
+                "details": { "unicode_name": "AAEL", "data": {
+                    "domain": "alibabacloud.com",
+                    "operation": "kangaroo/pull-image",
+                    "content": {
+                        "reference": "registry.example.com/ns/vllm:latest",
+                        "digest": d,
+                    }
+                } }
+            })
+        };
+
+        let ok = tdx_input(
+            serde_json::Value::Null,
+            &[
+                kernel_event(&kernel),
+                pull_event(&image),
+                pai_load_model_event(&model),
+            ],
+        );
+        assert_eq!(eval_modules(&cfg, &ok).await, (2, 2, 2, 2));
+        assert!(
+            eval_failed_checks(&cfg, &ok).await.is_none(),
+            "a successful appraisal emits no diagnostics extension"
+        );
+
+        // Container image mismatch.
+        let tampered_image = format!("sha256:{}", hex64('f'));
+        let bad_image = tdx_input(
+            serde_json::Value::Null,
+            &[
+                kernel_event(&kernel),
+                pull_event(&tampered_image),
+                pai_load_model_event(&model),
+            ],
+        );
+        let failed = eval_failed_checks(&cfg, &bad_image)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["dimension"], "executables");
+        assert_eq!(failed[0]["check"], "com.alibabacloud.container.image.vllm");
+        assert_eq!(failed[0]["expected"], json!(image));
+        assert_eq!(failed[0]["actual"], json!([tampered_image]));
+        assert_eq!(failed[0]["reason"], "mismatch");
+        assert!(
+            failed[0].get("matched").is_none(),
+            "matched is internal and must not reach the payload"
+        );
+
+        // Kernel mismatch.
+        let tampered_kernel = hex96('9');
+        let bad_kernel = tdx_input(
+            serde_json::Value::Null,
+            &[
+                kernel_event(&tampered_kernel),
+                pull_event(&image),
+                pai_load_model_event(&model),
+            ],
+        );
+        let failed = eval_failed_checks(&cfg, &bad_kernel)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["check"], "tdx.kernel");
+        assert_eq!(failed[0]["actual"], json!([tampered_kernel]));
+
+        // Model hash mismatch: the actual is the observed model/hash pairs.
+        let tampered_model = hex64('e');
+        let bad_model = tdx_input(
+            serde_json::Value::Null,
+            &[
+                kernel_event(&kernel),
+                pull_event(&image),
+                pai_load_model_event(&tampered_model),
+            ],
+        );
+        let failed = eval_failed_checks(&cfg, &bad_model)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(
+            failed[0]["check"],
+            "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B"
+        );
+        assert_eq!(
+            failed[0]["actual"],
+            json!([{ "model-id": "Qwen/Qwen3.8-27B", "hash": tampered_model }])
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_report_tdx_posture_sub_checks() {
+        let cfg = r#"[{"type":"tdx","value":{}}]"#;
+        let ok = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
+        assert_eq!(eval_modules(cfg, &ok).await, (2, 2, 2, 2));
+        assert!(
+            eval_failed_checks(cfg, &ok).await.is_none(),
+            "a passing posture emits no diagnostics extension"
+        );
+
+        // Debug bit set: only that sub-check is reported, with the raw
+        // attribute word as `actual`.
+        let debug = ok.replace("0000001000000000", "0100001000000000");
+        let failed = eval_failed_checks(cfg, &debug)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["dimension"], "hardware");
+        assert_eq!(failed[0]["check"], "tdx.debug");
+        assert_eq!(failed[0]["expected"], "debug bit clear");
+        assert_eq!(failed[0]["actual"], "0100001000000000");
+        assert_eq!(failed[0]["reason"], "mismatch");
+
+        // Missing event log: only the eventlog sub-check is reported.
+        let no_eventlog = tdx_input(serde_json::Value::Null, &[]);
+        let failed = eval_failed_checks(cfg, &no_eventlog)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["check"], "tdx.eventlog");
+        assert_eq!(failed[0]["expected"], "non-empty event log");
+        assert_eq!(failed[0]["actual"], json!(0));
+
+        // Several failing sub-checks are all reported, in check order.
+        let multi = tdx_input(json!({ "td_attributes": "0100001000000080" }), &[]);
+        let failed = eval_failed_checks(cfg, &multi)
+            .await
+            .expect("extension present");
+        let checks: Vec<_> = failed.iter().map(|f| f["check"].clone()).collect();
+        assert_eq!(
+            checks,
+            vec![
+                json!("tdx.debug"),
+                json!("tdx.perfmon"),
+                json!("tdx.eventlog"),
+            ],
+            "{failed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_report_nvidia_cc_enabled() {
+        let measurement = hex96('3');
+        let cfg = r#"[{"type":"nvidia","value":{"min_count":1}}]"#;
+        let gpu_input = |cc_enabled: bool| {
+            tdx_input_full(
+                serde_json::Value::Null,
+                json!({ "nvidia_gpu.0": {
+                    "uuid": "GPU-x", "name": "L20C", "driver_version": "570.148.05",
+                    "vbios_version": "96.00.f4", "cc_enabled": cc_enabled,
+                    "measurement": measurement.clone()
+                } }),
+                &[json!({ "event": "ok" })],
+            )
+        };
+
+        let ok = gpu_input(true);
+        assert_eq!(eval_modules(cfg, &ok).await, (2, 2, 2, 2));
+        assert!(eval_failed_checks(cfg, &ok).await.is_none());
+
+        let failed = eval_failed_checks(cfg, &gpu_input(false))
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["dimension"], "hardware");
+        assert_eq!(failed[0]["check"], "nvidia.cc_enabled");
+        assert_eq!(failed[0]["expected"], "cc_enabled == true");
+        assert_eq!(failed[0]["reason"], "mismatch");
+        let actual = failed[0]["actual"].as_array().expect("gpu list");
+        assert_eq!(actual.len(), 1, "{actual:?}");
+        assert_eq!(actual[0]["cc_enabled"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_report_gpu_result_codes() {
+        let cfg = r#"[{"type":"com.alibabacloud.gpu","value":{}}]"#;
+        let gpu_event = |collect: i64, attest: i64| {
+            json!({
+                "type_name": "EV_EVENT_TAG",
+                "details": { "unicode_name": "AAEL", "data": {
+                    "domain": "alibabacloud.com",
+                    "operation": "gpu/attestation",
+                    "content": {
+                        "gpu-collect-evidence-result-code": collect,
+                        "gpu-attest-result-code": attest,
+                    }
+                } }
+            })
+        };
+
+        let ok = tdx_input(serde_json::Value::Null, &[gpu_event(0, 0)]);
+        assert!(eval_failed_checks(cfg, &ok).await.is_none());
+
+        let failed =
+            eval_failed_checks(cfg, &tdx_input(serde_json::Value::Null, &[gpu_event(0, 5)]))
+                .await
+                .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["dimension"], "hardware");
+        assert_eq!(failed[0]["check"], "gpu.result_codes");
+        assert_eq!(
+            failed[0]["expected"],
+            "collect and attest result codes are 0"
+        );
+        assert_eq!(failed[0]["actual"], json!([{ "collect": 0, "attest": 5 }]));
+
+        // A missing attestation event fails the presence sub-check only. The
+        // vacuous result-code check must not add a second, misleading failure.
+        let none = tdx_input(serde_json::Value::Null, &[]);
+        let failed = eval_failed_checks(cfg, &none)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["check"], "gpu.event_present");
+        assert_eq!(failed[0]["expected"], "gpu/attestation event present");
+        assert_eq!(failed[0]["actual"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_skip_winning_or_group_failures() {
+        let (a, b) = (hex96('1'), hex96('2'));
+        let cfg = format!(
+            r#"[[{{"type":"tdx.ovmf","value":"{a}"}}],[{{"type":"tdx.ovmf","value":"{b}"}}]]"#
+        );
+        let input = tdx_input(json!({ "mr_td": a }), &[json!({ "event": "ok" })]);
+        assert_eq!(eval_modules(&cfg, &input).await, (2, 2, 2, 2));
+        assert!(
+            eval_failed_checks(&cfg, &input).await.is_none(),
+            "the losing group of an affirming OR group must not be reported"
+        );
+
+        // Neither group matches: the dimension is non-affirming and both
+        // baseline failures are reported.
+        let neither = tdx_input(json!({ "mr_td": hex96('9') }), &[json!({ "event": "ok" })]);
+        let failed = eval_failed_checks(&cfg, &neither)
+            .await
+            .expect("extension present");
+        assert_eq!(failed.len(), 2, "{failed:?}");
+        assert!(failed.iter().all(|f| f["check"] == "tdx.ovmf"));
+        assert!(failed.iter().all(|f| f["dimension"] == "executables"));
+
+        // Non-TDX evidence leaves both dimensions non-affirming: the platform
+        // itself is reported, with no observed measurement.
+        let csv = json!({ "csv": { "version": "2" } }).to_string();
+        let failed = eval_failed_checks(&cfg, &csv)
+            .await
+            .expect("extension present");
+        let platform = failed
+            .iter()
+            .find(|f| f["check"] == "tdx")
+            .expect("platform check reported");
+        assert_eq!(platform["dimension"], "hardware");
+        assert_eq!(platform["reason"], "platform-not-recognized");
+        assert!(failed.iter().any(|f| f["check"] == "tdx.ovmf"));
+        assert!(
+            failed.iter().all(|f| f["actual"].is_null()),
+            "no TDX evidence means no observed measurement: {failed:?}"
+        );
+    }
+
+    // Test-only clock used to build epoch-relative fixtures; the test runs on
+    // the host, and `std::time::SystemTime::now` is correct there.
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn modules_diagnostics_report_tdx_tcb_and_collateral_sub_checks() {
+        // Every attribute sub-check disabled, so only the TCB and collateral
+        // sub-checks can fail.
+        let cfg = r#"[{"type":"tdx","value":{
+            "debug":"allow","sept_ve_disable":"allow","perfmon":"allow",
+            "service_td":"allow","eventlog":"optional",
+            "tcb":{"min_status":"up_to_date","reject_advisories":["INTEL-SA-00001"]},
+            "collateral":{"allow_expired":false,"min_tcb_date":"2026-06-01","max_collateral_age_days":30}
+        }}]"#;
+        let epoch = iso_date_to_epoch_secs("2026-06-01").expect("epoch");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after the epoch")
+            .as_secs() as i64;
+
+        let ok = tcb_input(json!({
+            "tcb_status": "UpToDate",
+            "advisory_ids": "",
+            "collateral_expired": false,
+            "tcb_level_date_tag": epoch,
+            "latest_issue_date": now,
+        }));
+        assert!(eval_failed_checks(cfg, &ok).await.is_none());
+
+        // All five TCB/collateral sub-checks failing at once.
+        let stale_issue = now - 40 * 86400;
+        let bad = tcb_input(json!({
+            "tcb_status": "OutOfDate",
+            "advisory_ids": "INTEL-SA-00001",
+            "collateral_expired": true,
+            "tcb_level_date_tag": epoch - 1,
+            "latest_issue_date": stale_issue,
+        }));
+        let failed = eval_failed_checks(cfg, &bad)
+            .await
+            .expect("extension present");
+        let checks: Vec<_> = failed.iter().map(|f| f["check"].clone()).collect();
+        assert_eq!(
+            checks,
+            vec![
+                json!("tdx.tcb_status"),
+                json!("tdx.tcb_advisories"),
+                json!("tdx.collateral_expired"),
+                json!("tdx.collateral_min_tcb_date"),
+                json!("tdx.collateral_max_age"),
+            ],
+            "{failed:?}"
+        );
+        let actual: Vec<_> = failed.iter().map(|f| f["actual"].clone()).collect();
+        assert_eq!(
+            actual,
+            vec![
+                json!("OutOfDate"),
+                json!("INTEL-SA-00001"),
+                json!(true),
+                json!(epoch - 1),
+                json!(stale_issue),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_project_nvidia_allow_list_failures() {
+        let pinned_digest = hex96('3');
+        let observed_digest = hex96('4');
+        let cfg = format!(
+            r#"[{{"type":"nvidia","value":{{
+                "allow_uuids":["GPU-a"],
+                "allow_driver_versions":["570.148.05"],
+                "allow_vbios_versions":["96.00.f4"],
+                "measurement_digest":["{pinned_digest}"]
+            }}}}]"#
+        );
+        let input = tdx_input_full(
+            serde_json::Value::Null,
+            json!({ "nvidia_gpu.0": {
+                "uuid": "GPU-x", "name": "L20C", "driver_version": "999.0.0",
+                "vbios_version": "1.2.3", "cc_enabled": true,
+                "measurement": observed_digest.clone()
+            } }),
+            &[json!({ "event": "ok" })],
+        );
+        let failed = eval_failed_checks(&cfg, &input)
+            .await
+            .expect("extension present");
+        let checks: Vec<_> = failed.iter().map(|f| f["check"].clone()).collect();
+        assert_eq!(
+            checks,
+            vec![
+                json!("nvidia.uuid"),
+                json!("nvidia.driver_version"),
+                json!("nvidia.vbios_version"),
+                json!("nvidia.measurement_digest"),
+            ],
+            "{failed:?}"
+        );
+        let actual: Vec<_> = failed.iter().map(|f| f["actual"].clone()).collect();
+        assert_eq!(
+            actual,
+            vec![
+                json!(["GPU-x"]),
+                json!(["999.0.0"]),
+                json!(["1.2.3"]),
+                json!([observed_digest]),
+            ]
         );
     }
 }
