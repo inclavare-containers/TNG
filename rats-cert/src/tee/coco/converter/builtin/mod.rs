@@ -20,5 +20,9 @@ pub use policy_config::{
     TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyServiceConfig,
 };
 
+/// Render the Rego source a builtin AS loads for `policy`. This is the same
+/// function the tunnel uses; the tunnel additionally base64-encodes the result.
+pub use policies::render_policy_source;
+
 /// Default policy ID used by builtin AS
 pub const DEFAULT_POLICY_ID: &str = "default";

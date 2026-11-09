@@ -18,20 +18,18 @@ use crate::errors::*;
 pub(crate) mod modules;
 pub(crate) mod transparency_log;
 
-/// Load policy from configuration
-/// Returns a URL-safe base64 encoding of the policy source for the
-/// tng-bundled templates and the user-supplied Inline/Path variants.
-pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>> {
+/// Render the Rego source a builtin AS loads for `policy`.
+///
+/// This is the single `PolicyConfig`-to-Rego implementation. The tunnel's
+/// `load_policy` base64-encodes the result and `tng tools policy export` writes
+/// it verbatim.
+pub async fn render_policy_source(policy: &PolicyConfig) -> Result<String> {
     match policy {
-        PolicyConfig::HardwareOnly => Ok(Some(
-            URL_SAFE_NO_PAD.encode(include_str!("static/hardware_only.rego")),
-        )),
-        PolicyConfig::HardwareOnlyStrict => Ok(Some(
-            URL_SAFE_NO_PAD.encode(include_str!("static/hardware_only_strict.rego")),
-        )),
-        PolicyConfig::TrustAll => Ok(Some(
-            URL_SAFE_NO_PAD.encode(include_str!("static/trust_all.rego")),
-        )),
+        PolicyConfig::HardwareOnly => Ok(include_str!("static/hardware_only.rego").to_string()),
+        PolicyConfig::HardwareOnlyStrict => {
+            Ok(include_str!("static/hardware_only_strict.rego").to_string())
+        }
+        PolicyConfig::TrustAll => Ok(include_str!("static/trust_all.rego").to_string()),
         // Fetch + authenticate the Rekor v1 entry by logIndex, then bake
         // the trusted payloadHash into Rego. The cryptography (P-256 ECDSA
         // SET verification + SHA-256 Merkle inclusion proof) lives behind
@@ -133,7 +131,7 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
                         static_reference_measurements.as_deref(),
                     );
                     tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash + DSSE into Rego");
-                    Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
+                    Ok(policy)
                 }
                 TransparencyServiceConfig::ArtifactServer {
                     url,
@@ -155,7 +153,7 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
                         static_reference_measurements.as_deref(),
                     )?;
                     tracing::info!(policy = %policy, "Transparency_log policy loaded: artifact-server primary, no baked payloadHash");
-                    Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
+                    Ok(policy)
                 }
             }
         }
@@ -163,16 +161,16 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
         PolicyConfig::TransparencyLog { .. } => {
             Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto)
         }
-        PolicyConfig::Modules { modules } => {
-            let policy = modules::build_modules_policy(modules)?;
-            Ok(Some(URL_SAFE_NO_PAD.encode(policy)))
-        }
+        PolicyConfig::Modules { modules } => Ok(modules::build_modules_policy(modules)?),
         PolicyConfig::Inline { content } => {
-            // Decode base64 encoded policy
             let decoded = BASE64_STANDARD
                 .decode(content)
                 .map_err(Error::DecodePolicyContentFailed)?;
-            Ok(Some(URL_SAFE_NO_PAD.encode(decoded)))
+            String::from_utf8(decoded).map_err(|e| {
+                Error::BuiltinPolicyTemplateFailed(anyhow::anyhow!(
+                    "inline policy is not UTF-8: {e}"
+                ))
+            })
         }
         #[cfg(not(wasm))]
         PolicyConfig::Path { path } => {
@@ -183,9 +181,17 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>>
                         path: path.clone(),
                         source: e,
                     })?;
-            Ok(Some(URL_SAFE_NO_PAD.encode(content_str)))
+            Ok(content_str)
         }
     }
+}
+
+/// Load policy from configuration
+/// Returns a URL-safe base64 encoding of the policy source.
+pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>> {
+    Ok(Some(
+        URL_SAFE_NO_PAD.encode(render_policy_source(policy).await?),
+    ))
 }
 
 #[cfg(test)]
@@ -295,5 +301,66 @@ default file_system := 2"#;
         let content = String::from_utf8(decoded).expect("Invalid UTF-8");
         assert!(content.contains("package policy"));
         assert!(content.contains("default hardware := 2"));
+    }
+
+    #[tokio::test]
+    async fn load_policy_is_base64_of_render_policy_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("policy.rego");
+        std::fs::write(&path, "package policy\n").expect("write policy file");
+
+        let mut cases = vec![
+            PolicyConfig::HardwareOnly,
+            PolicyConfig::HardwareOnlyStrict,
+            PolicyConfig::TrustAll,
+            PolicyConfig::Modules {
+                modules: ModuleGroupsConfig::Single(vec![]),
+            },
+            PolicyConfig::Inline {
+                content: BASE64_STANDARD.encode("package policy\n"),
+            },
+        ];
+        #[cfg(not(wasm))]
+        cases.push(PolicyConfig::Path {
+            path: path.to_string_lossy().into_owned(),
+        });
+        #[cfg(feature = "crypto-rustcrypto")]
+        cases.push(
+            serde_json::from_value(serde_json::json!({
+                "type": "transparency_log",
+                "publishedMeasurements": ["container.image.cmaas-runtime"],
+                "schemaVersion": "1.0.0",
+                "services": [{
+                    "type": "artifact-server",
+                    "url": "https://attest.example.com",
+                    "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}]
+                }]
+            }))
+            .expect("artifact-server policy config"),
+        );
+
+        for policy in cases {
+            let source = render_policy_source(&policy).await.expect("render source");
+            let loaded = load_policy(&policy)
+                .await
+                .expect("load policy")
+                .expect("every current variant yields a policy");
+            assert_eq!(
+                URL_SAFE_NO_PAD.encode(source.as_bytes()),
+                loaded,
+                "policy {policy:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn inline_policy_must_be_utf8() {
+        let policy = PolicyConfig::Inline {
+            content: BASE64_STANDARD.encode([0xff, 0xfe]),
+        };
+        let err = render_policy_source(&policy)
+            .await
+            .expect_err("non-UTF-8 inline policy must fail");
+        assert!(err.to_string().contains("UTF-8"), "{err}");
     }
 }
