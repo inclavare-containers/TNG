@@ -143,6 +143,10 @@ async fn main() -> anyhow::Result<()> {
     // writer (incl. the rolling appender's BufWriter) — this prevents log
     // loss on shutdown. `std::process::exit` skips destructors, so the error
     // path below drops it explicitly before exiting.
+
+    // Tools commands print data (PEM, JSON, Rego) on stdout; logs must not
+    // share that stream.
+    let tools_command = matches!(&cli.command, GlobalSubcommand::Tools(_));
     let (log_writer, worker_guard, is_file) = match &cli.log_file {
         Some(path) if rolling.config.enabled && tng::rolling::path_supports_rolling(path) => {
             let appender = tracing_rolling_file::RollingFileAppenderBase::new(
@@ -170,13 +174,18 @@ async fn main() -> anyhow::Result<()> {
             (non_blocking, guard, true)
         }
         None => {
+            let default_stream = if tools_command { "stderr" } else { "stdout" };
             if rolling.config.enabled {
-                writer_warnings.push(
-                    "--log-rolling ignored: no --log-file (stdout); using non-rolling stdout"
-                        .into(),
-                );
+                writer_warnings.push(format!(
+                    "--log-rolling ignored: no --log-file ({default_stream}); \
+                     using non-rolling {default_stream}"
+                ));
             }
-            let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
+            let (non_blocking, guard) = if tools_command {
+                tracing_appender::non_blocking(std::io::stderr())
+            } else {
+                tracing_appender::non_blocking(std::io::stdout())
+            };
             (non_blocking, guard, false)
         }
     };
@@ -251,6 +260,8 @@ async fn main() -> anyhow::Result<()> {
         LogFormat::Text => {
             let ansi = if is_file {
                 false
+            } else if tools_command {
+                std::io::stderr().is_terminal()
             } else {
                 std::io::stdout().is_terminal()
             };

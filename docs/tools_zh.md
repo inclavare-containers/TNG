@@ -1,6 +1,6 @@
 # TNG 工具
 
-> `tng tools` 是一组面向运维人员的子命令，用于检查和验证 TNG 在线路上使用的远程证明材料：rats-tls 证书、ohttp 密钥配置以及去中心化的 HPKE 密钥环。
+> `tng tools` 是一组面向运维人员的子命令，用于检查和验证 TNG 在线路上使用的远程证明材料：rats-tls 证书、ohttp 密钥配置、内置证明策略以及去中心化的 HPKE 密钥环。
 >
 > 这些命令**不**运行隧道。它们复用与运行中的 TNG 实例相同的 RA 栈（Attestation Agent、Attestation Service、RA-TLS 验证器），因此由 `tng tools` 生成或验证的证书或密钥配置与隧道本身产生或接受的材料逐字节一致。
 
@@ -17,6 +17,8 @@
 - [tng tools ohttp](#tng-tools-ohttp)
   - [ohttp dump](#ohttp-dump)
   - [ohttp verify](#ohttp-verify)
+- [tng tools policy](#tng-tools-policy)
+  - [policy export](#policy-export)
 - [tng tools key-sync](#tng-tools-key-sync)
   - [key-sync 参数](#key-sync-参数)
   - [key-sync 输出格式](#key-sync-输出格式)
@@ -26,12 +28,13 @@
 
 ## 概述
 
-`tng tools` 按证明材料的种类分为三组子命令：
+`tng tools` 按证明材料的种类分为四组子命令：
 
 | 分组 | 材料 | 需要 AA | 需要 AS | 典型用途 |
 |---|---|---|---|---|
 | `tng tools rats-tls` | rats-tls 证书（PEM） | gen / dump（双向） | verify | 签发或校验 RA-TLS 握手中携带的证书 |
 | `tng tools ohttp` | ohttp 密钥配置响应（JSON） | dump（双向） | verify | 拉取并验证 ohttp egress 公告的 HPKE 密钥配置 |
+| `tng tools policy` | 内置 AS 证明策略（Rego） | 否 | 否 | 从配置渲染内置 AS 会加载的 Rego |
 | `tng tools key-sync` | 去中心化 HPKE 密钥环（文件） | 是 | 是 | 运行 serf 集群，将 ohttp 密钥环同步并轮转到磁盘 |
 
 `gen` 与 `verify` 是针对扁平 RA JSON 参数的本地操作；`dump` 连接一个在线端点；`key-sync` 是长驻守护进程。该扁平 JSON 被直接解析为 `AttestArgs` / `VerifyArgs`（见 [AttestArgs 与 VerifyArgs JSON](#attestargs-与-verifyargs-json)），因此与完整的 TNG 配置块不同，model 与 provider 标签必须显式写明。
@@ -315,6 +318,71 @@ tng tools ohttp decode --raw bundle/raw.json \
 
 ---
 
+## tng tools policy
+
+内置 AS 证明策略工具。`export` 从完整 TNG 配置或单个 `attestation_policy` 取值渲染出内置 AS 实际加载的 Rego，调用的是隧道路径同一个渲染函数，输出与运行期加载的内容逐字节一致。
+
+### policy export
+
+导出一份配置里每个内置 `attestation_policy` 的 Rego，或导出一个独立的策略取值。命令不需要 AA 或 AS，也不评估任何策略。
+
+```bash
+tng tools policy export (--config <FILE> | --attestation-policy <JSON>) [--out-dir <DIR>]
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `--config` | 文件路径 | — | 完整 TNG 配置文件；`-` 表示从 stdin 读取。接受 JSONC。按 `add_ingress`、`add_egress` 的顺序扫描，每个内置 `verify` 导出一份 Rego。 |
+| `--attestation-policy` | JSON 字符串 | — | 单独的 `attestation_policy` 取值，使用严格 JSON。 |
+| `--out-dir` | 目录 | stdout | 每个策略向该目录写一个 `<path>.rego`。目录不存在时创建，同名文件直接覆盖。 |
+
+`--config` 与 `--attestation-policy` 互斥，且必须给出其中一个。
+
+文件名由策略在配置里的位置决定：
+
+| 输入 | 文件名 |
+|---|---|
+| `add_ingress[0]` 上的内置策略 | `add_ingress.0.verify.attestation_policy.rego` |
+| `add_egress[1]` 上的内置策略 | `add_egress.1.verify.attestation_policy.rego` |
+| `--attestation-policy '<json>'` | `attestation_policy.rego` |
+
+层级用点号连接，数组下标用十进制，因此同一个小节的策略按名称排序时天然聚在一起，也不需要 shell 转义。相同策略不去重，各自按路径导出。
+
+不给 `--out-dir` 时，Rego 写到 stdout。每个块的第一行是 `# <name>.rego`，块之间用一行裸的 `---` 分隔。单策略时也输出块首注释，因此按 `---` 切开后总能得到合法的单份策略文件。合并输出本身不是可加载的 Rego 模块，因为其中并存多个 `package` 语句。
+
+```text
+# add_ingress.0.verify.attestation_policy.rego
+package policy
+import rego.v1
+...
+
+---
+
+# add_egress.0.verify.attestation_policy.rego
+package policy
+import rego.v1
+...
+```
+
+使用 `--out-dir` 时 stdout 保持为空，每个写出的文件向 stderr 打印一行 `wrote <path>`。
+
+所有策略类型都支持：
+
+| 策略类型 | 导出行为 | 额外依赖 |
+|---|---|---|
+| `hardware_only`（包括省略与 `default` 别名） | 读取内置模板 | 无 |
+| `hardware_only_strict` | 读取内置模板 | 无 |
+| `trust_all` | 读取内置模板 | 无 |
+| `modules` | 由模块表生成 Rego | 无 |
+| `inline` | 解码标准 base64 内容，结果必须是 UTF-8 文本 | 无 |
+| `path` | 读取配置中指定的文件 | 本地文件 |
+| `transparency_log`，artifact-server primary | 生成 Rego；artifact server 在评估时才解析 | 无 |
+| `transparency_log`，rekor-v1 primary | 导出时联网拉取并验证 Rekor 条目 | 网络与信任锚 |
+
+工具只渲染策略，不校验整份配置能否启动；被内置 converter 在启动期拒绝的配置照样会导出它的 Rego。`tng tools` 的日志写到 stderr，stdout 只承载命令输出。
+
+---
+
 ## tng tools key-sync
 
 去中心化 HPKE 密钥同步守护进程。它运行一个无状态 serf 集群，成员之间通过 RA-TLS QUIC 互证，同步 HPKE 密钥环，按计划轮转，并将运行中集群密钥集镜像到磁盘，使外部 ohttp 密钥管理器（或任意消费方）无需加入集群即可消费轮转中的密钥。需要 AA 与 AS（节点间 RA-TLS 双向证明）。`key-sync` 子命令以 `__egress-common` 特性门控；它在 wasm 目标上不可用，且需要 AA+AS 证明栈（serf 传输使用 RA-TLS 双向证明）。
@@ -406,15 +474,16 @@ tng tools key-sync --host 0.0.0.0 --port 8301 \
 
 ## 平台支持
 
-工具复用平台相关的 RA 与 TLS 栈，因此可用性因子命令与目标而异：
+`tng tools` 属于原生 `tng` 二进制，wasm 构建不包含它。在原生构建内，可用性仍因子命令而异：
 
 | 子命令 | 可用性 | 说明 |
 |---|---|---|
 | `rats-tls gen` | unix | 需要 AA 证明方（unix 限定） |
-| `rats-tls dump` | 非 wasm | `--attest` 需要 unix 目标；在其他非 wasm 目标上请省略 |
-| `rats-tls verify` | 非 wasm | wasm TLS 栈不构建验证器 |
-| `ohttp dump` | 非 wasm | 使用 reqwest 与 tokio fs |
-| `ohttp verify` | 非 wasm | 通过 reqwest 联系 AS |
-| `key-sync` | 非 wasm（`__egress-common`） | 需要 AA+AS 证明栈以驱动 RA-TLS serf 传输 |
+| `rats-tls dump` | 所有原生目标 | `--attest` 需要 unix 目标；在其他原生目标上请省略 |
+| `rats-tls verify` | 所有原生目标 | 按 verify 配置校验证书 |
+| `ohttp dump` | 所有原生目标 | 使用 reqwest 与 tokio fs |
+| `ohttp verify` | 所有原生目标 | 通过 reqwest 联系 AS |
+| `policy export` | `__builtin-as` | 本地渲染，不需要 AA 或 AS |
+| `key-sync` | `__egress-common` | 需要 AA+AS 证明栈以驱动 RA-TLS serf 传输 |
 
-在子命令不可用的目标上，它会以清晰的报错在运行时退出，而非编译失败。
+在当前构建中不可用的子命令，要么不参与编译，要么以清晰的报错在运行时退出。

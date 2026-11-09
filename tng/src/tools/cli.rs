@@ -9,6 +9,10 @@ pub enum ToolsCommand {
     /// ohttp key-config tools
     #[command(subcommand)]
     Ohttp(OhttpCommand),
+    /// builtin AS attestation policy tools
+    #[cfg(feature = "__builtin-as")]
+    #[command(subcommand)]
+    Policy(PolicyCommand),
     /// decentralized HPKE key-sync daemon (serf)
     KeySync(KeySyncOptions),
 }
@@ -86,6 +90,23 @@ pub enum OhttpCommand {
         attestation_result: Option<PathBuf>,
         #[arg(long, value_name = "DIR")]
         out_dir: PathBuf,
+    },
+}
+
+#[cfg(feature = "__builtin-as")]
+#[derive(Subcommand, Debug)]
+pub enum PolicyCommand {
+    /// render the Rego a builtin AS loads from a TNG config or an attestation_policy value
+    Export {
+        /// full TNG config file; `-` reads stdin. JSONC is accepted.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+        /// a bare `attestation_policy` JSON value
+        #[arg(long, value_name = "JSON")]
+        attestation_policy: Option<String>,
+        /// write one `<path>.rego` per policy into DIR; default: stdout
+        #[arg(long, value_name = "DIR")]
+        out_dir: Option<PathBuf>,
     },
 }
 

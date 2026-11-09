@@ -1,6 +1,8 @@
 pub mod cli;
 pub mod key_sync;
 pub mod ohttp;
+#[cfg(feature = "__builtin-as")]
+pub mod policy;
 pub mod rats_tls;
 
 #[cfg(feature = "__egress-common")]
@@ -16,6 +18,8 @@ pub async fn run(cmd: ToolsCommand) -> Result<()> {
     match cmd {
         ToolsCommand::RatsTls(c) => rats_tls::run(c).await,
         ToolsCommand::Ohttp(c) => ohttp::run(c).await,
+        #[cfg(feature = "__builtin-as")]
+        ToolsCommand::Policy(c) => policy::run(c).await,
         ToolsCommand::KeySync(opts) => key_sync::run(opts).await,
     }
 }

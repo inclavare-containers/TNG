@@ -102,7 +102,7 @@
 
 `container.image.<repo>` 与 `ai.model.<model-id>` 是各自 `com.alibabacloud.` 写法的永久别名，生成逐字节相同的策略。`com.alibabacloud.gpu` 没有无前缀别名。
 
-`tdx.td-shim` 与 `tdx.ovmf` 钉的是同一个 quote 字段，按 TD 的实际启动固件选用。
+`tdx.td-shim` 与 `tdx.ovmf` 钉的是同一个 quote 字段，按 TD 的实际启动固件选用。要查看一份配置生成的确切 Rego，运行 `tng tools policy export`（见 [TNG 工具](tools_zh.md#tng-tools-policy)）。
 
 ### 客户机固件度量：`tdx.td-shim`、`tdx.ovmf`
 

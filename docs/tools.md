@@ -1,6 +1,6 @@
 # TNG Tools
 
-> `tng tools` is a group of operator-facing subcommands for inspecting and verifying the remote-attestation material that TNG uses on the wire: rats-tls certificates, ohttp key configs, and the decentralized HPKE key ring.
+> `tng tools` is a group of operator-facing subcommands for inspecting and verifying the remote-attestation material that TNG uses on the wire: rats-tls certificates, ohttp key configs, builtin attestation policies, and the decentralized HPKE key ring.
 >
 > These commands do **not** run a tunnel. They reuse the same RA stack (Attestation Agent, Attestation Service, RA-TLS verifier) as a live TNG instance, so a cert or key config produced or verified by `tng tools` is byte-for-byte equivalent to what the tunnel would produce or accept.
 
@@ -17,6 +17,8 @@
 - [tng tools ohttp](#tng-tools-ohttp)
   - [ohttp dump](#ohttp-dump)
   - [ohttp verify](#ohttp-verify)
+- [tng tools policy](#tng-tools-policy)
+  - [policy export](#policy-export)
 - [tng tools key-sync](#tng-tools-key-sync)
   - [key-sync Flags](#key-sync-flags)
   - [key-sync Output Format](#key-sync-output-format)
@@ -26,12 +28,13 @@
 
 ## Overview
 
-`tng tools` has three subcommand groups, one per kind of attested material:
+`tng tools` has four subcommand groups, one per kind of attested material:
 
 | Group | Material | Needs AA | Needs AS | Typical use |
 |---|---|---|---|---|
 | `tng tools rats-tls` | rats-tls certificate (PEM) | gen / dump (mutual) | verify | Issue or check the cert carried in the RA-TLS handshake |
 | `tng tools ohttp` | ohttp key-config response (JSON) | dump (mutual) | verify | Fetch and verify the HPKE key config an ohttp egress advertises |
+| `tng tools policy` | builtin AS attestation policy (Rego) | no | no | Render the Rego a builtin AS loads from a config |
 | `tng tools key-sync` | decentralized HPKE key ring (files) | yes | yes | Run a serf cluster that syncs and rotates the ohttp key ring to disk |
 
 `gen` and `verify` are local operations against a flat RA JSON argument; `dump` reaches out to a live endpoint; `key-sync` is a long-running daemon. The flat JSON is parsed directly as `AttestArgs` / `VerifyArgs` (see [AttestArgs and VerifyArgs JSON](#attestargs-and-verifyargs-json)), so unlike a full TNG config block the model and provider tags must be spelled out explicitly.
@@ -315,6 +318,71 @@ tng tools ohttp decode --raw bundle/raw.json \
 
 ---
 
+## tng tools policy
+
+Builtin AS attestation-policy tools. `export` renders the exact Rego a builtin AS loads, either from a full TNG config or from a bare `attestation_policy` value. It calls the same renderer the tunnel uses, so the output matches what the builtin AS loads at runtime byte for byte.
+
+### policy export
+
+Render the Rego for every builtin `attestation_policy` in a config, or for one standalone policy value. The command needs no AA or AS and does not evaluate any policy.
+
+```bash
+tng tools policy export (--config <FILE> | --attestation-policy <JSON>) [--out-dir <DIR>]
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--config` | file path | — | Full TNG config file; `-` reads stdin. JSONC is accepted. Scans `add_ingress` then `add_egress` and exports one Rego per builtin `verify`. |
+| `--attestation-policy` | JSON string | — | A bare `attestation_policy` value in strict JSON. |
+| `--out-dir` | directory | stdout | Write one `<path>.rego` per policy into this directory. The directory is created if missing, and an existing file is overwritten. |
+
+`--config` and `--attestation-policy` are mutually exclusive, and exactly one is required.
+
+Output names come from the policy's position in the config:
+
+| Input | File name |
+|---|---|
+| builtin policy on `add_ingress[0]` | `add_ingress.0.verify.attestation_policy.rego` |
+| builtin policy on `add_egress[1]` | `add_egress.1.verify.attestation_policy.rego` |
+| `--attestation-policy '<json>'` | `attestation_policy.rego` |
+
+Levels are joined with dots and array indexes are decimal, so policies from one section sort together without shell escaping. Duplicate policies are not deduplicated; each is exported under its own path.
+
+Without `--out-dir` the Rego goes to stdout. Every block starts with a `# <name>.rego` line, and a bare `---` line separates blocks. The header is emitted even for a single policy, so splitting on `---` always yields valid per-policy files. The combined output is not one loadable Rego module, because it carries several `package` statements.
+
+```text
+# add_ingress.0.verify.attestation_policy.rego
+package policy
+import rego.v1
+...
+
+---
+
+# add_egress.0.verify.attestation_policy.rego
+package policy
+import rego.v1
+...
+```
+
+With `--out-dir`, stdout stays empty and each written file prints `wrote <path>` to stderr.
+
+Every policy type is supported:
+
+| Policy type | Export behavior | Extra dependency |
+|---|---|---|
+| `hardware_only` (including omitted and `default`) | Reads the bundled template | none |
+| `hardware_only_strict` | Reads the bundled template | none |
+| `trust_all` | Reads the bundled template | none |
+| `modules` | Generates the Rego from the module table | none |
+| `inline` | Decodes the standard base64 content; the result must be UTF-8 text | none |
+| `path` | Reads the file named in the config | the local file |
+| `transparency_log`, artifact-server primary | Generates the Rego; the artifact server is resolved at appraisal time | none |
+| `transparency_log`, rekor-v1 primary | Fetches and verifies the Rekor entry at export time | network and a trust anchor |
+
+The tool renders the policy and does not validate that the whole config would start; a config the builtin converter rejects at startup still exports its Rego. `tng tools` writes its logs to stderr, so stdout carries only the command output.
+
+---
+
 ## tng tools key-sync
 
 A decentralized HPKE key-sync daemon. It runs a stateless serf cluster whose members mutually attest over RA-TLS QUIC, sync the HPKE key ring, rotate it on a schedule, and mirror the live cluster key set to disk so an external ohttp key manager (or any consumer) can consume rotating keys without joining the cluster. Needs both the AA and the AS (RA-TLS mutual attestation between nodes). The `key-sync` subcommand is feature-gated on `__egress-common`; it is not available on the wasm target and requires the AA+AS attest stack (the serf transport uses RA-TLS mutual attestation).
@@ -406,15 +474,16 @@ After convergence both nodes export the same active key under `current/`, and af
 
 ## Platform Support
 
-The tools reuse platform-specific RA and TLS stacks, so availability varies by subcommand and target:
+`tng tools` is part of the native `tng` binary; the wasm build does not include it. Within a native build, availability depends on the subcommand:
 
 | Subcommand | Availability | Notes |
 |---|---|---|
 | `rats-tls gen` | unix | needs the AA attester (unix-only) |
-| `rats-tls dump` | non-wasm | `--attest` requires a unix target; omit it on other non-wasm targets |
-| `rats-tls verify` | non-wasm | the wasm TLS stack does not build the verifier |
-| `ohttp dump` | non-wasm | uses reqwest and tokio fs |
-| `ohttp verify` | non-wasm | contacts the AS over reqwest |
-| `key-sync` | non-wasm (`__egress-common`) | requires the AA+AS attest stack for the RA-TLS serf transport |
+| `rats-tls dump` | all native | `--attest` requires a unix target; omit it elsewhere |
+| `rats-tls verify` | all native | verifies a cert against a verify config |
+| `ohttp dump` | all native | uses reqwest and tokio fs |
+| `ohttp verify` | all native | contacts the AS over reqwest |
+| `policy export` | `__builtin-as` | renders locally; no AA or AS |
+| `key-sync` | `__egress-common` | requires the AA+AS attest stack for the RA-TLS serf transport |
 
-On a target where a subcommand is unavailable it bails at runtime with a clear message rather than failing to compile.
+A subcommand that is unavailable in the current build either is not compiled in or bails at runtime with a clear message.

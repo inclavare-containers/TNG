@@ -102,7 +102,7 @@ These are rejected when the policy loads, before any appraisal runs:
 
 `container.image.<repo>` and `ai.model.<model-id>` are permanent aliases of their `com.alibabacloud.` spellings and produce byte-identical policies. `com.alibabacloud.gpu` has no unprefixed alias.
 
-`tdx.td-shim` and `tdx.ovmf` pin the same quote field; use whichever matches how the TD is booted.
+`tdx.td-shim` and `tdx.ovmf` pin the same quote field; use whichever matches how the TD is booted. To see the exact Rego a configuration generates, run `tng tools policy export` (see [TNG Tools](tools.md#tng-tools-policy)).
 
 ### Guest firmware measurement: `tdx.td-shim`, `tdx.ovmf`
 

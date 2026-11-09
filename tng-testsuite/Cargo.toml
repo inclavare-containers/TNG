@@ -415,3 +415,8 @@ name = "key_sync"
 path = "tests/key_sync.rs"
 required-features = ["on-source-code"]
 
+[[test]]
+name = "policy_export"
+path = "tests/policy_export.rs"
+required-features = ["on-source-code"]
+
