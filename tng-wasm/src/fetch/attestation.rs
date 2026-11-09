@@ -67,7 +67,7 @@ pub(super) fn attach_attestation_info(
                             attest_info.as_addr = as_addr.clone();
                             attest_info.policy_ids = Some(policy_ids.clone());
                         }
-                        CocoVerifierArgs::Builtin { .. } => {
+                        CocoVerifierArgs::Builtin => {
                             // Nothing to do
                         }
                     }

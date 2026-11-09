@@ -32,6 +32,7 @@ enum State {
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>
     FirstByteReadTimeoutStream<T>
 {
+    #[cfg(not(wasm))]
     pub fn new(inner: T, timeout: Duration) -> Self {
         Self {
             inner,

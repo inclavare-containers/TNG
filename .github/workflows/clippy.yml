@@ -50,3 +50,9 @@ jobs:
 
       - name: Cargo Clippy
         run: make clippy
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cargo Clippy (wasm32)
+        run: make clippy-wasm

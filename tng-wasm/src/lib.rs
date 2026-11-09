@@ -17,12 +17,17 @@ pub fn init_tng() {
     let wasm_layer_config = WASMLayerConfigBuilder::new()
         .set_console_config(tracing_wasm::ConsoleConfig::ReportWithoutConsoleColor)
         .build();
-    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(
-        WASMLayer::new(wasm_layer_config).with_filter(Into::<tracing_subscriber::EnvFilter>::into(
+    let subscriber =
+        tracing_subscriber::registry().with(WASMLayer::new(wasm_layer_config).with_filter(Into::<
+            tracing_subscriber::EnvFilter,
+        >::into(
             "info,tokio_graceful=off,rats_cert=debug,tng=debug",
-        )),
-    ))
-    .expect("failed to set tng default global tracing subscriber");
+        )));
+    if let Err(error) = tracing::subscriber::set_global_default(subscriber) {
+        // A host page may already have a global subscriber; keep it rather
+        // than aborting the wasm module.
+        tracing::debug!(%error, "keeping the host's global tracing subscriber");
+    }
 
     tng::show_banner("wasm");
 }

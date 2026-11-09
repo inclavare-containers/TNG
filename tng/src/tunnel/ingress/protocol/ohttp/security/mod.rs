@@ -23,7 +23,9 @@ use crate::{
     },
     AttestationResult, TokioRuntime, HTTP_REQUEST_USER_AGENT_HEADER,
 };
-use anyhow::{Context, Result};
+#[cfg(not(wasm))]
+use anyhow::Context;
+use anyhow::Result;
 #[cfg(not(wasm))]
 use async_trait::async_trait;
 use http::HeaderValue;

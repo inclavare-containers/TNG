@@ -445,6 +445,11 @@ windows-cross-build: install-windows-build-deps
 clippy:
 	cargo clippy --workspace --exclude tng-wasm --exclude tng-testsuite --all-targets -- -D warnings
 
+# tng-wasm only builds for wasm32; the target needs the getrandom backend cfg.
+.PHONY: clippy-wasm
+clippy-wasm:
+	RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo clippy --target wasm32-unknown-unknown -p tng-wasm --all-targets -- -D warnings
+
 .PHONY: deny
 deny:
 	cargo deny --log-level error check bans

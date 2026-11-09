@@ -243,7 +243,11 @@ impl RaArgsUnchecked {
                                         )));
                                     }
 
-                                    // Validation for skip_as_token_cert_verify
+                                    // Validation for skip_as_token_cert_verify.
+                                    // The first check is cfg-gated for wasm, so
+                                    // the statement shape differs per target and
+                                    // the two ifs cannot be merged.
+                                    #[allow(clippy::collapsible_if)]
                                     if *skip_as_token_cert_verify {
                                         #[cfg(not(wasm))]
                                         if trusted_certs_paths.is_some() {

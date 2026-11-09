@@ -137,6 +137,7 @@ pub(crate) const DOWNSTREAM_ENDED_MESSAGE: &str =
 /// Record and report a downstream setup failure at the severity its fault
 /// implies. A macro so `tracing` keeps the caller's module as the event
 /// target. `failure_message` is used for anything that is not a benign end.
+#[cfg(not(wasm))]
 macro_rules! report_downstream_failure {
     ($connector:expr, $error:ident, $failure:expr) => {{
         let fault = $crate::tunnel::connection_fault::DownstreamSetupError::find(&$error)
@@ -154,6 +155,7 @@ macro_rules! report_downstream_failure {
         }
     }};
 }
+#[cfg(not(wasm))]
 pub(crate) use report_downstream_failure;
 
 #[cfg(test)]

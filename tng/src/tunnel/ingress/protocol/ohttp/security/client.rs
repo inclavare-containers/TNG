@@ -868,7 +868,7 @@ impl OHttpClientInner {
             tokio_with_wasm::task::spawn(
                 async move {
                     let stream = response_body;
-                    sender.send_all(&mut stream.map(|item| Ok(item))).await
+                    sender.send_all(&mut stream.map(Ok)).await
                 }
                 .instrument(parent_span),
             );

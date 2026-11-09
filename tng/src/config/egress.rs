@@ -403,6 +403,7 @@ pub struct OHttpArgs {
 impl OHttpArgs {
     /// The suites that are both advertised and accepted: the configured
     /// allowlist, or `DEFAULT_OHTTP_AEAD_SUITES` when unset.
+    #[cfg(not(wasm))]
     pub(crate) fn resolved_aead_suites(&self) -> AeadSuites {
         self.aead_suites.clone().unwrap_or_default()
     }
