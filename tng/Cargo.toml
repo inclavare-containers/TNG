@@ -16,7 +16,7 @@ async-stream = {workspace = true}
 async-trait = {workspace = true}
 auto_enums = {workspace = true}
 base64 = {workspace = true}
-bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "2ec8816bcd82291feed34dc8d1135c6108cefd7e", features = ["http-compat"]}
+bhttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "99e254f75e7bfad79224d7fa5e2f04cd1e42d045", features = ["http-compat"]}
 bytes = {workspace = true}
 chrono = {workspace = true}
 cidr = {workspace = true}
@@ -43,7 +43,7 @@ libc = "0.2"
 local-ip-address = "0.6"
 parking_lot = "0.12"
 nix = {workspace = true, features = ["process", "signal", "socket", "net"]}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "2ec8816bcd82291feed34dc8d1135c6108cefd7e"}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "99e254f75e7bfad79224d7fa5e2f04cd1e42d045"}
 opentelemetry = {workspace = true, optional = true}
 opentelemetry-otlp = {workspace = true, features = [
   "logs",
@@ -112,13 +112,13 @@ which = {workspace = true, optional = true}
 x509-cert = {workspace = true}
 
 [target.'cfg(not(all(target_arch = "wasm32", target_vendor = "unknown", target_os = "unknown")))'.dependencies]
-async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime"]}
+async-tungstenite = {version = "0.25.1", optional = true, features = ["tokio-runtime", "tokio-rustls-manual-roots"]}
 axum = {workspace = true, default-features = true, features = ["tokio", "http1", "http2", "ws"]}
 hyper = {workspace = true}
 hyper-util = {workspace = true}
 moka = {workspace = true}
 notify = {workspace = true}
-ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "2ec8816bcd82291feed34dc8d1135c6108cefd7e", features = ["aws-lc"]}
+ohttp = {git = "https://github.com/inclavare-containers/ohttp.git", rev = "99e254f75e7bfad79224d7fa5e2f04cd1e42d045", features = ["aws-lc"]}
 quinn = {workspace = true}
 rats-cert = {path = "../rats-cert", default-features = false, features = ["crypto-rustcrypto", "attester-coco", "verifier-coco", "attester-ita", "verifier-ita"]}
 socket2 = {workspace = true}

@@ -5,6 +5,10 @@ use crate::tunnel::provider::ProviderType;
 pub mod header;
 pub mod metadata;
 pub mod userdata;
+/// Wire helpers for the websocket tunnel. Both ends are native-only
+/// (the wasm client never tunnels ws), so the module is gated off wasm.
+#[cfg(not(wasm))]
+pub mod ws;
 
 /// Request structure for the key configuration endpoint
 #[derive(Serialize, Deserialize, Debug, Clone)]

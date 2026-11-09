@@ -16,6 +16,8 @@ mod tcp_server;
 mod tls_tcp_proxy;
 mod udp_client;
 mod udp_server;
+mod ws_client;
+mod ws_server;
 
 const TCP_PAYLOAD: &str = "Hello World TCP!";
 const UDP_PAYLOAD: &str = "Hello World UDP!";
@@ -80,7 +82,28 @@ pub enum AppType {
     UdpServer { port: u16 },
     #[allow(dead_code)]
     UdpClient { host: &'static str, port: u16 },
+    #[allow(dead_code)]
+    WsServer {
+        port: u16,
+        close_after_greeting: bool,
+    },
+    #[allow(dead_code)]
+    WsClient {
+        host: &'static str,
+        port: u16,
+        /// "ip:port" of the ingress to dial instead of the backend, keeping
+        /// the backend authority in the handshake request (proxy semantics).
+        proxy: Option<String>,
+        /// `Sec-WebSocket-Protocol` token offered on the handshake; the
+        /// server echoes a negotiated one into its greeting, proving
+        /// subprotocol passthrough through the tunnel.
+        subprotocol: Option<&'static str>,
+        /// Which side of the close handshake the client exercises.
+        close: ws_client::WsCloseMode,
+    },
 }
+
+pub use ws_client::WsCloseMode;
 
 #[async_trait]
 impl Task for AppType {
@@ -89,11 +112,13 @@ impl Task for AppType {
             AppType::HttpServer { .. }
             | AppType::HttpServerWithHeaders { .. }
             | AppType::HttpEchoServer { .. }
-            | AppType::TcpServer { .. } => "app_server",
+            | AppType::TcpServer { .. }
+            | AppType::WsServer { .. } => "app_server",
             AppType::UdpServer { .. } | AppType::UdpClient { .. } => "app_udp",
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
-            | AppType::TcpClient { .. } => "app_client",
+            | AppType::TcpClient { .. }
+            | AppType::WsClient { .. } => "app_client",
             AppType::LoadBalancer { .. } => "load_balancer",
             AppType::TlsTcpProxy { .. } => "tls_tcp_proxy",
             #[cfg(feature = "js-sdk")]
@@ -107,11 +132,13 @@ impl Task for AppType {
             AppType::HttpServer { .. }
             | AppType::HttpServerWithHeaders { .. }
             | AppType::HttpEchoServer { .. }
-            | AppType::TcpServer { .. } => NodeType::Server,
+            | AppType::TcpServer { .. }
+            | AppType::WsServer { .. } => NodeType::Server,
             AppType::UdpServer { .. } => NodeType::Server,
             AppType::HttpClient { .. }
             | AppType::HttpClientWithReverseProxy { .. }
-            | AppType::TcpClient { .. } => NodeType::Client,
+            | AppType::TcpClient { .. }
+            | AppType::WsClient { .. } => NodeType::Client,
             AppType::UdpClient { .. } => NodeType::Client,
             AppType::LoadBalancer { .. } => NodeType::Middleware,
             AppType::TlsTcpProxy { .. } => NodeType::Middleware,
@@ -198,6 +225,20 @@ impl Task for AppType {
             AppType::UdpServer { port } => udp_server::launch_udp_server(token, *port).await,
             AppType::UdpClient { host, port } => {
                 udp_client::launch_udp_client(token, host, *port).await
+            }
+            AppType::WsServer {
+                port,
+                close_after_greeting,
+            } => ws_server::launch_ws_server(token, *port, *close_after_greeting).await,
+            AppType::WsClient {
+                host,
+                port,
+                proxy,
+                subprotocol,
+                close,
+            } => {
+                ws_client::launch_ws_client(token, host, *port, proxy.clone(), *subprotocol, *close)
+                    .await
             }
             AppType::LoadBalancer {
                 listen_port,

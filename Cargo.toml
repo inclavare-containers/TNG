@@ -25,6 +25,7 @@ as-any = "0.3.2"
 async-http-proxy = {version = "1.2.5", features = ["runtime-tokio"]}
 async-stream = "0.3.6"
 async-trait = "0.1.88"
+async-tungstenite = {version = "0.25.1", features = ["tokio-runtime", "tokio-rustls-manual-roots"]}
 attestation-service = {git = "https://github.com/openanolis/trustee/", rev = "a68a22e8271bf3c63ddbb2f7f2f6730f13b64c96", default-features = false}
 auto_enums = {version = "0.8", features = ["std", "tokio1"]}
 axum = {version = "0.8.4", default-features = false}

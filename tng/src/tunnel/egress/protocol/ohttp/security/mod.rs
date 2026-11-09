@@ -25,6 +25,7 @@ pub mod cors_fallback;
 #[allow(dead_code)]
 pub mod key_manager;
 pub mod server;
+pub mod ws;
 
 /// Hyper reports an incomplete message when a request was only partially read.
 /// That verdict has no io source of its own, so it belongs at this boundary

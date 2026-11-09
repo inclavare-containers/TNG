@@ -92,6 +92,14 @@ fn scheme_from_tls(tls: Option<bool>) -> &'static str {
     }
 }
 
+/// Read a configured CA file (single cert or PEM bundle) for the two trust
+/// paths that share `tls_ca_certs`: the reqwest client and the ws hop's
+/// rustls client config.
+#[cfg(not(wasm))]
+fn read_ca_pem_bundle(path: &str) -> Result<Vec<u8>> {
+    std::fs::read(path).with_context(|| format!("Failed to read TLS CA cert: {path}"))
+}
+
 /// Build the reqwest client used to forward OHTTP POSTs to the upstream.
 ///
 /// On non-wasm targets this honors `ohttp_args.tls_ca_certs` (each file may be a
@@ -129,8 +137,7 @@ fn build_ohttp_http_client(
     }
 
     for path in &ohttp_args.tls_ca_certs {
-        let pem =
-            std::fs::read(path).with_context(|| format!("Failed to read TLS CA cert: {path}"))?;
+        let pem = read_ca_pem_bundle(path)?;
         let certs = reqwest::Certificate::from_pem_bundle(&pem)
             .with_context(|| format!("Failed to parse TLS CA cert bundle: {path}"))?;
         for cert in certs {
@@ -147,6 +154,50 @@ fn build_ohttp_http_client(
     }
 
     Ok(builder.build()?)
+}
+
+/// The rustls connector for the websocket tunnel's hop to the egress, built
+/// only when `ohttp.tls` is on. Root material comes from the same
+/// `tls_ca_certs` PEM set as the reqwest path. Unlike reqwest, which keeps a
+/// built-in root store when no CA files are configured, an empty `tls_ca_certs`
+/// here yields no trust anchors at all, so the hop cannot verify the egress.
+#[cfg(not(wasm))]
+fn build_ws_tls_connector(
+    ohttp_args: &OHttpArgs,
+) -> Result<Option<Arc<tokio_rustls::TlsConnector>>> {
+    if ohttp_args.tls != Some(true) {
+        return Ok(None);
+    }
+    if ohttp_args.tls_ca_certs.is_empty() {
+        tracing::warn!(
+            "ohttp.tls is enabled without tls_ca_certs; the websocket tunnel hop \
+             to the egress has no trust anchors and its TLS verification will fail"
+        );
+    }
+
+    let mut root_store = rustls::RootCertStore::empty();
+    for path in &ohttp_args.tls_ca_certs {
+        let pem = read_ca_pem_bundle(path)?;
+        for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+            let cert =
+                cert.with_context(|| format!("Failed to parse TLS CA cert bundle: {path}"))?;
+            root_store
+                .add(cert)
+                .with_context(|| format!("Failed to add TLS CA cert: {path}"))?;
+        }
+    }
+
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    // The hop speaks the HTTP/1.1 websocket upgrade; without an ALPN
+    // advertisement an h2-only egress front would negotiate HTTP/2 and the
+    // upgrade could never happen.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    Ok(Some(Arc::new(tokio_rustls::TlsConnector::from(Arc::new(
+        config,
+    )))))
 }
 
 /// wasm build of the OHTTP reqwest client. The browser controls TLS and the
@@ -185,6 +236,12 @@ pub struct OHttpSecurityLayer {
     passthrough_response_headers: Arc<crate::config::header_passthrough::HeaderPassthroughSpec>,
     /// AEAD allowlist and preference order; `None` means no policy.
     aead_suites: Option<AeadSuites>,
+    /// TLS connector for the websocket tunnel's hop to the egress; `Some`
+    /// exactly when the outer scheme is https (native ingress only).
+    #[cfg(not(wasm))]
+    ws_tls_connector: Option<Arc<tokio_rustls::TlsConnector>>,
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    transport_so_mark: Option<u32>,
 }
 
 impl OHttpSecurityLayer {
@@ -238,6 +295,8 @@ impl OHttpSecurityLayer {
             default = aead_suites.is_none(),
             "OHTTP ingress AEAD suite policy in effect"
         );
+        #[cfg(not(wasm))]
+        let ws_tls_connector = build_ws_tls_connector(ohttp_args)?;
 
         let passthrough_request_headers = Arc::new(
             ohttp_args
@@ -266,6 +325,10 @@ impl OHttpSecurityLayer {
             passthrough_request_headers,
             passthrough_response_headers,
             aead_suites,
+            #[cfg(not(wasm))]
+            ws_tls_connector,
+            #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+            transport_so_mark,
         })
     }
 
@@ -373,6 +436,72 @@ impl OHttpSecurityLayer {
             })
             .await
             .cloned()
+    }
+}
+
+/// Pre-handshake state of a websocket tunnel hop to the egress: per-session
+/// crypto material, the dialled (not yet handshaked) TCP connection, and the
+/// TLS connector when `ohttp.tls` is on.
+#[cfg(not(wasm))]
+pub struct WsEgressHop {
+    pub material: client::WsSessionMaterial,
+    pub tcp: tokio::net::TcpStream,
+    pub tls_connector: Option<Arc<tokio_rustls::TlsConnector>>,
+}
+
+#[cfg(not(wasm))]
+impl OHttpSecurityLayer {
+    /// The path the websocket relay sends toward the egress: the app path
+    /// after the same `path_rewrites`/`path_default` rule as the outer POST
+    /// path, because the relayed handshake names the backend proxy-style and
+    /// the egress forwards that path on to it.
+    pub(crate) fn ws_relay_path<'a>(&self, request: &'a axum::extract::Request) -> Cow<'a, str> {
+        outer_path(&self.path_rewrite_group, self.path_default, request)
+    }
+
+    /// Entry for the ingress websocket forwarder: fetch (or create) the
+    /// endpoint's OHTTP client, build the session material, and dial the TCP
+    /// connection to the egress with the tunnel's socket mark. The ws
+    /// handshake itself happens on the returned stream in `ws.rs`.
+    ///
+    /// The ws hop uses only the client's origin (`ws_base_parts` drops the
+    /// path; the relayed handshake request itself carries the backend
+    /// target), so the client cache is keyed on a fixed `"/"` and all
+    /// websocket sessions of one endpoint share a single OHTTP client (and
+    /// one key-config fetch) regardless of the app request's path.
+    pub async fn forward_ws_upgrade(
+        &self,
+        endpoint: &TngEndpoint,
+    ) -> Result<WsEgressHop, TngError> {
+        let ohttp_client = self.get_or_create_ohttp_client(endpoint, "/").await?;
+        let material = ohttp_client.ws_session_material().await?;
+
+        // Bound the dial like the egress bounds its backend dial: a black-holed
+        // address must fail the upgrade, not hang the app's request forever.
+        let tcp = tokio::time::timeout(
+            crate::tunnel::ohttp::protocol::ws::TNG_WS_NEGOTIATION_TIMEOUT,
+            endpoint.tcp_connect(
+                #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+                self.transport_so_mark,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            TngError::WsUpstreamConnectFailed(anyhow::anyhow!(
+                "timed out connecting to the ohttp egress for the websocket tunnel"
+            ))
+        })?
+        .map_err(|error| {
+            TngError::WsUpstreamConnectFailed(
+                error.context("connecting to the ohttp egress for the websocket tunnel"),
+            )
+        })?;
+
+        Ok(WsEgressHop {
+            material,
+            tcp,
+            tls_connector: self.ws_tls_connector.clone(),
+        })
     }
 }
 
