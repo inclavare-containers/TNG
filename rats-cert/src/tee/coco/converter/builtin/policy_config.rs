@@ -23,11 +23,12 @@ pub enum PolicyConfig {
     /// posture, firmware/kernel/image/model measurement, GPU, transparency
     /// log). Entries within one group are AND-ed; multiple groups are
     /// alternative baselines evaluated with OR. Measurement values are pinned
-    /// inline in the entries, so this type must not be combined with external
-    /// `reference_values`. Omitting a module type imposes no requirement on
-    /// that part; listing one is fail-closed. A `transparency_log` entry takes
-    /// an options object and anchors its baseline in a transparency log
-    /// instead of pinning a digest in the policy.
+    /// inline in the entries or anchored in a transparency log, so this type
+    /// must not be combined with external `reference_values`. Omitting a module
+    /// type imposes no requirement on that part; listing one is fail-closed. A
+    /// `transparency_log` entry takes an options object and anchors its
+    /// baseline in a transparency log instead of pinning a digest in the
+    /// policy.
     Modules {
         /// Either a flat list (a single group, entries AND-ed) or a list of
         /// lists (one acceptable baseline per inner list). An empty list

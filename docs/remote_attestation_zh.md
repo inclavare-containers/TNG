@@ -504,7 +504,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **场景 4：transparency_log 锚定（高级）**
 
-目标：把可信度量集锚定到一个记录在透明日志中的 ReleaseManifest，appraisal 时将实际度量值与记录的参考比对。在 `modules` 策略里加一个 `transparency_log` 条目；`publishedMeasurements`、`schemaVersion` 与恰好一个 service 为必填。条目只门控 `executables`，需要保留平台姿态检查时再加 `tdx` 条目。
+目标：把可信度量集锚定到一个记录在透明日志中的 ReleaseManifest，appraisal 时将实际度量值与记录的参考比对。在 `modules` 策略里加一个 `transparency_log` 条目；`publishedMeasurements` 与恰好一个 service 为必填，`schemaVersion` 默认为 `1.0.0`。条目只门控 `executables`，需要保留平台姿态检查时再加 `tdx` 条目。
 
 <details>
 <summary>示例：带 transparency_log 条目的 modules 策略</summary>
@@ -552,7 +552,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 **appraisal（证据校验）时：**
 
 - 从 TDX quote（如 `tdx.td-shim` 对应的 `mr_td`）与 UEFI 事件日志（如 `container.image.cmaas-runtime` 度量对应 AAEL `kangaroo/pull-image` 事件中的镜像摘要）中提取实际度量值。
-- 按 `publishedMeasurements` 给定的顺序，用这些实际值重建 release manifest，并将其哈希与记录的 `payloadHash` 比对。类型、顺序、值或 `schemaVersion` 不匹配即拒绝。
+- 按度量类型排序（发布者使用的顺序）后，用这些实际值重建 release manifest，并将其哈希与记录的 `payloadHash` 比对。由于先排序，配置里的顺序无关紧要；类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。
 - DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥，将条目绑定到可信 publisher（抵御 `logIndex` 被替换）。
 
 **primary 为 `artifact-server` 时：** 策略加载不访问网络，条目在 appraisal 时把重建的 manifest 发往配置的 `url` 解析。可选的 fallback 是三态决策：只在 primary 返回 `fail` 时启用；`ok` 与 `revoked` 都不会触发。primary 失败且没有 fallback 即拒绝。
@@ -568,7 +568,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `publishedMeasurements` | — | （必填）非空的度量类型列表，按 manifest 顺序；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复 |
+| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复。重建前会按类型排序，配置顺序不影响结果 |
 | `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
@@ -578,8 +578,8 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `services[].url` | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
 | `services[].publisherPublicKeyPem` | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
-| `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；须与 `fallbackServices` 同时出现，非空，且是 `publishedMeasurements` 的子集 |
-| `fallbackServices` | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用 |
+| `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
+| `fallbackServices` | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 </details>
 

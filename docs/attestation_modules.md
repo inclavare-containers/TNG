@@ -81,7 +81,7 @@ These are rejected when the policy loads, before any appraisal runs:
 - an entry `type` outside the set listed below, including a mistyped family prefix; the `com.alibabacloud.` prefix is only legal on `container.image.`, `ai.model.`, and the exact type `gpu`, and unprefixed `gpu` is not a type;
 - the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines). `transparency_log` is the one exception: it may repeat within a group so several log-anchored baselines must all verify;
 - a value in the wrong shape or format: wrong digest length or uppercase hex (all digests are lowercase), a `com.alibabacloud.container.image.*` value without the `sha256:` prefix, an object given where the type expects a string or the reverse;
-- a `transparency_log` entry whose value violates the entry schema: an empty or unsupported `publishedMeasurements` list, a duplicate measurement type, an empty `services` list or more than one service, an `artifact-server` primary that is not the only service, an unknown field in the value object, an unfilled fallback pairing, or a fallback that is empty, not `rekor-v1`, or not a subset of `publishedMeasurements` (see the entry section below);
+- a `transparency_log` entry whose value violates the entry schema: an empty or unsupported `publishedMeasurements` list, a duplicate measurement type, an empty `services` list or more than one service, an `artifact-server` primary that is not the only service, an unknown top-level field in the value object (unknown fields nested inside a service entry are currently ignored), an unfilled fallback pairing, or a fallback that is empty, not `rekor-v1`, or not a subset of `publishedMeasurements` (see the entry section below);
 - a name segment (`<repo>`, `<model-id>`) containing characters outside `[A-Za-z0-9._/@:+-]`;
 - an unknown field inside a `tdx`, `nvidia`, or `com.alibabacloud.gpu` options object; the `com.alibabacloud.gpu` value must be the empty object `{}`;
 - an `nvidia` entry whose `min_count` is below 1 (omit the entry to disable GPU appraisal);
@@ -269,7 +269,7 @@ Anchors the trusted measurement set to a ReleaseManifest recorded in a transpare
 
 **Load time and appraisal time.** With a `rekor-v1` primary the entry is fetched and authenticated when the policy loads: the log entry is looked up by `logIndex`, its signed checkpoint, Merkle inclusion proof, and Signed Entry Timestamp are verified, and the entry's `payloadHash` and DSSE publisher signature are baked into the generated rule. Omitting `rekorPublicKeyPem` uses the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; other logs must supply their key. With an `artifact-server` primary the policy loads without network access and the entry is resolved at appraisal time. The optional fallback is consulted only when the primary returns `fail` (`ok` and `revoked` never trigger it), and a failed primary with no fallback rejects.
 
-**What it verifies.** The entry extracts the actual measurement values from the TDX quote and the UEFI event log, reconstructs the manifest in the order given by `publishedMeasurements`, and compares its SHA-256 with the logged `payloadHash`. A mismatch (wrong type, wrong order, wrong value, or wrong `schemaVersion`) rejects. The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
+**What it verifies.** The entry extracts the actual measurement values from the TDX quote and the UEFI event log, sorts the measurement types by type (the publisher's canonical order), reconstructs the manifest in that sorted order, and compares its SHA-256 with the logged `payloadHash`. Because the types are sorted, the order in the configuration does not matter; a mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects. The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
 
 **Dimension and hardware.** The entry gates `executables` only. Platform posture stays a separate `tdx` entry: add `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` to keep the old non-debug and event-log checks without imposing the newer attribute gates. TDX platform recognition is automatic. With only `transparency_log` entries, `hardware` requires that recognition alone.
 
@@ -291,7 +291,7 @@ Anchors the trusted measurement set to a ReleaseManifest recorded in a transpare
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types in manifest order; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and a type may not repeat |
+| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and a type may not repeat. Types are sorted before hashing, so the configuration order does not matter |
 | `schemaVersion` | string | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | list | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | string | — | (required) `"rekor-v1"` or `"artifact-server"` |
@@ -301,8 +301,8 @@ Anchors the trusted measurement set to a ReleaseManifest recorded in a transpare
 | `services[].publisherPublicKeyPem` | string | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
 | `services[].url` | string | — | (required for `artifact-server`) Artifact-server base URL |
 | `services[].logServices` | list | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
-| `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; required with `fallbackServices`, non-empty, and a subset of `publishedMeasurements` |
-| `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary |
+| `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
+| `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 
 `publishedMeasurements` is narrower than the module measurement types: it accepts only the three types above, which is the shape the cmaas release manifest publishes. `tdx.ovmf`, `tdx.uki`, and arbitrary `container.image.<repo>` are not accepted.
 

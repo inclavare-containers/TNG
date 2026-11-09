@@ -504,7 +504,7 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 
 **Scenario 4: transparency_log anchoring (advanced)**
 
-Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and at appraisal compare the actual measurements against that recorded reference. Add a `transparency_log` entry to a `modules` policy; `publishedMeasurements`, `schemaVersion`, and exactly one service are required. The entry gates `executables` only, so add a `tdx` entry to keep the platform posture checks.
+Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and at appraisal compare the actual measurements against that recorded reference. Add a `transparency_log` entry to a `modules` policy; `publishedMeasurements` and exactly one service are required, and `schemaVersion` defaults to `1.0.0`. The entry gates `executables` only, so add a `tdx` entry to keep the platform posture checks.
 
 <details>
 <summary>Example: modules policy with a transparency_log entry</summary>
@@ -552,7 +552,7 @@ The entry anchors the trusted measurement set to a ReleaseManifest recorded in a
 **At appraisal (evidence verification):**
 
 - Extract the actual measurement values from the TDX quote (e.g. `mr_td` for `tdx.td-shim`) and the UEFI event log (e.g. the image digest from an AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`).
-- Reconstruct the release manifest from those actual values, in the order given by `publishedMeasurements`, and compare its hash to the recorded `payloadHash`. A mismatch (wrong type, wrong order, wrong value, or wrong `schemaVersion`) rejects.
+- Reconstruct the release manifest from those actual values, with the measurement types sorted by type (the publisher's canonical order), and compare its hash to the recorded `payloadHash`. Because the types are sorted, the configuration order does not matter; a mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects.
 - The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise, binding the entry to a trusted publisher (defense against a substituted `logIndex`).
 
 **With an `artifact-server` primary:** the policy loads without network access, and the entry is resolved at appraisal time by sending the reconstructed manifest to the configured `url`. The optional fallback is a tri-state decision: it is consulted only when the primary returns `fail`; `ok` and `revoked` never fall back. A failed primary with no fallback rejects.
@@ -568,7 +568,7 @@ The entry anchors the trusted measurement set to a ReleaseManifest recorded in a
 
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | — | (required) Non-empty measurement type list in manifest order; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`; a type may not repeat |
+| `publishedMeasurements` | — | (required) Non-empty measurement type list; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`; a type may not repeat. Types are sorted before hashing, so the configuration order does not matter |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |
@@ -578,8 +578,8 @@ The entry anchors the trusted measurement set to a ReleaseManifest recorded in a
 | `services[].url` | — | (required for `artifact-server`) Artifact-server base URL |
 | `services[].logServices` | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
 | `services[].publisherPublicKeyPem` | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
-| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; required with `fallbackServices`, non-empty, and a subset of `publishedMeasurements` |
-| `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary |
+| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
+| `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 
 </details>
 

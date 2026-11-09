@@ -10,4 +10,4 @@
 
 ## 策略配置
 
-内建 Attestation Service（`as_type` = `"builtin"`）使用 OPA/Rego 策略对 evidence 进行 appraisal。策略变体由 `attestation_policy.type` 字段选择。除了内建的 `default`/`hardware_only`/`hardware_only_strict`/`trust_all` 姿态、`modules` 模块规则列表以及 `transparency_log` 策略之外，也支持 `inline`/`path` 自定义策略方式。
+内建 Attestation Service（`as_type` = `"builtin"`）使用 OPA/Rego 策略对 evidence 进行 appraisal。策略变体由 `attestation_policy.type` 字段选择。除了内建的 `default`/`hardware_only`/`hardware_only_strict`/`trust_all` 姿态与 `modules` 模块规则列表（其条目类型包含 `transparency_log`）之外，也支持 `inline`/`path` 自定义策略方式。

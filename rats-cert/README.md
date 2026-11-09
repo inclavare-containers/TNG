@@ -10,4 +10,4 @@ This crate was migrated from [rats-rs](https://github.com/inclavare-containers/r
 
 ## Policy Configuration
 
-The builtin Attestation Service (`as_type` = `"builtin"`) appraises evidence with an OPA/Rego policy. The policy variant is selected by the `attestation_policy.type` field. Besides the built-in `default`/`hardware_only`/`hardware_only_strict`/`trust_all` postures, the `modules` module-rule list, and the `transparency_log` policy, the `inline`/`path` custom-policy escapes are also supported.
+The builtin Attestation Service (`as_type` = `"builtin"`) appraises evidence with an OPA/Rego policy. The policy variant is selected by the `attestation_policy.type` field. Besides the built-in `default`/`hardware_only`/`hardware_only_strict`/`trust_all` postures and the `modules` module-rule list (whose entry types include `transparency_log`), the `inline`/`path` custom-policy escapes are also supported.

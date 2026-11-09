@@ -81,7 +81,7 @@
 - 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
 - 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象或姿态类给了字符串；
-- `transparency_log` 条目的取值不符合条目 schema：`publishedMeasurements` 为空或含不支持的类型、度量类型重复、`services` 为空或不止一个 service、`artifact-server` primary 不是唯一 service、取值对象里出现未知字段、fallback 字段配对不全，或 fallback 为空、不是 `rekor-v1`、不是 `publishedMeasurements` 的子集（详见下方条目说明）；
+- `transparency_log` 条目的取值不符合条目 schema：`publishedMeasurements` 为空或含不支持的类型、度量类型重复、`services` 为空或不止一个 service、`artifact-server` primary 不是唯一 service、取值对象顶层出现未知字段（service 条目内部嵌套的未知字段目前会被忽略）、fallback 字段配对不全，或 fallback 为空、不是 `rekor-v1`、不是 `publishedMeasurements` 的子集（详见下方条目说明）；
 - 名字段（`<repo>`、`<model-id>`）含 `[A-Za-z0-9._/@:+-]` 之外的字符；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
 - `nvidia` 条目的 `min_count` 小于 1（要关闭 GPU 评定就不写该条目）；
@@ -269,7 +269,7 @@
 
 **加载期与 appraisal 期。** primary 为 `rekor-v1` 时条目在策略加载时拉取并认证：按 `logIndex` 取出日志条目，验证其签名检查点、Merkle 包含证明与 Signed Entry Timestamp，并把条目的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供公钥。primary 为 `artifact-server` 时策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用（`ok` 与 `revoked` 都不会触发），primary 失败且没有 fallback 即拒绝。
 
-**校验内容。** 条目从 TDX quote 与 UEFI 事件日志提取实际度量值，按 `publishedMeasurements` 给定的顺序重建 manifest，并将其 SHA-256 与日志记录的 `payloadHash` 比对。类型、顺序、值或 `schemaVersion` 不匹配即拒绝。DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
+**校验内容。** 条目从 TDX quote 与 UEFI 事件日志提取实际度量值，按度量类型排序（发布者使用的顺序）后重建 manifest，并将其 SHA-256 与日志记录的 `payloadHash` 比对。由于重建前先排序，配置里的顺序无关紧要；类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
 
 **维度与 hardware。** 条目只门控 `executables`。平台姿态仍由独立的 `tdx` 条目表达：加上 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` 即保留旧的 non-debug 与事件日志检查，同时不引入新的属性位要求。TDX 平台识别是自动的。只有 `transparency_log` 条目时，`hardware` 仅要求该识别。
 
@@ -291,7 +291,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表，按 manifest 顺序；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复 |
+| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复。重建前会按类型排序，配置顺序不影响结果 |
 | `schemaVersion` | string | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | 列表 | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | string | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
@@ -301,8 +301,8 @@
 | `services[].publisherPublicKeyPem` | string | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
 | `services[].url` | string | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | 列表 | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
-| `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；须与 `fallbackServices` 同时出现，非空，且是 `publishedMeasurements` 的子集 |
-| `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用 |
+| `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
+| `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 `publishedMeasurements` 比模块的度量类型更窄：只接受上述三种类型，也就是 cmaas release manifest 发布的形状。`tdx.ovmf`、`tdx.uki` 以及任意的 `container.image.<repo>` 都不接受。
 
