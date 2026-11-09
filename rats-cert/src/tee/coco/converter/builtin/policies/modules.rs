@@ -972,10 +972,12 @@ fn tcb_actual(field: &str) -> String {
     )
 }
 
-/// The evaluated per-GPU claims: every `input.tdx.nvidia_gpu.*` value. Defined
-/// once per policy when an `nvidia` entry appears; both the sub-check
-/// predicates and their diagnostic projections read it.
-const NVIDIA_GPUS_HELPER: &str = r#"nvidia_gpus := [g |
+/// The evaluated per-GPU claims, keyed by their `input.tdx` field name.
+/// Defined once per policy when an `nvidia` entry appears; both the sub-check
+/// predicates and their diagnostic projections read it. Carrying the key lets
+/// a diagnostic identify the GPU without embedding the whole claim, which in
+/// the raw/skip form carries the base64 `attestation_report`.
+const NVIDIA_GPUS_HELPER: &str = r#"nvidia_gpus := [{"gpu": k, "claim": g} |
 	tdx := object.get(input, "tdx", {})
 	some k, g in tdx
 	startswith(k, "nvidia_gpu.")
@@ -1265,6 +1267,18 @@ fn gpu_posture_rule() -> Vec<PostureCheck> {
     ]
 }
 
+/// A compact diagnostic projection of the GPUs an allow-list check rejects:
+/// the GPU key and UUID, plus the one field the check inspects. The whole
+/// claim is never projected: a raw/skip report's `attestation_report` must not
+/// reach the token or the client's error text.
+fn nvidia_actual(field: Option<&str>, condition: &str) -> String {
+    let mut projection = "\"gpu\": e.gpu, \"uuid\": e.claim.uuid".to_string();
+    if let Some(field) = field {
+        projection.push_str(&format!(", {field:?}: e.claim.{field}"));
+    }
+    format!("[{{{projection}}} | some e in nvidia_gpus; {condition}]")
+}
+
 /// Emit the sub-checks of an `nvidia` posture entry: the standard trustee
 /// NVIDIA appraisal over the evaluated per-GPU claims, rejecting the raw/skip
 /// passthrough form (which carries attestation_report and lacks measurement).
@@ -1279,10 +1293,10 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         PostureCheck {
             suffix: "raw_form",
             expected: "no raw/skip passthrough report".to_string(),
-            actual_expr: "[g | some g in nvidia_gpus; g.attestation_report]".to_string(),
+            actual_expr: nvidia_actual(None, "e.claim.attestation_report"),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                "\tnot g.attestation_report".to_string(),
+                "every e in nvidia_gpus {".to_string(),
+                "\tnot e.claim.attestation_report".to_string(),
                 "}".to_string(),
             ],
         },
@@ -1292,10 +1306,10 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "measurement",
             expected: "measurement present".to_string(),
-            actual_expr: "[g | some g in nvidia_gpus; not g.measurement]".to_string(),
+            actual_expr: nvidia_actual(None, "not e.claim.measurement"),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                "\tg.measurement".to_string(),
+                "every e in nvidia_gpus {".to_string(),
+                "\te.claim.measurement".to_string(),
                 "}".to_string(),
             ],
         });
@@ -1304,23 +1318,25 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "cc_enabled",
             expected: "cc_enabled == true".to_string(),
-            actual_expr: "[g | some g in nvidia_gpus; g.cc_enabled != true]".to_string(),
+            actual_expr: nvidia_actual(Some("cc_enabled"), "e.claim.cc_enabled != true"),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                "\tg.cc_enabled == true".to_string(),
+                "every e in nvidia_gpus {".to_string(),
+                "\te.claim.cc_enabled == true".to_string(),
                 "}".to_string(),
             ],
         });
     }
     if !cfg.allow_uuids.is_empty() {
+        // `uuid` is the check's field as well as the identifier, so the
+        // projection carries it once.
         let allow = rego_string_array(&cfg.allow_uuids);
         checks.push(PostureCheck {
             suffix: "uuid",
             expected: format!("uuid in {allow}"),
-            actual_expr: format!("[g.uuid | some g in nvidia_gpus; not g.uuid in {allow}]"),
+            actual_expr: nvidia_actual(None, &format!("not e.claim.uuid in {allow}")),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                format!("\tg.uuid in {allow}"),
+                "every e in nvidia_gpus {".to_string(),
+                format!("\te.claim.uuid in {allow}"),
                 "}".to_string(),
             ],
         });
@@ -1330,12 +1346,13 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "driver_version",
             expected: format!("driver_version in {allow}"),
-            actual_expr: format!(
-                "[g.driver_version | some g in nvidia_gpus; not g.driver_version in {allow}]"
+            actual_expr: nvidia_actual(
+                Some("driver_version"),
+                &format!("not e.claim.driver_version in {allow}"),
             ),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                format!("\tg.driver_version in {allow}"),
+                "every e in nvidia_gpus {".to_string(),
+                format!("\te.claim.driver_version in {allow}"),
                 "}".to_string(),
             ],
         });
@@ -1345,12 +1362,13 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "vbios_version",
             expected: format!("vbios_version in {allow}"),
-            actual_expr: format!(
-                "[g.vbios_version | some g in nvidia_gpus; not g.vbios_version in {allow}]"
+            actual_expr: nvidia_actual(
+                Some("vbios_version"),
+                &format!("not e.claim.vbios_version in {allow}"),
             ),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                format!("\tg.vbios_version in {allow}"),
+                "every e in nvidia_gpus {".to_string(),
+                format!("\te.claim.vbios_version in {allow}"),
                 "}".to_string(),
             ],
         });
@@ -1360,12 +1378,13 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "measurement_digest",
             expected: format!("measurement in {allow}"),
-            actual_expr: format!(
-                "[g.measurement | some g in nvidia_gpus; not g.measurement in {allow}]"
+            actual_expr: nvidia_actual(
+                Some("measurement"),
+                &format!("not e.claim.measurement in {allow}"),
             ),
             body: vec![
-                "every g in nvidia_gpus {".to_string(),
-                format!("\tg.measurement in {allow}"),
+                "every e in nvidia_gpus {".to_string(),
+                format!("\te.claim.measurement in {allow}"),
                 "}".to_string(),
             ],
         });
@@ -3272,8 +3291,15 @@ mod tests {
         assert_eq!(failed[0]["expected"], "cc_enabled == true");
         assert_eq!(failed[0]["reason"], "mismatch");
         let actual = failed[0]["actual"].as_array().expect("gpu list");
-        assert_eq!(actual.len(), 1, "{actual:?}");
-        assert_eq!(actual[0]["cc_enabled"], json!(false));
+        assert_eq!(
+            actual,
+            &vec![json!({
+                "gpu": "nvidia_gpu.0",
+                "uuid": "GPU-x",
+                "cc_enabled": false,
+            })],
+            "{failed:?}"
+        );
     }
 
     #[tokio::test]
@@ -3467,11 +3493,51 @@ mod tests {
         assert_eq!(
             actual,
             vec![
-                json!(["GPU-x"]),
-                json!(["999.0.0"]),
-                json!(["1.2.3"]),
-                json!([observed_digest]),
+                // `uuid` is both the identifier and the checked field, so it
+                // appears once.
+                json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x" }]),
+                json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "driver_version": "999.0.0" }]),
+                json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "vbios_version": "1.2.3" }]),
+                json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "measurement": observed_digest }]),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_nvidia_actual_never_leaks_the_raw_report() {
+        // Skip/raw passthrough: the claim carries the base64 attestation
+        // report and no measurement, so both the raw_form and measurement
+        // sub-checks fail.
+        const RAW_REPORT: &str = "SENSITIVE-BASE64-ATTESTATION-REPORT";
+        let cfg = r#"[{"type":"nvidia","value":{"min_count":1}}]"#;
+        let input = tdx_input_full(
+            serde_json::Value::Null,
+            json!({ "nvidia_gpu.0": {
+                "index": 0, "uuid": "GPU-x", "cc_enabled": true,
+                "attestation_report": RAW_REPORT
+            } }),
+            &[json!({ "event": "ok" })],
+        );
+        let failed = eval_failed_checks(cfg, &input)
+            .await
+            .expect("extension present");
+        let checks: Vec<_> = failed.iter().map(|f| f["check"].clone()).collect();
+        assert_eq!(
+            checks,
+            vec![json!("nvidia.raw_form"), json!("nvidia.measurement")],
+            "{failed:?}"
+        );
+        // Each actual identifies the GPU without embedding its claim.
+        for check in &failed {
+            assert_eq!(
+                check["actual"],
+                json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x" }])
+            );
+        }
+        let payload = serde_json::to_string(&failed).expect("serialize failed checks");
+        assert!(
+            !payload.contains(RAW_REPORT) && !payload.contains("attestation_report"),
+            "the raw report must never reach a diagnostic: {payload}"
         );
     }
 }
