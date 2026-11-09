@@ -4,8 +4,9 @@
 use super::super::policy_config::{
     value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
     TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
-    TdxTcbConfig,
+    TdxTcbConfig, TransparencyLogEntryConfig,
 };
+use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
 use anyhow::Context;
 
@@ -43,6 +44,10 @@ pub(crate) enum Module {
     Nvidia(NvidiaPostureConfig),
     /// `com.alibabacloud.gpu`: the guest-reported AAEL attestation event.
     Gpu,
+    /// `transparency_log`: a ReleaseManifest baseline anchored in a
+    /// transparency log. Gates `executables`; platform posture is expressed by
+    /// a separate `tdx` entry.
+    TransparencyLog(TransparencyLogEntryConfig),
 }
 
 impl Module {
@@ -55,7 +60,8 @@ impl Module {
             | Module::Kernel { .. }
             | Module::Uki { .. }
             | Module::ContainerImage { .. }
-            | Module::AiModel { .. } => Dimension::Executables,
+            | Module::AiModel { .. }
+            | Module::TransparencyLog(_) => Dimension::Executables,
             Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => Dimension::Hardware,
         }
     }
@@ -107,6 +113,7 @@ enum EntryType<'a> {
     Uki,
     ContainerImage { repo: &'a str },
     AiModel { model_id: &'a str },
+    TransparencyLog,
 }
 
 impl<'a> EntryType<'a> {
@@ -130,6 +137,7 @@ impl<'a> EntryType<'a> {
             "tdx.ovmf" => Ok(Self::Ovmf),
             "tdx.kernel" => Ok(Self::Kernel),
             "tdx.uki" => Ok(Self::Uki),
+            "transparency_log" => Ok(Self::TransparencyLog),
             _ => {
                 // Permanent unprefixed aliases of the two vendor measurement
                 // families.
@@ -159,6 +167,7 @@ impl<'a> EntryType<'a> {
                 format!("com.alibabacloud.container.image.{repo}")
             }
             Self::AiModel { model_id } => format!("com.alibabacloud.ai.model.{model_id}"),
+            Self::TransparencyLog => "transparency_log".to_string(),
         }
     }
 }
@@ -304,6 +313,13 @@ impl ModuleEntryConfig {
                 }
                 Ok(Module::Uki { value: v })
             }
+            EntryType::TransparencyLog => {
+                value_obj()?;
+                let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
+                    .context("invalid transparency_log config")?;
+                transparency_log::validate_entry(&cfg)?;
+                Ok(Module::TransparencyLog(cfg))
+            }
             EntryType::ContainerImage { repo } => {
                 if !is_valid_module_name(repo) {
                     anyhow::bail!("container.image name {repo:?} has an invalid character");
@@ -352,7 +368,12 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
         let mut entry_types = Vec::with_capacity(group.len());
         for entry in group {
             let entry_type = EntryType::parse(&entry.module_type)?;
-            if !seen.insert(entry_type.canonical()) {
+            // `transparency_log` may repeat within one group: several
+            // log-anchored baselines are AND-ed (every one must verify),
+            // unlike the single-baseline measurement and posture types.
+            if !matches!(entry_type, EntryType::TransparencyLog)
+                && !seen.insert(entry_type.canonical())
+            {
                 anyhow::bail!(
                     "duplicate module type {:?} within group {gi}",
                     entry_type.canonical()
@@ -372,12 +393,12 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// Build the `modules` Rego policy.
 ///
 /// Each entry emits an entry predicate and belongs to exactly one AR4SI
-/// dimension: measurements gate `executables`, posture entries gate `hardware`.
-/// Per group and dimension a `group_<i>_<dimension>_ok` predicate ANDs that
-/// group's entries of the dimension; a dimension aggregates with OR over the
-/// groups that carry entries of it. A dimension with no entries stays at its
-/// affirming default, so a failing posture cannot drag down `executables` and
-/// vice versa.
+/// dimension: measurements and `transparency_log` baselines gate `executables`,
+/// posture entries gate `hardware`. Per group and dimension a
+/// `group_<i>_<dimension>_ok` predicate ANDs that group's entries of the
+/// dimension; a dimension aggregates with OR over the groups that carry
+/// entries of it. A dimension with no entries stays at its affirming default,
+/// so a failing posture cannot drag down `executables` and vice versa.
 ///
 /// Every entry declares the TEE platform its evidence is rooted at, and
 /// `hardware` affirms only when that platform is recognised and the group's
@@ -386,18 +407,70 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// dependency, so it emits no recognition rule and `hardware` stays
 /// non-affirming (97); `executables`, `configuration`, and `file_system` keep
 /// their affirming defaults.
-pub(super) fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
-    build_modules_policy_inner(config).map_err(Error::BuiltinPolicyTemplateFailed)
+///
+/// A `transparency_log` entry with a rekor-v1 primary fetches and authenticates
+/// its log entry here, before rendering. An artifact-server primary defers to
+/// appraisal time and does no I/O at load.
+pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
+    let groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
+
+    #[cfg(not(feature = "crypto-rustcrypto"))]
+    if groups
+        .iter()
+        .flatten()
+        .any(|m| matches!(m, Module::TransparencyLog(_)))
+    {
+        // Both the rekor-v1 authentication and the artifact-server host-awaits
+        // live behind this feature.
+        return Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto);
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    let resolved = {
+        let mut resolved = Vec::new();
+        for module in groups.iter().flatten() {
+            if let Module::TransparencyLog(cfg) = module {
+                resolved.push(
+                    transparency_log::resolve_entry(cfg)
+                        .await
+                        .map_err(Error::TransparencyLogFetchFailed)?,
+                );
+            }
+        }
+        resolved
+    };
+    #[cfg(not(feature = "crypto-rustcrypto"))]
+    let resolved: Vec<Option<ResolvedRekor>> = Vec::new();
+
+    render_modules_policy(&groups, &resolved).map_err(Error::BuiltinPolicyTemplateFailed)
 }
 
-fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
+/// Render a policy from already-parsed entries and already-resolved rekor data,
+/// performing no network I/O. `resolved` holds one slot per `transparency_log`
+/// entry in flatten order: `Some` for a rekor-v1 primary, `None` for an
+/// artifact-server primary.
+#[cfg(test)]
+pub(super) fn build_modules_policy_with_resolved(
+    config: &ModuleGroupsConfig,
+    resolved: &[Option<ResolvedRekor>],
+) -> anyhow::Result<String> {
     let groups = parse_module_groups(config)?;
+    render_modules_policy(&groups, resolved)
+}
 
+fn render_modules_policy(
+    groups: &[Vec<Module>],
+    resolved: &[Option<ResolvedRekor>],
+) -> anyhow::Result<String> {
+    let mut resolved_entries = resolved.iter();
     let mut helpers: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
     let mut has_executables = false;
+    // Whether any transparency entry exists; its shared measurement-extraction
+    // rules are emitted once for the whole policy.
+    let mut has_transparency = false;
     // The platform the policy depends on. No entry means no dependency and no
     // recognition predicate is emitted. While only one platform exists, one
     // shared recognition block covers every group; when a second platform
@@ -421,6 +494,19 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
                 }
                 Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
                 Module::Gpu => gpu_posture_rule(&pred),
+                Module::TransparencyLog(cfg) => {
+                    // Every transparency entry consumes its own resolved slot,
+                    // in flatten order, so multiple entries cannot share or
+                    // overwrite each other's baked data.
+                    let entry = resolved_entries.next().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no resolved rekor data for transparency_log entry m_{gi}_{j}"
+                        )
+                    })?;
+                    has_transparency = true;
+                    let prefix = format!("t_{gi}_{j}");
+                    transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
+                }
                 measurement => measurement_rule(measurement, &pred)?,
             };
             if matches!(module, Module::ContainerImage { .. }) {
@@ -481,10 +567,23 @@ fn build_modules_policy_inner(config: &ModuleGroupsConfig) -> anyhow::Result<Str
         None => String::new(),
     };
 
-    let helper_block = if helpers.is_empty() {
+    // The shared transparency extraction rules are emitted once, ahead of the
+    // per-entry rules that call them. They use `image_repo_name`, so a
+    // transparency entry needs that helper too.
+    let mut helper_parts: Vec<String> = Vec::new();
+    if has_transparency {
+        need_repo_name = true;
+        helper_parts.push(
+            transparency_log::measurement_extraction_rules()
+                .trim_end()
+                .to_string(),
+        );
+    }
+    helper_parts.extend(helpers);
+    let helper_block = if helper_parts.is_empty() {
         String::new()
     } else {
-        format!("{}\n\n", helpers.join("\n\n"))
+        format!("{}\n\n", helper_parts.join("\n\n"))
     };
     let repo_name_block = if need_repo_name {
         // The repo tail of an image reference: last '/' segment, before any
@@ -612,8 +711,10 @@ fn measurement_rule(module: &Module, pred: &str) -> anyhow::Result<String> {
 }}"#
         ),
         // Posture variants are emitted by `tdx_posture_rule` /
-        // `nvidia_posture_rule`; the caller never passes them here.
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => {
+        // `nvidia_posture_rule`, and `transparency_log` by
+        // `transparency_log::build_entry_rules`; the caller never passes them
+        // here.
+        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => {
             anyhow::bail!("posture module passed to the measurement emitter")
         }
     })
@@ -861,6 +962,12 @@ mod tests {
 
     fn modules_cfg(json: &str) -> ModuleGroupsConfig {
         serde_json::from_str(json).expect("modules config parses")
+    }
+
+    /// Render a policy without network I/O. None of these tests use a
+    /// `transparency_log` entry, so no resolved rekor data is needed.
+    fn build_policy(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
+        build_modules_policy_with_resolved(config, &[])
     }
 
     #[test]
@@ -1175,17 +1282,16 @@ mod tests {
 
             // Both spellings must generate byte-identical rego.
             let canonical_policy =
-                build_modules_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
+                build_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
                     module_type: canonical.to_string(),
                     value: value.clone(),
                 }]))
                 .expect("build canonical");
-            let alias_policy =
-                build_modules_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
-                    module_type: alias.to_string(),
-                    value,
-                }]))
-                .expect("build alias");
+            let alias_policy = build_policy(&ModuleGroupsConfig::Single(vec![ModuleEntryConfig {
+                module_type: alias.to_string(),
+                value,
+            }]))
+            .expect("build alias");
             assert_eq!(canonical_policy, alias_policy);
         }
     }
@@ -1221,6 +1327,7 @@ mod tests {
             "tdx.ovmf",
             "tdx.kernel",
             "tdx.uki",
+            "transparency_log",
             "com.alibabacloud.container.image.model-server",
             "container.image.model-server",
             "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
@@ -1257,6 +1364,19 @@ mod tests {
         ));
         assert!(parse_module_groups(&dup_cross_group).is_ok());
 
+        // `transparency_log` is the one type exempt from the same-group
+        // duplicate rejection: several log-anchored baselines are AND-ed.
+        let dup_transparency = modules_cfg(
+            r#"[
+              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r1","logIndex":1}]}},
+              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r2","logIndex":2}]}}
+            ]"#,
+        );
+        assert!(
+            parse_module_groups(&dup_transparency).is_ok(),
+            "repeated transparency_log entries within one group must be legal"
+        );
+
         // Mixed spellings of a canonical type collide after normalization.
         for (canonical, alias, value) in [
             (
@@ -1288,7 +1408,7 @@ mod tests {
     #[test]
     fn modules_policy_rego_snapshot() {
         let ovmf = hex96('1');
-        let policy = build_modules_policy(&modules_cfg(&format!(
+        let policy = build_policy(&modules_cfg(&format!(
             r#"[
           {{"type":"tdx","value":{{}}}},
           {{"type":"tdx.ovmf","value":"{ovmf}"}}
@@ -1327,8 +1447,7 @@ mod tests {
     fn modules_policy_no_executables_keeps_executables_affirming() {
         // A posture-only policy must not make the executables dimension depend
         // on the posture: there are no measurement entries to satisfy.
-        let policy =
-            build_modules_policy(&modules_cfg(r#"[{"type":"tdx","value":{}}]"#)).expect("build");
+        let policy = build_policy(&modules_cfg(r#"[{"type":"tdx","value":{}}]"#)).expect("build");
         assert!(policy.contains("default executables := 2"));
         assert!(!policy.contains("group_0_executables_ok"));
         // No measurement entries, so hardware reduces to recognition plus the
@@ -1339,7 +1458,7 @@ mod tests {
     #[test]
     fn modules_policy_no_posture_uses_tdx_recognition_only() {
         let ovmf = hex96('1');
-        let policy = build_modules_policy(&modules_cfg(&format!(
+        let policy = build_policy(&modules_cfg(&format!(
             r#"[{{"type":"tdx.ovmf","value":"{ovmf}"}}]"#
         )))
         .expect("build");
@@ -1348,7 +1467,7 @@ mod tests {
         assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
         // The empty list declares no dependency: no recognition rule and no
         // hardware-affirming rule, so the default hardware := 97 applies.
-        let empty = build_modules_policy(&modules_cfg("[]")).expect("build");
+        let empty = build_policy(&modules_cfg("[]")).expect("build");
         assert!(empty.contains("default executables := 2"));
         assert!(empty.contains("default hardware := 97"));
         assert!(!empty.contains("tdx_recognized"));
@@ -1357,7 +1476,7 @@ mod tests {
 
     #[test]
     fn modules_policy_rego_snapshot_groups_or() {
-        let policy = build_modules_policy(&modules_cfg(
+        let policy = build_policy(&modules_cfg(
         r#"[
           [{"type":"tdx.ovmf","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
           [{"type":"tdx.ovmf","value":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]
@@ -1385,17 +1504,17 @@ mod tests {
         // `nonce_binding` was removed: the report_data session binding is a
         // verifier baseline, not a policy knob. `deny_unknown_fields` rejects
         // the key at deserialization with a clear error.
-        let err = build_modules_policy(&modules_cfg(
+        let err = build_policy(&modules_cfg(
             r#"[{"type":"tdx","value":{"nonce_binding":"required"}}]"#,
         ))
         .expect_err("nonce_binding must be rejected as an unknown field");
-        let msg = err.to_string();
+        let msg = format!("{err:#}");
         assert!(msg.contains("nonce_binding"), "{msg}");
         assert!(msg.contains("unknown field"), "{msg}");
 
         // The remaining permissive fields still parse once nonce_binding is
         // gone.
-        assert!(build_modules_policy(&modules_cfg(
+        assert!(build_policy(&modules_cfg(
         r#"[{"type":"tdx","value":{"debug":"allow","perfmon":"allow","service_td":"allow","sept_ve_disable":"allow","eventlog":"optional"}}]"#
     ))
     .is_ok());
@@ -1403,7 +1522,7 @@ mod tests {
 
     #[test]
     fn modules_policy_tdx_tcb_collateral_rules() {
-        let policy = build_modules_policy(&modules_cfg(
+        let policy = build_policy(&modules_cfg(
         r#"[{"type":"tdx","value":{
             "tcb":{"min_status":"up_to_date","reject_advisories":["INTEL-SA-00001","INTEL-SA-00002"],"allow_advisories":["INTEL-SA-00002"]},
             "collateral":{"allow_expired":false,"min_tcb_date":"2026-06-01","max_collateral_age_days":30}
@@ -1421,7 +1540,7 @@ mod tests {
         assert!(policy.contains("time.now_ns()"));
 
         // A malformed date is a config error.
-        let err = build_modules_policy(&modules_cfg(
+        let err = build_policy(&modules_cfg(
             r#"[{"type":"tdx","value":{"collateral":{"min_tcb_date":"06/01/2026"}}}]"#,
         ))
         .expect_err("bad date must reject");
@@ -1477,7 +1596,7 @@ mod tests {
     /// every pinned value as a literal, so no reference values are involved.
     async fn eval_modules(cfg_json: &str, input: &str) -> (i8, i8, i8, i8) {
         let cfg = modules_cfg(cfg_json);
-        let policy = build_modules_policy(&cfg).expect("build modules policy");
+        let policy = build_policy(&cfg).expect("build modules policy");
         eval_policy_vector(&policy, input).await
     }
 
@@ -1596,7 +1715,7 @@ mod tests {
         // nothing: executables/configuration/file_system stay affirming while
         // hardware stays at its non-affirming default (97), whatever the
         // evidence form.
-        let policy = build_modules_policy(&modules_cfg("[]")).expect("build");
+        let policy = build_policy(&modules_cfg("[]")).expect("build");
         let tdx = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
         let evidence = [
             tdx.clone(),
@@ -1818,7 +1937,7 @@ mod tests {
         // Both policies gate only the hardware dimension; on TDX evidence the
         // strict modules posture reproduces hardware_only_strict.
         let cfg = r#"[{"type":"tdx","value":{"sept_ve_disable":"allow","perfmon":"allow","service_td":"allow"}}]"#;
-        let modules = build_modules_policy(&modules_cfg(cfg)).expect("build");
+        let modules = build_policy(&modules_cfg(cfg)).expect("build");
         let strict = include_str!("static/hardware_only_strict.rego");
 
         let ok = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);

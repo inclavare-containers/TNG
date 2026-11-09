@@ -36,50 +36,6 @@ pub enum PolicyConfig {
     /// tng-bundled template: every trustworthiness dimension is affirming
     /// regardless of input. **For development and testing only.**
     TrustAll,
-    /// At init, fetch a Rekor v1 entry by logIndex, authenticate it
-    /// (checkpoint + Merkle inclusion + SET), and bake the trusted
-    /// `payloadHash` into Rego. At appraisal the Rego reconstructs the
-    /// ReleaseManifest from the actual TDX measurement values, hashes it,
-    /// and compares to the baked payloadHash. Mirrors the transparency-verification
-    /// flow for signed release manifests.
-    #[serde(rename = "transparency_log")]
-    TransparencyLog {
-        /// Ordered measurement types baked into the policy. When `None`
-        /// (the `publishedMeasurements` JSON field is absent), the policy
-        /// skips the measurement reconstruction + verification entirely and
-        /// `executables` stays affirming (2) — only TDX platform checks
-        /// gate the appraisal. An explicit `[]` still runs the check (and
-        /// fails it, since no manifest can match the baked payloadHash).
-        #[serde(rename = "publishedMeasurements", default)]
-        published_measurements: Option<Vec<String>>,
-        #[serde(rename = "schemaVersion", default = "default_schema_version")]
-        schema_version: String,
-        services: Vec<TransparencyServiceConfig>,
-        /// Fallback measurement types used when the artifact-server primary
-        /// cannot resolve a measurement; must be a subset of
-        /// `publishedMeasurements`.
-        #[serde(rename = "fallbackPublishedMeasurements", default)]
-        fallback_published_measurements: Option<Vec<String>>,
-        /// Fallback transparency-log services (rekor-v1 only) used when the
-        /// artifact-server primary cannot resolve a measurement; only supported
-        /// when the primary service is an `artifact-server`.
-        #[serde(rename = "fallbackServices", default)]
-        fallback_services: Option<Vec<TransparencyServiceConfig>>,
-        /// Measurement types verified against statically registered reference
-        /// values (the builtin AS `reference_values` / RVPS
-        /// `query_reference_value`) instead of the transparency service. Used
-        /// for user-owned artifacts the transparency service does not publish:
-        /// `model` (the pai/load-model event, reference name
-        /// `measurement.model.<model-id>`) and `container.image.<repo>`
-        /// (reference name `measurement.container.image.<repo>`, digest
-        /// extraction shared with the published container-image measurements).
-        /// The static checks AND-gate `measurements_verified`: the appraisal
-        /// passes only when the transparency-log manifest check AND every
-        /// static check pass. Must be disjoint from `publishedMeasurements`
-        /// and `fallbackPublishedMeasurements`.
-        #[serde(rename = "staticReferenceMeasurements", default)]
-        static_reference_measurements: Option<Vec<String>>,
-    },
     /// Base64 encoded policy content
     Inline { content: String },
     /// Path to policy file
@@ -87,9 +43,37 @@ pub enum PolicyConfig {
     Path { path: String },
 }
 
-/// Default schema version for the transparency-log policy config.
+/// Default schema version for a transparency-log module entry.
 fn default_schema_version() -> String {
     "1.0.0".to_string()
+}
+
+/// A `transparency_log` module entry: the published measurements whose trusted
+/// baseline is a ReleaseManifest recorded in a transparency log. A rekor-v1
+/// primary is fetched and authenticated when the policy loads; an
+/// artifact-server primary is resolved at appraisal time. The entry gates the
+/// `executables` dimension; platform posture stays a separate `tdx` entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TransparencyLogEntryConfig {
+    /// Non-empty ordered measurement types. At appraisal the policy
+    /// reconstructs the manifest from the actual TDX measurement values and
+    /// compares it to the logged reference.
+    #[serde(rename = "publishedMeasurements")]
+    pub published_measurements: Vec<String>,
+    #[serde(rename = "schemaVersion", default = "default_schema_version")]
+    pub schema_version: String,
+    pub services: Vec<TransparencyServiceConfig>,
+    /// Fallback measurement types used when the artifact-server primary
+    /// cannot resolve a measurement; must be a subset of
+    /// `publishedMeasurements`.
+    #[serde(rename = "fallbackPublishedMeasurements", default)]
+    pub fallback_published_measurements: Option<Vec<String>>,
+    /// Fallback transparency-log services (rekor-v1 only) used when the
+    /// artifact-server primary cannot resolve a measurement; only supported
+    /// when the primary service is an `artifact-server`.
+    #[serde(rename = "fallbackServices", default)]
+    pub fallback_services: Option<Vec<TransparencyServiceConfig>>,
 }
 
 /// One entry in a `modules` attestation-policy group. `type` selects the
@@ -309,7 +293,7 @@ pub(crate) fn value_shape(v: &serde_json::Value) -> &'static str {
 /// A transparency-log service whose entry authenticates the reference
 /// measurements. `rekor-v1` fetches an entry by logIndex; `artifact-server`
 /// delegates to a log-services list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum TransparencyServiceConfig {
     #[serde(rename = "rekor-v1")]

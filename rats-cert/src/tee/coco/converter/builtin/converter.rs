@@ -146,15 +146,15 @@ impl BuiltinCocoConverter {
     }
 
     /// Short policy name used in configuration errors, for the variants whose
-    /// verification rules do not consume reference values. `inline`, `path`
-    /// and `transparency_log` may read them, so they return `None`.
+    /// verification rules do not consume reference values. `inline` and `path`
+    /// may read them, so they return `None`.
     fn policy_without_reference_values(policy: &PolicyConfig) -> Option<&'static str> {
         match policy {
             PolicyConfig::HardwareOnly => Some("hardware_only"),
             PolicyConfig::HardwareOnlyStrict => Some("hardware_only_strict"),
             PolicyConfig::TrustAll => Some("trust_all"),
             PolicyConfig::Modules { .. } => Some("modules"),
-            PolicyConfig::TransparencyLog { .. } | PolicyConfig::Inline { .. } => None,
+            PolicyConfig::Inline { .. } => None,
             #[cfg(not(wasm))]
             PolicyConfig::Path { .. } => None,
         }

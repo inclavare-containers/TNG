@@ -17,7 +17,8 @@ pub use policy_config::{
     ArtifactLogService, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig,
     NvidiaPostureConfig, PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog,
-    TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyServiceConfig,
+    TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyLogEntryConfig,
+    TransparencyServiceConfig,
 };
 
 /// Render the Rego source a builtin AS loads for `policy`. This is the same

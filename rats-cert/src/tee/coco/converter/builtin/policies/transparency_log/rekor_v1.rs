@@ -110,8 +110,8 @@ pub(crate) struct PayloadHash {
 /// number-free, so this also equals Rego's `json.marshal` output, keeping the
 /// init-bake `payloadHash` consistent with the appraisal-time recomputation.
 ///
-/// Shared by the init-bake `build_transparency_log_policy` tests (via
-/// `mod.rs`) and the on-demand `tng.fetch_rekor_on_demand` host-await
+/// Shared by the load-time bake tests (via `mod.rs`) and the on-demand
+/// `tng.fetch_rekor_on_demand` host-await
 /// (`artifact_server::canonical_manifest_sha256`) so both paths compute the
 /// identical canonical bytes for the same manifest.
 #[cfg(any(feature = "attester-coco", feature = "crypto-rustcrypto"))]

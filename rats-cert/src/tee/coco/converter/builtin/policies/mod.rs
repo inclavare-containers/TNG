@@ -4,15 +4,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 
-#[cfg(feature = "crypto-rustcrypto")]
-use self::transparency_log::build_artifact_server_policy;
-#[cfg(feature = "crypto-rustcrypto")]
-use self::transparency_log::build_transparency_log_policy;
-#[cfg(feature = "crypto-rustcrypto")]
-use super::host_fns::resolve_dsse_signature;
 use super::policy_config::PolicyConfig;
-#[cfg(feature = "crypto-rustcrypto")]
-use super::policy_config::TransparencyServiceConfig;
 use crate::errors::*;
 
 pub(crate) mod modules;
@@ -30,138 +22,7 @@ pub async fn render_policy_source(policy: &PolicyConfig) -> Result<String> {
             Ok(include_str!("static/hardware_only_strict.rego").to_string())
         }
         PolicyConfig::TrustAll => Ok(include_str!("static/trust_all.rego").to_string()),
-        // Fetch + authenticate the Rekor v1 entry by logIndex, then bake
-        // the trusted payloadHash into Rego. The cryptography (P-256 ECDSA
-        // SET verification + SHA-256 Merkle inclusion proof) lives behind
-        // the `crypto-rustcrypto` feature; the arm is gated the same way so
-        // a non-crypto build still compiles (and bails there instead).
-        #[cfg(feature = "crypto-rustcrypto")]
-        PolicyConfig::TransparencyLog {
-            published_measurements,
-            schema_version,
-            services,
-            fallback_published_measurements,
-            fallback_services,
-            static_reference_measurements,
-        } => {
-            // Validate the full config shape BEFORE dispatching on the
-            // primary service type. This turns every operator-supplied config
-            // violation (empty/missing fields, artifact-server-not-sole-primary,
-            // fallback-requires-artifact-server-primary, non-rekor-v1 in
-            // fallbackServices, fallbackPublishedMeasurements-not-subset,
-            // duplicate logServices, etc.) into a clean `Err` at load time
-            // rather than a process panic (e.g. `unreachable!` / `fs[0]` in
-            // `build_artifact_server_policy`) downstream.
-            policy
-                .validate_transparency_config()
-                .map_err(Error::TransparencyLogFetchFailed)?;
-            // Dispatch on the primary service type. `RekorV1` keeps the
-            // existing init-bake path verbatim (fetch + bake payloadHash);
-            // `ArtifactServer` generates Rego that resolves the
-            // manifest at appraisal time via `tng.resolve_artifact_server`
-            // (with an optional `tng.fetch_rekor_on_demand` fallback) and
-            // bakes NO payloadHash.
-            let primary = services.first().ok_or_else(|| {
-                Error::TransparencyLogFetchFailed(anyhow::anyhow!(
-                    "transparency_log services must be non-empty"
-                ))
-            })?;
-            match primary {
-                TransparencyServiceConfig::RekorV1 { .. } => {
-                    // EXISTING init-bake path, unchanged (fetch the rekor-v1
-                    // entry by logIndex, authenticate it, bake the trusted
-                    // payloadHash into Rego). The artifact-server primary path is a
-                    // separate arm below; this stays verbatim for rekor-v1.
-                    let svc = match services.as_slice() {
-                        [TransparencyServiceConfig::RekorV1 {
-                            log_url,
-                            log_index,
-                            rekor_public_key_pem,
-                            publisher_public_key_pem,
-                        }] => (
-                            log_url.as_str(),
-                            *log_index,
-                            rekor_public_key_pem.as_deref(),
-                            publisher_public_key_pem.as_deref(),
-                        ),
-                        _ => {
-                            return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
-                                "transparency_log policy requires exactly one rekor-v1 service"
-                            )))
-                        }
-                    };
-                    let (log_url, log_index, rekor_public_key_pem, publisher_public_key_pem) = svc;
-                    tracing::info!(
-                        log_url,
-                        log_index,
-                        "Loading transparency_log policy: fetching Rekor v1 entry"
-                    );
-                    let auth = transparency_log::rekor_v1::fetch_trusted_payload_hash(
-                        log_url,
-                        log_index,
-                        rekor_public_key_pem,
-                    )
-                    .await
-                    .map_err(Error::TransparencyLogFetchFailed)?;
-                    // DSSE publisher-signature verification is mandatory:
-                    // resolve the publisher key unconditionally — the
-                    // configured `publisherPublicKeyPem`, or the built-in
-                    // publisher key baseline when none is set — and always
-                    // bake both the DSSE signature and the publisher key so
-                    // the generated Rego emits the
-                    // `tng.verify_dsse_signature` line. An empty
-                    // `dsse_signature` means a malformed/non-dsse entry →
-                    // fail closed. This mirrors
-                    // `build_artifact_server_policy`'s approach (the
-                    // publisher key literal is the configured value or
-                    // empty→built-in).
-                    let publisher_key = publisher_public_key_pem
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or(
-                            transparency_log::artifact_server::BUILTIN_LOG_ENTRY_PUB_KEY_PEM,
-                        );
-                    let dsse_signature = resolve_dsse_signature(&auth.dsse_signature)
-                        .map_err(Error::TransparencyLogFetchFailed)?;
-                    let policy = transparency_log::build_transparency_log_policy(
-                        &auth.payload_hash,
-                        schema_version,
-                        published_measurements.as_deref(),
-                        dsse_signature,
-                        publisher_key,
-                        static_reference_measurements.as_deref(),
-                    );
-                    tracing::info!(payload_hash = %auth.payload_hash, policy = %policy, "Transparency_log policy loaded: baking payloadHash + DSSE into Rego");
-                    Ok(policy)
-                }
-                TransparencyServiceConfig::ArtifactServer {
-                    url,
-                    log_services,
-                    publisher_public_key_pem,
-                } => {
-                    tracing::info!(
-                        artifact_server_url = %url,
-                        "Loading transparency_log policy: generating artifact-server-primary Rego"
-                    );
-                    let policy = transparency_log::build_artifact_server_policy(
-                        schema_version,
-                        published_measurements.as_deref(),
-                        url,
-                        log_services,
-                        publisher_public_key_pem.as_deref(),
-                        fallback_published_measurements.as_deref(),
-                        fallback_services.as_deref(),
-                        static_reference_measurements.as_deref(),
-                    )?;
-                    tracing::info!(policy = %policy, "Transparency_log policy loaded: artifact-server primary, no baked payloadHash");
-                    Ok(policy)
-                }
-            }
-        }
-        #[cfg(not(feature = "crypto-rustcrypto"))]
-        PolicyConfig::TransparencyLog { .. } => {
-            Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto)
-        }
-        PolicyConfig::Modules { modules } => Ok(modules::build_modules_policy(modules)?),
+        PolicyConfig::Modules { modules } => Ok(modules::build_modules_policy(modules).await?),
         PolicyConfig::Inline { content } => {
             let decoded = BASE64_STANDARD
                 .decode(content)
@@ -327,13 +188,18 @@ default file_system := 2"#;
         #[cfg(feature = "crypto-rustcrypto")]
         cases.push(
             serde_json::from_value(serde_json::json!({
-                "type": "transparency_log",
-                "publishedMeasurements": ["container.image.cmaas-runtime"],
-                "schemaVersion": "1.0.0",
-                "services": [{
-                    "type": "artifact-server",
-                    "url": "https://attest.example.com",
-                    "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}]
+                "type": "modules",
+                "modules": [{
+                    "type": "transparency_log",
+                    "value": {
+                        "publishedMeasurements": ["container.image.cmaas-runtime"],
+                        "schemaVersion": "1.0.0",
+                        "services": [{
+                            "type": "artifact-server",
+                            "url": "https://attest.example.com",
+                            "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}]
+                        }]
+                    }
                 }]
             }))
             .expect("artifact-server policy config"),
