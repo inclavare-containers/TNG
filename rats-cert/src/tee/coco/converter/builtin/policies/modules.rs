@@ -1190,6 +1190,9 @@ mod tests {
         }
     }
 
+    // The loop is the extension point: every Platform variant must be listed
+    // here, and the lint only fires while the list has one entry.
+    #[allow(clippy::single_element_loop)]
     #[test]
     fn platform_recognition_predicate_matches_its_rule() {
         // Every Platform variant must be listed here. The rule text has to
@@ -1958,6 +1961,9 @@ mod tests {
         );
     }
 
+    // Test-only clock used to build epoch-relative fixtures; the test runs on
+    // the host, and `std::time::SystemTime::now` is correct there.
+    #[allow(clippy::disallowed_methods)]
     #[tokio::test]
     async fn modules_tdx_collateral_gates() {
         // allow_expired=false rejects expired collateral.
@@ -2149,7 +2155,7 @@ mod tests {
         // Driver/VBIOS allow-lists gate the evaluated claims.
         let cfg_pinned = r#"[{"type":"nvidia","value":{"min_count":1,"allow_driver_versions":["570.148.05"],"allow_vbios_versions":["96.00.f4"]}}]"#;
         assert_eq!(
-            eval_modules(&cfg_pinned, &evaluated).await,
+            eval_modules(cfg_pinned, &evaluated).await,
             (2, 2, 2, 2),
             "pinned driver + vbios versions affirm"
         );
@@ -2162,7 +2168,7 @@ mod tests {
             std::slice::from_ref(&event),
         );
         assert_eq!(
-            eval_modules(&cfg_pinned, &wrong_driver).await,
+            eval_modules(cfg_pinned, &wrong_driver).await,
             (2, 97, 2, 2),
             "driver version outside the allow-list must reject hardware"
         );

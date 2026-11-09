@@ -2,6 +2,8 @@
 
 #![allow(unknown_lints)]
 #![allow(clippy::all)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 #![allow(unused_attributes)]
 #![cfg_attr(rustfmt, rustfmt::skip)]

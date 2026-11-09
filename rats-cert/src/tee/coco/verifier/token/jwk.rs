@@ -149,12 +149,14 @@ fn reject_unknown_algorithm_keys(jwkset: jwk::JwkSet) -> Result<jwk::JwkSet, Jwk
     Ok(jwkset)
 }
 
-fn new_http_client() -> reqwest::Client {
+fn new_http_client() -> anyhow::Result<reqwest::Client> {
     let builder =
         reqwest::Client::builder().user_agent(format!("rats-rs/{}", env!("CARGO_PKG_VERSION")));
     #[cfg(unix)]
     let builder = builder.connect_timeout(Duration::from_secs(RESTFUL_AS_CONNECT_TIMEOUT_DEFAULT));
-    builder.build().unwrap()
+    builder
+        .build()
+        .context("Failed to build the JWKS HTTP client")
 }
 
 /// Field size (in bytes) for the NIST EC curves supported in a JWK.
@@ -197,7 +199,7 @@ fn pad_ec_coordinate(bytes: &[u8], field_size: usize) -> anyhow::Result<Vec<u8>>
 
 impl JwkAttestationTokenVerifier {
     pub async fn new(config: &AttestationTokenVerifierConfig) -> anyhow::Result<Self> {
-        let client = new_http_client();
+        let client = new_http_client()?;
 
         let mut trusted_jwk_sets = jwk::JwkSet { keys: Vec::new() };
 

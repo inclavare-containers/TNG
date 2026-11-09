@@ -448,7 +448,6 @@ mod extensions_tests {
     }
 
     #[test]
-    #[test]
     fn unknown_variant_forward_compat() {
         // Serde #[serde(other)] does not work on adjacently-tagged enums
         // (content map can't be discarded for a unit variant), so unknown

@@ -938,7 +938,7 @@ mod tests {
         let (body, manifest_json, log_index) = cmaas_fetch_rekor_response_body();
         Mock::given(method("GET"))
             .and(path("/api/v1/log/entries"))
-            .and(query_param("logIndex", &log_index.to_string()))
+            .and(query_param("logIndex", log_index.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .expect(1)
             .mount(&server)
@@ -974,7 +974,7 @@ mod tests {
         let (body, manifest_json, log_index) = cmaas_fetch_rekor_response_body();
         Mock::given(method("GET"))
             .and(path("/api/v1/log/entries"))
-            .and(query_param("logIndex", &log_index.to_string()))
+            .and(query_param("logIndex", log_index.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .expect(1)
             .mount(&server)

@@ -95,35 +95,32 @@ impl<'a> Deserialize<'a> for TaggedEvidenceBufferHelperOwned {
         match tagged {
             Value::Tag(tag, any) => match *any {
                 Value::Array(a) => {
-                    if a.len() == 2 {
-                        let mut it = a.into_iter();
-                        let (a_0, a_1) = (it.next().unwrap(), it.next().unwrap());
-                        let evidence = match a_0 {
-                            Value::Bytes(bs) => bs,
-                            _ => Err(serde::de::Error::invalid_type(
-                                (&a_0).into(),
-                                &"bytes (raw_evidence)",
-                            ))?,
-                        };
-
-                        let claims_buffer = match a_1 {
-                            Value::Bytes(bs) => bs,
-                            _ => Err(serde::de::Error::invalid_type(
-                                (&a_1).into(),
-                                &"bytes (claims_buffer)",
-                            ))?,
-                        };
-                        Ok(Self {
-                            tag,
-                            evidence,
-                            claims_buffer,
-                        })
-                    } else {
-                        Err(serde::de::Error::invalid_type(
+                    let [a_0, a_1]: [Value; 2] = a.try_into().map_err(|a: Vec<Value>| {
+                        serde::de::Error::invalid_type(
                             (&Value::Array(a)).into(),
                             &"an array with length 2",
-                        ))
-                    }
+                        )
+                    })?;
+                    let evidence = match a_0 {
+                        Value::Bytes(bs) => bs,
+                        _ => Err(serde::de::Error::invalid_type(
+                            (&a_0).into(),
+                            &"bytes (raw_evidence)",
+                        ))?,
+                    };
+
+                    let claims_buffer = match a_1 {
+                        Value::Bytes(bs) => bs,
+                        _ => Err(serde::de::Error::invalid_type(
+                            (&a_1).into(),
+                            &"bytes (claims_buffer)",
+                        ))?,
+                    };
+                    Ok(Self {
+                        tag,
+                        evidence,
+                        claims_buffer,
+                    })
                 }
                 _ => Err(serde::de::Error::invalid_type((&*any).into(), &"array")),
             },

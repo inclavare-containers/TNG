@@ -439,8 +439,11 @@ windows-cross-build: install-windows-build-deps
 	RUSTFLAGS="--cfg tokio_unstable" cargo zigbuild --target x86_64-pc-windows-gnu --release
 
 .PHONY: clippy
+# Lint every production crate. tng-testsuite is excluded until its existing
+# warnings are burned down; tng-wasm needs a wasm32 target and is covered by its
+# own job.
 clippy:
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --workspace --exclude tng-wasm --exclude tng-testsuite --all-targets -- -D warnings
 
 .PHONY: deny
 deny:

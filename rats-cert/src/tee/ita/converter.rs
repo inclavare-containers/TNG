@@ -95,6 +95,17 @@ impl ItaConverter {
                 && body.contains("Failed to verify GPU evidence"))
     }
 
+    /// Clone the request for one attempt. A streaming body makes the request
+    /// unretryable; report it instead of panicking inside the retry loop.
+    fn clone_request(
+        request: &reqwest::RequestBuilder,
+        label: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        request
+            .try_clone()
+            .ok_or_else(|| Error::ItaError(format!("ITA request to `{label}` is not replayable")))
+    }
+
     /// Send an HTTP request to ITA with retry logic, returning the response body
     /// on success.
     async fn ita_request(&self, request: reqwest::RequestBuilder, label: &str) -> Result<String> {
@@ -106,9 +117,10 @@ impl ItaConverter {
 
         let (status, body) = policy
             .retry(|| {
-                let request = request.try_clone().expect("request must be cloneable");
+                let request = Self::clone_request(&request, &label);
                 let label = label.clone();
                 async move {
+                    let request = request?;
                     let resp = request
                         .send()
                         .await

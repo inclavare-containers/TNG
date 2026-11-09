@@ -12,6 +12,7 @@ use crate::errors::*;
 use crate::tee::coco::converter::{convert_additional_evidence, CoCoNonce};
 use crate::tee::GenericConverter;
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod as_api {
     pub mod v1_5_2 {
         include!(concat!(

@@ -3415,6 +3415,9 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// `fallback_called` becomes true (the host-await's clean-deny then swallows
     /// the connection-reset into `Ok(false)`, so `executables` stays 2 either
     /// way, the listener is what makes the short-circuit observable).
+    // Test-only spawn: the wasm-safety rule behind the disallowed list does
+    // not apply to a host-only tokio test.
+    #[allow(clippy::disallowed_methods)]
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn branch_b_does_not_call_fallback_when_primary_ok() {
