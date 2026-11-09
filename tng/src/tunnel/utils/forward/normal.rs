@@ -349,6 +349,24 @@ fn is_benign_write_kind(kind: io::ErrorKind) -> bool {
     )
 }
 
+/// Decides whether a write error means the peer stopped accepting data,
+/// looking through wrapper layers. Stream adapters such as
+/// `ContextualStream` re-box socket errors and may flatten the `ErrorKind`,
+/// so the top-level kind alone can report `Other` for a plain BrokenPipe;
+/// the original kind stays reachable through the source chain.
+fn is_benign_write_error(error: &io::Error) -> bool {
+    let mut node: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(err) = node {
+        if let Some(io_error) = err.downcast_ref::<io::Error>() {
+            if is_benign_write_kind(io_error.kind()) {
+                return true;
+            }
+        }
+        node = err.source();
+    }
+    false
+}
+
 fn classify_error(error: &ForwardError) -> AbortKind {
     match error {
         // A read that returns an error (non-EOF) means the source endpoint can
@@ -359,7 +377,7 @@ fn classify_error(error: &ForwardError) -> AbortKind {
         ForwardError::ReadDownstream(_) | ForwardError::ReadUpstream(_) => AbortKind::Fatal,
         ForwardError::WriteZero => AbortKind::Soft,
         ForwardError::WriteUpstream(e) | ForwardError::WriteDownstream(e) => {
-            if is_benign_write_kind(e.kind()) {
+            if is_benign_write_error(e) {
                 AbortKind::Soft
             } else {
                 AbortKind::Fatal
@@ -1213,5 +1231,62 @@ mod tests {
             resp.len()
         );
         assert_eq!(got, resp, "drained bytes must equal the full response");
+    }
+
+    /// Builds the error shape a stream adapter produces: the socket error is
+    /// wrapped with a context tag, optionally flattening the kind to `Other`
+    /// the way `io::Error::other` used to.
+    fn wrapped_error(kind: io::ErrorKind, flattened: bool) -> io::Error {
+        let boxed = anyhow::Error::from(io::Error::from(kind)).context("ingress-mapping");
+        io::Error::new(
+            if flattened {
+                io::ErrorKind::Other
+            } else {
+                kind
+            },
+            boxed,
+        )
+    }
+
+    /// A write error under a context wrapper is still a peer-close, whether or
+    /// not the wrapper kept the original kind.
+    #[test]
+    fn test_wrapped_benign_write_error_is_soft() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+        ] {
+            for flattened in [false, true] {
+                let error = ForwardError::WriteDownstream(wrapped_error(kind, flattened));
+                assert!(
+                    matches!(classify_error(&error), AbortKind::Soft),
+                    "{kind:?} flattened={flattened} must classify as Soft"
+                );
+            }
+        }
+    }
+
+    /// The chain walk must not widen the benign set: a wrapped non-benign
+    /// write error still aborts the other direction.
+    #[test]
+    fn test_wrapped_non_benign_write_error_is_fatal() {
+        for flattened in [false, true] {
+            let error = ForwardError::WriteUpstream(wrapped_error(
+                io::ErrorKind::PermissionDenied,
+                flattened,
+            ));
+            assert!(
+                matches!(classify_error(&error), AbortKind::Fatal),
+                "PermissionDenied flattened={flattened} must stay Fatal"
+            );
+        }
+    }
+
+    /// Read errors are fatal regardless of wrapper shape.
+    #[test]
+    fn test_wrapped_read_error_stays_fatal() {
+        let error = ForwardError::ReadDownstream(wrapped_error(io::ErrorKind::BrokenPipe, true));
+        assert!(matches!(classify_error(&error), AbortKind::Fatal));
     }
 }

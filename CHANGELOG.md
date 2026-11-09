@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A client that closes its connection while TNG is writing the response is no longer reported as a fatal forwarding error: the stream-adapter wrapper keeps the underlying socket error kind, so the teardown takes the benign path and the other direction drains its in-flight data instead of being force-aborted.
 - Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
 - `/status/egress/{id}/` advertises only the configured protocol's subtree (`ohttp` or `rats_tls`); previously a rats_tls egress advertised an `ohttp` node whose every path 404s.
 
