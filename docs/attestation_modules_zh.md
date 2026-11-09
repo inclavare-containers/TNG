@@ -1,6 +1,6 @@
 # `modules` 证明策略
 
-`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动度量（客户机固件、内核、UKI、容器镜像、模型）、GPU 评定、TDX 平台姿态，或锚定在透明日志中的度量基线。证据来自阿里云 AAEL 事件的条目带 `com.alibabacloud.` 厂商前缀；两个度量家族保留无前缀写法作为永久别名。每个条目把预期值内联钉住，生成的校验规则直接用该常量比对证据。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
+`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动度量（客户机固件、内核、UKI、容器镜像、模型）、GPU 评定、TDX 平台姿态，或锚定在透明日志中的度量基线。证据来自阿里云 AAEL 事件的条目带 `com.alibabacloud.` 厂商前缀；两个度量家族保留无前缀写法作为永久别名。度量与姿态条目把预期值内联钉住，生成的校验规则直接用这些常量比对证据；`transparency_log` 条目则把基线锚定在透明日志中。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
 
 ## 策略形态
 
@@ -81,12 +81,12 @@
 - 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
 - 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象或姿态类给了字符串；
-- `transparency_log` 条目的取值不符合条目 schema：`publishedMeasurements` 为空或含不支持的类型、度量类型重复、`services` 为空或不止一个 service、`artifact-server` primary 不是唯一 service、取值对象顶层出现未知字段（service 条目内部嵌套的未知字段目前会被忽略）、fallback 字段配对不全，或 fallback 为空、不是 `rekor-v1`、不是 `publishedMeasurements` 的子集（详见下方条目说明）；
+- `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。另外，`value` 顶层出现未知字段会被拒绝，但 `services[]` 内部嵌套的未知字段目前会被忽略；`fallbackServices` 单独出现会被接受，但没有效果；
 - 名字段（`<repo>`、`<model-id>`）含 `[A-Za-z0-9._/@:+-]` 之外的字符；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
 - `nvidia` 条目的 `min_count` 小于 1（要关闭 GPU 评定就不写该条目）；
 - `tdx` 的 `collateral.min_tcb_date` 不是 `YYYY-MM-DD`；
-- `modules` 策略同时提供非空 `reference_values` 列表：生成的规则拿证据与钉住的常量比对，从不读取参考值，因此加载期直接拒绝。空列表（`[]`）放行。只有 `inline`、`path` 两种策略接受非空列表，它们的规则会消费参考值。
+- `modules` 策略同时提供非空 `reference_values` 列表：生成的规则不读取参考值，因此加载期直接拒绝。空列表（`[]`）放行。只有 `inline`、`path` 两种策略接受非空列表，它们的规则会消费参考值。
 
 ## 模块类型
 
@@ -267,11 +267,11 @@
 
 把可信度量集锚定到记录在透明日志中的 ReleaseManifest，而不是把摘要内联钉住。appraisal 时条目用实际 TDX 度量值重建 manifest 并与日志记录的参考比对，因此可信基线存放在日志里，策略只携带指向它的指针。这是 `modules` 的条目类型；早期版本顶层 `attestation_policy.type = "transparency_log"` 的写法已不存在。
 
-**加载期与 appraisal 期。** primary 为 `rekor-v1` 时条目在策略加载时拉取并认证：按 `logIndex` 取出日志条目，验证其签名检查点、Merkle 包含证明与 Signed Entry Timestamp，并把条目的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供公钥。primary 为 `artifact-server` 时策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用（`ok` 与 `revoked` 都不会触发），primary 失败且没有 fallback 即拒绝。
+**加载期与 appraisal 期。** primary 为 `rekor-v1` 时条目在策略加载时拉取并认证：按 `logIndex` 取出日志条目，验证其签名检查点、Merkle 包含证明与 Signed Entry Timestamp，并把条目的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供公钥。条目在加载期逐个拉取，因此包含多个 `rekor-v1` 条目的策略会为每个条目各做一次日志查询，加载耗时随条目数增加。primary 为 `artifact-server` 时策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用；`ok` 不会触发，被撤销的度量返回 `deny`（硬拒绝），同样不会回退。primary 失败且没有 fallback 即拒绝。
 
 **校验内容。** 条目从 TDX quote 与 UEFI 事件日志提取实际度量值，按度量类型排序（发布者使用的顺序）后重建 manifest，并将其 SHA-256 与日志记录的 `payloadHash` 比对。由于重建前先排序，配置里的顺序无关紧要；类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
 
-**维度与 hardware。** 条目只门控 `executables`。平台姿态仍由独立的 `tdx` 条目表达：加上 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` 即保留旧的 non-debug 与事件日志检查，同时不引入新的属性位要求。TDX 平台识别是自动的。只有 `transparency_log` 条目时，`hardware` 仅要求该识别。
+**平台姿态。** 由独立的 `tdx` 条目表达：加上 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` 即保留旧的 non-debug 与事件日志检查，同时不引入新的属性位要求。TDX 平台识别是自动的。只有 `transparency_log` 条目时，`hardware` 仅要求该识别。
 
 **重复语义。** `transparency_log` 是唯一可以在同一组内出现多次的条目类型。同一组内两个条目 AND，两条日志锚定基线都必须通过；分属两组的两个条目 OR，任一基线通过即可。前者用于要求多条日志同时成立，后者用于接受多个可接受版本中的任一个。
 
@@ -305,6 +305,8 @@
 | `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 `publishedMeasurements` 比模块的度量类型更窄：只接受上述三种类型，也就是 cmaas release manifest 发布的形状。`tdx.ovmf`、`tdx.uki` 以及任意的 `container.image.<repo>` 都不接受。
+
+**可选的未知字段会被静默忽略。** service 条目内部的未知字段（例如把 `publisherPublicKeyPem` 或 `rekorPublicKeyPem` 拼错）不会导致加载失败，条目会回退到内置公钥。修改 service 条目后，请用 `tng tools policy export` 确认生成的规则。
 
 条目的度量提取沿用已删除顶层策略的规则，尚未与其他条目的 `tdx.*`、`container.image.*` 度量谓词统一；例如 `tdx.kernel` 的提取还额外要求 RTMR 索引为 2、blob 长度为 32 MiB。统一两者是后续独立改动。
 

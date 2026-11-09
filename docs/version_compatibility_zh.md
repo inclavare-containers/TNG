@@ -19,6 +19,6 @@
 | > 2.12.0 | **破坏性变更**：Python SDK 现在要求 Python 3.10 或更高版本。该版本无法安装在 Python 3.8 或 3.9 上；在这些解释器上不加版本号执行 `pip install tng-sdk` 会解析到仍然兼容的最新旧版本，而不是报错。若要看到 `Requires-Python` 错误，请显式固定版本。上游 `urllib3`、`requests`、`anyio`、`pytest` 的修复版本均要求 Python 3.10 或更高版本。 |
 | > 2.12.0 | **破坏性变更**：移除 `transparency_log` attestation policy 的 `staticReferenceMeasurements` 字段。设置了该字段的配置不再解析。请改用 `modules` 条目钉住这些度量（`com.alibabacloud.ai.model.<model-id>`、`com.alibabacloud.container.image.<repo>`）。 |
 | > 2.12.0 | **破坏性变更**：移除顶层 `transparency_log` 内置证明策略类型，改为 `modules` 策略中的 `transparency_log` 条目。把 `attestation_policy.type` 设为 `"transparency_log"` 的配置不再解析。请把旧取值包进 `{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`；需要旧平台检查时再加 `tdx` 条目。 |
-| > 2.12.0 | **破坏性变更**：`transparency_log` 配置若同时携带非空 `reference_values` 列表，将不再加载。该列表此前会被接受但从不读取，而 `modules` 策略（包括带 `transparency_log` 条目的策略）在加载期拒绝非空列表。迁移时请删除该列表。 |
+| > 2.12.0 | **破坏性变更**：`transparency_log` 配置若同时携带非空 `reference_values` 列表，将不再加载。该列表此前仅在同时设置 `staticReferenceMeasurements` 时才会被读取，而该字段已由上一条移除。`modules` 策略（包括带 `transparency_log` 条目的策略）在加载期拒绝非空列表。迁移时请删除该列表。 |
 
 > **JSON 配置兼容性说明**：一般来说，旧版本的 JSON 配置文件在新版本中仍然能够被识别和解析，但实际行为可能因默认值变更、字段重命名或语义修改而不同。升级前请务必查阅下方的版本兼容性说明，并在测试环境中验证你的配置。

@@ -59,7 +59,7 @@ fn default_schema_version() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransparencyLogEntryConfig {
-    /// Non-empty ordered measurement types. At appraisal the policy
+    /// Non-empty measurement types. At appraisal the policy
     /// reconstructs the manifest from the actual TDX measurement values and
     /// compares it to the logged reference.
     #[serde(rename = "publishedMeasurements")]

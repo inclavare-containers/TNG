@@ -101,10 +101,10 @@ For the specific field configuration of each model, see [Configuration](#configu
 - **Trustee**: the Attestation Service reference implementation maintained by OpenAnolis; can be deployed as an external AS.
 - **CoCo**: Confidential Containers; the AA/AS reference implementation TNG targets by default.
 - **ITA**: Intel Trust Authority, Intel's online remote attestation service.
-- **Rekor**: sigstore's transparency-log service; v1 is used for the `transparency_log` module entry anchor, v2 for signer_transparency certificate binding. They are two independent mechanisms.
+- **Rekor**: sigstore's transparency-log service.
 - **OPA / rego**: Open Policy Agent and its policy language rego; the built-in AS uses it to express custom verification policies.
 - **SLSA**: a software supply-chain provenance standard; `reference_values` can obtain reference values from SLSA provenance.
-- **DSSE**: a signed-payload envelope format; a `transparency_log` module entry verifies the entry's DSSE publisher signature.
+- **DSSE**: a signed-payload envelope format.
 - **PCCS**: Provisioning Certificate Caching Service, the SGX/TDX certificate caching service; verifying TDX evidence requires fetching collateral from it.
 - **RATS-TLS**: a protocol that carries remote-attestation evidence inside the TLS 1.3 handshake; TNG's default communication protocol.
 
@@ -214,7 +214,7 @@ When `as_type` = `"builtin"`, TNG uses the built-in AS to verify Evidence locall
 | `model` | string | — | Set to `"background_check"` to enable explicitly (omitting it defaults to this mode) |
 | `as_type` | string | `"builtin"` | Set to `"builtin"` to enable the built-in AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | Built-in AS verification policy. Defaults to `{"type": "hardware_only"}` if omitted (the alias `{"type": "default"}` resolves to the same). `type` values are shown in the scenarios and the cheat-sheet at the end |
-| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `inline` and `path` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` (including a policy whose entries include `transparency_log`), because their verification rules do not consume reference values. An empty list is accepted for every policy |
+| `reference_values` | array | — | Built-in AS reference value (trusted baseline) configuration list. Consumed only by the `inline` and `path` policies. A non-empty list is rejected at load for `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules`, because their verification rules do not consume reference values. An empty list is accepted for every policy |
 
 **PCCS configuration**
 
@@ -340,7 +340,7 @@ The group requires the strict TDX posture, a successful guest-reported GPU attes
 The appraisal passes when either group passes in full: an OVMF-booted VM matching the first baseline, or a td-shim-booted confidential container matching the second. Measurements mixed across the two baselines pass neither.
 </details>
 
-The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values; this includes a `modules` policy whose entries include `transparency_log`. An empty list is accepted by every policy.
+The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values. An empty list is accepted by every policy.
 
 Each `reference_values[]` entry has two `type` fields: the outer one selects the reference-value **source**, the inner `payload.type` selects the **loading method**.
 
@@ -504,7 +504,7 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 
 **Scenario 4: transparency_log anchoring (advanced)**
 
-Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and at appraisal compare the actual measurements against that recorded reference. Add a `transparency_log` entry to a `modules` policy; `publishedMeasurements` and exactly one service are required, and `schemaVersion` defaults to `1.0.0`. The entry gates `executables` only, so add a `tdx` entry to keep the platform posture checks.
+Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and compare the actual measurements against it during appraisal. Add a `transparency_log` entry to a `modules` policy with `publishedMeasurements` and one service; `schemaVersion` defaults to `1.0.0`. Add a `tdx` entry when you also want platform posture checks.
 
 <details>
 <summary>Example: modules policy with a transparency_log entry</summary>
@@ -541,25 +541,28 @@ Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a tran
 <details>
 <summary>What the <code>transparency_log</code> entry verifies</summary>
 
-The entry anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log, then checks the running TDX hardware's actual measurements against that recorded reference.
+The entry anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log. There are two primary types; they differ in where the trusted reference comes from.
 
-**At init (policy load), with a `rekor-v1` primary:**
+**Primary `rekor-v1`, at policy load:**
 
-- Fetch the entry by `logIndex` from the configured `logUrl`.
-- Authenticate it: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). If `rekorPublicKeyPem` is omitted, the well-known public key for `rekor.sigstore.dev` / `rekor.openanolis.cn` is used; other logs must supply their key.
-- Bake the trusted reference (the entry's `payloadHash` and the DSSE publisher signature) into the generated rule.
+- Fetch the entry by `logUrl` and `logIndex`.
+- Authenticate it: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). When `rekorPublicKeyPem` is omitted, the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key is used; other logs must supply their own.
+- Bake the trusted `payloadHash` and DSSE publisher signature into the generated rules.
 
-**At appraisal (evidence verification):**
+**Primary `artifact-server`, at appraisal:**
 
-- Extract the actual measurement values from the TDX quote (e.g. `mr_td` for `tdx.td-shim`) and the UEFI event log (e.g. the image digest from an AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`).
-- Reconstruct the release manifest from those actual values, with the measurement types sorted by type (the publisher's canonical order), and compare its hash to the recorded `payloadHash`. Because the types are sorted, the configuration order does not matter; a mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects.
-- The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise, binding the entry to a trusted publisher (defense against a substituted `logIndex`).
+- Send the reconstructed manifest to the configured `url` for resolution.
+- The optional fallback runs only when the primary returns `fail`. `ok` does not fall back; a revoked measurement returns `deny` (a hard deny) and does not fall back either. A failed primary with no fallback rejects.
 
-**With an `artifact-server` primary:** the policy loads without network access, and the entry is resolved at appraisal time by sending the reconstructed manifest to the configured `url`. The optional fallback is a tri-state decision: it is consulted only when the primary returns `fail`; `ok` and `revoked` never fall back. A failed primary with no fallback rejects.
+**Appraisal steps shared by both primaries:**
 
-**`publishedMeasurements` must be non-empty:** the measurement reconstruction and hash comparison always run; a missing field or an explicit empty array (`[]`) is rejected at load.
+- Extract the actual measurement values from the TDX quote (for example `mr_td` for `tdx.td-shim`) and the UEFI event log (for example the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`).
+- Reconstruct the manifest after sorting the measurement types, then compare its hash with the trusted `payloadHash`. A mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects. Configuration order does not matter because the types are sorted before reconstruction.
+- The DSSE publisher signature is always verified: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 
-**Dimension and hardware:** the entry gates `executables` only. Platform posture is a separate `tdx` entry. A policy with only `transparency_log` entries makes `hardware` depend on TDX platform recognition alone, so add the `tdx` entry (with its attribute gates set to `allow`) if you need the non-debug and event-log checks.
+**Field constraints:** `publishedMeasurements` is required and non-empty, allows `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and rejects duplicate types. `schemaVersion` defaults to `1.0.0` and must equal the logged manifest's value.
+
+**Platform posture:** expressed by a separate `tdx` entry. With only a `transparency_log` entry, `hardware` depends on TDX platform recognition alone; add a `tdx` entry with its attribute-bit gates set to `allow` when you need the non-debug and event-log checks.
 
 </details>
 

@@ -5,7 +5,7 @@ use base64::Engine as _;
 
 use super::policies::transparency_log::{artifact_server, rekor_v1};
 
-/// Resolve the DSSE signature to bake into the `transparency_log` policy.
+/// Resolve the DSSE signature to bake into the `transparency_log` entry.
 ///
 /// A real rekor v1 `dsse` entry always carries a signature in
 /// `body.spec.signatures[0].signature`. An empty `dsse_signature` therefore

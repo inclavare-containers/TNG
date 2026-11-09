@@ -462,6 +462,21 @@ fn render_modules_policy(
     groups: &[Vec<Module>],
     resolved: &[Option<ResolvedRekor>],
 ) -> anyhow::Result<String> {
+    // Entries are associated with resolved slots by position, so the two
+    // sequences must line up exactly. Reject a mismatch up front: an
+    // over-supplied slice would otherwise be silently ignored.
+    let transparency_entries = groups
+        .iter()
+        .flatten()
+        .filter(|m| matches!(m, Module::TransparencyLog(_)))
+        .count();
+    if transparency_entries != resolved.len() {
+        anyhow::bail!(
+            "resolved rekor data has {} slots for {} transparency_log entries",
+            resolved.len(),
+            transparency_entries
+        );
+    }
     let mut resolved_entries = resolved.iter();
     let mut helpers: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
@@ -1453,6 +1468,21 @@ mod tests {
         // No measurement entries, so hardware reduces to recognition plus the
         // posture group.
         assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
+    }
+
+    #[test]
+    fn modules_policy_without_transparency_has_no_actual_measurement_rule() {
+        // The shared transparency measurement-extraction rules are emitted
+        // once, and only when a `transparency_log` entry exists. A
+        // container.image entry emits the repo-name helper but must not pull
+        // in those rules.
+        let image = format!("sha256:{}", "c".repeat(64));
+        let policy = build_policy(&modules_cfg(&format!(
+            r#"[{{"type":"com.alibabacloud.container.image.model-server","value":"{image}"}}]"#
+        )))
+        .expect("build");
+        assert!(policy.contains("image_repo_name"));
+        assert!(!policy.contains("actual_measurement"), "{policy}");
     }
 
     #[test]

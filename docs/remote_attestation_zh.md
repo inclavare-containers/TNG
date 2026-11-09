@@ -101,10 +101,10 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 - **Trustee**：OpenAnolis 维护的 Attestation Service 参考实现，可作为外部 AS 部署。
 - **CoCo**：Confidential Containers，TNG 默认对接的 AA/AS 参考实现。
 - **ITA**：Intel Trust Authority，Intel 提供的在线远程证明服务。
-- **Rekor**：sigstore 的透明日志服务；文档中 v1 用于 `transparency_log` 模块条目的锚定，v2 用于 signer_transparency 证书绑定，是两套独立机制。
+- **Rekor**：sigstore 的透明日志服务。
 - **OPA / rego**：Open Policy Agent 及其策略语言 rego，内置 AS 用它表达自定义验证策略。
 - **SLSA**：软件供应链溯源标准，`reference_values` 可从 SLSA provenance 获取参考值。
-- **DSSE**：签名载荷封装格式，`transparency_log` 模块条目会校验条目的 DSSE 发布者签名。
+- **DSSE**：签名载荷封装格式。
 - **PCCS**：Provisioning Certificate Caching Service，SGX/TDX 证书缓存服务；验证 TDX 证据时需从中拉取 collateral。
 - **RATS-TLS**：在 TLS 1.3 握手内传递远程证明证据的协议，TNG 默认通信协议。
 
@@ -214,7 +214,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `model` | string | — | 设为 `"background_check"` 显式启用（省略即默认该模式） |
 | `as_type` | string | `"builtin"` | 设为 `"builtin"` 启用内置 AS |
 | `attestation_policy` | object | `{"type": "hardware_only"}` | 内置 AS 的验证策略。省略时默认 `{"type": "hardware_only"}`（别名 `{"type": "default"}` 同样解析为该策略）。`type` 取值见下方场景与末尾速查表 |
-| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表。只有 `inline`、`path` 两种策略会消费它。非空列表在 `trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules`（包括条目中含 `transparency_log` 的 modules 策略）下于加载期被拒绝，因为这些策略的校验规则不读取参考值。空列表对所有策略都放行 |
+| `reference_values` | array | — | 内置 AS 的参考值（可信基线）配置列表。只有 `inline`、`path` 两种策略会消费它。非空列表在 `trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 下于加载期被拒绝，因为这些策略的校验规则不读取参考值。空列表对所有策略都放行 |
 
 **PCCS 配置**
 
@@ -340,7 +340,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 任一组整体通过即评定通过：匹配第一条基线的 OVMF 启动虚机，或匹配第二条基线的 td-shim 启动机密容器。度量混搭跨两条基线的证据两组都不命中。
 </details>
 
-`reference_values` 字段只为消费参考值的策略类型提供可信基线：场景 2 的自定义 `inline`/`path` 策略。`trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 的规则从不读取参考值，非空列表在加载期被拒绝；条目中含 `transparency_log` 的 modules 策略同样如此。空列表对所有策略都放行。
+`reference_values` 字段只为消费参考值的策略类型提供可信基线：场景 2 的自定义 `inline`/`path` 策略。`trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 的规则从不读取参考值，非空列表在加载期被拒绝。空列表对所有策略都放行。
 
 每个 `reference_values[]` 条目有两个 `type`：外层选参考值**来源**，内层 `payload.type` 选**加载方式**。
 
@@ -504,7 +504,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **场景 4：transparency_log 锚定（高级）**
 
-目标：把可信度量集锚定到一个记录在透明日志中的 ReleaseManifest，appraisal 时将实际度量值与记录的参考比对。在 `modules` 策略里加一个 `transparency_log` 条目；`publishedMeasurements` 与恰好一个 service 为必填，`schemaVersion` 默认为 `1.0.0`。条目只门控 `executables`，需要保留平台姿态检查时再加 `tdx` 条目。
+目标：把可信度量集锚定到一个透明日志里的 ReleaseManifest，appraisal 时拿实际度量值和它比对。在 `modules` 策略里加一个 `transparency_log` 条目，提供 `publishedMeasurements` 和一个 service；`schemaVersion` 不写时为 `1.0.0`。需要平台姿态检查时，再加一个 `tdx` 条目。
 
 <details>
 <summary>示例：带 transparency_log 条目的 modules 策略</summary>
@@ -541,25 +541,28 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 <details>
 <summary><code>transparency_log</code> 条目校验什么</summary>
 
-条目把可信度量集锚定到记录在透明日志中的 ReleaseManifest，然后在 appraisal 时将运行中 TDX 硬件的实际度量值与记录的参考进行比对。
+条目把可信度量集锚定到透明日志中的 ReleaseManifest。primary 有两种，区别在可信参考从哪里来。
 
-**primary 为 `rekor-v1` 时，初始化（策略加载）阶段：**
+**primary 为 `rekor-v1`，策略加载时：**
 
 - 按配置的 `logUrl` 与 `logIndex` 拉取条目。
-- 认证条目：校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。若省略 `rekorPublicKeyPem`，则使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
-- 把可信参考（条目的 `payloadHash` 与 DSSE 发布者签名）烘焙进生成的规则。
+- 认证条目：校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
+- 把可信的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。
 
-**appraisal（证据校验）时：**
+**primary 为 `artifact-server`，appraisal 时：**
 
-- 从 TDX quote（如 `tdx.td-shim` 对应的 `mr_td`）与 UEFI 事件日志（如 `container.image.cmaas-runtime` 度量对应 AAEL `kangaroo/pull-image` 事件中的镜像摘要）中提取实际度量值。
-- 按度量类型排序（发布者使用的顺序）后，用这些实际值重建 release manifest，并将其哈希与记录的 `payloadHash` 比对。由于先排序，配置里的顺序无关紧要；类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。
-- DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥，将条目绑定到可信 publisher（抵御 `logIndex` 被替换）。
+- 把重建的 manifest 发往配置的 `url` 解析。
+- 可选的 fallback 只在 primary 返回 `fail` 时启用。`ok` 不回退；被撤销的度量返回 `deny`（硬拒绝），也不回退。primary 失败且没有 fallback 即拒绝。
 
-**primary 为 `artifact-server` 时：** 策略加载不访问网络，条目在 appraisal 时把重建的 manifest 发往配置的 `url` 解析。可选的 fallback 是三态决策：只在 primary 返回 `fail` 时启用；`ok` 与 `revoked` 都不会触发。primary 失败且没有 fallback 即拒绝。
+**两种 primary 共用的 appraisal 步骤：**
 
-**`publishedMeasurements` 必须非空：** 度量重建与哈希比对始终执行；缺失该字段或显式空数组（`[]`）都在加载期被拒绝。
+- 从 TDX quote（如 `tdx.td-shim` 对应的 `mr_td`）与 UEFI 事件日志（如 `container.image.cmaas-runtime` 对应的 AAEL `kangaroo/pull-image` 事件）中提取实际度量值。
+- 按度量类型排序后重建 manifest，把它的哈希与可信 `payloadHash` 比对。类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。配置里的顺序无关紧要，因为重建前会先排序。
+- DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
-**维度与 hardware：** 条目只门控 `executables`。平台姿态由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别，因此需要 non-debug 与事件日志检查时请加 `tdx` 条目（其属性位门设为 `allow`）。
+**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志 manifest 的值。
+
+**平台姿态：** 由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别；需要 non-debug 与事件日志检查时，加一个 `tdx` 条目，并把属性位门设为 `allow`。
 
 </details>
 
