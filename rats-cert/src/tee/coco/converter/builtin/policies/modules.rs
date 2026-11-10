@@ -414,18 +414,6 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
     let groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
 
-    #[cfg(not(feature = "crypto-rustcrypto"))]
-    if groups
-        .iter()
-        .flatten()
-        .any(|m| matches!(m, Module::TransparencyLog(_)))
-    {
-        // Both the rekor-v1 authentication and the artifact-server host-awaits
-        // live behind this feature.
-        return Err(Error::TransparencyLogPolicyRequiresCryptoRustcrypto);
-    }
-
-    #[cfg(feature = "crypto-rustcrypto")]
     let resolved = {
         let mut resolved = Vec::new();
         for module in groups.iter().flatten() {
@@ -439,8 +427,6 @@ pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<
         }
         resolved
     };
-    #[cfg(not(feature = "crypto-rustcrypto"))]
-    let resolved: Vec<Option<ResolvedRekor>> = Vec::new();
 
     render_modules_policy(&groups, &resolved).map_err(Error::BuiltinPolicyTemplateFailed)
 }

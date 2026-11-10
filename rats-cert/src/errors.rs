@@ -290,10 +290,6 @@ pub enum Error {
     #[error("Failed to build builtin policy template: {0:#}")]
     BuiltinPolicyTemplateFailed(#[source] anyhow::Error),
 
-    #[error("transparency_log entry requires the crypto-rustcrypto feature")]
-    #[cfg(not(feature = "crypto-rustcrypto"))]
-    TransparencyLogPolicyRequiresCryptoRustcrypto,
-
     #[error("Failed to fetch and authenticate transparency-log entry")]
     TransparencyLogFetchFailed(#[source] anyhow::Error),
 

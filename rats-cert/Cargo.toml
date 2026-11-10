@@ -151,11 +151,9 @@ crypto-rustcrypto = [
 ]
 
 # Builtin Attestation Service features (local evidence verification)
-# __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled
-# `dep:sha2` is included here so the `crypto.sha256` host-await helper compiles
-# whenever builtin-as is on, regardless of the `crypto-rustcrypto` feature —
-# honoring the non-crypto fallback path in `load_policy_as_base64_url_safe_no_pad`.
-__builtin-as = ["dep:attestation-service", "dep:reference-value-provider-service", "dep:regorus", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen", "dep:sha2", "dep:artifact-resolve-sdk"]
+# __builtin-as should not be used directly. It is auto-enabled when any TEE-specific builtin feature is enabled.
+# It implies crypto-rustcrypto: transparency-log authentication and DSSE verification always need the RustCrypto path.
+__builtin-as = ["crypto-rustcrypto", "dep:attestation-service", "dep:reference-value-provider-service", "dep:regorus", "dep:flatten-json-object", "dep:tempfile", "dep:rcgen", "dep:sha2", "dep:artifact-resolve-sdk"]
 builtin-as-all = ["__builtin-as", "attestation-service/all-verifier"]
 builtin-as-sgx = ["__builtin-as", "attestation-service/sgx-verifier"]
 builtin-as-snp = ["__builtin-as", "attestation-service/snp-verifier"]
