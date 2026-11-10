@@ -14,11 +14,11 @@ pub use converter::BuiltinCocoConverter;
 // The config types were all public before the split into `policy_config`; keep
 // that reachability for downstream users of the builtin converter.
 pub use policy_config::{
-    ArtifactLogService, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig,
-    NvidiaPostureConfig, PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
-    SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog,
-    TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyLogEntryConfig,
-    TransparencyServiceConfig,
+    ArtifactLogService, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NotPrintableAscii,
+    NvidiaPostureConfig, PolicyConfig, PrintableAscii, ReferenceValueConfig,
+    SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit,
+    TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe, TdxTcbConfig,
+    TransparencyLogEntryConfig, TransparencyServiceConfig,
 };
 
 /// Render the Rego source a builtin AS loads for `policy`. This is the same

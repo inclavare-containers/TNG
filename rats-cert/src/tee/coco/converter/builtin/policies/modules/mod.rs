@@ -65,7 +65,7 @@ impl Module {
             | Module::Kernel { .. }
             | Module::Uki { .. }
             | Module::ContainerImage { .. }
-| Module::AiModel { .. }
+            | Module::AiModel { .. }
             | Module::TransparencyLog(_) => EntryDimension::Executables,
             Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => EntryDimension::Hardware,
         }
@@ -679,7 +679,7 @@ fn render_modules_policy(
         None => String::new(),
     };
 
-// The shared transparency extraction rules are emitted once, ahead of the
+    // The shared transparency extraction rules are emitted once, ahead of the
     // per-entry rules that call them. They use `image_repo_name`, so a
     // transparency entry needs that helper too.
     let mut helper_parts: Vec<String> = Vec::new();
@@ -697,7 +697,7 @@ fn render_modules_policy(
     let diagnostics_block = match policy_platform.as_ref() {
         Some(platform) => {
             let mut names = diag_names;
-            names.push("diag_platform".to_string());
+            names.push(diagnostics::PLATFORM_DIAG_NAME.to_string());
             format!(
                 "\n\n{}\n\n{}",
                 diagnostics::platform_diagnostic_rule(platform),
@@ -1153,13 +1153,26 @@ mod tests {
         // characters, so the generated Rego literal would be unparsable. Every
         // allow-list accepts printable ASCII only. The deserializer rejects the
         // value before any field-level handling, so the error names the value
-        // rather than the field; each case below sets exactly one bad field.
+        // rather than the field; each case below sets exactly one bad field,
+        // and the expected text is the full escaped literal.
         for (value_text, value) in [
-            ("GPU-", json!({ "allow_uuids": ["GPU-\u{1}"] })),
-            ("GPU-", json!({ "allow_uuids": ["GPU-\u{200b}"] })),
-            ("GPU-", json!({ "allow_uuids": ["GPU-\u{301}"] })),
-            ("570.1", json!({ "allow_driver_versions": ["570.1\u{1}"] })),
-            ("96.0", json!({ "allow_vbios_versions": ["96.0\u{200b}"] })),
+            (r#""GPU-\u{1}""#, json!({ "allow_uuids": ["GPU-\u{1}"] })),
+            (
+                r#""GPU-\u{200b}""#,
+                json!({ "allow_uuids": ["GPU-\u{200b}"] }),
+            ),
+            (
+                r#""GPU-\u{301}""#,
+                json!({ "allow_uuids": ["GPU-\u{301}"] }),
+            ),
+            (
+                r#""570.1\u{1}""#,
+                json!({ "allow_driver_versions": ["570.1\u{1}"] }),
+            ),
+            (
+                r#""96.0\u{200b}""#,
+                json!({ "allow_vbios_versions": ["96.0\u{200b}"] }),
+            ),
         ] {
             let err = ModuleEntryConfig {
                 module_type: "nvidia".to_string(),
@@ -1175,15 +1188,15 @@ mod tests {
         // The TDX TCB advisory lists go through the same Rego string emitter.
         for (value_text, value) in [
             (
-                "INTEL-SA-",
+                r#""INTEL-SA-\u{1}""#,
                 json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{1}"] } }),
             ),
             (
-                "INTEL-SA-",
+                r#""INTEL-SA-\u{200b}""#,
                 json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{200b}"] } }),
             ),
             (
-                "INTEL-SA-",
+                r#""INTEL-SA-\u{301}""#,
                 json!({ "tcb": { "allow_advisories": ["INTEL-SA-\u{301}"] } }),
             ),
         ] {
@@ -1895,7 +1908,7 @@ mod tests {
         // Both policies gate only the hardware dimension; on TDX evidence the
         // strict modules posture reproduces hardware_only_strict.
         let cfg = r#"[{"type":"tdx","value":{"sept_ve_disable":"allow","perfmon":"allow","service_td":"allow"}}]"#;
-let modules = build_policy(&modules_cfg(cfg)).expect("build");
+        let modules = build_policy(&modules_cfg(cfg)).expect("build");
         let strict = include_str!("../static/hardware_only_strict.rego");
 
         let ok = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);

@@ -567,13 +567,18 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
     checks
 }
 
+/// Rule name of the platform recognition diagnostic. The assembler lists it in
+/// the `failed_checks` collector, so the name is owned here.
+pub(super) const PLATFORM_DIAG_NAME: &str = "diag_platform";
+
 /// The platform's own diagnostic: reports evidence that does not identify the
 /// platform the policy's entries are rooted at.
 pub(super) fn platform_diagnostic_rule(platform: &Platform) -> String {
     let recognition = platform.recognition();
     let check = platform.check_name();
+    let name = PLATFORM_DIAG_NAME;
     format!(
-        r#"diag_platform := {{
+        r#"{name} := {{
 	"dimension": "hardware",
 	"check": {check:?},
 	"matched": true,
@@ -581,7 +586,7 @@ pub(super) fn platform_diagnostic_rule(platform: &Platform) -> String {
 	{recognition}
 }}
 
-diag_platform := {{
+{name} := {{
 	"dimension": "hardware",
 	"check": {check:?},
 	"matched": false,

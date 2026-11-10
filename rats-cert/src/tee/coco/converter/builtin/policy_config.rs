@@ -11,12 +11,58 @@ use std::ops::Deref;
 /// Config lists of identifiers, versions, and digests are spliced into the
 /// generated Rego as Rust `{:?}` literals. That escaping turns control,
 /// non-printable, and combining characters into `\u{...}`, which regorus
-/// rejects, so such a value would produce an unparsable policy. Rejecting it in
-/// the deserializer means every consumer receives a value that is safe to
-/// render.
+/// rejects, so such a value would produce an unparsable policy. Rejecting it
+/// when the value is created means every consumer receives a value that is safe
+/// to render.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct PrintableAscii(String);
+
+/// The error returned when a string holds a character that `is_ascii_graphic`
+/// rejects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotPrintableAscii {
+    value: String,
+}
+
+impl fmt::Display for NotPrintableAscii {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} is not printable ASCII", self.value)
+    }
+}
+
+impl std::error::Error for NotPrintableAscii {}
+
+impl PrintableAscii {
+    /// Build a value, rejecting any character that is not `is_ascii_graphic`.
+    ///
+    /// This is the single validation path shared by deserialization and direct
+    /// construction.
+    pub fn new(value: impl Into<String>) -> Result<Self, NotPrintableAscii> {
+        let value = value.into();
+        if value.chars().all(|c| c.is_ascii_graphic()) {
+            Ok(Self(value))
+        } else {
+            Err(NotPrintableAscii { value })
+        }
+    }
+}
+
+impl TryFrom<String> for PrintableAscii {
+    type Error = NotPrintableAscii;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for PrintableAscii {
+    type Error = NotPrintableAscii;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
 
 impl<'de> Deserialize<'de> for PrintableAscii {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -24,12 +70,7 @@ impl<'de> Deserialize<'de> for PrintableAscii {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        if !value.chars().all(|c| c.is_ascii_graphic()) {
-            return Err(serde::de::Error::custom(format!(
-                "{value:?} is not printable ASCII"
-            )));
-        }
-        Ok(Self(value))
+        Self::new(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -659,6 +700,26 @@ mod tests {
                 _ => panic!("Expected Inline payload"),
             },
             _ => panic!("Expected Slsa variant"),
+        }
+    }
+
+    #[test]
+    fn printable_ascii_construction_matches_deserialization() {
+        assert_eq!(
+            PrintableAscii::new("GPU-1234").expect("graphic ASCII"),
+            serde_json::from_value::<PrintableAscii>(json!("GPU-1234")).expect("deserialize")
+        );
+
+        // Both constructors and the deserializer reject the same value.
+        let from_str = PrintableAscii::try_from("GPU-\u{200b}").expect_err("non-printable");
+        let from_string =
+            PrintableAscii::try_from(String::from("GPU-\u{200b}")).expect_err("non-printable");
+        assert_eq!(from_str, from_string);
+        let deser = serde_json::from_value::<PrintableAscii>(json!("GPU-\u{200b}"))
+            .expect_err("non-printable");
+        for rendered in [from_str.to_string(), deser.to_string()] {
+            assert!(rendered.contains(r#""GPU-\u{200b}""#), "{rendered}");
+            assert!(rendered.contains("printable ASCII"), "{rendered}");
         }
     }
 }
