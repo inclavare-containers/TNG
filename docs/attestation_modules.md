@@ -84,7 +84,9 @@ failed checks:
 - [hardware] tdx.debug, expected "debug bit clear", actual "0100001000000000", reason mismatch
 ```
 
-The other builtin policy types report only the status and the trustworthiness vector.
+A non-affirming appraisal discloses the pinned `expected` values to the verifying side, so do not pin secrets in allow lists.
+
+The other bundled templates report only the status and the trustworthiness vector.
 
 ## Configuration errors
 

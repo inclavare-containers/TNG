@@ -322,6 +322,20 @@ impl ModuleEntryConfig {
                         );
                     }
                 }
+                // `rego_string_array` writes values with Rust's `{:?}`, which
+                // renders control characters as `\u{...}`; regorus rejects
+                // that escape form. Reject such values at load instead of
+                // emitting an unparsable policy.
+                for (name, values) in [
+                    ("allow_uuids", &cfg.allow_uuids),
+                    ("allow_driver_versions", &cfg.allow_driver_versions),
+                    ("allow_vbios_versions", &cfg.allow_vbios_versions),
+                    ("measurement_digest", &cfg.measurement_digest),
+                ] {
+                    if values.iter().any(|v| v.chars().any(char::is_control)) {
+                        anyhow::bail!("nvidia {name} entries must not contain control characters");
+                    }
+                }
                 Ok(Module::Nvidia(cfg))
             }
             EntryType::TdShim => {
@@ -1272,9 +1286,13 @@ fn gpu_posture_rule() -> Vec<PostureCheck> {
 /// claim is never projected: a raw/skip report's `attestation_report` must not
 /// reach the token or the client's error text.
 fn nvidia_actual(field: Option<&str>, condition: &str) -> String {
-    let mut projection = "\"gpu\": e.gpu, \"uuid\": e.claim.uuid".to_string();
+    // `object.get(..., null)` keeps the GPU in the projection when a field is
+    // missing; a bare `e.claim.<field>` is undefined and would drop the element.
+    let mut projection = r#""gpu": e.gpu, "uuid": object.get(e.claim, "uuid", null)"#.to_string();
     if let Some(field) = field {
-        projection.push_str(&format!(", {field:?}: e.claim.{field}"));
+        projection.push_str(&format!(
+            ", {field:?}: object.get(e.claim, {field:?}, null)"
+        ));
     }
     format!("[{{{projection}}} | some e in nvidia_gpus; {condition}]")
 }
@@ -1318,7 +1336,10 @@ fn nvidia_posture_rule(cfg: &NvidiaPostureConfig) -> Vec<PostureCheck> {
         checks.push(PostureCheck {
             suffix: "cc_enabled",
             expected: "cc_enabled == true".to_string(),
-            actual_expr: nvidia_actual(Some("cc_enabled"), "e.claim.cc_enabled != true"),
+            actual_expr: nvidia_actual(
+                Some("cc_enabled"),
+                r#"object.get(e.claim, "cc_enabled", null) != true"#,
+            ),
             body: vec![
                 "every e in nvidia_gpus {".to_string(),
                 "\te.claim.cc_enabled == true".to_string(),
@@ -1757,6 +1778,30 @@ mod tests {
         }
         .to_module_parsed()
         .is_err());
+
+        // Control characters would make the generated Rego string literal
+        // unparsable, so every allow-list rejects them at load time.
+        for (name, value) in [
+            ("allow_uuids", json!({ "allow_uuids": ["GPU-\u{1}"] })),
+            (
+                "allow_driver_versions",
+                json!({ "allow_driver_versions": ["570.1\u{1}"] }),
+            ),
+            (
+                "allow_vbios_versions",
+                json!({ "allow_vbios_versions": ["96.0\u{1}"] }),
+            ),
+        ] {
+            let err = ModuleEntryConfig {
+                module_type: "nvidia".to_string(),
+                value,
+            }
+            .to_module_parsed()
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains("control characters"), "{err}");
+        }
 
         // A present nvidia entry must require at least one GPU: min_count 0 is
         // rejected (omitting the entry is how GPU appraisal is disabled).
@@ -3500,6 +3545,30 @@ mod tests {
                 json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "vbios_version": "1.2.3" }]),
                 json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "measurement": observed_digest }]),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_diagnostics_nvidia_actual_keeps_a_gpu_with_a_missing_field() {
+        // A claim without `cc_enabled` fails that posture check. The
+        // projection must still identify the GPU and show the missing field as
+        // null; a bare field access would be undefined and drop the element.
+        let cfg = r#"[{"type":"nvidia","value":{"min_count":1}}]"#;
+        let input = tdx_input_full(
+            serde_json::Value::Null,
+            json!({ "nvidia_gpu.0": {
+                "uuid": "GPU-x", "measurement": hex96('3')
+            } }),
+            &[json!({ "event": "ok" })],
+        );
+        let failed = eval_failed_checks(cfg, &input)
+            .await
+            .expect("extension present");
+        let checks: Vec<_> = failed.iter().map(|f| f["check"].clone()).collect();
+        assert_eq!(checks, vec![json!("nvidia.cc_enabled")], "{failed:?}");
+        assert_eq!(
+            failed[0]["actual"],
+            json!([{ "gpu": "nvidia_gpu.0", "uuid": "GPU-x", "cc_enabled": null }])
         );
     }
 

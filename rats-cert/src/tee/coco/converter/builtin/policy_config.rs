@@ -32,7 +32,9 @@ pub enum PolicyConfig {
     Modules {
         /// Either a flat list (a single group, entries AND-ed) or a list of
         /// lists (one acceptable baseline per inner list). An empty list
-        /// imposes no requirements (the `hardware_only` equivalent).
+        /// imposes no module requirements, so `hardware` stays at 97; this is
+        /// not the `hardware_only` posture, which recognises TDX and affirms
+        /// `hardware`.
         #[serde(default)]
         modules: ModuleGroupsConfig,
     },
@@ -122,8 +124,9 @@ impl Default for ModuleGroupsConfig {
 
 impl ModuleGroupsConfig {
     /// Normalize both shapes to the list of groups a flat single group is a
-    /// one-element list. An outer empty array (`[]`) is one empty group (no
-    /// requirements), matching the `hardware_only` equivalence.
+    /// one-element list. An outer empty array (`[]`) is one empty group with no
+    /// requirements, which leaves `hardware` at 97 rather than affirming it
+    /// the way `hardware_only` does.
     pub fn as_groups(&self) -> Vec<&Vec<ModuleEntryConfig>> {
         match self {
             ModuleGroupsConfig::Single(entries) => vec![entries],

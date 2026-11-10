@@ -270,7 +270,28 @@ mod tests {
                 rendered.contains("com.alibabacloud.container.image.vllm"),
                 "{rendered}"
             );
+            assert!(rendered.contains(r#"expected "sha256:85a7""#), "{rendered}");
+            assert!(rendered.contains(r#"actual ["sha256:95a7"]"#), "{rendered}");
             assert!(rendered.contains("reason mismatch"), "{rendered}");
+        }
+
+        #[tokio::test]
+        async fn signed_token_with_empty_diagnostics_keeps_the_plain_error() {
+            for diagnostics in [json!({}), json!({"failed": []})] {
+                let error = verify_signed_claims(ear_claims(Some(diagnostics)))
+                    .await
+                    .expect_err("non-affirming token must be rejected");
+
+                assert!(
+                    matches!(error, Error::EarStatusNotAffirming { .. }),
+                    "{error:?}"
+                );
+                assert!(!error.to_string().contains("failed checks:"), "{error}");
+                assert!(
+                    !error.to_string().contains("no failed checks reported"),
+                    "{error}"
+                );
+            }
         }
 
         #[tokio::test]

@@ -84,7 +84,9 @@ failed checks:
 - [hardware] tdx.debug, expected "debug bit clear", actual "0100001000000000", reason mismatch
 ```
 
-`modules` 以外的内置策略类型只报告状态与信任度向量。
+评定未通过时，诊断信息会把固定的期望值（`expected`）发送给校验端，因此不要在允许列表中固定机密信息。
+
+`modules` 以外的内置模板只报告状态与信任度向量。
 
 ## 配置错误
 
