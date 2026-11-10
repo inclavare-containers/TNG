@@ -8,6 +8,8 @@ use super::policy_config::PolicyConfig;
 use crate::errors::*;
 
 pub(crate) mod modules;
+#[cfg(test)]
+mod test_support;
 pub(crate) mod transparency_log;
 
 /// Render the Rego source a builtin AS loads for `policy`.

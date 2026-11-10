@@ -3,6 +3,8 @@ pub mod builtin;
 mod common;
 mod ear_layout;
 pub mod remote;
+#[cfg(test)]
+mod tests;
 pub mod token;
 #[cfg(feature = "crypto-rustcrypto")]
 pub mod transparency;

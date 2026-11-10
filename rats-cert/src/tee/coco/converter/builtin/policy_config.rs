@@ -3,6 +3,55 @@
 use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::ops::Deref;
+
+/// A string restricted to printable ASCII.
+///
+/// Config lists of identifiers, versions, and digests are spliced into the
+/// generated Rego as Rust `{:?}` literals. That escaping turns control,
+/// non-printable, and combining characters into `\u{...}`, which regorus
+/// rejects, so such a value would produce an unparsable policy. Rejecting it in
+/// the deserializer means every consumer receives a value that is safe to
+/// render.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PrintableAscii(String);
+
+impl<'de> Deserialize<'de> for PrintableAscii {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if !value.chars().all(|c| c.is_ascii_graphic()) {
+            return Err(serde::de::Error::custom(format!(
+                "{value:?} is not printable ASCII"
+            )));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl Deref for PrintableAscii {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PrintableAscii {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PrintableAscii {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// Configuration for policy loading
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -211,9 +260,9 @@ pub struct TdxTcbConfig {
     pub min_status: TcbMinStatus,
     /// Advisory IDs that force a reject when present in the platform's
     /// affected list.
-    pub reject_advisories: Vec<String>,
+    pub reject_advisories: Vec<PrintableAscii>,
     /// Advisory IDs exempted from `reject_advisories`.
-    pub allow_advisories: Vec<String>,
+    pub allow_advisories: Vec<PrintableAscii>,
 }
 
 /// Minimum TCB status accepted by a `tcb` gate (the `min_status` field).
@@ -260,17 +309,17 @@ pub struct NvidiaPostureConfig {
     pub min_count: u64,
     /// Allowed GPU UUIDs (empty = no whitelist).
     #[serde(default)]
-    pub allow_uuids: Vec<String>,
+    pub allow_uuids: Vec<PrintableAscii>,
     /// Allowed driver versions (empty = no whitelist).
     #[serde(default)]
-    pub allow_driver_versions: Vec<String>,
+    pub allow_driver_versions: Vec<PrintableAscii>,
     /// Allowed VBIOS versions (empty = no whitelist).
     #[serde(default)]
-    pub allow_vbios_versions: Vec<String>,
+    pub allow_vbios_versions: Vec<PrintableAscii>,
     /// Allowed per-GPU measurement digests, each 96 lowercase hex
     /// (empty = no whitelist).
     #[serde(default)]
-    pub measurement_digest: Vec<String>,
+    pub measurement_digest: Vec<PrintableAscii>,
 }
 
 /// A `com.alibabacloud.gpu` module. It has no fields; the empty-object value is
