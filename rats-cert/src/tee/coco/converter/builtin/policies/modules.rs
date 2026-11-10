@@ -257,11 +257,16 @@ fn is_sha256_digest(s: &str) -> bool {
 }
 
 /// Reject values that `rego_string_array` would render with Rust's `{:?}` as
-/// `\u{...}`, an escape form regorus does not parse. `field` names the config
-/// list in the error.
-fn ensure_no_control_chars(field: &str, values: &[String]) -> anyhow::Result<()> {
-    if values.iter().any(|v| v.chars().any(char::is_control)) {
-        anyhow::bail!("{field} entries must not contain control characters");
+/// `\u{...}`. That covers control characters plus non-printable and combining
+/// characters, and regorus does not parse the escape form. These lists hold
+/// identifiers, versions, and digests, so printable ASCII is the accepted set.
+/// `field` names the config list in the error.
+fn ensure_printable_ascii(field: &str, values: &[String]) -> anyhow::Result<()> {
+    if values
+        .iter()
+        .any(|v| !v.chars().all(|c| c.is_ascii_graphic()))
+    {
+        anyhow::bail!("{field} entries must be printable ASCII");
     }
     Ok(())
 }
@@ -308,8 +313,8 @@ impl ModuleEntryConfig {
                     }
                 }
                 if let Some(tcb) = &cfg.tcb {
-                    ensure_no_control_chars("tdx tcb reject_advisories", &tcb.reject_advisories)?;
-                    ensure_no_control_chars("tdx tcb allow_advisories", &tcb.allow_advisories)?;
+                    ensure_printable_ascii("tdx tcb reject_advisories", &tcb.reject_advisories)?;
+                    ensure_printable_ascii("tdx tcb allow_advisories", &tcb.allow_advisories)?;
                 }
                 Ok(Module::Tdx(cfg))
             }
@@ -337,16 +342,16 @@ impl ModuleEntryConfig {
                     }
                 }
                 // `rego_string_array` writes values with Rust's `{:?}`, which
-                // renders control characters as `\u{...}`; regorus rejects
-                // that escape form. Reject such values at load instead of
-                // emitting an unparsable policy.
+                // escapes control, non-printable, and combining characters as
+                // `\u{...}`; regorus rejects that escape form. Reject such
+                // values at load instead of emitting an unparsable policy.
                 for (field, values) in [
                     ("nvidia allow_uuids", &cfg.allow_uuids),
                     ("nvidia allow_driver_versions", &cfg.allow_driver_versions),
                     ("nvidia allow_vbios_versions", &cfg.allow_vbios_versions),
                     ("nvidia measurement_digest", &cfg.measurement_digest),
                 ] {
-                    ensure_no_control_chars(field, values)?;
+                    ensure_printable_ascii(field, values)?;
                 }
                 Ok(Module::Nvidia(cfg))
             }
@@ -1791,17 +1796,20 @@ mod tests {
         .to_module_parsed()
         .is_err());
 
-        // Control characters would make the generated Rego string literal
-        // unparsable, so every allow-list rejects them at load time.
+        // Rust's `{:?}` escapes control, non-printable, and combining
+        // characters, so the generated Rego literal would be unparsable. Every
+        // allow-list accepts printable ASCII only.
         for (name, value) in [
             ("allow_uuids", json!({ "allow_uuids": ["GPU-\u{1}"] })),
+            ("allow_uuids", json!({ "allow_uuids": ["GPU-\u{200b}"] })),
+            ("allow_uuids", json!({ "allow_uuids": ["GPU-\u{301}"] })),
             (
                 "allow_driver_versions",
                 json!({ "allow_driver_versions": ["570.1\u{1}"] }),
             ),
             (
                 "allow_vbios_versions",
-                json!({ "allow_vbios_versions": ["96.0\u{1}"] }),
+                json!({ "allow_vbios_versions": ["96.0\u{200b}"] }),
             ),
         ] {
             let err = ModuleEntryConfig {
@@ -1812,7 +1820,7 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(err.contains(name), "{err}");
-            assert!(err.contains("control characters"), "{err}");
+            assert!(err.contains("printable ASCII"), "{err}");
         }
 
         // The TDX TCB advisory lists go through the same Rego string emitter.
@@ -1822,8 +1830,12 @@ mod tests {
                 json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{1}"] } }),
             ),
             (
+                "reject_advisories",
+                json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{200b}"] } }),
+            ),
+            (
                 "allow_advisories",
-                json!({ "tcb": { "allow_advisories": ["INTEL-SA-\u{1}"] } }),
+                json!({ "tcb": { "allow_advisories": ["INTEL-SA-\u{301}"] } }),
             ),
         ] {
             let err = ModuleEntryConfig {
@@ -1834,7 +1846,7 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(err.contains(name), "{err}");
-            assert!(err.contains("control characters"), "{err}");
+            assert!(err.contains("printable ASCII"), "{err}");
         }
 
         // A present nvidia entry must require at least one GPU: min_count 0 is
