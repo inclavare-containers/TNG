@@ -97,6 +97,14 @@ fn log_tail(path: &Path) -> String {
     }
 }
 
+/// Whether this host can produce TDX evidence: a guest device plus a local
+/// attestation agent. Both are needed for the handshake to succeed.
+fn tdx_attestation_available() -> bool {
+    Path::new("/dev/tdx_guest").exists()
+        && Path::new("/run/confidential-containers/attestation-agent/attestation-agent.sock")
+            .exists()
+}
+
 /// Run `tng exec` with a bounded wait and a guaranteed log level.
 async fn run_exec(config: &str, log: &Path, command: &[&str]) -> Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new(resolve_tng_binary()?);
@@ -162,7 +170,8 @@ async fn modules_policy_builds_and_runs_wrapped_command() -> Result<()> {
 
 /// Without a TEE the OHTTP/RA handshake cannot complete. The request must fail
 /// at the attestation path, not because the modules policy could not be built
-/// or parsed.
+/// or parsed. On a host that can actually attest, the request may succeed, so
+/// only the policy-build and handshake-attempt assertions are unconditional.
 #[serial]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn modules_policy_attestation_attempt_fails_without_tee() -> Result<()> {
@@ -179,11 +188,13 @@ async fn modules_policy_attestation_attempt_fails_without_tee() -> Result<()> {
     .await?;
 
     let log_text = read_log(&log);
-    assert!(
-        !output.status.success(),
-        "the request must fail without a TEE: status={:?} log={log_text}",
-        output.status
-    );
+    if !tdx_attestation_available() {
+        assert!(
+            !output.status.success(),
+            "the request must fail without a TEE: status={:?} log={log_text}",
+            output.status
+        );
+    }
     assert!(
         !log_text.contains("Failed to build builtin policy template"),
         "failure must not come from the modules policy build: {log_text}"

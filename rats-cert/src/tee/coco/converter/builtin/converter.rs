@@ -830,10 +830,12 @@ default file_system := 2"#,
             let result = verifier.verify_evidence(&token, &report_data).await;
             assert!(result.is_err());
             let error = result.unwrap_err();
+            let rendered = format!("{error:?}");
             assert!(
-                format!("{error:?}").contains("EarStatusNotAffirming"),
-                "{error:?}"
+                rendered.contains("EarStatusNotAffirmingWithDiagnostics"),
+                "{rendered}"
             );
+            assert!(rendered.contains("tdx.ovmf"), "{rendered}");
         }
     }
 }

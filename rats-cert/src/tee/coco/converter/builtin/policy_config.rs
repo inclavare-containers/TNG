@@ -3,6 +3,96 @@
 use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::ops::Deref;
+
+/// A string restricted to printable ASCII.
+///
+/// Config lists of identifiers, versions, and digests are spliced into the
+/// generated Rego as Rust `{:?}` literals. That escaping turns control,
+/// non-printable, and combining characters into `\u{...}`, which regorus
+/// rejects, so such a value would produce an unparsable policy. Rejecting it
+/// when the value is created means every consumer receives a value that is safe
+/// to render.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PrintableAscii(String);
+
+/// The error returned when a string holds a character that `is_ascii_graphic`
+/// rejects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotPrintableAscii {
+    value: String,
+}
+
+impl fmt::Display for NotPrintableAscii {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} is not printable ASCII", self.value)
+    }
+}
+
+impl std::error::Error for NotPrintableAscii {}
+
+impl PrintableAscii {
+    /// Build a value, rejecting any character that is not `is_ascii_graphic`.
+    ///
+    /// This is the single validation path shared by deserialization and direct
+    /// construction.
+    pub fn new(value: impl Into<String>) -> Result<Self, NotPrintableAscii> {
+        let value = value.into();
+        if value.chars().all(|c| c.is_ascii_graphic()) {
+            Ok(Self(value))
+        } else {
+            Err(NotPrintableAscii { value })
+        }
+    }
+}
+
+impl TryFrom<String> for PrintableAscii {
+    type Error = NotPrintableAscii;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for PrintableAscii {
+    type Error = NotPrintableAscii;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for PrintableAscii {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Deref for PrintableAscii {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PrintableAscii {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PrintableAscii {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// Configuration for policy loading
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -32,7 +122,9 @@ pub enum PolicyConfig {
     Modules {
         /// Either a flat list (a single group, entries AND-ed) or a list of
         /// lists (one acceptable baseline per inner list). An empty list
-        /// imposes no requirements (the `hardware_only` equivalent).
+        /// imposes no module requirements, so `hardware` stays at 97; this is
+        /// not the `hardware_only` posture, which recognises TDX and affirms
+        /// `hardware`.
         #[serde(default)]
         modules: ModuleGroupsConfig,
     },
@@ -122,8 +214,9 @@ impl Default for ModuleGroupsConfig {
 
 impl ModuleGroupsConfig {
     /// Normalize both shapes to the list of groups a flat single group is a
-    /// one-element list. An outer empty array (`[]`) is one empty group (no
-    /// requirements), matching the `hardware_only` equivalence.
+    /// one-element list. An outer empty array (`[]`) is one empty group with no
+    /// requirements, which leaves `hardware` at 97 rather than affirming it
+    /// the way `hardware_only` does.
     pub fn as_groups(&self) -> Vec<&Vec<ModuleEntryConfig>> {
         match self {
             ModuleGroupsConfig::Single(entries) => vec![entries],
@@ -208,9 +301,9 @@ pub struct TdxTcbConfig {
     pub min_status: TcbMinStatus,
     /// Advisory IDs that force a reject when present in the platform's
     /// affected list.
-    pub reject_advisories: Vec<String>,
+    pub reject_advisories: Vec<PrintableAscii>,
     /// Advisory IDs exempted from `reject_advisories`.
-    pub allow_advisories: Vec<String>,
+    pub allow_advisories: Vec<PrintableAscii>,
 }
 
 /// Minimum TCB status accepted by a `tcb` gate (the `min_status` field).
@@ -257,17 +350,17 @@ pub struct NvidiaPostureConfig {
     pub min_count: u64,
     /// Allowed GPU UUIDs (empty = no whitelist).
     #[serde(default)]
-    pub allow_uuids: Vec<String>,
+    pub allow_uuids: Vec<PrintableAscii>,
     /// Allowed driver versions (empty = no whitelist).
     #[serde(default)]
-    pub allow_driver_versions: Vec<String>,
+    pub allow_driver_versions: Vec<PrintableAscii>,
     /// Allowed VBIOS versions (empty = no whitelist).
     #[serde(default)]
-    pub allow_vbios_versions: Vec<String>,
+    pub allow_vbios_versions: Vec<PrintableAscii>,
     /// Allowed per-GPU measurement digests, each 96 lowercase hex
     /// (empty = no whitelist).
     #[serde(default)]
-    pub measurement_digest: Vec<String>,
+    pub measurement_digest: Vec<PrintableAscii>,
 }
 
 /// A `com.alibabacloud.gpu` module. It has no fields; the empty-object value is
@@ -607,6 +700,26 @@ mod tests {
                 _ => panic!("Expected Inline payload"),
             },
             _ => panic!("Expected Slsa variant"),
+        }
+    }
+
+    #[test]
+    fn printable_ascii_construction_matches_deserialization() {
+        assert_eq!(
+            PrintableAscii::new("GPU-1234").expect("graphic ASCII"),
+            serde_json::from_value::<PrintableAscii>(json!("GPU-1234")).expect("deserialize")
+        );
+
+        // Both constructors and the deserializer reject the same value.
+        let from_str = PrintableAscii::try_from("GPU-\u{200b}").expect_err("non-printable");
+        let from_string =
+            PrintableAscii::try_from(String::from("GPU-\u{200b}")).expect_err("non-printable");
+        assert_eq!(from_str, from_string);
+        let deser = serde_json::from_value::<PrintableAscii>(json!("GPU-\u{200b}"))
+            .expect_err("non-printable");
+        for rendered in [from_str.to_string(), deser.to_string()] {
+            assert!(rendered.contains(r#""GPU-\u{200b}""#), "{rendered}");
+            assert!(rendered.contains("printable ASCII"), "{rendered}");
         }
     }
 }

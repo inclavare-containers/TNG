@@ -74,6 +74,20 @@
 
 空 modules 列表不声明任何平台依赖，因此不生成识别规则：`executables`、`configuration`、`file_system` 为 affirming，`hardware` 保持非 affirming 默认值（97）。这与 `hardware_only` 不同，后者会识别 TDX 及遗留平台；要在 modules 中断言硬件识别，请写 `tdx` 条目，或直接使用 `hardware_only` 策略。
 
+## 评定未通过时的诊断
+
+modules 评定结果为非 affirming 时，校验端会报出每一个未通过的检查。每一行写明所属的 AR4SI 维度与检查名，并在有值时带上期望值与实测值，以及失败原因。姿态条目按条件逐项报告（例如 `tdx.debug`、`tdx.eventlog`、`nvidia.cc_enabled`、`gpu.result_codes`），因此报出的是失败的具体条件，而不是整个条目。所属维度仍为 affirming 的检查不会列出：当另一条基线通过时，失败的基线不会被报成失败。
+
+```text
+failed checks:
+- [executables] com.alibabacloud.container.image.model-server, expected "sha256:c5945b51…", actual ["sha256:95a7e6f2…"], reason mismatch
+- [hardware] tdx.debug, expected "debug bit clear", actual "0100001000000000", reason mismatch
+```
+
+评定未通过时，诊断信息会把固定的期望值（`expected`）发送给校验端，因此不要在允许列表中固定机密信息。
+
+`modules` 以外的内置模板只报告状态与信任度向量。
+
 ## 配置错误
 
 以下情况在策略加载期即被拒绝，不会进入运行期：

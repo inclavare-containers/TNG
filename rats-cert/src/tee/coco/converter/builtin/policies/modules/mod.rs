@@ -3,12 +3,16 @@
 
 use super::super::policy_config::{
     value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
-    TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
-    TdxTcbConfig, TransparencyLogEntryConfig,
+    TdxPostureConfig, TransparencyLogEntryConfig,
 };
 use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
 use anyhow::Context;
+
+mod diagnostics;
+
+#[cfg(test)]
+mod test_support;
 
 /// A parsed, validated measurement/posture module: the concrete variant the
 /// generator switches on.
@@ -51,9 +55,10 @@ pub(crate) enum Module {
 }
 
 impl Module {
-    /// The AR4SI dimension this module gates. Measurements describe what the
-    /// platform executes; posture modules describe the hardware/TCB state.
-    fn dimension(&self) -> Dimension {
+    /// The AR4SI dimension this module gates. Measurements, including a
+    /// `transparency_log` baseline, describe what the platform executes;
+    /// posture modules describe the hardware/TCB state.
+    fn dimension(&self) -> EntryDimension {
         match self {
             Module::TdShim { .. }
             | Module::Ovmf { .. }
@@ -61,8 +66,8 @@ impl Module {
             | Module::Uki { .. }
             | Module::ContainerImage { .. }
             | Module::AiModel { .. }
-            | Module::TransparencyLog(_) => Dimension::Executables,
-            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => Dimension::Hardware,
+            | Module::TransparencyLog(_) => EntryDimension::Executables,
+            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => EntryDimension::Hardware,
         }
     }
 
@@ -71,6 +76,38 @@ impl Module {
     /// the AAEL event-log families, and the evaluated `nvidia_gpu.*` claims.
     fn platform(&self) -> Platform {
         Platform::Tdx
+    }
+
+    /// The canonical type spelling, used as the diagnostic `check` name of a
+    /// measurement entry.
+    fn canonical_type(&self) -> String {
+        match self {
+            Module::TdShim { .. } => "tdx.td-shim".to_string(),
+            Module::Ovmf { .. } => "tdx.ovmf".to_string(),
+            Module::Kernel { .. } => "tdx.kernel".to_string(),
+            Module::Uki { .. } => "tdx.uki".to_string(),
+            Module::ContainerImage { repo, .. } => {
+                format!("com.alibabacloud.container.image.{repo}")
+            }
+            Module::AiModel { model_id, .. } => format!("com.alibabacloud.ai.model.{model_id}"),
+            Module::Tdx(_) => "tdx".to_string(),
+            Module::Nvidia(_) => "nvidia".to_string(),
+            Module::Gpu => "com.alibabacloud.gpu".to_string(),
+            Module::TransparencyLog(_) => "transparency_log".to_string(),
+        }
+    }
+
+    /// The pinned measurement value, or `None` for a posture entry, which has
+    /// no single expected value.
+    fn pinned_value(&self) -> Option<&str> {
+        match self {
+            Module::TdShim { value }
+            | Module::Ovmf { value }
+            | Module::Kernel { value }
+            | Module::Uki { value } => Some(value),
+            Module::ContainerImage { digest, .. } | Module::AiModel { digest, .. } => Some(digest),
+            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
+        }
     }
 }
 
@@ -95,6 +132,13 @@ impl Platform {
             Platform::Tdx => {
                 "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
             }
+        }
+    }
+
+    /// The diagnostic `check` name reported for the platform itself.
+    fn check_name(&self) -> &'static str {
+        match self {
+            Platform::Tdx => "tdx",
         }
     }
 }
@@ -176,10 +220,29 @@ fn unknown_module_type(raw: &str) -> anyhow::Error {
     anyhow::anyhow!("unknown module type {raw:?}")
 }
 
+/// The AR4SI trustworthiness dimension a module entry gates.
+///
+/// Only these two variants exist because only two kinds of entry exist: a
+/// measurement entry (`tdx.td-shim`, `tdx.ovmf`, `tdx.kernel`, `tdx.uki`, the
+/// AAEL image and model entries) gates `executables`, and a posture entry
+/// (`tdx`, `nvidia`, `com.alibabacloud.gpu`) gates `hardware`. No module entry
+/// constrains the other six AR4SI dimensions, so none of them is representable
+/// here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Dimension {
+enum EntryDimension {
     Executables,
     Hardware,
+}
+
+impl EntryDimension {
+    /// The AR4SI dimension name, as it appears in a diagnostic payload and in
+    /// the `dimension_value` lookup.
+    fn as_str(self) -> &'static str {
+        match self {
+            EntryDimension::Executables => "executables",
+            EntryDimension::Hardware => "hardware",
+        }
+    }
 }
 
 /// Name segment charset: letters, digits and `. _ / @ : + -`.
@@ -265,7 +328,7 @@ impl ModuleEntryConfig {
                     anyhow::bail!("nvidia min_count must be at least 1");
                 }
                 for d in &cfg.measurement_digest {
-                    if !is_lower_hex(d, 96) {
+                    if !is_lower_hex(d.as_ref(), 96) {
                         anyhow::bail!(
                             "nvidia measurement_digest entries must be 96 lowercase hex chars"
                         );
@@ -411,6 +474,13 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// A `transparency_log` entry with a rekor-v1 primary fetches and authenticates
 /// its log entry here, before rendering. An artifact-server primary defers to
 /// appraisal time and does no I/O at load.
+///
+/// Every entry also emits a diagnostic, and the policy carries a
+/// `tng.appraisal-diagnostics` extension listing the checks that failed. A
+/// posture entry is split into one diagnostic per enabled sub-check, so a
+/// failure names the specific check (`tdx.debug`, `nvidia.cc_enabled`)
+/// instead of the whole posture. The extension is undefined while nothing
+/// fails, so a successful appraisal's token is unchanged.
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
     let groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
 
@@ -465,6 +535,10 @@ fn render_modules_policy(
     }
     let mut resolved_entries = resolved.iter();
     let mut helpers: Vec<String> = Vec::new();
+    let mut entry_rules: Vec<String> = Vec::new();
+    // Diagnostic rule names, in emission order, for the `failed_checks`
+    // collector.
+    let mut diag_names: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
@@ -480,21 +554,38 @@ fn render_modules_policy(
     // Whether the policy references the pull-image repo-name extractor; defined
     // once when any container.image entry appears.
     let mut need_repo_name = false;
+    // GPU claim / event projections shared by the sub-checks of one posture
+    // family, defined once per policy when such an entry appears.
+    let mut need_nvidia_gpus = false;
+    let mut need_gpu_events = false;
 
     for (gi, group) in groups.iter().enumerate() {
         let mut executables_preds: Vec<String> = Vec::new();
         let mut hardware_preds: Vec<String> = Vec::new();
         for (j, module) in group.iter().enumerate() {
             let pred = format!("m_{gi}_{j}");
+            let diag = format!("diag_{gi}_{j}");
             policy_platform.get_or_insert_with(|| module.platform());
-            let body = match module {
+            let dimension = module.dimension().as_str();
+            let block = match module {
                 Module::Tdx(cfg) => {
-                    let (body, extra) = tdx_posture_rule(cfg, &pred)?;
-                    helpers.extend(extra);
-                    body
+                    let rendered = diagnostics::tdx_entry_rules(cfg, &pred, &diag, dimension)?;
+                    helpers.extend(rendered.helpers);
+                    diag_names.extend(rendered.diag_names);
+                    rendered.rules
                 }
-                Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
-                Module::Gpu => gpu_posture_rule(&pred),
+                Module::Nvidia(cfg) => {
+                    need_nvidia_gpus = true;
+                    let rendered = diagnostics::nvidia_entry_rules(cfg, &pred, &diag, dimension);
+                    diag_names.extend(rendered.diag_names);
+                    rendered.rules
+                }
+                Module::Gpu => {
+                    need_gpu_events = true;
+                    let rendered = diagnostics::gpu_entry_rules(&pred, &diag, dimension);
+                    diag_names.extend(rendered.diag_names);
+                    rendered.rules
+                }
                 Module::TransparencyLog(cfg) => {
                     // Every transparency entry consumes its own resolved slot,
                     // in flatten order, so multiple entries cannot share or
@@ -505,19 +596,39 @@ fn render_modules_policy(
                         )
                     })?;
                     has_transparency = true;
+                    diag_names.push(diag.clone());
                     let prefix = format!("t_{gi}_{j}");
-                    transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
+                    format!(
+                        "{}\n\n{}",
+                        transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?,
+                        diagnostics::transparency_log_diag_rules(&pred, &diag, dimension),
+                    )
                 }
-                measurement => measurement_rule(measurement, &pred)?,
+                measurement => {
+                    let observed = format!("observed_{gi}_{j}");
+                    diag_names.push(diag.clone());
+                    format!(
+                        "{}\n\n{}\n\n{}",
+                        measurement_rule(measurement, &pred)?,
+                        diagnostics::measurement_observed_rule(measurement, &observed)?,
+                        diagnostics::measurement_diag_rules(
+                            measurement,
+                            &pred,
+                            &diag,
+                            &observed,
+                            dimension
+                        )?,
+                    )
+                }
             };
             if matches!(module, Module::ContainerImage { .. }) {
                 need_repo_name = true;
             }
             match module.dimension() {
-                Dimension::Executables => executables_preds.push(pred),
-                Dimension::Hardware => hardware_preds.push(pred),
+                EntryDimension::Executables => executables_preds.push(pred),
+                EntryDimension::Hardware => hardware_preds.push(pred),
             }
-            helpers.push(body);
+            entry_rules.push(block);
         }
 
         if !executables_preds.is_empty() {
@@ -580,7 +691,30 @@ fn render_modules_policy(
                 .to_string(),
         );
     }
+
+    // The platform's own diagnostic: without it a non-recognised platform only
+    // shows up as a silently non-affirming hardware dimension.
+    let diagnostics_block = match policy_platform.as_ref() {
+        Some(platform) => {
+            let mut names = diag_names;
+            names.push(diagnostics::PLATFORM_DIAG_NAME.to_string());
+            format!(
+                "\n\n{}\n\n{}",
+                diagnostics::platform_diagnostic_rule(platform),
+                diagnostics::failed_checks_block(&names)
+            )
+        }
+        None => String::new(),
+    };
+
+    if need_nvidia_gpus {
+        helpers.push(diagnostics::NVIDIA_GPUS_HELPER.to_string());
+    }
+    if need_gpu_events {
+        helpers.push(diagnostics::GPU_ATTESTATION_EVENTS_HELPER.to_string());
+    }
     helper_parts.extend(helpers);
+
     let helper_block = if helper_parts.is_empty() {
         String::new()
     } else {
@@ -592,6 +726,11 @@ fn render_modules_policy(
         "image_repo_name(ref) := name if {\n\tsegs := split(ref, \"/\")\n\tlast := segs[count(segs) - 1]\n\tname := split(split(last, \"@\")[0], \":\")[0]\n}\n\n".to_string()
     } else {
         String::new()
+    };
+    let entry_block = if entry_rules.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n\n", entry_rules.join("\n\n"))
     };
     let dimension_block = if group_dimension_rules.is_empty() {
         String::new()
@@ -619,9 +758,9 @@ default file_system := 2
 default hardware := 97
 default executables := {executables_default}
 
-{helper_block}{repo_name_block}{dimension_block}{executables_block}
+{helper_block}{repo_name_block}{entry_block}{dimension_block}{executables_block}
 
-{hardware_block}{recognition_block}
+{hardware_block}{recognition_block}{diagnostics_block}
 "#,
         hardware_block = hardware_rules.join("\n\n"),
     );
@@ -721,189 +860,6 @@ fn measurement_rule(module: &Module, pred: &str) -> anyhow::Result<String> {
     })
 }
 
-/// Emit the `name if { ... }` rule for a `tdx` posture entry plus helper rules
-/// for the disjunctive checks (service-TD zero, rejected advisories). Every
-/// field defaults to its strict choice; a field that "allows"/"optionals" adds
-/// no constraint. There is no `nonce_binding` field: the `report_data` session
-/// binding is enforced unconditionally by the verifier's `runtime_data` path,
-/// so it is not a policy knob and is not emitted here.
-fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let mut body: Vec<String> = Vec::new();
-    let mut extra: Vec<String> = Vec::new();
-
-    if cfg.debug == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f][02468ace]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
-    }
-    if cfg.sept_ve_disable == TdxSeptVe::Require {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{6}[13579bdf]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
-    }
-    if cfg.perfmon == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{14}[0-7]\", input.tdx.quote.body.td_attributes)".to_string(),
-        );
-    }
-    if cfg.service_td == TdxBit::Deny {
-        let helper = format!("{name}_svc_td");
-        body.push(format!("\t{helper}"));
-        extra.push(format!(
-            r#"{helper} if {{
-	not input.tdx.quote.body.mr_servicetd
-}}
-
-{helper} if {{
-	regex.match("^0{{96}}$", input.tdx.quote.body.mr_servicetd)
-}}"#
-        ));
-    }
-
-    // TCB gate (opt-in). A revoked status always rejects; `up_to_date` further
-    // rejects the out-of-date ranks. `advisory_ids` is a comma-joined string.
-    if let Some(tcb) = &cfg.tcb {
-        body.push("\tv := input.tdx.tcb_verification".to_string());
-        body.push("\tv.tcb_status != \"Revoked\"".to_string());
-        if tcb.min_status == TcbMinStatus::UpToDate {
-            body.push(
-                "\tv.tcb_status in [\"UpToDate\", \"ConfigurationNeeded\", \"SWHardeningNeeded\", \"ConfigurationAndSWHardeningNeeded\"]".to_string(),
-            );
-        }
-        if !tcb.reject_advisories.is_empty() {
-            let helper = format!("{name}_adv");
-            let reject = rego_string_array(&tcb.reject_advisories);
-            let allow = rego_string_array(&tcb.allow_advisories);
-            body.push(format!("\tnot {helper}"));
-            extra.push(format!(
-                r#"{helper} if {{
-	some a in {reject}
-	a in split(input.tdx.tcb_verification.advisory_ids, ",")
-	not a in {allow}
-}}"#
-            ));
-        }
-    }
-
-    // Collateral gate (opt-in). All thresholds are compared against the
-    // epoch-second fields that the native TDX verifier places in
-    // `tcb_verification`.
-    if let Some(coll) = &cfg.collateral {
-        body.push("\tvc := input.tdx.tcb_verification".to_string());
-        if !coll.allow_expired {
-            body.push("\tvc.collateral_expired == false".to_string());
-        }
-        if let Some(date) = &coll.min_tcb_date {
-            let epoch = iso_date_to_epoch_secs(date).with_context(|| {
-                format!("validated tdx collateral min_tcb_date {date:?} is not convertible to epoch seconds")
-            })?;
-            body.push(format!("\tvc.tcb_level_date_tag >= {epoch}"));
-        }
-        if let Some(days) = coll.max_collateral_age_days {
-            let secs = days as i64 * 86400;
-            body.push(format!(
-                "\t(time.now_ns() / 1000000000) - vc.latest_issue_date <= {secs}"
-            ));
-        }
-    }
-
-    if cfg.eventlog == TdxEventlog::Required {
-        body.push("\tcount(input.tdx.uefi_event_logs) > 0".to_string());
-    }
-
-    if body.is_empty() {
-        return Ok((format!("{name} if {{\n\ttrue\n}}"), extra));
-    }
-    Ok((format!("{name} if {{\n{}\n}}", body.join("\n")), extra))
-}
-
-/// Emit the `com.alibabacloud.gpu` rule: the guest-reported AAEL GPU
-/// attestation event must exist and every such event must report zero for both
-/// result codes.
-fn gpu_posture_rule(pred: &str) -> String {
-    format!(
-        r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EVENT_TAG"
-		e.details.unicode_name == "AAEL"
-		e.details.data.domain == "alibabacloud.com"
-		e.details.data.operation == "gpu/attestation"
-	]
-	count(events) > 0
-	every e in events {{
-		e.details.data.content["gpu-collect-evidence-result-code"] == 0
-		e.details.data.content["gpu-attest-result-code"] == 0
-	}}
-}}"#
-    )
-}
-
-/// Emit the `nvidia` posture rule: the standard trustee NVIDIA appraisal over
-/// the evaluated per-GPU claims, rejecting the raw/skip passthrough form (which
-/// carries attestation_report and lacks measurement).
-fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
-    let mut gpu_body: Vec<String> = Vec::new();
-    gpu_body.push("\t\tnot g.attestation_report".to_string());
-    if cfg.require_report {
-        gpu_body.push("\t\tg.measurement".to_string());
-    }
-    if cfg.require_cc_mode {
-        gpu_body.push("\t\tg.cc_enabled == true".to_string());
-    }
-    if !cfg.allow_uuids.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.uuid in {}",
-            rego_string_array(&cfg.allow_uuids)
-        ));
-    }
-    if !cfg.allow_driver_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.driver_version in {}",
-            rego_string_array(&cfg.allow_driver_versions)
-        ));
-    }
-    if !cfg.allow_vbios_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.vbios_version in {}",
-            rego_string_array(&cfg.allow_vbios_versions)
-        ));
-    }
-    if !cfg.measurement_digest.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.measurement in {}",
-            rego_string_array(&cfg.measurement_digest)
-        ));
-    }
-    let gpu_conj = gpu_body.join("\n");
-    format!(
-        r#"{pred} if {{
-	gpus := [g |
-		g := input.tdx[k]
-		startswith(k, "nvidia_gpu.")
-	]
-	count(gpus) >= {min}
-	every g in gpus {{
-{inner}
-	}}
-}}"#,
-        min = cfg.min_count,
-        inner = gpu_conj
-    )
-}
-
-/// Render a slice of strings as a Rego array literal.
-fn rego_string_array(items: &[String]) -> String {
-    let inner = items
-        .iter()
-        .map(|s| format!("{s:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{inner}]")
-}
-
 /// Convert a strict `YYYY-MM-DD` date to Unix epoch seconds (UTC midnight).
 /// Returns `None` for anything else, including a calendar-invalid day (e.g.
 /// `2026-02-31`), which the caller surfaces as a config error.
@@ -950,9 +906,12 @@ fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::eval_policy_vector;
+    use super::test_support::{
+        build_policy, eval_modules, hex64, hex96, modules_cfg, tcb_input, tdx_input, tdx_input_full,
+    };
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
-    use crate::tee::coco::converter::builtin::policies::transparency_log::eval_policy_vector;
     use crate::tee::coco::converter::builtin::policy_config::{
         PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     };
@@ -960,17 +919,6 @@ mod tests {
     use serde_json::json;
 
     // --- modules policy -----------------------------------------------------
-
-    fn modules_cfg(json: &str) -> ModuleGroupsConfig {
-        serde_json::from_str(json).expect("modules config parses")
-    }
-
-    /// Render a policy without network I/O. None of these tests use a
-    /// `transparency_log` entry, so no resolved rekor data is needed.
-    fn build_policy(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
-        build_modules_policy_with_resolved(config, &[])
-    }
-
     #[test]
     fn modules_config_flat_and_nested_parse() {
         // Flat single group.
@@ -1200,6 +1148,68 @@ mod tests {
         }
         .to_module_parsed()
         .is_err());
+
+        // Rust's `{:?}` escapes control, non-printable, and combining
+        // characters, so the generated Rego literal would be unparsable. Every
+        // allow-list accepts printable ASCII only. The deserializer rejects the
+        // value before any field-level handling, so the error names the value
+        // rather than the field; each case below sets exactly one bad field,
+        // and the expected text is the full escaped literal.
+        for (value_text, value) in [
+            (r#""GPU-\u{1}""#, json!({ "allow_uuids": ["GPU-\u{1}"] })),
+            (
+                r#""GPU-\u{200b}""#,
+                json!({ "allow_uuids": ["GPU-\u{200b}"] }),
+            ),
+            (
+                r#""GPU-\u{301}""#,
+                json!({ "allow_uuids": ["GPU-\u{301}"] }),
+            ),
+            (
+                r#""570.1\u{1}""#,
+                json!({ "allow_driver_versions": ["570.1\u{1}"] }),
+            ),
+            (
+                r#""96.0\u{200b}""#,
+                json!({ "allow_vbios_versions": ["96.0\u{200b}"] }),
+            ),
+        ] {
+            let err = ModuleEntryConfig {
+                module_type: "nvidia".to_string(),
+                value,
+            }
+            .to_module_parsed()
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains(value_text), "{err}");
+            assert!(err.contains("printable ASCII"), "{err}");
+        }
+
+        // The TDX TCB advisory lists go through the same Rego string emitter.
+        for (value_text, value) in [
+            (
+                r#""INTEL-SA-\u{1}""#,
+                json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{1}"] } }),
+            ),
+            (
+                r#""INTEL-SA-\u{200b}""#,
+                json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{200b}"] } }),
+            ),
+            (
+                r#""INTEL-SA-\u{301}""#,
+                json!({ "tcb": { "allow_advisories": ["INTEL-SA-\u{301}"] } }),
+            ),
+        ] {
+            let err = ModuleEntryConfig {
+                module_type: "tdx".to_string(),
+                value,
+            }
+            .to_module_parsed()
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains(value_text), "{err}");
+            assert!(err.contains("printable ASCII"), "{err}");
+        }
 
         // A present nvidia entry must require at least one GPU: min_count 0 is
         // rejected (omitting the entry is how GPU appraisal is disabled).
@@ -1608,61 +1618,6 @@ mod tests {
         assert_eq!(iso_date_to_epoch_secs("2100-02-29"), None);
     }
 
-    /// Evaluate a `modules` policy over `input`. The generated policy embeds
-    /// every pinned value as a literal, so no reference values are involved.
-    async fn eval_modules(cfg_json: &str, input: &str) -> (i8, i8, i8, i8) {
-        let cfg = modules_cfg(cfg_json);
-        let policy = build_policy(&cfg).expect("build modules policy");
-        eval_policy_vector(&policy, input).await
-    }
-
-    /// 96-char lowercase hex string made of `ch` repeated (a stand-in digest).
-    fn hex96(ch: char) -> String {
-        ch.to_string().repeat(96)
-    }
-    fn hex64(ch: char) -> String {
-        ch.to_string().repeat(64)
-    }
-
-    /// A minimal TDX claims input (recognized non-debug quote) whose event log
-    /// contains the given events. `body_extra` keys are merged into the quote
-    /// body; the default `td_attributes` keeps the SEPT #VE bit 28 set and the
-    /// debug/perfmon bits clear, so it satisfies the strict `tdx {}` defaults.
-    fn tdx_input(body_extra: serde_json::Value, events: &[serde_json::Value]) -> String {
-        tdx_input_full(body_extra, serde_json::Value::Null, events)
-    }
-
-    /// [`tdx_input`] plus `tdx_extra` keys merged into the `tdx` object (e.g.
-    /// the flat `nvidia_gpu.0` claims).
-    fn tdx_input_full(
-        body_extra: serde_json::Value,
-        tdx_extra: serde_json::Value,
-        events: &[serde_json::Value],
-    ) -> String {
-        let mut body = json!({ "td_attributes": "0000001000000000" });
-        if let Some(map) = body_extra.as_object() {
-            for (k, v) in map {
-                body[k] = v.clone();
-            }
-        }
-        let mut tdx = json!({
-            "quote": {
-                "header": {
-                    "tee_type": "81000000",
-                    "vendor_id": "939a7233f79c4ca9940a0db3957f0607",
-                },
-                "body": body,
-            },
-            "uefi_event_logs": events,
-        });
-        if let Some(map) = tdx_extra.as_object() {
-            for (k, v) in map {
-                tdx[k] = v.clone();
-            }
-        }
-        json!({ "tdx": tdx }).to_string()
-    }
-
     #[tokio::test]
     async fn modules_ovmf_and_kernel_match_and_mismatch() {
         let ovmf = hex96('1');
@@ -1750,7 +1705,7 @@ mod tests {
 
         // Documented difference from hardware_only: on TDX evidence the empty
         // list still does not recognise the platform, while hardware_only does.
-        let hardware_only = include_str!("static/hardware_only.rego");
+        let hardware_only = include_str!("../static/hardware_only.rego");
         assert_eq!(
             eval_policy_vector(hardware_only, &tdx).await,
             (2, 2, 2, 2),
@@ -1954,7 +1909,7 @@ mod tests {
         // strict modules posture reproduces hardware_only_strict.
         let cfg = r#"[{"type":"tdx","value":{"sept_ve_disable":"allow","perfmon":"allow","service_td":"allow"}}]"#;
         let modules = build_policy(&modules_cfg(cfg)).expect("build");
-        let strict = include_str!("static/hardware_only_strict.rego");
+        let strict = include_str!("../static/hardware_only_strict.rego");
 
         let ok = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
         assert_eq!(
@@ -2021,15 +1976,6 @@ mod tests {
             (2, 2, 2, 2),
             "zero service TD affirms"
         );
-    }
-
-    /// Build a TDX input carrying a synthetic `tcb_verification` claim.
-    fn tcb_input(tcb: serde_json::Value) -> String {
-        tdx_input_full(
-            serde_json::Value::Null,
-            json!({ "tcb_verification": tcb }),
-            &[json!({ "event": "ok" })],
-        )
     }
 
     #[tokio::test]
