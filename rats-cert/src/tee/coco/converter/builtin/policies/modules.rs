@@ -256,6 +256,16 @@ fn is_sha256_digest(s: &str) -> bool {
     }
 }
 
+/// Reject values that `rego_string_array` would render with Rust's `{:?}` as
+/// `\u{...}`, an escape form regorus does not parse. `field` names the config
+/// list in the error.
+fn ensure_no_control_chars(field: &str, values: &[String]) -> anyhow::Result<()> {
+    if values.iter().any(|v| v.chars().any(char::is_control)) {
+        anyhow::bail!("{field} entries must not contain control characters");
+    }
+    Ok(())
+}
+
 impl ModuleEntryConfig {
     /// Test helper: parse the type spelling and convert in one step, mirroring
     /// what `parse_module_groups` does.
@@ -297,6 +307,10 @@ impl ModuleEntryConfig {
                         }
                     }
                 }
+                if let Some(tcb) = &cfg.tcb {
+                    ensure_no_control_chars("tdx tcb reject_advisories", &tcb.reject_advisories)?;
+                    ensure_no_control_chars("tdx tcb allow_advisories", &tcb.allow_advisories)?;
+                }
                 Ok(Module::Tdx(cfg))
             }
             EntryType::AlibabaGpu => {
@@ -326,15 +340,13 @@ impl ModuleEntryConfig {
                 // renders control characters as `\u{...}`; regorus rejects
                 // that escape form. Reject such values at load instead of
                 // emitting an unparsable policy.
-                for (name, values) in [
-                    ("allow_uuids", &cfg.allow_uuids),
-                    ("allow_driver_versions", &cfg.allow_driver_versions),
-                    ("allow_vbios_versions", &cfg.allow_vbios_versions),
-                    ("measurement_digest", &cfg.measurement_digest),
+                for (field, values) in [
+                    ("nvidia allow_uuids", &cfg.allow_uuids),
+                    ("nvidia allow_driver_versions", &cfg.allow_driver_versions),
+                    ("nvidia allow_vbios_versions", &cfg.allow_vbios_versions),
+                    ("nvidia measurement_digest", &cfg.measurement_digest),
                 ] {
-                    if values.iter().any(|v| v.chars().any(char::is_control)) {
-                        anyhow::bail!("nvidia {name} entries must not contain control characters");
-                    }
+                    ensure_no_control_chars(field, values)?;
                 }
                 Ok(Module::Nvidia(cfg))
             }
@@ -1794,6 +1806,28 @@ mod tests {
         ] {
             let err = ModuleEntryConfig {
                 module_type: "nvidia".to_string(),
+                value,
+            }
+            .to_module_parsed()
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains("control characters"), "{err}");
+        }
+
+        // The TDX TCB advisory lists go through the same Rego string emitter.
+        for (name, value) in [
+            (
+                "reject_advisories",
+                json!({ "tcb": { "reject_advisories": ["INTEL-SA-\u{1}"] } }),
+            ),
+            (
+                "allow_advisories",
+                json!({ "tcb": { "allow_advisories": ["INTEL-SA-\u{1}"] } }),
+            ),
+        ] {
+            let err = ModuleEntryConfig {
+                module_type: "tdx".to_string(),
                 value,
             }
             .to_module_parsed()
