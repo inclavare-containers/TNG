@@ -81,7 +81,7 @@ These are rejected when the policy loads, before any appraisal runs:
 - an entry `type` outside the set listed below, including a mistyped family prefix; the `com.alibabacloud.` prefix is only legal on `container.image.`, `ai.model.`, and the exact type `gpu`, and unprefixed `gpu` is not a type;
 - the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines). `transparency_log` is the one exception: it may repeat within a group so several log-anchored baselines must all verify;
 - a value in the wrong shape or format: wrong digest length or uppercase hex (all digests are lowercase), a `com.alibabacloud.container.image.*` value without the `sha256:` prefix, an object given where the type expects a string or the reverse;
-- a `transparency_log` entry whose value violates the field constraints in the Transparency log section below. Unknown fields at the top level of the value are rejected; unknown fields nested inside a `services[]` entry are currently ignored. A `fallbackServices` list without `fallbackPublishedMeasurements` is accepted but has no effect;
+- a `transparency_log` entry whose value violates the field constraints in the Transparency log section below. A `fallbackServices` list without `fallbackPublishedMeasurements` is accepted but has no effect;
 - an unknown field inside a `tdx`, `nvidia`, or `com.alibabacloud.gpu` options object; the `com.alibabacloud.gpu` value must be the empty object `{}`;
 - an `nvidia` entry whose `min_count` is below 1 (omit the entry to disable GPU appraisal);
 - a `tdx` `collateral.min_tcb_date` that is not `YYYY-MM-DD`;
@@ -302,8 +302,6 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 | `services[].logServices` | list | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
 | `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
 | `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
-
-**Unknown optional keys are silently ignored.** An unknown field inside a service entry, such as a mistyped `publisherPublicKeyPem` or `rekorPublicKeyPem`, does not fail the load; the entry falls back to the built-in key. After editing a service entry, confirm the generated rule with `tng tools policy export`.
 
 The entry extracts measurements with the same rules the removed top-level policy used, which are not yet unified with the `tdx.*` and `container.image.*` measurement predicates of the other entries; for example, the `tdx.kernel` extraction also requires RTMR index 2 and a 32 MiB blob length. Unifying them is a separate change.
 

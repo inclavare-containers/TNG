@@ -81,7 +81,7 @@
 - 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
 - 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象或姿态类给了字符串；
-- `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。另外，`value` 顶层出现未知字段会被拒绝，但 `services[]` 内部嵌套的未知字段目前会被忽略；`fallbackServices` 单独出现会被接受，但没有效果；
+- `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。`fallbackServices` 单独出现会被接受，但没有效果；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
 - `nvidia` 条目的 `min_count` 小于 1（要关闭 GPU 评定就不写该条目）；
 - `tdx` 的 `collateral.min_tcb_date` 不是 `YYYY-MM-DD`；
@@ -303,7 +303,6 @@
 | `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
 | `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
-**可选的未知字段会被静默忽略。** service 条目内部的未知字段（例如把 `publisherPublicKeyPem` 或 `rekorPublicKeyPem` 拼错）不会导致加载失败，条目会回退到内置公钥。修改 service 条目后，请用 `tng tools policy export` 确认生成的规则。
 条目的度量提取沿用已删除顶层策略的规则，尚未与其他条目的 `tdx.*`、`container.image.*` 度量谓词统一；例如 `tdx.kernel` 的提取还额外要求 RTMR 索引为 2、blob 长度为 32 MiB。统一两者是后续独立改动。
 
 **从顶层类型迁移。** 把旧策略的取值包进一个 `modules` 条目：`{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`。若需要旧的 non-debug 与事件日志检查，再加一个 `tdx` 条目（TDX 识别是自动的）；只有 `transparency_log` 条目时 `hardware` 退化为仅要求该识别。删除任何非空 `reference_values`，新策略会在加载期拒绝它。

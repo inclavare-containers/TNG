@@ -1103,6 +1103,68 @@ mod tests {
             "fallbackPublishedMeasurements": [],
         }))
         .contains("fallbackPublishedMeasurements non-empty"));
+
+        // Unknown fields nested inside a service entry are rejected at load,
+        // so a mistyped key cannot silently fall back to the built-in key.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "rekorPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}],
+                          "publisherPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r", "urlX": "x"}]}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                                  "logUrlX": "x"}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("unknown field"));
+
+        // A fully specified valid configuration still parses: the strictness
+        // must not reject known fields.
+        let valid_rekor_entry = json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "rekorPublicKeyPem": "pem", "publisherPublicKeyPem": "pem"}],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(valid_rekor_entry)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        let valid_artifact_entry = json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}],
+                          "publisherPublicKeyPem": "pem"}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(valid_artifact_entry)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
     }
 
     // --- Rego shape --------------------------------------------------------

@@ -300,7 +300,7 @@ pub(crate) fn value_shape(v: &serde_json::Value) -> &'static str {
 /// measurements. `rekor-v1` fetches an entry by logIndex; `artifact-server`
 /// delegates to a log-services list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum TransparencyServiceConfig {
     #[serde(rename = "rekor-v1")]
     RekorV1 {
@@ -331,6 +331,7 @@ pub enum TransparencyServiceConfig {
 /// A single log-service entry nested under an `artifact-server` transparency
 /// service: `{"type":"rekor-v1","url":"..."}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactLogService {
     #[serde(rename = "type")]
     pub type_: String,
