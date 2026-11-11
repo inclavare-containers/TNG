@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The JavaScript SDK is now built with the same 1.89.0 stable toolchain as the rest of the repo; the `nightly-2025-07-07` toolchain is now only needed for `make create-tarball`.
 - The Python SDK now requires Python 3.10 or newer. This release cannot be installed on Python 3.8 or 3.9; an unpinned `pip install tng-sdk` on those interpreters resolves to the newest older release, and pinning this version fails the `Requires-Python` check.
 - `tng tools` writes its logs to stderr instead of stdout, so command output (PEM, JSON, Rego) can be redirected or piped cleanly. `--log-file` and `--log-error-file` still take precedence.
+- `modules` measurement entries and the `transparency_log` entry now share one measurement extraction rule. `tdx.kernel` requires every matching `td_payload` event to be recorded in RTMR1 (register index 2) and to carry a SHA-384 digest, and all matching events must report the same digest. `tdx.uki` requires the same for every `EV_EFI_BOOT_SERVICES_APPLICATION` event. `container.image` extraction requires the `EV_EVENT_TAG` event type. The `transparency_log` entry no longer requires the `td_payload` blob to be 32 MiB.
 
 ### Removed
 
@@ -43,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A TNG verifier now accepts both the pre-draft-04 and the draft-04 EAR token claim layouts, so a token issued by an upstream Trustee AS that migrated to draft-04 ([confidential-containers/trustee#1614](https://github.com/confidential-containers/trustee/pull/1614)) no longer fails with a missing `runtime_data_claims` field. The builtin AS's pre-draft-04 tokens keep verifying unchanged.
 - Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
 - `/status/egress/{id}/` advertises only the configured protocol's subtree (`ohttp` or `rats_tls`); previously a rats_tls egress advertised an `ohttp` node whose every path 404s.
+- The `transparency_log` entry no longer silently drops a published measurement that cannot be extracted from the evidence: a manifest is built only when every configured published measurement is extractable, so an incomplete published type set fails the entry instead of comparing a shortened manifest.
 
 ## [2.12.0] - 2026-10-25
 

@@ -221,122 +221,24 @@ pub(super) async fn resolve_entry(
     }))
 }
 
-/// Render a slice of strings as a Rego array literal.
-fn rego_string_array(items: &[String]) -> String {
-    format!(
-        "[{}]",
-        items
-            .iter()
-            .map(|s| format!("{s:?}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-/// The shared `actual_measurement` extraction rules, emitted once when a
-/// modules policy contains at least one `transparency_log` entry.
+/// Render the ReleaseManifest `measurements` array for one manifest as a Rego
+/// object literal, one `{"type", "value"}` object per sorted published type.
 ///
-/// These are the transparency templates' original extraction bodies. They are
-/// intentionally not shared with the modules measurement predicates yet: the
-/// `tdx.kernel` rule here pins the RTMR index and the 32 MiB blob length, while
-/// the modules rule does not. Unifying the two is a separate follow-up.
-pub(super) fn measurement_extraction_rules() -> &'static str {
-    r#"# extract the actual measurement value for a type from rego input.
-# Each rule gates its digest on a canonical-format regex: td-shim/td-kernel
-# require 96 lowercase hex chars; container.image.* require sha256:+64 lowercase
-# hex. A value that fails the format check makes the rule undefined → the
-# measurement is dropped from the reconstructed manifest → its hash mismatches
-# t_<group>_<index>_payload_hash → the m_<group>_<index> entry predicate fails → reject (fail-closed).
-actual_measurement("tdx.td-shim") := digest if {
-    digest := input.tdx.quote.body.mr_td
-    regex.match("^[0-9a-f]{96}$", digest)
-}
-
-actual_measurement("tdx.kernel") := digest if {
-    some e in input.tdx.uefi_event_logs
-    e.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
-    # Exact descriptor match against "td_payload". The UEFI event-log parser
-    # exposes the description WITHOUT the trailing NUL (`data[1..length]`,
-    # length includes the NUL byte), so the parsed `e.details.string` is
-    # `"td_payload"` (10 chars). A `startswith` prefix would wrongly match
-    # unrelated `td_payload_*` descriptors.
-    e.details.string == "td_payload"
-    e.index == 2
-    some d in e.digests
-    d.alg == "SHA-384"
-    digest := d.digest
-    regex.match("^[0-9a-f]{96}$", digest)
-    # Guard (#2): fail-closed if ANY descriptor-matching td_payload event has
-    # register index != 2. A td_payload descriptor-matching event must extend
-    # RTMR1 (register index 2); any such event with a non-2 index is a
-    # violation. Without this guard the `e2.index == 2` filter inside the
-    # comprehensions below would silently exclude such an event from the
-    # conflict set rather than rejecting. The set is empty iff no
-    # descriptor-matching event has a non-2 index → count == 0 lets the rule
-    # proceed; any bad event → count 1 → rule undefined → drop → reject
-    # (fail-closed).
-    bad_index_events := {1 | some eb in input.tdx.uefi_event_logs; eb.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; eb.details.string == "td_payload"; eb.index != 2}
-    count(bad_index_events) == 0
-    # Guard (#3): fail-closed if ANY descriptor-matching td_payload event
-    # (extending RTMR1) lacks a SHA-384 digest. A td_payload event must carry a
-    # 48-byte SHA-384 digest; an event with no digests (or no SHA-384 digest)
-    # is a violation. Without this guard the
-    # `some d2 ... d2.alg == "SHA-384"` filter inside the comprehensions below
-    # would silently exclude such an event from the conflict set rather than
-    # rejecting. The 96-hex regex on the extracted value already enforces
-    # the 48-byte length on matching events; this guard rejects events that
-    # have NO SHA-384 digest at all. Compare the distinct set of
-    # descriptor-matching index-2 events (by `event` body) against the subset
-    # that carries a SHA-384 digest — equal counts iff every such event has a
-    # SHA-384 digest.
-    td_index2_events := {ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; ev := e2.event}
-    td_index2_with_sha384 := {ev | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; ev := e2.event}
-    count(td_index2_events) == count(td_index2_with_sha384)
-    # Conflicting-events check across ALL td_payload descriptor+RTMR1 events.
-    # A digest OR blobLength disagreement is a conflict ("conflicting
-    # td_payload events") — both the digest and the blobLength must agree
-    # across every matching event. Build distinct digest and blobLength sets
-    # WITHOUT the 32 MiB pre-filter so a non-32 MiB td_payload event is counted
-    # as a conflict rather than silently excluded. The distinct-digest set must
-    # have exactly one element (all digests agree); the distinct-length set must
-    # equal exactly {33554432} (all lengths agree AND the agreed length is
-    # 32 MiB = 32<<20). A 32 MiB + non-32 MiB td_payload pair → length set
-    # {33554432, other} → set != {33554432} → rule undefined → drop →
-    # reject (fail-closed).
-    matching_digests := {dg | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"; dg := d2.digest}
-    count(matching_digests) == 1
-    matching_lengths := {tng.td_payload_blob_length([e2.event]) | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; e2.index == 2; some d2 in e2.digests; d2.alg == "SHA-384"}
-    matching_lengths == {33554432}
-}
-
-actual_measurement(type) := digest if {
-    startswith(type, "container.image.")
-    # Validation accepts only the unprefixed `container.image.<repo>` spelling,
-    # so trim exactly one prefix here; `trim_prefix` strips the same prefix the
-    # Rust side strips, keeping validation and extraction aligned on one string.
-    repo := trim_prefix(type, "container.image.")
-    some e in input.tdx.uefi_event_logs
-    e.details.unicode_name == "AAEL"
-    e.details.data.domain == "alibabacloud.com"
-    e.details.data.operation == "kangaroo/pull-image"
-    image_repo_name(e.details.data.content.reference) == repo
-    digest := e.details.data.content.digest
-    regex.match("^sha256:[0-9a-f]{64}$", digest)
-    # Explicit conflicting-events check: all AAEL kangaroo/pull-image events
-    # for this repo must agree on the digest. A conflict makes the
-    # distinct-digest set size > 1 → rule undefined → measurement dropped →
-    # manifest mismatch → reject (fail-closed).
-    matching_digests := {dg | some e2 in input.tdx.uefi_event_logs; e2.details.unicode_name == "AAEL"; e2.details.data.domain == "alibabacloud.com"; e2.details.data.operation == "kangaroo/pull-image"; image_repo_name(e2.details.data.content.reference) == repo; dg := e2.details.data.content.digest}
-    count(matching_digests) == 1
-    # NOTE: AAEL event-digest integrity (sha384(event) == digests[0]) is NOT
-    # re-verified here. It is verified by the attestation-service event-log
-    # replay (trustee CcEventLog
-    # replay_and_match, which replays events against RTMRs) before claims reach
-    # the policy — TNG's Rego layer trusts that replay. This is by-design
-    # delegated to the AS event-log replay, not silently skipped.
-}
-
-"#
+/// The literal is what makes a missing extraction structurally fail-closed:
+/// an undefined `actual_measurement(...)` makes the object undefined, the array
+/// undefined, and the whole manifest undefined, so no shrunken manifest can
+/// ever be compared against the signed payload. An array comprehension would
+/// instead silently drop the undefined element.
+fn manifest_literal(types: &[String], schema_expr: &str) -> String {
+    let mut measurements = String::new();
+    for t in types {
+        measurements.push_str(&format!(
+            "\t\t{{\"type\": {t:?}, \"value\": actual_measurement({t:?})}},\n"
+        ));
+    }
+    format!(
+        "{{\n\t\"measurements\": [\n{measurements}\t],\n\t\"schemaVersion\": {schema_expr},\n}}"
+    )
 }
 
 /// Render the Rego rules for one `transparency_log` module entry.
@@ -358,7 +260,7 @@ pub(super) fn build_entry_rules(
         .ok_or_else(|| anyhow::anyhow!("services must be non-empty"))?;
     let mut sorted_pm = cfg.published_measurements.clone();
     sorted_pm.sort();
-    let pm_lit = rego_string_array(&sorted_pm);
+    let manifest = manifest_literal(&sorted_pm, &format!("{prefix}_schema_version"));
 
     match primary {
         TransparencyServiceConfig::RekorV1 { .. } => {
@@ -369,17 +271,15 @@ pub(super) fn build_entry_rules(
                 r#"# transparency_log entry: rekor-v1 primary, payloadHash + DSSE baked at load
 {prefix}_payload_hash := {payload_hash:?}
 {prefix}_schema_version := {schema_version:?}
-{prefix}_published_measurements := {pm_lit}
 # baked: DSSE publisher signature + trusted publisher public key
 {prefix}_dsse_signature := {dsse_signature:?}
 {prefix}_publisher_key := {publisher_key:?}
 
 # reconstruct the manifest object (rego object keys serialize sorted == ASCII
-# JCS; json.marshal is compact; no numbers in this shape)
-{prefix}_reconstructed_manifest := {{
-    "measurements": [{{"type": t, "value": actual_measurement(t)}} | some t in {prefix}_published_measurements],
-    "schemaVersion": {prefix}_schema_version,
-}}
+# JCS; json.marshal is compact; no numbers in this shape). Every declared type
+# is a literal entry, so a missing extraction makes the whole manifest
+# undefined instead of silently dropping a measurement.
+{prefix}_reconstructed_manifest := {manifest}
 
 # The transparency-log manifest check and the mandatory DSSE publisher
 # binding. Any mismatch leaves the entry predicate undefined (fail-closed).
@@ -392,7 +292,7 @@ pub(super) fn build_entry_rules(
                 prefix = prefix,
                 payload_hash = resolved.payload_hash,
                 schema_version = cfg.schema_version,
-                pm_lit = pm_lit,
+                manifest = manifest,
                 dsse_signature = resolved.dsse_signature,
                 publisher_key = resolved.publisher_key,
                 pred = pred,
@@ -431,16 +331,16 @@ pub(super) fn build_entry_rules(
                     };
                     let mut fpm_sorted = fpm.clone();
                     fpm_sorted.sort();
-                    let fpm_lit = rego_string_array(&fpm_sorted);
+                    let fallback_manifest =
+                        manifest_literal(&fpm_sorted, &format!("{prefix}_schema_version"));
                     (
                         format!(
-                            "\n{prefix}_fallback_published_measurements := {fpm_lit}\n\
-                                 {prefix}_fallback_log_url := {log_url:?}\n\
+                            "\n{prefix}_fallback_log_url := {log_url:?}\n\
                                  {prefix}_fallback_log_index := {log_index}\n"
                         ),
                         format!(
                             r#"
-{prefix}_fallback_manifest := {{"measurements": [{{"type": t, "value": actual_measurement(t)}} | some t in {prefix}_fallback_published_measurements], "schemaVersion": {prefix}_schema_version}}
+{prefix}_fallback_manifest := {fallback_manifest}
 {pred} if {{
     {prefix}_primary_status == "fail"
     tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_publisher_key]) == true
@@ -455,29 +355,35 @@ pub(super) fn build_entry_rules(
             Ok(format!(
                 r#"# transparency_log entry: artifact-server primary, resolved at appraisal
 {prefix}_schema_version := {schema_version:?}
-{prefix}_published_measurements := {pm_lit}
 {prefix}_artifact_server_url := {url_lit}
 {prefix}_log_services := {ls_lit}
 # baked: configured publisher key PEM (empty string → host-await uses the
 # built-in publisher key baseline)
 {prefix}_publisher_key := {publisher_key_lit}{fallback_lit}
 
-{prefix}_full_manifest := {{
-    "measurements": [{{"type": t, "value": actual_measurement(t)}} | some t in {prefix}_published_measurements],
-    "schemaVersion": {prefix}_schema_version,
+{prefix}_full_manifest := {manifest}
+
+# A missing measurement makes the full manifest undefined. Map that to "fail"
+# (not "deny") so the configured fallback baseline is still consulted; a real
+# revocation resolves to "deny" and never falls back.
+{prefix}_primary_status := "fail" if {{
+    not {prefix}_full_manifest
 }}
 
-{prefix}_primary_status := tng.resolve_artifact_server([{prefix}_artifact_server_url, json.marshal({prefix}_full_manifest), json.marshal({prefix}_log_services), {prefix}_publisher_key])
+{prefix}_primary_status := tng.resolve_artifact_server([{prefix}_artifact_server_url, json.marshal({prefix}_full_manifest), json.marshal({prefix}_log_services), {prefix}_publisher_key]) if {{
+    {prefix}_full_manifest
+}}
+
 {pred} if {{ {prefix}_primary_status == "ok" }}
 {fallback_rules}"#,
                 prefix = prefix,
                 schema_version = cfg.schema_version,
-                pm_lit = pm_lit,
                 url_lit = url_lit,
                 ls_lit = ls_lit,
                 publisher_key_lit = publisher_key_lit,
                 fallback_lit = fallback_lit,
                 fallback_rules = fallback_rules,
+                manifest = manifest,
                 pred = pred,
             ))
         }
@@ -1185,7 +1091,10 @@ mod tests {
         ];
         let policy = render(
             json!([
-                transparency_entry(rekor_entry_value(&["tdx.td-shim"], 1)),
+                transparency_entry(rekor_entry_value(
+                    &["tdx.td-shim", "container.image.cmaas-runtime"],
+                    1
+                )),
                 transparency_entry(rekor_entry_value(&["tdx.kernel"], 2)),
             ]),
             &resolved,
@@ -1199,20 +1108,40 @@ mod tests {
         assert!(policy.contains("m_0_0 if {"), "{policy}");
         assert!(policy.contains("m_0_1 if {"), "{policy}");
 
-        // The shared measurement extraction and its repo-name helper are
-        // emitted once for the whole policy.
+        // The shared extraction is emitted once per family for the whole
+        // policy, and each needed helper once.
         assert_eq!(
             policy
-                .matches("actual_measurement(\"tdx.td-shim\")")
+                .matches("actual_measurement(\"tdx.td-shim\") :=")
                 .count(),
             1
         );
         assert_eq!(
-            policy.matches("actual_measurement(\"tdx.kernel\")").count(),
+            policy
+                .matches("actual_measurement(\"tdx.kernel\") :=")
+                .count(),
             1
         );
+        assert_eq!(policy.matches("actual_measurement(type) :=").count(), 1);
         assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
+        assert_eq!(policy.matches("has_sha384_digest(e) if {").count(), 1);
+        // Manifest construction is a literal, not an array comprehension, so a
+        // missing extraction cannot silently drop an entry.
+        assert!(!policy.contains("| some t in"), "{policy}");
+        assert!(
+            policy.contains(
+                "{\"type\": \"container.image.cmaas-runtime\", \"value\": actual_measurement(\"container.image.cmaas-runtime\")}"
+            ),
+            "{policy}"
+        );
+        assert!(
+            policy.contains(
+                "{\"type\": \"tdx.kernel\", \"value\": actual_measurement(\"tdx.kernel\")}"
+            ),
+            "{policy}"
+        );
         assert!(!policy.contains("query_reference_value"));
+        assert!(!policy.contains("td_payload_blob_length"), "{policy}");
 
         // Both predicates AND into the group's executables dimension, which is
         // non-affirming by default.
@@ -1266,6 +1195,23 @@ mod tests {
             policy.contains("t_0_0_primary_status := tng.resolve_artifact_server"),
             "{policy}"
         );
+        // An undefined full manifest (a declaration whose measurement cannot
+        // be extracted) is "fail", not "deny", so the fallback is consulted.
+        assert!(
+            policy.contains("t_0_0_primary_status := \"fail\" if {"),
+            "{policy}"
+        );
+        assert!(policy.contains("not t_0_0_full_manifest"), "{policy}");
+        assert!(
+            policy.contains(
+                "tng.resolve_artifact_server([t_0_0_artifact_server_url, json.marshal(t_0_0_full_manifest)"
+            ),
+            "{policy}"
+        );
+        assert!(
+            policy.contains("json.marshal(t_0_0_log_services), t_0_0_publisher_key]) if {"),
+            "{policy}"
+        );
         assert!(
             policy.contains("m_0_0 if { t_0_0_primary_status == \"ok\" }"),
             "{policy}"
@@ -1275,6 +1221,8 @@ mod tests {
             "{policy}"
         );
         assert!(policy.contains("t_0_0_fallback_manifest"), "{policy}");
+        // Manifest construction is a literal.
+        assert!(!policy.contains("| some t in"), "{policy}");
         // The artifact-server primary bakes no payloadHash.
         assert!(!policy.contains("payload_hash :="), "{policy}");
 
@@ -1589,7 +1537,7 @@ mod tests {
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    async fn transparency_log_rekor_td_kernel_blob_length_must_be_32mib() {
+    async fn transparency_log_rekor_td_kernel_accepts_any_blob_length() {
         let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
         let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
         let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
@@ -1603,24 +1551,28 @@ mod tests {
             "td_payload blob length == 32 MiB must affirm"
         );
 
-        let wrong_blob = tdx_input(&[td_payload_event(event_16mib, kernel, 2)]);
+        // BlobLength is unauthenticated metadata and is not part of the
+        // td_payload contract, so a non-32 MiB blob is accepted.
+        let other_blob = tdx_input(&[td_payload_event(event_16mib, kernel, 2)]);
         assert_eq!(
-            eval_policy_vector(&policy, &wrong_blob).await,
-            (97, 2, 2, 2),
-            "td_payload blob length != 32 MiB must reject"
+            eval_policy_vector(&policy, &other_blob).await,
+            (2, 2, 2, 2),
+            "a non-32 MiB td_payload blob must affirm"
         );
 
+        // The event payload is never parsed, so even a malformed value is
+        // accepted as long as the digest agreement holds.
         let malformed = tdx_input(&[td_payload_event("AAAA", kernel, 2)]);
         assert_eq!(
             eval_policy_vector(&policy, &malformed).await,
-            (97, 2, 2, 2),
-            "malformed td_payload event must reject (fail-closed)"
+            (2, 2, 2, 2),
+            "the td_payload event body is not inspected"
         );
     }
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    async fn transparency_log_rekor_td_kernel_conflicting_blob_length_rejects() {
+    async fn transparency_log_rekor_td_kernel_blob_length_is_not_a_conflict() {
         let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
         let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
         let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
@@ -1640,15 +1592,31 @@ mod tests {
             "duplicate 32 MiB td_payload events (same digest) must affirm"
         );
 
-        // Same digest but a blobLength disagreement is a conflict.
-        let conflict = tdx_input(&[
+        // Same digest, different blob lengths: the digests still agree, so
+        // there is no conflict.
+        let differing_blob = tdx_input(&[
             td_payload_event(event_32mib, kernel, 2),
             td_payload_event(event_16mib, kernel, 2),
         ]);
         assert_eq!(
+            eval_policy_vector(&policy, &differing_blob).await,
+            (2, 2, 2, 2),
+            "32 MiB + 16 MiB td_payload events (same digest) must affirm"
+        );
+
+        // A digest disagreement is still a conflict.
+        let conflict = tdx_input(&[
+            td_payload_event(event_32mib, kernel, 2),
+            td_payload_event(
+                event_32mib,
+                "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                2,
+            ),
+        ]);
+        assert_eq!(
             eval_policy_vector(&policy, &conflict).await,
             (97, 2, 2, 2),
-            "32 MiB + 16 MiB td_payload pair (same digest) must reject (blobLength conflict)"
+            "conflicting td_payload digests must reject"
         );
     }
 
@@ -1673,6 +1641,16 @@ mod tests {
             eval_policy_vector(&policy, &bad).await,
             (97, 2, 2, 2),
             "descriptor-matching td_payload event at index != 2 must reject (fail-closed)"
+        );
+
+        // A matching event with no index at all also rejects.
+        let mut no_index = td_payload_event(event_32mib, kernel, 2);
+        no_index.as_object_mut().unwrap().remove("index");
+        let missing_index = tdx_input(&[no_index]);
+        assert_eq!(
+            eval_policy_vector(&policy, &missing_index).await,
+            (97, 2, 2, 2),
+            "descriptor-matching td_payload event without an index must reject"
         );
     }
 
@@ -1732,6 +1710,39 @@ mod tests {
             eval_policy_vector(&policy, &empty_digests).await,
             (97, 2, 2, 2),
             "td_payload event with an empty digests array must reject (fail-closed)"
+        );
+
+        // Two events sharing the SAME `event` body, one without SHA-384: the
+        // per-event check must not be deduplicated by the event body.
+        let same_body = serde_json::to_string(&json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [
+                    {
+                        "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                        "details": {"string": "td_payload"},
+                        "event": event_32mib,
+                        "digests": [{"alg": "SHA-384", "digest": kernel}],
+                        "index": 2,
+                    },
+                    {
+                        "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                        "details": {"string": "td_payload"},
+                        "event": event_32mib,
+                        "digests": [{"alg": "SHA-256", "digest": hex64('0')}],
+                        "index": 2,
+                    },
+                ],
+            }
+        }))
+        .expect("serialize input");
+        assert_eq!(
+            eval_policy_vector(&policy, &same_body).await,
+            (97, 2, 2, 2),
+            "one of two same-body events without SHA-384 must reject"
         );
     }
 
@@ -1915,9 +1926,138 @@ mod tests {
         );
     }
 
+    /// Red-green regression: a declared type that neither the signed manifest
+    /// nor the evidence carries must reject. With an array comprehension the
+    /// undefined extraction was silently dropped and the shrunken manifest
+    /// still matched `payloadHash`; the literal manifest makes it undefined.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    async fn transparency_log_rekor_rejects_malformed_measurement_value_format() {
+    async fn transparency_log_rekor_rejects_declared_type_missing_from_manifest() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        // The publisher signed a manifest that omits the declared tdx.kernel.
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", digest)]);
+        let policy = render_rekor(
+            &["tdx.kernel", "container.image.cmaas-runtime"],
+            &resolved_from_manifest(&logged),
+        );
+
+        // The evidence carries only the image event: tdx.kernel extracts to
+        // undefined, so the whole reconstructed manifest is undefined.
+        let input = tdx_input(&[aael_event(digest)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (97, 2, 2, 2),
+            "a declared type missing from both the signed manifest and the evidence must reject"
+        );
+    }
+
+    /// The `modules` measurement entry and a `transparency_log` entry that
+    /// publishes the same type read one extraction rule, so they agree on
+    /// every evidence shape.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_and_modules_kernel_paths_agree() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let conflict = "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let transparency = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+        let modules = render(json!([{"type": "tdx.kernel", "value": kernel}]), &[]);
+
+        let event = |digest: &str, index: Option<i64>, alg: &str| {
+            let mut e = json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": {"string": "td_payload"},
+                "event": "AAAA",
+                "digests": [{"alg": alg, "digest": digest}],
+            });
+            if let Some(index) = index {
+                e["index"] = json!(index);
+            }
+            e
+        };
+
+        let cases: [(&str, Vec<Value>, i8); 4] = [
+            ("pass", vec![event(kernel, Some(2), "SHA-384")], 2),
+            ("bad index", vec![event(kernel, Some(1), "SHA-384")], 97),
+            (
+                "missing SHA-384",
+                vec![event(&hex64('0'), Some(2), "SHA-256")],
+                97,
+            ),
+            (
+                "digest conflict",
+                vec![
+                    event(kernel, Some(2), "SHA-384"),
+                    event(conflict, Some(2), "SHA-384"),
+                ],
+                97,
+            ),
+        ];
+        for (name, events, expected) in cases {
+            let input = tdx_input(&events);
+            let transparency_vector = eval_policy_vector(&transparency, &input).await;
+            let modules_vector = eval_policy_vector(&modules, &input).await;
+            assert_eq!(
+                transparency_vector.0, expected,
+                "transparency path on case {name:?}"
+            );
+            assert_eq!(modules_vector.0, expected, "modules path on case {name:?}");
+            assert_eq!(
+                transparency_vector.0, modules_vector.0,
+                "the two kernel paths must agree on case {name:?}"
+            );
+        }
+    }
+
+    /// The same real PAI event log feeds both kernel paths to the same verdict.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_and_modules_agree_on_real_pai_event_log() {
+        const REAL_KERNEL_DIGEST: &str =
+            "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+
+        let ccel_bytes =
+            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
+                .expect("read real PAI event-log fixture");
+        let ccel: eventlog::CcEventLog =
+            ccel_bytes.try_into().expect("parse real PAI CC event log");
+        let parsed = serde_json::to_value(&ccel)
+            .expect("serialize parsed CC event log")
+            .as_object()
+            .expect("parsed event log is an object")
+            .clone();
+        let mut tdx = serde_json::Map::new();
+        tdx.insert(
+            "quote".to_string(),
+            json!({
+                "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                "body": {"td_attributes": "0000001000000000"},
+            }),
+        );
+        tdx.insert(
+            "uefi_event_logs".to_string(),
+            parsed["uefi_event_logs"].clone(),
+        );
+        let input = json!({"tdx": tdx}).to_string();
+
+        let logged = manifest("1.0.0", &[("tdx.kernel", REAL_KERNEL_DIGEST)]);
+        let transparency = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+        let modules = render(
+            json!([{"type": "tdx.kernel", "value": REAL_KERNEL_DIGEST}]),
+            &[],
+        );
+
+        assert_eq!(
+            eval_policy_vector(&transparency, &input).await,
+            eval_policy_vector(&modules, &input).await,
+            "the two kernel paths must agree on the real PAI event log"
+        );
+        assert_eq!(eval_policy_vector(&modules, &input).await, (2, 2, 2, 2));
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_compares_values_without_format_checks() {
         let good = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
         let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", good)]);
         let policy = render_rekor(
@@ -1929,21 +2069,38 @@ mod tests {
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
             (2, 2, 2, 2),
-            "well-formed sha256:+64hex digest must affirm"
+            "the signed digest must affirm"
         );
 
-        for malformed in [
+        // Any value that differs from the signed one changes the reconstructed
+        // manifest and rejects; no format regex is involved.
+        for other in [
             "sha256:D42F6E1B2AAFB59383D0892824AEBF5E0A2E27DAD989A3FB26552A6E77E4BE46",
             "sha256:abc123",
             "d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
         ] {
-            let bad = tdx_input(&[aael_event(malformed)]);
+            let bad = tdx_input(&[aael_event(other)]);
             assert_eq!(
                 eval_policy_vector(&policy, &bad).await,
                 (97, 2, 2, 2),
-                "malformed digest {malformed:?} must reject (format check)"
+                "a digest {other:?} different from the signed value must reject"
             );
         }
+
+        // The signed value is the only contract: a non-canonical digest the
+        // publisher signed and the evidence reports is accepted unchanged.
+        let non_canonical = "sha256:abc123";
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", non_canonical)]);
+        let policy = render_rekor(
+            &["container.image.cmaas-runtime"],
+            &resolved_from_manifest(&logged),
+        );
+        let matching = tdx_input(&[aael_event(non_canonical)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &matching).await,
+            (2, 2, 2, 2),
+            "extraction does not impose a digest format the publisher did not"
+        );
     }
 
     #[cfg(feature = "crypto-rustcrypto")]
@@ -2423,6 +2580,145 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             let vec = eval_policy_vector(&policy, &input).await;
             assert_eq!(vec.0, 97, "both-fail must deny executables (got {vec:?})");
         }
+    }
+
+    /// Red-green regression for the artifact-server primary: a declared type
+    /// the evidence does not carry leaves the full manifest undefined, which
+    /// must map to `"fail"` and, with no fallback, reject. The mock would
+    /// happily resolve the fixture manifest, so an array comprehension that
+    /// dropped the undefined type would shrink the manifest to exactly that
+    /// fixture, reach the mock, and affirm.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn transparency_log_artifact_server_rejects_declared_type_missing() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
+
+        artifact_server::invalidate_host_await_caches_for_test();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .expect(0) // the undefined full manifest must never reach the resolve call
+            .mount(&server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": server.uri(),
+                "logServices": [{"type": "rekor-v1", "url": entry_url}],
+            }],
+        });
+        let policy = render(json!([transparency_entry(value)]), &[None]);
+
+        // The evidence carries only the image measurement, so tdx.kernel is
+        // undefined and the full manifest with it.
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (97, 2, 2, 2),
+            "a declared type missing from the evidence must reject the primary"
+        );
+        server.verify().await;
+    }
+
+    /// A primary manifest that cannot be constructed maps to `"fail"`, so the
+    /// complete fallback baseline is still consulted and can pass.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn transparency_log_artifact_server_missing_primary_measurement_uses_fallback() {
+        let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        artifact_server::invalidate_host_await_caches_for_test();
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .and(wiremock::matchers::query_param(
+                "logIndex",
+                log_index.to_string(),
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(1)
+            .mount(&rekor_server)
+            .await;
+
+        let value = json!({
+            // The primary declares tdx.kernel, which the evidence lacks.
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "http://127.0.0.1:1",
+                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
+            }],
+            // The fallback declares the complete smaller baseline.
+            "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
+            "fallbackServices": [{
+                "type": "rekor-v1",
+                "logUrl": rekor_server.uri(),
+                "logIndex": log_index,
+            }],
+        });
+        let policy = render(json!([transparency_entry(value)]), &[None]);
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 2,
+            "a fail primary must consult the complete fallback baseline (got {vec:?})"
+        );
+        rekor_server.verify().await;
+    }
+
+    /// The fallback's own manifest is a literal too: when
+    /// `fallbackPublishedMeasurements` names a type the evidence lacks, the
+    /// fallback manifest is undefined and no rekor query is made.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn transparency_log_artifact_server_incomplete_fallback_rejects() {
+        let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        artifact_server::invalidate_host_await_caches_for_test();
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(0)
+            .mount(&rekor_server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "http://127.0.0.1:1",
+                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
+            }],
+            // tdx.kernel is declared but absent from the evidence, so the
+            // fallback manifest is undefined as well.
+            "fallbackPublishedMeasurements": ["tdx.kernel"],
+            "fallbackServices": [{
+                "type": "rekor-v1",
+                "logUrl": rekor_server.uri(),
+                "logIndex": log_index,
+            }],
+        });
+        let policy = render(json!([transparency_entry(value)]), &[None]);
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 97,
+            "an incomplete fallback manifest must reject without a rekor query (got {vec:?})"
+        );
+        rekor_server.verify().await;
     }
 
     #[cfg(feature = "crypto-rustcrypto")]

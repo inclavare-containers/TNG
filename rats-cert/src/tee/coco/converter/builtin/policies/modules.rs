@@ -6,6 +6,7 @@ use super::super::policy_config::{
     TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
     TdxTcbConfig, TransparencyLogEntryConfig,
 };
+use super::measurements::{self, Families};
 use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
 use anyhow::Context;
@@ -482,17 +483,16 @@ fn render_modules_policy(
     let mut executables_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
     let mut has_executables = false;
-    // Whether any transparency entry exists; its shared measurement-extraction
-    // rules are emitted once for the whole policy.
-    let mut has_transparency = false;
+    // Measurement-extraction families the policy needs, emitted once for the
+    // whole policy. Measurement entries select their own family;
+    // transparency_log entries contribute the families their declared
+    // published types need.
+    let mut families = Families::default();
     // The platform the policy depends on. No entry means no dependency and no
     // recognition predicate is emitted. While only one platform exists, one
     // shared recognition block covers every group; when a second platform
     // lands, the block must be emitted once per distinct platform in use.
     let mut policy_platform: Option<Platform> = None;
-    // Whether the policy references the pull-image repo-name extractor; defined
-    // once when any container.image entry appears.
-    let mut need_repo_name = false;
 
     for (gi, group) in groups.iter().enumerate() {
         let mut executables_preds: Vec<String> = Vec::new();
@@ -517,15 +517,19 @@ fn render_modules_policy(
                             "no resolved rekor data for transparency_log entry m_{gi}_{j}"
                         )
                     })?;
-                    has_transparency = true;
+                    families.extend_published_types(&cfg.published_measurements);
                     let prefix = format!("t_{gi}_{j}");
                     transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
                 }
-                measurement => measurement_rule(measurement, &pred)?,
+                measurement => {
+                    if let Some(family) = measurements::family_of_module(measurement) {
+                        families.insert(family);
+                    }
+                    measurements::predicate(measurement, &pred).ok_or_else(|| {
+                        anyhow::anyhow!("posture module passed to the measurement emitter")
+                    })?
+                }
             };
-            if matches!(module, Module::ContainerImage { .. }) {
-                need_repo_name = true;
-            }
             match module.dimension() {
                 Dimension::Executables => executables_preds.push(pred),
                 Dimension::Hardware => hardware_preds.push(pred),
@@ -581,30 +585,18 @@ fn render_modules_policy(
         None => String::new(),
     };
 
-    // The shared transparency extraction rules are emitted once, ahead of the
-    // per-entry rules that call them. They use `image_repo_name`, so a
-    // transparency entry needs that helper too.
+    // The shared measurement-extraction rules are emitted once, ahead of the
+    // per-entry rules that call them, and only for the families in use.
+    let extraction = families.rules();
     let mut helper_parts: Vec<String> = Vec::new();
-    if has_transparency {
-        need_repo_name = true;
-        helper_parts.push(
-            transparency_log::measurement_extraction_rules()
-                .trim_end()
-                .to_string(),
-        );
+    if !extraction.is_empty() {
+        helper_parts.push(extraction.trim_end().to_string());
     }
     helper_parts.extend(helpers);
     let helper_block = if helper_parts.is_empty() {
         String::new()
     } else {
         format!("{}\n\n", helper_parts.join("\n\n"))
-    };
-    let repo_name_block = if need_repo_name {
-        // The repo tail of an image reference: last '/' segment, before any
-        // ':' tag or '@' digest.
-        "image_repo_name(ref) := name if {\n\tsegs := split(ref, \"/\")\n\tlast := segs[count(segs) - 1]\n\tname := split(split(last, \"@\")[0], \":\")[0]\n}\n\n".to_string()
-    } else {
-        String::new()
     };
     let dimension_block = if group_dimension_rules.is_empty() {
         String::new()
@@ -632,7 +624,7 @@ default file_system := 2
 default hardware := 97
 default executables := {executables_default}
 
-{helper_block}{repo_name_block}{dimension_block}{executables_block}
+{helper_block}{dimension_block}{executables_block}
 
 {hardware_block}{recognition_block}
 "#,
@@ -648,90 +640,6 @@ fn indent(items: &[String]) -> String {
         .map(|i| format!("\t{i}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Emit the `<pred> if { ... }` rule for a measurement entry. The pinned value
-/// is spliced in as a Rego string literal; validation in `to_module` guarantees
-/// it contains no quoting hazard. The container.image variant additionally
-/// depends on the `image_repo_name` helper, which the caller emits once for the
-/// whole policy.
-fn measurement_rule(module: &Module, pred: &str) -> anyhow::Result<String> {
-    Ok(match module {
-        Module::TdShim { value } | Module::Ovmf { value } => format!(
-            r#"{pred} if {{
-	input.tdx.quote.body.mr_td == {value:?}
-}}"#
-        ),
-        Module::Kernel { value } => format!(
-            r#"{pred} if {{
-	some e in input.tdx.uefi_event_logs
-	e.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"
-	e.details.string == "td_payload"
-	some d in e.digests
-	d.alg == "SHA-384"
-	d.digest == {value:?}
-	# fail-closed on ambiguity: every td_payload descriptor event must carry
-	# the same SHA-384 digest. The RTMR register index is firmware-dependent
-	# ordering, not part of the td_payload contract, so it is not pinned here;
-	# a distinct-digest set of size != 1 leaves this rule undefined.
-	ds := {{x | some e2 in input.tdx.uefi_event_logs; e2.type_name == "EV_EFI_PLATFORM_FIRMWARE_BLOB2"; e2.details.string == "td_payload"; some d2 in e2.digests; d2.alg == "SHA-384"; x := d2.digest}}
-	count(ds) == 1
-}}"#
-        ),
-        Module::Uki { value } => format!(
-            r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EFI_BOOT_SERVICES_APPLICATION"
-	]
-	count(events) > 0
-	every e in events {{
-		some d in e.digests
-		d.alg == "SHA-384"
-		d.digest == {value:?}
-	}}
-}}"#
-        ),
-        Module::ContainerImage { repo, digest } => format!(
-            r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EVENT_TAG"
-		e.details.unicode_name == "AAEL"
-		e.details.data.domain == "alibabacloud.com"
-		e.details.data.operation == "kangaroo/pull-image"
-		image_repo_name(e.details.data.content.reference) == {repo:?}
-	]
-	count(events) > 0
-	every e in events {{
-		e.details.data.content.digest == {digest:?}
-	}}
-}}"#
-        ),
-        Module::AiModel { model_id, digest } => format!(
-            r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EVENT_TAG"
-		e.details.unicode_name == "AAEL"
-		e.details.data.domain == "alibabacloud.com"
-		e.details.data.operation == "pai/load-model"
-	]
-	count(events) > 0
-	every e in events {{
-		e.details.data.content["model-id"] == {model_id:?}
-		e.details.data.content["hash"] == {digest:?}
-	}}
-}}"#
-        ),
-        // Posture variants are emitted by `tdx_posture_rule` /
-        // `nvidia_posture_rule`, and `transparency_log` by
-        // `transparency_log::build_entry_rules`; the caller never passes them
-        // here.
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => {
-            anyhow::bail!("posture module passed to the measurement emitter")
-        }
-    })
 }
 
 /// Emit the `name if { ... }` rule for a `tdx` posture entry plus helper rules
@@ -1471,8 +1379,19 @@ mod tests {
         // Both dimensions carry entries, so executables defaults non-affirming.
         assert!(policy.contains("default executables := 97"));
         assert!(policy.contains("default hardware := 97"));
-        // the pinned value is embedded as a literal, with no RVPS lookup
-        assert!(policy.contains(&format!("input.tdx.quote.body.mr_td == \"{ovmf}\"")));
+        // The pinned value is embedded as a literal in a one-line equality
+        // predicate; the extraction rule itself reads the quote field.
+        assert!(policy.contains(&format!(
+            "m_0_1 if {{\n\tactual_measurement(\"tdx.ovmf\") == \"{ovmf}\"\n}}"
+        )));
+        assert!(policy.contains("digest := input.tdx.quote.body.mr_td"));
+        // One extraction block for the whole policy.
+        assert_eq!(
+            policy
+                .matches("actual_measurement(\"tdx.ovmf\") :=")
+                .count(),
+            1
+        );
         assert!(!policy.contains("query_reference_value"));
         // per-dimension group predicates
         assert!(policy.contains("group_0_executables_ok if {"));
@@ -1504,21 +1423,33 @@ mod tests {
         // No measurement entries, so hardware reduces to recognition plus the
         // posture group.
         assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
+        // A posture-only policy needs no measurement extraction at all.
+        assert!(!policy.contains("actual_measurement"));
     }
 
     #[test]
-    fn modules_policy_without_transparency_has_no_actual_measurement_rule() {
-        // The shared transparency measurement-extraction rules are emitted
-        // once, and only when a `transparency_log` entry exists. A
-        // container.image entry emits the repo-name helper but must not pull
-        // in those rules.
+    fn modules_policy_measurement_entry_emits_extraction_once() {
+        // A measurement entry emits its extraction family once, whether or not
+        // a transparency_log entry is present.
         let image = format!("sha256:{}", "c".repeat(64));
         let policy = build_policy(&modules_cfg(&format!(
             r#"[{{"type":"com.alibabacloud.container.image.model-server","value":"{image}"}}]"#
         )))
         .expect("build");
-        assert!(policy.contains("image_repo_name"));
-        assert!(!policy.contains("actual_measurement"), "{policy}");
+        assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
+        assert_eq!(
+            policy.matches("actual_measurement(type) :=").count(),
+            1,
+            "{policy}"
+        );
+        // The one-line predicate names the canonical (unprefixed) key.
+        assert!(policy.contains(&format!(
+            "m_0_0 if {{\n\tactual_measurement(\"container.image.model-server\") == \"{image}\"\n}}"
+        )));
+        // No format regex is emitted: the pin is validated at load instead.
+        assert!(!policy.contains("regex.match(\"^sha256:"), "{policy}");
+        // The blob-length host function is not part of any generated policy.
+        assert!(!policy.contains("td_payload_blob_length"), "{policy}");
     }
 
     #[test]
@@ -1557,10 +1488,17 @@ mod tests {
         );
         assert_eq!(policy.matches("group_0_executables_ok if {").count(), 1);
         assert_eq!(policy.matches("group_1_executables_ok if {").count(), 1);
-        // each group carries its own literal; no group-suffixed reference names
+        // each group carries its own pinned literal; no group-suffixed reference names
         let (a, b) = ("a".repeat(96), "b".repeat(96));
-        assert!(policy.contains(&format!("input.tdx.quote.body.mr_td == \"{a}\"")));
-        assert!(policy.contains(&format!("input.tdx.quote.body.mr_td == \"{b}\"")));
+        assert!(policy.contains(&format!("actual_measurement(\"tdx.ovmf\") == \"{a}\"")));
+        assert!(policy.contains(&format!("actual_measurement(\"tdx.ovmf\") == \"{b}\"")));
+        // Two entries share one extraction rule.
+        assert_eq!(
+            policy
+                .matches("actual_measurement(\"tdx.ovmf\") :=")
+                .count(),
+            1
+        );
         assert!(!policy.contains("query_reference_value"));
         assert!(!policy.contains(".g0") && !policy.contains(".g1"));
     }
@@ -1772,6 +1710,98 @@ mod tests {
             eval_modules(&cfg, &ambiguous).await,
             (97, 2, 2, 2),
             "a matching td_payload plus a conflicting one must reject"
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_kernel_rtmr_and_digest_contract() {
+        let kernel = hex96('2');
+        let cfg = format!(r#"[{{"type":"tdx.kernel","value":"{kernel}"}}]"#);
+        let event_with = |index: Option<i64>, digests: serde_json::Value, body: &str| {
+            let mut e = json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": { "string": "td_payload" },
+                "event": body,
+                "digests": digests,
+            });
+            if let Some(index) = index {
+                e["index"] = json!(index);
+            }
+            e
+        };
+        let sha384 = |d: &str| json!([{ "alg": "SHA-384", "digest": d }]);
+
+        // RTMR1 (index 2) with a SHA-384 digest affirms.
+        let ok = tdx_input(
+            serde_json::Value::Null,
+            &[event_with(Some(2), sha384(&kernel), "AAAA")],
+        );
+        assert_eq!(eval_modules(&cfg, &ok).await, (2, 2, 2, 2));
+
+        // A missing index rejects: `not e.index == 2` is true when the field
+        // is undefined.
+        let missing_index = tdx_input(
+            serde_json::Value::Null,
+            &[event_with(None, sha384(&kernel), "AAAA")],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &missing_index).await,
+            (97, 2, 2, 2),
+            "a td_payload event without an index must reject"
+        );
+
+        let bad_index = tdx_input(
+            serde_json::Value::Null,
+            &[event_with(Some(1), sha384(&kernel), "AAAA")],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &bad_index).await,
+            (97, 2, 2, 2),
+            "a td_payload event at a non-RTMR1 index must reject"
+        );
+
+        // Two events with the SAME event body, one missing a SHA-384 digest:
+        // the per-event check must not be deduplicated by the event body.
+        let same_body = tdx_input(
+            serde_json::Value::Null,
+            &[
+                event_with(Some(2), sha384(&kernel), "SAME"),
+                event_with(
+                    Some(2),
+                    json!([{ "alg": "SHA-256", "digest": hex64('a') }]),
+                    "SAME",
+                ),
+            ],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &same_body).await,
+            (97, 2, 2, 2),
+            "one of two same-body events without SHA-384 must reject"
+        );
+
+        let conflict = tdx_input(
+            serde_json::Value::Null,
+            &[
+                event_with(Some(2), sha384(&kernel), "AAAA"),
+                event_with(Some(2), sha384(&hex96('9')), "BBBB"),
+            ],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &conflict).await,
+            (97, 2, 2, 2),
+            "conflicting td_payload digests must reject"
+        );
+
+        // No blob-length constraint: an arbitrary/malformed `event` body is
+        // never parsed, so the digest alone decides.
+        let arbitrary_blob = tdx_input(
+            serde_json::Value::Null,
+            &[event_with(Some(2), sha384(&kernel), "not-base64")],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &arbitrary_blob).await,
+            (2, 2, 2, 2),
+            "blob length is not part of the td_payload contract"
         );
     }
 

@@ -59,69 +59,6 @@ fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::Extens
     })
 }
 
-/// `tng.td_payload_blob_length([event_b64]) -> number`. Parses the
-/// UEFI_PLATFORM_FIRMWARE_BLOB2 layout from a base64-encoded TD-payload event
-/// and returns the declared `BlobLength` (LE u64): byte 0 = descriptionSize,
-/// bytes [1..1+desc_size] = description, then 8-byte BlobBase, then 8-byte LE
-/// BlobLength at offset `1 + desc_size + 8`. The TD-payload kernel measurement
-/// rule collects the blobLength of every td_payload descriptor+RTMR1 event
-/// into a set and requires that set to equal exactly `{33554432}` (32 MiB =
-/// 32<<20) — so a 32 MiB + non-32 MiB td_payload pair is a conflict (set
-/// mismatch) → reject.
-///
-/// Fail-closed: any decode/parse/length error returns `Ok(Number(-1))` so the
-/// length set never equals `{33554432}` → the tdx.kernel measurement rule is
-/// undefined → the measurement is dropped → manifest mismatch → reject. An
-/// `Err` would abort the whole policy evaluation (verified via the in-tree
-/// `evaluate_with_regovm_propagates_async_builtin_error` test), breaking the
-/// fail-closed contract, so errors map to a sentinel that never equals the
-/// required 32 MiB.
-fn td_payload_blob_length_host_await() -> attestation_service::policy_engine::opa::ExtensionFunction
-{
-    use base64::Engine;
-    use regorus::Value;
-
-    std::sync::Arc::new(|argument: regorus::Value| {
-        Box::pin(async move {
-            // Fail-closed sentinel: -1 never equals 33554432 (32 MiB).
-            let bail = || Value::Number((-1.0f64).into());
-            let arr = match argument.as_array() {
-                Ok(a) if a.len() == 1 => a,
-                _ => return Ok(bail()),
-            };
-            let event_b64: &str = match arr[0].as_string() {
-                Ok(s) => s,
-                Err(_) => return Ok(bail()),
-            };
-            let event = match base64::engine::general_purpose::STANDARD.decode(event_b64) {
-                Ok(b) => b,
-                Err(_) => return Ok(bail()),
-            };
-            if event.is_empty() {
-                return Ok(bail());
-            }
-            let desc_size = event[0] as usize;
-            // Layout requires len == 1 + desc_size + 16 (BlobBase + BlobLength).
-            let expected_len = 1usize
-                .checked_add(desc_size)
-                .and_then(|n| n.checked_add(16));
-            let blob_length_offset = 1usize.checked_add(desc_size).and_then(|n| n.checked_add(8));
-            let (blob_length_offset, expected_len) = match (blob_length_offset, expected_len) {
-                (Some(o), Some(l)) => (o, l),
-                _ => return Ok(bail()),
-            };
-            if event.len() != expected_len {
-                return Ok(bail());
-            }
-            let blob_length_bytes = &event[blob_length_offset..blob_length_offset + 8];
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(blob_length_bytes);
-            let blob_length = u64::from_le_bytes(buf);
-            Ok(Value::Number((blob_length as f64).into()))
-        })
-    })
-}
-
 /// DSSE payload type for the ReleaseManifest signatures. Hardcoded to the
 /// release-manifest payload type
 /// `application/vnd.alibabacloud.confidential-computing.release+json`
@@ -225,17 +162,7 @@ pub(crate) fn builtin_as_host_await_functions() -> Vec<(
     String,
     attestation_service::policy_engine::opa::ExtensionFunction,
 )> {
-    let mut fns = vec![
-        ("tng.sha256".to_string(), crypto_sha256_host_await()),
-        // TD-payload firmware-blob2 BlobLength parser (no crypto deps; the rego
-        // that calls it is only generated under crypto-rustcrypto, but the
-        // primitive itself is pure parsing). Always registered so the
-        // eval_policy_vector test helper resolves it.
-        (
-            "tng.td_payload_blob_length".to_string(),
-            td_payload_blob_length_host_await(),
-        ),
-    ];
+    let mut fns = vec![("tng.sha256".to_string(), crypto_sha256_host_await())];
     #[cfg(feature = "crypto-rustcrypto")]
     fns.push((
         "tng.verify_dsse_signature".to_string(),

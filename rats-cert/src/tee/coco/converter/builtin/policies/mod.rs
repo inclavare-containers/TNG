@@ -7,6 +7,7 @@ use base64::Engine;
 use super::policy_config::PolicyConfig;
 use crate::errors::*;
 
+pub(crate) mod measurements;
 pub(crate) mod modules;
 #[cfg(test)]
 pub(crate) mod test_support;

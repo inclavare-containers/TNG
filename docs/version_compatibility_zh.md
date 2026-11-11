@@ -20,5 +20,6 @@
 | > 2.12.0 | **破坏性变更**：移除 `transparency_log` attestation policy 的 `staticReferenceMeasurements` 字段。设置了该字段的配置不再解析。请改用 `modules` 条目钉住这些度量（`com.alibabacloud.ai.model.<model-id>`、`com.alibabacloud.container.image.<repo>`）。 |
 | > 2.12.0 | **破坏性变更**：移除顶层 `transparency_log` 内置证明策略类型，改为 `modules` 策略中的 `transparency_log` 条目。把 `attestation_policy.type` 设为 `"transparency_log"` 的配置不再解析。请把旧取值包进 `{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`；需要旧平台检查时再加 `tdx` 条目。 |
 | > 2.12.0 | **破坏性变更**：`transparency_log` 配置若同时携带非空 `reference_values` 列表，将不再加载。该列表此前仅在同时设置 `staticReferenceMeasurements` 时才会被读取，而该字段已由上一条移除。`modules` 策略（包括带 `transparency_log` 条目的策略）在加载期拒绝非空列表。迁移时请删除该列表。 |
+| > 2.12.0 | **破坏性变更**：`modules` 度量条目与 `transparency_log` 条目现在共用一份度量提取规则。三处检查更严。`tdx.kernel` 拒绝 RTMR 索引不是 2 或缺少 SHA-384 摘要的 `td_payload` 事件。`tdx.uki` 拒绝单个启动应用事件携带多个不同的 SHA-384 摘要。`container.image` 不再匹配没有 `EV_EVENT_TAG` 事件类型的 AAEL 事件；真实事件日志都带该类型，所以只影响构造的证据。接受不是 32 MiB 的 `td_payload` blob 属于放宽，不构成兼容性破坏。 |
 
 > **JSON 配置兼容性说明**：一般来说，旧版本的 JSON 配置文件在新版本中仍然能够被识别和解析，但实际行为可能因默认值变更、字段重命名或语义修改而不同。升级前请务必查阅下方的版本兼容性说明，并在测试环境中验证你的配置。
