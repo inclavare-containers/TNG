@@ -169,7 +169,7 @@ ctor = {workspace = true}
 # rules read. Dev-only: the real-evidence tdx.kernel test parses the real PAI
 # fixture (`tdx_CCEL_data_pai`) through the same crate the attestation-service
 # TDX verifier uses, so the test exercises the exact production parser.
-eventlog = {git = "https://github.com/openanolis/trustee/", rev = "a68a22e8271bf3c63ddbb2f7f2f6730f13b64c96"}
+eventlog = {git = "https://github.com/openanolis/trustee/", rev = "0215708b020f6e668c37ffedb510603f38b87dfb"}
 rayon = {workspace = true}
 rsa = {workspace = true}
 rstest = {workspace = true}
