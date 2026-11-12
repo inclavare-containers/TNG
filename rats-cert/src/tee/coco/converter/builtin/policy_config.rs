@@ -56,6 +56,11 @@ fn default_schema_version() -> String {
 /// primary is fetched and authenticated when the policy loads; an
 /// artifact-server primary is resolved at appraisal time. The entry gates the
 /// `executables` dimension; platform posture stays a separate `tdx` entry.
+///
+/// Each measurement type is listed once. At appraisal a `container.image.*`
+/// type expands to one manifest entry per digest observed in the evidence, so
+/// the reconstructed manifest keeps a repeated entry for that type; every other
+/// type contributes exactly one entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransparencyLogEntryConfig {
@@ -94,6 +99,11 @@ pub struct TransparencyLogEntryConfig {
 /// unrecognized type, a malformed value, or a name-segment charset violation
 /// is a configuration error rejected before any appraisal runs, never silently
 /// ignored.
+///
+/// A `container.image.<repo>` type may repeat within one group: the entries'
+/// values merge into the expected digest set for that repo, and evidence must
+/// report exactly that set. Every other type (including `ai.model.*` and
+/// `tdx.*`) may appear at most once per group.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModuleEntryConfig {
     #[serde(rename = "type")]

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `modules` policies accept multiple digests for one container image repository: the same `com.alibabacloud.container.image.<repo>` type may appear more than once in one group, and the digests reported by the evidence must equal the configured digest set exactly, so an extra or a missing digest fails the entry. Existing single-digest configurations behave as before.
+- A `transparency_log` entry also compares container image digest sets: the logged manifest may contain a `container.image.<repo>` type once per digest, the evidence digest set must equal the manifest's set, and `publishedMeasurements` still lists each type once.
+
 ## [2.13.0] - 2026-11-12
 
 ### Added
