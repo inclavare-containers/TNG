@@ -555,11 +555,11 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 **What both primaries check:**
 
-- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`.
-- If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
+- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` digests for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`. A container image type compares digest sets: when the repository runs several versions the manifest may list that type once per digest, and the digests in the evidence must equal the manifest's set exactly.
+- If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects; for a container image type, an extra or a missing digest is a mismatch. The order of `publishedMeasurements` does not matter.
 - The publisher signature is always checked: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 
-**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For the container image and `rootfs.cc` types, use exactly the names the transparency log records; the `com.alibabacloud.` aliases do not match and are rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
+**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For the container image and `rootfs.cc` types, use exactly the names the transparency log records; the `com.alibabacloud.` aliases do not match and are rejected at load. A type may not repeat, but a container image type expands to one manifest entry per digest, and the evidence digest set must match the log's set. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
 
 **Platform posture:** expressed by a separate `tdx` entry. With only a `transparency_log` entry, `hardware` depends on TDX platform recognition alone; add a `tdx` entry with its attribute-bit gates set to `allow` when you need the non-debug and event-log checks.
 
@@ -570,7 +570,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For container images and `rootfs.cc`, use exactly the names the transparency log records; the `com.alibabacloud.` aliases are rejected at load. A type may not repeat. Order does not matter |
+| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For container images and `rootfs.cc`, use exactly the names the transparency log records; the `com.alibabacloud.` aliases are rejected at load. A type may not repeat; a container image type expands to one manifest entry per digest, and the evidence digest set must match the log's set. Order does not matter |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |
@@ -580,7 +580,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 | `services[].url` | — | (required for `artifact-server`) Artifact-server base URL |
 | `services[].logServices` | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
 | `services[].publisherPublicKeyPem` | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
-| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
+| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. A container image type expands to one entry per digest here too. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
 | `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 
 </details>

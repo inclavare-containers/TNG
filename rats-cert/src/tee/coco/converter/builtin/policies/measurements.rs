@@ -1,4 +1,6 @@
-//! The shared `actual_measurement(type)` extraction rules.
+//! The shared measurement extraction rules: `actual_measurement(type)` for the
+//! single-valued families and `actual_measurement_set(type)` for a container
+//! image's digest set.
 //!
 //! Both the `modules` measurement entries and `transparency_log` manifest
 //! reconstruction read the same per-type value through these rules, so the two
@@ -126,7 +128,7 @@ pub(super) fn measurement_key(module: &Module) -> Option<String> {
     }
 }
 
-/// The pinned value a measurement module entry compares against.
+/// The pinned value a single-valued measurement module entry compares against.
 fn measurement_pin(module: &Module) -> Option<&str> {
     match module {
         Module::TdShim { value }
@@ -134,15 +136,32 @@ fn measurement_pin(module: &Module) -> Option<&str> {
         | Module::Kernel { value }
         | Module::Uki { value } => Some(value),
         Module::RootfsCc { value } => Some(value),
-        Module::ContainerImage { digest, .. } | Module::AiModel { digest, .. } => Some(digest),
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
+        Module::AiModel { digest, .. } => Some(digest),
+        Module::ContainerImage { .. }
+        | Module::Tdx(_)
+        | Module::Nvidia(_)
+        | Module::Gpu
+        | Module::TransparencyLog(_) => None,
     }
 }
 
-/// The equality rule for a measurement module entry, or `None` for a posture
-/// or transparency entry. The pinned value is spliced as a Rego string literal;
-/// validation in the entry parser guarantees it contains no quoting hazard.
+/// The matching rule for a measurement module entry, or `None` for a posture
+/// or transparency entry. A container image compares digest sets; every other
+/// family compares a single pinned value. The pinned values are spliced as Rego
+/// literals; validation in the entry parser guarantees they contain no quoting
+/// hazard.
 pub(super) fn predicate(module: &Module, pred: &str) -> Option<String> {
+    if let Module::ContainerImage { repo, digests } = module {
+        let key = format!("container.image.{repo}");
+        let expected = digests
+            .iter()
+            .map(|digest| format!("{digest:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!(
+            "{pred} if {{\n\tactual_measurement_set({key:?}) == {{{expected}}}\n}}"
+        ));
+    }
     let key = measurement_key(module)?;
     let pin = measurement_pin(module)?;
     Some(format!(
@@ -251,8 +270,12 @@ actual_measurement(\"rootfs.cc\") := digest if {
 \tsome digest in digests
 }";
 
+/// A repo can be pulled at several versions inside one TD, so its AAEL events
+/// carry several digests. The rule returns the set of every digest and leaves
+/// the set-equality check to the caller; a repo with no matching event, or any
+/// matching event missing its digest, is undefined.
 const CONTAINER_IMAGE: &str = "\
-actual_measurement(type) := digest if {
+actual_measurement_set(type) := digests if {
 \tstartswith(type, \"container.image.\")
 \trepo := trim_prefix(type, \"container.image.\")
 \tevents := [e |
@@ -268,8 +291,6 @@ actual_measurement(type) := digest if {
 \t\te.details.data.content.digest
 \t}
 \tdigests := {e.details.data.content.digest | some e in events}
-\tcount(digests) == 1
-\tsome digest in digests
 }";
 
 const AI_MODEL: &str = "\
@@ -327,6 +348,20 @@ mod tests {
     /// when `actual_measurement(key)` equals `expected`.
     fn extraction_policy(families: &Families, key: &str, expected: &str) -> String {
         extraction_policy_for(families, &[(key, expected)])
+    }
+
+    /// Wrap the selected rules in a minimal policy that affirms `executables`
+    /// when `actual_measurement_set(key)` equals `expected`.
+    fn extraction_set_policy(families: &Families, key: &str, expected: &[&str]) -> String {
+        let values = expected
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "package policy\n\nimport rego.v1\n\ndefault executables := 97\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2\n\n{}executables := 2 if {{\n\tactual_measurement_set({key:?}) == {{{values}}}\n}}\n",
+            families.rules()
+        )
     }
 
     fn families(list: &[MeasurementFamily]) -> Families {
@@ -394,9 +429,12 @@ mod tests {
             1
         );
 
-        // The image family owns its repo-name helper, emitted once.
+        // The image family owns its repo-name helper and the multi-value
+        // extraction rule, emitted once.
         let image = families(&[MeasurementFamily::ContainerImage]).rules();
         assert_eq!(image.matches("image_repo_name(ref) :=").count(), 1);
+        assert_eq!(image.matches("actual_measurement_set(type) :=").count(), 1);
+        assert!(!image.contains("actual_measurement(type) :="));
 
         // The rootfs family is static and shares no helper with the others.
         let rootfs = families(&[MeasurementFamily::RootfsCc]).rules();
@@ -416,7 +454,7 @@ mod tests {
         );
         let image = Module::ContainerImage {
             repo: "model-server".to_string(),
-            digest: format!("sha256:{}", "c".repeat(64)),
+            digests: [format!("sha256:{}", "c".repeat(64))].into_iter().collect(),
         };
         assert_eq!(
             measurement_key(&image).unwrap(),
@@ -566,12 +604,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn container_image_positive_and_untyped_event_rejected() {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let policy = extraction_policy(
-            &families(&[MeasurementFamily::ContainerImage]),
+    async fn container_image_extracts_and_matches_digest_set() {
+        let digest_a = format!("sha256:{}", "a".repeat(64));
+        let digest_b = format!("sha256:{}", "b".repeat(64));
+        let family = families(&[MeasurementFamily::ContainerImage]);
+        let single = extraction_set_policy(&family, "container.image.model-server", &[&digest_a]);
+        let pair = extraction_set_policy(
+            &family,
             "container.image.model-server",
-            &digest,
+            &[&digest_a, &digest_b],
         );
         let event = |type_name: Option<&str>, digest: &str| {
             let mut e = json!({
@@ -593,13 +634,46 @@ mod tests {
             e
         };
 
-        let ok = tdx_input(&[event(Some("EV_EVENT_TAG"), &digest)]);
-        assert_eq!(eval_policy_vector(&policy, &ok).await, (2, 2, 2, 2));
+        let ok = tdx_input(&[event(Some("EV_EVENT_TAG"), &digest_a)]);
+        assert_eq!(eval_policy_vector(&single, &ok).await, (2, 2, 2, 2));
+
+        // Every digest the repo was pulled with is part of the set; repeated
+        // events for one digest contribute a single element.
+        let two = tdx_input(&[
+            event(Some("EV_EVENT_TAG"), &digest_a),
+            event(Some("EV_EVENT_TAG"), &digest_b),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&pair, &two).await,
+            (2, 2, 2, 2),
+            "two digests must match the two-element expected set"
+        );
+        let duplicate = tdx_input(&[
+            event(Some("EV_EVENT_TAG"), &digest_a),
+            event(Some("EV_EVENT_TAG"), &digest_a),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&single, &duplicate).await,
+            (2, 2, 2, 2),
+            "repeated events for one digest must collapse to one element"
+        );
+
+        // Set equality, not containment: extra and missing digests both reject.
+        assert_eq!(
+            eval_policy_vector(&single, &two).await,
+            (97, 2, 2, 2),
+            "an extra observed digest must reject the single-element expectation"
+        );
+        assert_eq!(
+            eval_policy_vector(&pair, &ok).await,
+            (97, 2, 2, 2),
+            "a missing observed digest must reject the two-element expectation"
+        );
 
         // Synthetic event without the EV_EVENT_TAG type no longer matches.
-        let untyped = tdx_input(&[event(None, &digest)]);
+        let untyped = tdx_input(&[event(None, &digest_a)]);
         assert_eq!(
-            eval_policy_vector(&policy, &untyped).await,
+            eval_policy_vector(&single, &untyped).await,
             (97, 2, 2, 2),
             "an AAEL event without EV_EVENT_TAG must not match"
         );
@@ -616,9 +690,16 @@ mod tests {
             },
         })]);
         assert_eq!(
-            eval_policy_vector(&policy, &missing).await,
+            eval_policy_vector(&single, &missing).await,
             (97, 2, 2, 2),
             "an event without a digest must reject"
+        );
+
+        let none = tdx_input(&[]);
+        assert_eq!(
+            eval_policy_vector(&single, &none).await,
+            (97, 2, 2, 2),
+            "a repo with no matching event must reject (fail-closed)"
         );
     }
 
@@ -699,15 +780,13 @@ mod tests {
     async fn container_image_and_ai_model_bind_independently() {
         let image_digest = format!("sha256:{}", "a".repeat(64));
         let model_hash = "b".repeat(64);
-        let policy = extraction_policy_for(
-            &families(&[
+        let policy = format!(
+            "package policy\n\nimport rego.v1\n\ndefault executables := 97\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2\n\n{}executables := 2 if {{\n\tactual_measurement_set(\"container.image.model-server\") == {{{image_digest:?}}}\n\tactual_measurement(\"ai.model.Qwen/Qwen3.8-27B\") == {model_hash:?}\n}}\n",
+            families(&[
                 MeasurementFamily::ContainerImage,
                 MeasurementFamily::AiModel,
-            ]),
-            &[
-                ("container.image.model-server", image_digest.as_str()),
-                ("ai.model.Qwen/Qwen3.8-27B", model_hash.as_str()),
-            ],
+            ])
+            .rules()
         );
 
         let image_event = json!({

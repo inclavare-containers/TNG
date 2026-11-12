@@ -218,24 +218,49 @@ pub(super) async fn resolve_entry(
     }))
 }
 
-/// Render the ReleaseManifest `measurements` array for one manifest as a Rego
-/// object literal, one `{"type", "value"}` object per sorted published type.
+/// Render the Rego that reconstructs one ReleaseManifest and binds it to
+/// `name`.
 ///
-/// The literal is what makes a missing extraction structurally fail-closed:
-/// an undefined `actual_measurement(...)` makes the object undefined, the array
-/// undefined, and the whole manifest undefined, so no shrunken manifest can
-/// ever be compared against the signed payload. An array comprehension would
-/// instead silently drop the undefined element.
-fn manifest_literal(types: &[String], schema_expr: &str) -> String {
-    let mut measurements = String::new();
-    for t in types {
-        measurements.push_str(&format!(
-            "\t\t{{\"type\": {t:?}, \"value\": actual_measurement({t:?})}},\n"
-        ));
+/// Each configured type contributes one ordered entry array. A non-image type
+/// is a single `{"type", "value"}` entry; a container image type expands to one
+/// entry per observed digest, sorted ascending. Types are rendered in the order
+/// given (the caller sorts them), so concatenating the per-type arrays keeps
+/// the whole `measurements` array in `(type, value)` order, which is the
+/// canonical form the publisher signs.
+///
+/// The literal/rule form is what makes a missing extraction structurally
+/// fail-closed: an undefined extraction makes its per-type array undefined, and
+/// `array.concat` propagates that, so the assembled manifest is undefined too.
+/// A comprehension over the per-type arrays could instead silently drop the
+/// missing type.
+fn manifest_rules(types: &[String], schema_expr: &str, name: &str) -> String {
+    let mut entry_arrays: Vec<String> = Vec::new();
+    let mut rules = String::new();
+    for (index, measurement_type) in types.iter().enumerate() {
+        let entry_name = format!("{name}_entries_{index}");
+        if measurement_type.starts_with("container.image.") {
+            rules.push_str(&format!(
+                "{entry_name} := entries if {{\n\
+                 \tdigests := sort(actual_measurement_set({measurement_type:?}))\n\
+                 \tentries := [{{\"type\": {measurement_type:?}, \"value\": d}} | some d in digests]\n\
+                 }}\n\n"
+            ));
+        } else {
+            rules.push_str(&format!(
+                "{entry_name} := [{{\"type\": {measurement_type:?}, \"value\": actual_measurement({measurement_type:?})}}]\n\n"
+            ));
+        }
+        entry_arrays.push(entry_name);
     }
-    format!(
-        "{{\n\t\"measurements\": [\n{measurements}\t],\n\t\"schemaVersion\": {schema_expr},\n}}"
-    )
+    let measurements = entry_arrays
+        .iter()
+        .cloned()
+        .reduce(|acc, entries| format!("array.concat({acc}, {entries})"))
+        .unwrap_or_else(|| "[]".to_string());
+    rules.push_str(&format!(
+        "{name} := {{\n\t\"measurements\": {measurements},\n\t\"schemaVersion\": {schema_expr},\n}}\n"
+    ));
+    rules
 }
 
 /// Render the Rego rules for one `transparency_log` module entry.
@@ -257,13 +282,18 @@ pub(super) fn build_entry_rules(
         .ok_or_else(|| anyhow::anyhow!("services must be non-empty"))?;
     let mut sorted_pm = cfg.published_measurements.clone();
     sorted_pm.sort();
-    let manifest = manifest_literal(&sorted_pm, &format!("{prefix}_schema_version"));
+    let schema_expr = format!("{prefix}_schema_version");
 
     match primary {
         TransparencyServiceConfig::RekorV1 { .. } => {
             let resolved = resolved.ok_or_else(|| {
                 anyhow::anyhow!("rekor-v1 transparency_log entry was not resolved")
             })?;
+            let manifest = manifest_rules(
+                &sorted_pm,
+                &schema_expr,
+                &format!("{prefix}_reconstructed_manifest"),
+            );
             Ok(format!(
                 r#"# transparency_log entry: rekor-v1 primary, payloadHash + DSSE baked at load
 {prefix}_payload_hash := {payload_hash:?}
@@ -273,11 +303,10 @@ pub(super) fn build_entry_rules(
 {prefix}_publisher_key := {publisher_key:?}
 
 # reconstruct the manifest object (rego object keys serialize sorted == ASCII
-# JCS; json.marshal is compact; no numbers in this shape). Every declared type
-# is a literal entry, so a missing extraction makes the whole manifest
-# undefined instead of silently dropping a measurement.
-{prefix}_reconstructed_manifest := {manifest}
-
+# JCS; json.marshal is compact; no numbers in this shape). Each type's entry
+# array is undefined when its extraction is, so a missing measurement leaves
+# the whole manifest undefined instead of silently dropping an entry.
+{manifest}
 # The transparency-log manifest check and the mandatory DSSE publisher
 # binding. Any mismatch leaves the entry predicate undefined (fail-closed).
 {pred} if {{
@@ -300,6 +329,8 @@ pub(super) fn build_entry_rules(
             log_services,
             publisher_public_key_pem,
         } => {
+            let manifest =
+                manifest_rules(&sorted_pm, &schema_expr, &format!("{prefix}_full_manifest"));
             let url_lit = serde_json::to_string(url)?;
             let ls_lit = serde_json::to_string(log_services)?;
             // Bake the configured publisher key, or empty string when none is
@@ -328,8 +359,11 @@ pub(super) fn build_entry_rules(
                     };
                     let mut fpm_sorted = fpm.clone();
                     fpm_sorted.sort();
-                    let fallback_manifest =
-                        manifest_literal(&fpm_sorted, &format!("{prefix}_schema_version"));
+                    let fallback_manifest = manifest_rules(
+                        &fpm_sorted,
+                        &schema_expr,
+                        &format!("{prefix}_fallback_manifest"),
+                    );
                     (
                         format!(
                             "\n{prefix}_fallback_log_url := {log_url:?}\n\
@@ -337,7 +371,7 @@ pub(super) fn build_entry_rules(
                         ),
                         format!(
                             r#"
-{prefix}_fallback_manifest := {fallback_manifest}
+{fallback_manifest}
 {pred} if {{
     {prefix}_primary_status == "fail"
     tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_publisher_key]) == true
@@ -358,8 +392,7 @@ pub(super) fn build_entry_rules(
 # built-in publisher key baseline)
 {prefix}_publisher_key := {publisher_key_lit}{fallback_lit}
 
-{prefix}_full_manifest := {manifest}
-
+{manifest}
 # A missing measurement makes the full manifest undefined. Map that to "fail"
 # (not "deny") so the configured fallback baseline is still consulted; a real
 # revocation resolves to "deny" and never falls back.
@@ -1187,7 +1220,8 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(policy.matches("actual_measurement(type) :=").count(), 1);
+        assert_eq!(policy.matches("actual_measurement_set(type) :=").count(), 1);
+        assert!(!policy.contains("actual_measurement(type) :="), "{policy}");
         assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
         assert_eq!(policy.matches("has_sha384_digest(e) if {").count(), 1);
         assert_eq!(
@@ -1196,12 +1230,17 @@ mod tests {
                 .count(),
             1
         );
-        // Manifest construction is a literal, not an array comprehension, so a
-        // missing extraction cannot silently drop an entry.
-        assert!(!policy.contains("| some t in"), "{policy}");
+        // An image type expands to one entry per observed digest, sorted by
+        // digest; a non-image type stays a single literal entry.
         assert!(
             policy.contains(
-                "{\"type\": \"container.image.cmaas-runtime\", \"value\": actual_measurement(\"container.image.cmaas-runtime\")}"
+                "digests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
+            ),
+            "{policy}"
+        );
+        assert!(
+            policy.contains(
+                "{\"type\": \"container.image.cmaas-runtime\", \"value\": d} | some d in digests"
             ),
             "{policy}"
         );
@@ -1211,6 +1250,7 @@ mod tests {
             ),
             "{policy}"
         );
+        assert!(policy.contains("array.concat("), "{policy}");
         assert!(!policy.contains("query_reference_value"));
         assert!(!policy.contains("td_payload_blob_length"), "{policy}");
 
@@ -1297,8 +1337,15 @@ mod tests {
             "{policy}"
         );
         assert!(policy.contains("t_0_0_fallback_manifest"), "{policy}");
-        // Manifest construction is a literal.
-        assert!(!policy.contains("| some t in"), "{policy}");
+        // Both the primary and the fallback expand an image type per digest
+        // through the same ordered assembly.
+        assert_eq!(
+            policy
+                .matches("sort(actual_measurement_set(\"container.image.cmaas-runtime\"))")
+                .count(),
+            2,
+            "{policy}"
+        );
         // The artifact-server primary bakes no payloadHash.
         assert!(!policy.contains("payload_hash :="), "{policy}");
 
@@ -1523,6 +1570,146 @@ mod tests {
             (97, 2, 2, 2),
             "wrong payloadHash must reject even when the order is sorted"
         );
+    }
+
+    #[tokio::test]
+    async fn manifest_rules_order_entries_by_type_then_value() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+        let mr_td = hex96('c');
+        // The caller passes types in ascending order; the image digests are
+        // deliberately handed over as an unordered set.
+        let types = vec![
+            "container.image.runtime".to_string(),
+            "tdx.td-shim".to_string(),
+        ];
+        let rules = manifest_rules(&types, "\"1.0.0\"", "test_manifest");
+        let expected = jcs_compact(&json!({
+            "measurements": [
+                {"type": "container.image.runtime", "value": digest_a},
+                {"type": "container.image.runtime", "value": digest_b},
+                {"type": "tdx.td-shim", "value": mr_td},
+            ],
+            "schemaVersion": "1.0.0",
+        }));
+        let policy = format!(
+            "package policy\n\nimport rego.v1\n\ndefault executables := 97\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2\n\n\
+             actual_measurement_set(type) := {{\"{digest_b}\", \"{digest_a}\"}} if {{\n\tstartswith(type, \"container.image.\")\n}}\n\
+             actual_measurement(\"tdx.td-shim\") := \"{mr_td}\"\n\n\
+             {rules}\nexecutables := 2 if {{\n\tjson.marshal(test_manifest) == {expected:?}\n}}\n"
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, "{}").await,
+            (2, 2, 2, 2),
+            "the assembled manifest must equal the (type, value)-ordered JCS form"
+        );
+
+        // A type whose extraction is undefined must leave the manifest
+        // undefined instead of contributing an empty array.
+        let undefined_rules = manifest_rules(&["tdx.kernel".to_string()], "\"1.0.0\"", "m");
+        let undefined_policy = format!(
+            "package policy\n\nimport rego.v1\n\ndefault executables := 97\ndefault hardware := 2\ndefault configuration := 2\ndefault file_system := 2\n\n\
+             actual_measurement(\"tdx.kernel\") := v if {{\n\tv := input.missing\n}}\n\n\
+             {undefined_rules}\nexecutables := 2 if {{\n\tjson.marshal(m)\n}}\n"
+        );
+        assert_eq!(
+            eval_policy_vector(&undefined_policy, "{}").await,
+            (97, 2, 2, 2),
+            "an undefined extraction must make the whole manifest undefined"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_multi_digest_manifest() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+        let digest_c = format!("sha256:{}", hex64('c'));
+        let image = "container.image.cmaas-runtime";
+
+        // The publisher records every observed digest, ascending.
+        let logged = manifest(
+            "1.0.0",
+            &[(image, digest_a.as_str()), (image, digest_b.as_str())],
+        );
+        let policy = render_rekor(&[image], &resolved_from_manifest(&logged));
+
+        let both = tdx_input(&[aael_event(&digest_a), aael_event(&digest_b)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &both).await,
+            (2, 2, 2, 2),
+            "evidence with exactly the published digest set must affirm"
+        );
+
+        let missing = tdx_input(&[aael_event(&digest_a)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &missing).await,
+            (97, 2, 2, 2),
+            "evidence missing one published digest must reject"
+        );
+
+        let extra = tdx_input(&[
+            aael_event(&digest_a),
+            aael_event(&digest_b),
+            aael_event(&digest_c),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &extra).await,
+            (97, 2, 2, 2),
+            "evidence with an extra digest must reject"
+        );
+
+        // The publisher must write the digests ascending: an unsorted manifest
+        // reconstructs to different bytes and fails payloadHash verification.
+        let unsorted = manifest(
+            "1.0.0",
+            &[(image, digest_b.as_str()), (image, digest_a.as_str())],
+        );
+        let unsorted_policy = render_rekor(&[image], &resolved_from_manifest(&unsorted));
+        assert_eq!(
+            eval_policy_vector(&unsorted_policy, &both).await,
+            (97, 2, 2, 2),
+            "a manifest whose digests are not ascending must fail payloadHash"
+        );
+
+        // One digest remains byte-for-byte compatible with the previous
+        // single-entry reconstruction.
+        let single_logged = manifest("1.0.0", &[(image, digest_a.as_str())]);
+        let single_policy = render_rekor(&[image], &resolved_from_manifest(&single_logged));
+        let single_input = tdx_input(&[aael_event(&digest_a)]);
+        assert_eq!(
+            eval_policy_vector(&single_policy, &single_input).await,
+            (2, 2, 2, 2),
+            "a single published digest must still affirm"
+        );
+    }
+
+    #[test]
+    fn transparency_log_artifact_server_fallback_expands_image_digests() {
+        let value = json!({
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "https://attest.example.com",
+                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
+            }],
+            "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
+            "fallbackServices": [{
+                "type": "rekor-v1",
+                "logUrl": "https://fallback.example.com",
+                "logIndex": 1,
+            }],
+        });
+        let policy = render(json!([transparency_entry(value)]), &[None]);
+        // Both manifests expand through the same per-type rule, so each image
+        // type gets one sorted-digest comprehension.
+        assert!(policy.contains(
+            "t_0_0_fallback_manifest_entries_0 := entries if {\n\tdigests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
+        ), "{policy}");
+        assert!(policy.contains(
+            "t_0_0_full_manifest_entries_0 := entries if {\n\tdigests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
+        ), "{policy}");
     }
 
     #[cfg(feature = "crypto-rustcrypto")]
