@@ -10,6 +10,7 @@ use super::measurements::{self, Families};
 use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
 use anyhow::Context;
+use std::collections::BTreeSet;
 
 /// A parsed, validated measurement/posture module: the concrete variant the
 /// generator switches on.
@@ -35,10 +36,13 @@ pub(crate) enum Module {
     RootfsCc {
         value: String,
     },
-    /// AAEL `kangaroo/pull-image` digest for the named repo, `sha256:`64 hex.
+    /// AAEL `kangaroo/pull-image` digests for the named repo, each
+    /// `sha256:`64 hex. A repo may run several versions in one TD, so the
+    /// expected value is the whole set: evidence must report exactly these
+    /// digests, no more and no fewer.
     ContainerImage {
         repo: String,
-        digest: String,
+        digests: BTreeSet<String>,
     },
     /// AAEL `pai/load-model` hash for the named model, 64 hex.
     AiModel {
@@ -373,7 +377,7 @@ impl ModuleEntryConfig {
                 }
                 Ok(Module::ContainerImage {
                     repo: repo.to_string(),
-                    digest,
+                    digests: BTreeSet::from([digest]),
                 })
             }
             EntryType::AiModel { model_id } => {
@@ -397,7 +401,11 @@ impl ModuleEntryConfig {
 
 /// Parse and validate every group. Rejects an unknown type, a value whose
 /// shape/charset is wrong, or a duplicate module type within the same group.
-/// Cross-group duplication is legal (each group is an independent baseline).
+/// `transparency_log` and `container.image.<repo>` may repeat: repeated image
+/// entries for one repo merge into a single module whose digest set is the
+/// union of their values, so the group renders one set-equality predicate per
+/// repo. Cross-group duplication is legal (each group is an independent
+/// baseline).
 pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result<Vec<Vec<Module>>> {
     let mut groups = Vec::new();
     for (gi, group) in config.as_groups().into_iter().enumerate() {
@@ -412,8 +420,13 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
             // `transparency_log` may repeat within one group: several
             // log-anchored baselines are AND-ed (every one must verify),
             // unlike the single-baseline measurement and posture types.
-            if !matches!(entry_type, EntryType::TransparencyLog)
-                && !seen.insert(entry_type.canonical())
+            // `container.image.<repo>` may repeat too, but those entries
+            // coalesce below. Both spellings of one repo normalize to the same
+            // type, so they merge as well.
+            if !matches!(
+                entry_type,
+                EntryType::TransparencyLog | EntryType::ContainerImage { .. }
+            ) && !seen.insert(entry_type.canonical())
             {
                 anyhow::bail!(
                     "duplicate module type {:?} within group {gi}",
@@ -422,9 +435,28 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
             }
             entry_types.push(entry_type);
         }
-        let mut parsed = Vec::new();
+        let mut parsed: Vec<Module> = Vec::new();
+        let mut image_positions = std::collections::HashMap::new();
         for (entry, entry_type) in group.iter().zip(entry_types) {
-            parsed.push(entry.to_module(entry_type)?);
+            let module = entry.to_module(entry_type)?;
+            if let Module::ContainerImage { repo, digests } = module {
+                match image_positions.get(&repo).copied() {
+                    Some(position) => {
+                        if let Module::ContainerImage {
+                            digests: existing, ..
+                        } = &mut parsed[position]
+                        {
+                            existing.extend(digests);
+                        }
+                    }
+                    None => {
+                        image_positions.insert(repo.clone(), parsed.len());
+                        parsed.push(Module::ContainerImage { repo, digests });
+                    }
+                }
+            } else {
+                parsed.push(module);
+            }
         }
         groups.push(parsed);
     }
@@ -1545,11 +1577,6 @@ mod tests {
         // Mixed spellings of a canonical type collide after normalization.
         for (canonical, alias, value) in [
             (
-                "com.alibabacloud.container.image.model-server",
-                "container.image.model-server",
-                format!("sha256:{}", hex64('c')),
-            ),
-            (
                 "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
                 "ai.model.Qwen/Qwen3.8-27B",
                 hex64('d'),
@@ -1569,6 +1596,158 @@ mod tests {
             let err = parse_module_groups(&mixed).unwrap_err().to_string();
             assert!(err.contains("duplicate"), "{canonical}/{alias}: {err}");
         }
+    }
+
+    #[test]
+    fn modules_container_image_duplicates_coalesce() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+
+        // Canonical and unprefixed spellings of one repo are the same type, so
+        // they merge; a repeated identical value is deduplicated silently.
+        let mixed = modules_cfg(&format!(
+            r#"[
+              {{"type":"com.alibabacloud.container.image.runtime","value":"{digest_a}"}},
+              {{"type":"container.image.runtime","value":"{digest_b}"}},
+              {{"type":"container.image.runtime","value":"{digest_a}"}}
+            ]"#
+        ));
+        let groups = parse_module_groups(&mixed).expect("repeated image type must be legal");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 1, "one module per repo");
+        let Module::ContainerImage { repo, digests } = &groups[0][0] else {
+            panic!("expected ContainerImage");
+        };
+        assert_eq!(repo, "runtime");
+        assert_eq!(
+            digests.iter().cloned().collect::<Vec<_>>(),
+            vec![digest_a.clone(), digest_b.clone()],
+            "digests are deduplicated and held in ascending order"
+        );
+
+        // Different repos stay separate modules in first-appearance order.
+        let two_repos = modules_cfg(&format!(
+            r#"[
+              {{"type":"container.image.runtime","value":"{digest_a}"}},
+              {{"type":"container.image.busybox","value":"{digest_b}"}}
+            ]"#
+        ));
+        let parsed = parse_module_groups(&two_repos).expect("distinct repos parse");
+        assert_eq!(parsed[0].len(), 2);
+        assert!(matches!(
+            &parsed[0][0],
+            Module::ContainerImage { repo, .. } if repo == "runtime"
+        ));
+        assert!(matches!(
+            &parsed[0][1],
+            Module::ContainerImage { repo, .. } if repo == "busybox"
+        ));
+
+        // Cross-group duplication is still legal.
+        let cross_group = modules_cfg(&format!(
+            r#"[[{{"type":"container.image.runtime","value":"{digest_a}"}}],[{{"type":"container.image.runtime","value":"{digest_b}"}}]]"#
+        ));
+        assert!(parse_module_groups(&cross_group).is_ok());
+
+        // Other types keep rejecting same-group duplicates.
+        for (t, v) in [
+            ("tdx.ovmf", hex96('1')),
+            ("ai.model.Qwen/Qwen3.8-27B", hex64('2')),
+        ] {
+            let dup = modules_cfg(&format!(
+                r#"[{{"type":"{t}","value":"{v}"}},{{"type":"{t}","value":"{v}"}}]"#
+            ));
+            let err = parse_module_groups(&dup).unwrap_err().to_string();
+            assert!(err.contains("duplicate"), "{t}: {err}");
+        }
+    }
+
+    #[test]
+    fn modules_container_image_renders_one_set_predicate() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+        // Listing the digests out of order must still render a stable,
+        // ascending set literal, and the two entries must collapse to one
+        // predicate.
+        let policy = build_policy(&modules_cfg(&format!(
+            r#"[
+              {{"type":"container.image.runtime","value":"{digest_b}"}},
+              {{"type":"com.alibabacloud.container.image.runtime","value":"{digest_a}"}}
+            ]"#
+        )))
+        .expect("build");
+        assert!(policy.contains(&format!(
+            "m_0_0 if {{\n\tactual_measurement_set(\"container.image.runtime\") == {{\"{digest_a}\", \"{digest_b}\"}}\n}}"
+        )));
+        assert!(!policy.contains("m_0_1"), "{policy}");
+        assert_eq!(
+            policy
+                .matches("actual_measurement_set(\"container.image.runtime\") ==")
+                .count(),
+            1,
+            "{policy}"
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_container_image_set_equality() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+        let digest_c = format!("sha256:{}", hex64('c'));
+        let cfg = format!(
+            r#"[{{"type":"container.image.runtime","value":"{digest_a}"}},{{"type":"container.image.runtime","value":"{digest_b}"}}]"#
+        );
+        let pull_event = |digest: &str| {
+            json!({
+                "type_name": "EV_EVENT_TAG",
+                "details": { "unicode_name": "AAEL", "data": {
+                    "domain": "alibabacloud.com",
+                    "operation": "kangaroo/pull-image",
+                    "content": {
+                        "reference": "registry.example.com/ns/runtime:latest",
+                        "digest": digest,
+                    }
+                } }
+            })
+        };
+
+        let exact = tdx_input(
+            serde_json::Value::Null,
+            &[pull_event(&digest_a), pull_event(&digest_b)],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &exact).await,
+            (2, 2, 2, 2),
+            "evidence with exactly the configured digests must affirm"
+        );
+
+        let missing = tdx_input(serde_json::Value::Null, &[pull_event(&digest_a)]);
+        assert_eq!(
+            eval_modules(&cfg, &missing).await,
+            (97, 2, 2, 2),
+            "evidence missing one configured digest must reject"
+        );
+
+        let extra = tdx_input(
+            serde_json::Value::Null,
+            &[
+                pull_event(&digest_a),
+                pull_event(&digest_b),
+                pull_event(&digest_c),
+            ],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &extra).await,
+            (97, 2, 2, 2),
+            "evidence with an extra digest must reject"
+        );
+
+        let no_event = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
+        assert_eq!(
+            eval_modules(&cfg, &no_event).await,
+            (97, 2, 2, 2),
+            "a repo with no matching event must reject (fail-closed)"
+        );
     }
 
     #[test]
@@ -1645,13 +1824,15 @@ mod tests {
         .expect("build");
         assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
         assert_eq!(
-            policy.matches("actual_measurement(type) :=").count(),
+            policy.matches("actual_measurement_set(type) :=").count(),
             1,
             "{policy}"
         );
-        // The one-line predicate names the canonical (unprefixed) key.
+        assert!(!policy.contains("actual_measurement(type) :="), "{policy}");
+        // The one-line predicate names the canonical (unprefixed) key and
+        // compares a one-element set, which is the single-digest case.
         assert!(policy.contains(&format!(
-            "m_0_0 if {{\n\tactual_measurement(\"container.image.model-server\") == \"{image}\"\n}}"
+            "m_0_0 if {{\n\tactual_measurement_set(\"container.image.model-server\") == {{\"{image}\"}}\n}}"
         )));
         // No format regex is emitted: the pin is validated at load instead.
         assert!(!policy.contains("regex.match(\"^sha256:"), "{policy}");
