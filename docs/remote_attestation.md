@@ -504,7 +504,7 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 
 **Scenario 4: transparency_log anchoring (advanced)**
 
-Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a transparency log, and compare the actual measurements against it during appraisal. Add a `transparency_log` entry to a `modules` policy with `publishedMeasurements` and one service; `schemaVersion` defaults to `1.0.0`. Add a `tdx` entry when you also want platform posture checks.
+Goal: keep the trusted measurement values in a release manifest recorded in a transparency log, and compare the current measurements with it during appraisal. Add a `transparency_log` entry to a `modules` policy with `publishedMeasurements` and one service; `schemaVersion` defaults to `1.0.0`. Add a `tdx` entry when you also want platform posture checks.
 
 <details>
 <summary>Example: modules policy with a transparency_log entry</summary>
@@ -541,26 +541,25 @@ Goal: anchor the trusted measurement set to a ReleaseManifest recorded in a tran
 <details>
 <summary>What the <code>transparency_log</code> entry verifies</summary>
 
-The entry anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log. There are two primary types; they differ in where the trusted reference comes from.
+The entry keeps the trusted measurement values in a release manifest recorded in a transparency log. There are two primary types; they differ in where the logged baseline comes from.
 
 **Primary `rekor-v1`, at policy load:**
 
 - Fetch the entry by `logUrl` and `logIndex`.
-- Authenticate it: verify the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). When `rekorPublicKeyPem` is omitted, the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key is used; other logs must supply their own.
-- Bake the trusted `payloadHash` and DSSE publisher signature into the generated rules.
+- Check the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). When `rekorPublicKeyPem` is omitted, the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key is used; other logs must supply their own.
 
 **Primary `artifact-server`, at appraisal:**
 
-- Send the reconstructed manifest to the configured `url` for resolution.
-- The optional fallback runs only when the primary returns `fail`. `ok` does not fall back; a revoked measurement returns `deny` (a hard deny) and does not fall back either. A failed primary with no fallback rejects.
+- Send the measurements from the current evidence to the configured `url` for comparison.
+- The optional fallback runs only when the primary returns `fail`. `ok` does not fall back; a revoked measurement returns `deny`, which does not fall back either. A failed primary with no fallback rejects.
 
-**Appraisal steps shared by both primaries:**
+**What both primaries check:**
 
-- Extract the actual measurement values from the TDX quote (for example `mr_td` for `tdx.td-shim`) and the UEFI event log (for example the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`).
-- Reconstruct the manifest after sorting the measurement types, then compare its hash with the trusted `payloadHash`. A mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects. Configuration order does not matter because the types are sorted before reconstruction.
-- The DSSE publisher signature is always verified: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
+- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`.
+- If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
+- The publisher signature is always checked: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 
-**Field constraints:** `publishedMeasurements` is required and non-empty, allows `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and rejects duplicate types. `schemaVersion` defaults to `1.0.0` and must equal the logged manifest's value.
+**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`. For the container image type, use exactly the name the transparency log records; the `com.alibabacloud.` alias does not match and is rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
 
 **Platform posture:** expressed by a separate `tdx` entry. With only a `transparency_log` entry, `hardware` depends on TDX platform recognition alone; add a `tdx` entry with its attribute-bit gates set to `allow` when you need the non-debug and event-log checks.
 
@@ -571,7 +570,7 @@ The entry anchors the trusted measurement set to a ReleaseManifest recorded in a
 
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | — | (required) Non-empty measurement type list; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`; a type may not repeat. Types are sorted before hashing, so the configuration order does not matter |
+| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`. For container images, use exactly the name the transparency log records; the `com.alibabacloud.` alias is rejected at load. A type may not repeat. Order does not matter |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |

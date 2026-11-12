@@ -190,6 +190,17 @@ fn is_valid_module_name(name: &str) -> bool {
         })
 }
 
+/// The repository segment of an image reference that appraisal extracts:
+/// the last '/'-separated path component, with any tag or digest stripped.
+/// A name containing '/', '@', or ':' can never equal that segment, so it is
+/// rejected at load instead of failing closed only at appraisal.
+pub(super) fn is_valid_image_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 /// A lowercase hex string of exactly `len` characters.
 fn is_lower_hex(s: &str, len: usize) -> bool {
     s.len() == len
@@ -321,8 +332,10 @@ impl ModuleEntryConfig {
                 Ok(Module::TransparencyLog(cfg))
             }
             EntryType::ContainerImage { repo } => {
-                if !is_valid_module_name(repo) {
-                    anyhow::bail!("container.image name {repo:?} has an invalid character");
+                if !is_valid_image_repo_name(repo) {
+                    anyhow::bail!(
+                        "container.image name {repo:?} must be a single repository segment using only ASCII letters, digits, '.', '_' and '-'"
+                    );
                 }
                 let digest = value_str()?;
                 if !is_sha256_digest(&digest) {
@@ -950,9 +963,9 @@ fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::eval_policy_vector;
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
-    use crate::tee::coco::converter::builtin::policies::transparency_log::eval_policy_vector;
     use crate::tee::coco::converter::builtin::policy_config::{
         PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     };
@@ -1170,6 +1183,43 @@ mod tests {
                 "empty model-id must fail for {t}"
             );
         }
+
+        // The container image repository is a single path segment: characters
+        // that can never appear in the extracted repo tail are rejected.
+        for t in [
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            assert!(
+                ModuleEntryConfig {
+                    module_type: t.to_string(),
+                    value: json!(ok_sha.clone()),
+                }
+                .to_module_parsed()
+                .is_err(),
+                "expected reject for {t}"
+            );
+        }
+        // Dots, underscores and dashes remain valid in the repository segment.
+        for t in ["container.image.model-server", "container.image.my-app.v2"] {
+            assert!(
+                ModuleEntryConfig {
+                    module_type: t.to_string(),
+                    value: json!(ok_sha.clone()),
+                }
+                .to_module_parsed()
+                .is_ok(),
+                "expected ok for {t}"
+            );
+        }
+        // The tightening is container-image specific: a model id keeps `/`.
+        assert!(ModuleEntryConfig {
+            module_type: "ai.model.Qwen/Qwen3.8-27B".to_string(),
+            value: json!(ok_hex64.clone()),
+        }
+        .to_module_parsed()
+        .is_ok());
 
         // Non-string values are rejected with a shape-name error, one arm per
         // JSON kind.

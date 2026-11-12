@@ -82,7 +82,6 @@
 - 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象或姿态类给了字符串；
 - `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。另外，`value` 顶层出现未知字段会被拒绝，但 `services[]` 内部嵌套的未知字段目前会被忽略；`fallbackServices` 单独出现会被接受，但没有效果；
-- 名字段（`<repo>`、`<model-id>`）含 `[A-Za-z0-9._/@:+-]` 之外的字符；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
 - `nvidia` 条目的 `min_count` 小于 1（要关闭 GPU 评定就不写该条目）；
 - `tdx` 的 `collateral.min_tcb_date` 不是 `YYYY-MM-DD`；
@@ -146,10 +145,10 @@
 { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
 ```
 
-无前缀的 `container.image.<repo>` 是永久别名。该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。钉住工作负载镜像的 OCI manifest digest。镜像 reference 的 repo 尾段等于 `<repo>` 的每条 `kangaroo/pull-image` AAEL 事件，其 `digest` 都必须等于条目钉住的 `sha256:` 常量。`<repo>` 是自由命名（即所钉镜像 reference 的 repo 尾段，路径最后一段，registry 主机、路径前缀、tag/digest 剥掉）；钉了没有对应 pull-image 事件的 repo 即拒绝。
+`container.image.<repo>` 是这个条目的简写。它检查阿里云记录为 AAEL 事件的镜像拉取事件：仓库名为 `<repo>` 的镜像，每次拉取都必须报告条目里配置的 `sha256:` 摘要。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。同一个类型写在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中时，要与透明日志里的记录一致，通常就是同一个最后一段路径。没有匹配的拉取事件时，条目验证失败。
 
-- 通过：镜像被拉取过，且该 repo 的每次拉取都报告钉住的 digest。
-- 拒绝：拉取到的镜像 digest 不符；或钉了 repo 却没有对应拉取事件（fail-closed，不是跳过）。
+- 通过：镜像被拉取过，且该仓库的每次拉取都报告配置的摘要。
+- 拒绝：某次拉取报告的摘要不同；或没有匹配的拉取事件（fail-closed）。
 
 ### 模型：`com.alibabacloud.ai.model.<model-id>`
 
@@ -157,9 +156,9 @@
 { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
 ```
 
-无前缀的 `ai.model.<model-id>` 是永久别名。该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。钉住模型的完整性度量，64 位小写 hex。哈希按该模型的度量约定算出（例如对落盘模型算的 fs-verity digest）。`<model-id>` 与事件里的模型标识逐字匹配（建议 modelscope-id 风格）。每条 `alibabacloud.com` `pai/load-model` AAEL 事件的 `model-id` 必须等于钉住的 `<model-id>`、`hash` 字段必须等于钉住的 64-hex 常量；至少存在一条 load-model 事件，事件缺失即拒绝。model-id 参与校验而不只是哈希：出现其它模型的加载事件即 fail-closed。
+无前缀的 `ai.model.<model-id>` 是永久别名。该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。校验模型的完整性度量，64 位小写 hex。哈希按该模型的度量约定算出（例如对落盘模型算的 fs-verity digest）。`<model-id>` 与事件里的模型标识逐字匹配（建议 modelscope-id 风格）。每条 `alibabacloud.com` `pai/load-model` AAEL 事件的 `model-id` 必须等于配置的 `<model-id>`、`hash` 字段必须等于配置的 64-hex 值；至少存在一条 load-model 事件，事件缺失即拒绝。条目也会校验 model id；出现其它模型的加载事件即 fail-closed。`<model-id>` 可以包含 ASCII 字母、数字、`.`、`_`、`/`、`@`、`:`、`+`、`-`；其它字符在加载期即被拒绝。
 
-- 通过：模型被加载过，且每次加载事件都指向钉住的模型并报告钉住的哈希。
+- 通过：模型被加载过，且每次加载事件都指向配置的模型并报告配置的哈希。
 - 拒绝：任一加载事件的 model-id 或哈希不符；或没有任何加载事件。
 
 ### 平台姿态：`tdx`
@@ -265,15 +264,15 @@
 } }
 ```
 
-把可信度量集锚定到记录在透明日志中的 ReleaseManifest，而不是把摘要内联钉住。appraisal 时条目用实际 TDX 度量值重建 manifest 并与日志记录的参考比对，因此可信基线存放在日志里，策略只携带指向它的指针。这是 `modules` 的条目类型；早期版本顶层 `attestation_policy.type = "transparency_log"` 的写法已不存在。
+用这个条目把可信度量值放在透明日志记录的 release manifest 里，不必把摘要写进策略。appraisal 时，TNG 把当前证据里的度量值与日志里的基线比对，策略只负责指向那条日志记录。这是 `modules` 的条目类型；早期版本顶层 `attestation_policy.type = "transparency_log"` 的写法已不存在。
 
-**加载期与 appraisal 期。** primary 为 `rekor-v1` 时条目在策略加载时拉取并认证：按 `logIndex` 取出日志条目，验证其签名检查点、Merkle 包含证明与 Signed Entry Timestamp，并把条目的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供公钥。条目在加载期逐个拉取，因此包含多个 `rekor-v1` 条目的策略会为每个条目各做一次日志查询，加载耗时随条目数增加。primary 为 `artifact-server` 时策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用；`ok` 不会触发，被撤销的度量返回 `deny`（硬拒绝），同样不会回退。primary 失败且没有 fallback 即拒绝。
+**加载期与 appraisal 期。** primary 为 `rekor-v1` 时，TNG 在策略加载时拉取并检查日志条目：按 `logIndex` 取出条目，校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。条目逐个拉取，因此包含多个 `rekor-v1` 条目的策略会为每个条目各做一次查询。primary 为 `artifact-server` 时，策略加载不访问网络，条目在 appraisal 时解析。可选的 fallback 只在 primary 返回 `fail` 时启用；`ok` 不会触发，被撤销的度量返回 `deny`，同样不会回退。primary 失败且没有 fallback 时，条目拒绝。
 
-**校验内容。** 条目从 TDX quote 与 UEFI 事件日志提取实际度量值，按度量类型排序（发布者使用的顺序）后重建 manifest，并将其 SHA-256 与日志记录的 `payloadHash` 比对。由于重建前先排序，配置里的顺序无关紧要；类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
+**校验内容。** 条目把当前 TDX 证据里的度量值与透明日志记录的基线比对。度量类型、任一取值或 `schemaVersion` 与基线不一致时，验证失败。`publishedMeasurements` 的顺序不影响结果。发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
 
 **平台姿态。** 由独立的 `tdx` 条目表达：加上 `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` 即保留旧的 non-debug 与事件日志检查，同时不引入新的属性位要求。TDX 平台识别是自动的。只有 `transparency_log` 条目时，`hardware` 仅要求该识别。
 
-**重复语义。** `transparency_log` 是唯一可以在同一组内出现多次的条目类型。同一组内两个条目 AND，两条日志锚定基线都必须通过；分属两组的两个条目 OR，任一基线通过即可。前者用于要求多条日志同时成立，后者用于接受多个可接受版本中的任一个。
+**重复语义。** `transparency_log` 是唯一可以在同一组内出现多次的条目类型。同一组内两个条目都必须与各自的日志匹配；分属两组的两个条目是备选关系，任一匹配即可。前者用于要求多条日志同时成立，后者用于接受多个版本中的任一个。
 
 ```json
 "modules": [
@@ -291,7 +290,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复。重建前会按类型排序，配置顺序不影响结果 |
+| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`，同一类型不得重复。容器镜像类型要和透明日志里记录的名字完全一致；`com.alibabacloud.` 别名与日志记录不一致，会在加载时被拒绝。顺序不影响结果 |
 | `schemaVersion` | string | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | 列表 | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | string | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
@@ -304,10 +303,7 @@
 | `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
 | `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
-`publishedMeasurements` 比模块的度量类型更窄：只接受上述三种类型，也就是 cmaas release manifest 发布的形状。`tdx.ovmf`、`tdx.uki` 以及任意的 `container.image.<repo>` 都不接受。
-
 **可选的未知字段会被静默忽略。** service 条目内部的未知字段（例如把 `publisherPublicKeyPem` 或 `rekorPublicKeyPem` 拼错）不会导致加载失败，条目会回退到内置公钥。修改 service 条目后，请用 `tng tools policy export` 确认生成的规则。
-
 条目的度量提取沿用已删除顶层策略的规则，尚未与其他条目的 `tdx.*`、`container.image.*` 度量谓词统一；例如 `tdx.kernel` 的提取还额外要求 RTMR 索引为 2、blob 长度为 32 MiB。统一两者是后续独立改动。
 
 **从顶层类型迁移。** 把旧策略的取值包进一个 `modules` 条目：`{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`。若需要旧的 non-debug 与事件日志检查，再加一个 `tdx` 条目（TDX 识别是自动的）；只有 `transparency_log` 条目时 `hardware` 退化为仅要求该识别。删除任何非空 `reference_values`，新策略会在加载期拒绝它。

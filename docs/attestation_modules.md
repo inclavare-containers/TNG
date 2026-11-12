@@ -82,7 +82,6 @@ These are rejected when the policy loads, before any appraisal runs:
 - the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines). `transparency_log` is the one exception: it may repeat within a group so several log-anchored baselines must all verify;
 - a value in the wrong shape or format: wrong digest length or uppercase hex (all digests are lowercase), a `com.alibabacloud.container.image.*` value without the `sha256:` prefix, an object given where the type expects a string or the reverse;
 - a `transparency_log` entry whose value violates the field constraints in the Transparency log section below. Unknown fields at the top level of the value are rejected; unknown fields nested inside a `services[]` entry are currently ignored. A `fallbackServices` list without `fallbackPublishedMeasurements` is accepted but has no effect;
-- a name segment (`<repo>`, `<model-id>`) containing characters outside `[A-Za-z0-9._/@:+-]`;
 - an unknown field inside a `tdx`, `nvidia`, or `com.alibabacloud.gpu` options object; the `com.alibabacloud.gpu` value must be the empty object `{}`;
 - an `nvidia` entry whose `min_count` is below 1 (omit the entry to disable GPU appraisal);
 - a `tdx` `collateral.min_tcb_date` that is not `YYYY-MM-DD`;
@@ -146,10 +145,10 @@ Pins the unified kernel image (UKI) measurement: firmware measures the UKI as an
 { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
 ```
 
-The unprefixed `container.image.<repo>` spelling is a permanent alias. This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. Pins the OCI manifest digest of a workload image. Every `kangaroo/pull-image` AAEL event whose image reference's repo tail equals `<repo>` must carry a `digest` equal to the pinned `sha256:` constant. `<repo>` is free-form (it is the repo tail of the image reference being pinned, the last path segment with registry host, path prefix, and tag/digest stripped); a pinned repo with no matching pull-image event rejects.
+The short form `container.image.<repo>` is also accepted. The entry checks the image pull events that Alibaba Cloud records as AAEL events: every pull of an image whose repository name is `<repo>` must report the `sha256:` digest configured in the entry. `<repo>` is the last path segment of the image reference, after removing the registry host, path prefix, tag, and digest. Use only ASCII letters, digits, `.`, `_`, and `-`; a name with `/`, `@`, or `:` cannot match the reference and is rejected when the policy loads. When the same type is used in a `transparency_log` entry's `publishedMeasurements` or `fallbackPublishedMeasurements`, write it exactly as the transparency log records it, usually the same last path segment. If no pull event matches, the entry fails.
 
-- Pass: the image was pulled and every pull of that repo reports the pinned digest.
-- Fail: a pulled image whose digest differs, or a pinned repo with no pull event at all (fail-closed, not skipped).
+- Pass: the image was pulled and every pull of that repository reports the configured digest.
+- Fail: a pull reports a different digest, or no pull event matches (the entry fails closed).
 
 ### Model: `com.alibabacloud.ai.model.<model-id>`
 
@@ -157,9 +156,9 @@ The unprefixed `container.image.<repo>` spelling is a permanent alias. This entr
 { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
 ```
 
-The unprefixed `ai.model.<model-id>` spelling is a permanent alias. This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. Pins a model's measured integrity hash, 64 lowercase hex. The hash comes from the measurement convention for that model (for example an fs-verity digest computed over the stored model). `<model-id>` matches the model identifier in the load event exactly (a modelscope-id style name is the convention). Every `alibabacloud.com` `pai/load-model` AAEL event must carry the pinned `<model-id>` in its `model-id` field and the pinned 64-hex constant in its `hash` field, and at least one load-model event must exist; a missing event rejects. The model id is part of the check, not just the hash: an extra load event for a different model fails the entry closed.
+The unprefixed `ai.model.<model-id>` spelling is a permanent alias. This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. Checks a model's measured integrity hash, 64 lowercase hex. The hash comes from the measurement convention for that model (for example an fs-verity digest computed over the stored model). `<model-id>` matches the model identifier in the load event exactly (a modelscope-id style name is the convention). Every `alibabacloud.com` `pai/load-model` AAEL event must carry the configured `<model-id>` in its `model-id` field and the configured 64-hex value in its `hash` field, and at least one load-model event must exist; a missing event rejects. The entry also checks the model id; an extra load event for a different model fails the entry closed. `<model-id>` may contain ASCII letters, digits, `.`, `_`, `/`, `@`, `:`, `+`, and `-`; any other character is rejected at load.
 
-- Pass: the model was loaded and every load event names the pinned model with the pinned hash.
+- Pass: the model was loaded and every load event names the configured model with the configured hash.
 - Fail: any load event with a different model id or hash, or no load event at all.
 
 ### Platform posture: `tdx`
@@ -265,15 +264,15 @@ The whitelist fields compare exact strings; an empty list means no restriction. 
 } }
 ```
 
-Anchors the trusted measurement set to a ReleaseManifest recorded in a transparency log instead of pinning the digests inline. At appraisal the entry reconstructs the manifest from the actual TDX measurement values and compares it to the logged reference, so the trusted baseline lives in the log and the policy carries only the pointer to it. This is a `modules` entry type; the top-level `attestation_policy.type = "transparency_log"` of earlier releases no longer exists.
+Use this entry to keep the trusted measurement values in a release manifest recorded in a transparency log, instead of writing the digests into the policy. At appraisal, TNG compares the measurements in the current evidence with the recorded baseline, so the policy only points to the log entry. This is a `modules` entry type. The top-level `attestation_policy.type = "transparency_log"` form from earlier releases no longer exists.
 
-**Load time and appraisal time.** With a `rekor-v1` primary the entry is fetched and authenticated when the policy loads: the log entry is looked up by `logIndex`, its signed checkpoint, Merkle inclusion proof, and Signed Entry Timestamp are verified, and the entry's `payloadHash` and DSSE publisher signature are baked into the generated rule. Omitting `rekorPublicKeyPem` uses the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; other logs must supply their key. Entries are fetched sequentially at load, so a policy with several `rekor-v1` entries performs one log lookup per entry and pays that cost once per entry. With an `artifact-server` primary the policy loads without network access and the entry is resolved at appraisal time. The optional fallback is consulted only when the primary returns `fail`; `ok` never triggers it, and a revoked measurement returns `deny`, a hard deny that never falls back. A failed primary with no fallback rejects.
+**When it loads and when it appraises.** With a `rekor-v1` primary, TNG fetches and checks the log entry when the policy loads: it looks up the entry by `logIndex` and verifies the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp. If `rekorPublicKeyPem` is omitted, TNG uses the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; other logs must supply their own. Entries are fetched one by one, so a policy with several `rekor-v1` entries performs one lookup per entry. With an `artifact-server` primary, the policy loads without network access and the entry is resolved at appraisal. The optional fallback is used only when the primary returns `fail`; `ok` does not trigger it, and a revoked measurement returns `deny`, which does not fall back either. If the primary fails and there is no fallback, the entry rejects.
 
-**What it verifies.** The entry extracts the actual measurement values from the TDX quote and the UEFI event log, sorts the measurement types by type (the publisher's canonical order), reconstructs the manifest in that sorted order, and compares its SHA-256 with the logged `payloadHash`. Because the types are sorted, the order in the configuration does not matter; a mismatch in the type set, a value, the `schemaVersion`, or the logged manifest's own ordering rejects. The DSSE publisher signature is always verified, against `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
+**What it verifies.** The entry compares the measurements in the current TDX evidence with the baseline recorded in the transparency log. If the measurement types, any value, or the `schemaVersion` differ from the baseline, verification fails. The order of `publishedMeasurements` does not matter. The publisher signature is always checked, with `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
 
 **Platform posture.** A separate `tdx` entry expresses it: add `{"type": "tdx", "value": {"sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow"}}` to keep the old non-debug and event-log checks without imposing the newer attribute gates. TDX platform recognition is automatic. With only `transparency_log` entries, `hardware` requires that recognition alone.
 
-**Repeat semantics.** `transparency_log` is the one entry type that may appear more than once in the same group. Two entries in one group AND, so both log-anchored baselines must verify; two entries in separate groups OR, so either baseline suffices. Use the first shape to require several logs, the second to accept any of several versions.
+**Repeat semantics.** `transparency_log` is the one entry type that may appear more than once in the same group. Two entries in one group must both match their logs; two entries in separate groups are alternatives, so either one may match. Use the first form to require several logs, the second to accept any of several versions.
 
 ```json
 "modules": [
@@ -291,7 +290,7 @@ Anchors the trusted measurement set to a ReleaseManifest recorded in a transpare
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types; allowed values are `tdx.td-shim`, `tdx.kernel`, and `container.image.cmaas-runtime`, and a type may not repeat. Types are sorted before hashing, so the configuration order does not matter |
+| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types; allowed values are `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`; a type may not repeat. Write the container image type exactly as the transparency log records it; the `com.alibabacloud.` alias does not match the logged name and is rejected at load. Order does not matter |
 | `schemaVersion` | string | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | list | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | string | — | (required) `"rekor-v1"` or `"artifact-server"` |
@@ -304,11 +303,9 @@ Anchors the trusted measurement set to a ReleaseManifest recorded in a transpare
 | `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
 | `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 
-`publishedMeasurements` is narrower than the module measurement types: it accepts only the three types above, which is the shape the cmaas release manifest publishes. `tdx.ovmf`, `tdx.uki`, and arbitrary `container.image.<repo>` are not accepted.
-
 **Unknown optional keys are silently ignored.** An unknown field inside a service entry, such as a mistyped `publisherPublicKeyPem` or `rekorPublicKeyPem`, does not fail the load; the entry falls back to the built-in key. After editing a service entry, confirm the generated rule with `tng tools policy export`.
 
-The entry extracts measurements with the same rules the removed top-level policy used, which are not yet unified with the `tdx.*` and `container.image.*` measurement predicates of the other entries; for example, the `tdx.kernel` extraction also pins RTMR index 2 and the 32 MiB blob length. Unifying them is a separate change.
+The entry extracts measurements with the same rules the removed top-level policy used, which are not yet unified with the `tdx.*` and `container.image.*` measurement predicates of the other entries; for example, the `tdx.kernel` extraction also requires RTMR index 2 and a 32 MiB blob length. Unifying them is a separate change.
 
 **Migrating from the top-level type.** Wrap the old policy value in a `modules` entry: `{"type": "modules", "modules": [{"type": "transparency_log", "value": <old value>}]}`. Add a `tdx` entry if the old non-debug and event-log checks are wanted (TDX recognition is automatic); with only the `transparency_log` entry, `hardware` reduces to that recognition. Delete any non-empty `reference_values`, which the new policy rejects at load.
 

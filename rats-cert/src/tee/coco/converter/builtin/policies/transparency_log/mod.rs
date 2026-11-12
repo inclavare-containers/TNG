@@ -2,28 +2,59 @@
 //! the rekor-v1 and artifact-server service implementations.
 
 use super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
+use super::modules::is_valid_image_repo_name;
 
 pub(crate) mod artifact_server;
 pub(crate) mod rekor_v1;
+
+/// A `publishedMeasurements` entry, parsed in one place. The raw string stays
+/// the manifest `type` and is preserved byte-for-byte; the enum only names the
+/// family whose transparency_log-specific acceptance rule `parse` applies.
+#[derive(Debug)]
+enum PublishedMeasurementType {
+    TdShim,
+    TdKernel,
+    ContainerImage,
+}
+
+impl PublishedMeasurementType {
+    fn parse(measurement_type: &str) -> anyhow::Result<Self> {
+        match measurement_type {
+            "tdx.td-shim" => Ok(Self::TdShim),
+            "tdx.kernel" => Ok(Self::TdKernel),
+            _ => match measurement_type.strip_prefix("container.image.") {
+                Some(repository_name) if is_valid_image_repo_name(repository_name) => {
+                    Ok(Self::ContainerImage)
+                }
+                Some(repository_name) => anyhow::bail!(
+                    "publishedMeasurements type {measurement_type:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
+                ),
+                None if measurement_type.starts_with("com.alibabacloud.container.image.") => {
+                    anyhow::bail!(
+                        "publishedMeasurements type {measurement_type:?} must use the log manifest's original spelling container.image.<repo>, not the com.alibabacloud. alias"
+                    )
+                }
+                None => anyhow::bail!(
+                    "unsupported publishedMeasurements type {measurement_type}"
+                ),
+            },
+        }
+    }
+}
 
 /// Validate one `transparency_log` module entry. Runs at policy load, before
 /// any Rekor fetch or appraisal, so a malformed entry is a configuration error
 /// rather than a panic downstream.
 pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result<()> {
-    let pm = cfg.published_measurements.as_slice();
-    if pm.is_empty() {
+    let published_measurements = cfg.published_measurements.as_slice();
+    if published_measurements.is_empty() {
         anyhow::bail!("publishedMeasurements must be non-empty");
     }
-    let mut seen = std::collections::HashSet::new();
-    for t in pm {
-        if !matches!(
-            t.as_str(),
-            "tdx.td-shim" | "tdx.kernel" | "container.image.cmaas-runtime"
-        ) {
-            anyhow::bail!("unsupported publishedMeasurements type {t}");
-        }
-        if !seen.insert(t) {
-            anyhow::bail!("duplicate publishedMeasurements type {t}");
+    let mut seen_measurement_types = std::collections::HashSet::new();
+    for measurement_type in published_measurements {
+        PublishedMeasurementType::parse(measurement_type)?;
+        if !seen_measurement_types.insert(measurement_type) {
+            anyhow::bail!("duplicate publishedMeasurements type {measurement_type}");
         }
     }
 
@@ -31,8 +62,8 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
         anyhow::bail!("services must be non-empty");
     }
     let mut artifact_server = false;
-    for (i, svc) in cfg.services.iter().enumerate() {
-        match svc {
+    for (service_index, service) in cfg.services.iter().enumerate() {
+        match service {
             TransparencyServiceConfig::ArtifactServer {
                 url,
                 log_services,
@@ -43,21 +74,30 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
                     anyhow::bail!("artifact-server must be the only primary service");
                 }
                 if url.is_empty() {
-                    anyhow::bail!("services[{i}] url is required");
+                    anyhow::bail!("services[{service_index}] url is required");
                 }
                 if log_services.is_empty() {
-                    anyhow::bail!("services[{i}] logServices non-empty");
+                    anyhow::bail!("services[{service_index}] logServices non-empty");
                 }
-                let mut ls = std::collections::HashSet::new();
-                for (j, s) in log_services.iter().enumerate() {
-                    if s.type_ != "rekor-v1" {
-                        anyhow::bail!("services[{i}].logServices[{j}] type must be rekor-v1");
+                let mut seen_log_services = std::collections::HashSet::new();
+                for (log_service_index, log_service) in log_services.iter().enumerate() {
+                    if log_service.type_ != "rekor-v1" {
+                        anyhow::bail!(
+                            "services[{service_index}].logServices[{log_service_index}] type must be rekor-v1"
+                        );
                     }
-                    if s.url.is_empty() {
-                        anyhow::bail!("services[{i}].logServices[{j}] url required");
+                    if log_service.url.is_empty() {
+                        anyhow::bail!(
+                            "services[{service_index}].logServices[{log_service_index}] url required"
+                        );
                     }
-                    if !ls.insert((s.type_.clone(), s.url.trim_end_matches('/'))) {
-                        anyhow::bail!("services[{i}].logServices[{j}] duplicate");
+                    if !seen_log_services.insert((
+                        log_service.type_.clone(),
+                        log_service.url.trim_end_matches('/'),
+                    )) {
+                        anyhow::bail!(
+                            "services[{service_index}].logServices[{log_service_index}] duplicate"
+                        );
                     }
                 }
             }
@@ -65,10 +105,10 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
                 log_url, log_index, ..
             } => {
                 if log_url.is_empty() {
-                    anyhow::bail!("services[{i}] logUrl required");
+                    anyhow::bail!("services[{service_index}] logUrl required");
                 }
                 if *log_index < 0 {
-                    anyhow::bail!("services[{i}] logIndex must be >= 0");
+                    anyhow::bail!("services[{service_index}] logIndex must be >= 0");
                 }
             }
         }
@@ -88,37 +128,38 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
             anyhow::bail!("fallbackPublishedMeasurements requires fallbackServices");
         }
         (None, None) => return Ok(()),
-        (Some(fs), _) => {
+        (Some(fallback_services), _) => {
             if !artifact_server {
                 anyhow::bail!("fallbackServices is only supported with an artifact-server primary");
             }
-            if fs.is_empty() {
+            if fallback_services.is_empty() {
                 anyhow::bail!("fallbackServices must be non-empty");
             }
-            for (i, svc) in fs.iter().enumerate() {
-                match svc {
+            for (service_index, service) in fallback_services.iter().enumerate() {
+                match service {
                     TransparencyServiceConfig::RekorV1 {
                         log_url, log_index, ..
                     } => {
                         if log_url.is_empty() {
-                            anyhow::bail!("fallbackServices[{i}] logUrl required");
+                            anyhow::bail!("fallbackServices[{service_index}] logUrl required");
                         }
                         if *log_index < 0 {
-                            anyhow::bail!("fallbackServices[{i}] logIndex >= 0");
+                            anyhow::bail!("fallbackServices[{service_index}] logIndex >= 0");
                         }
                     }
-                    _ => anyhow::bail!("fallbackServices[{i}] must be rekor-v1"),
+                    _ => anyhow::bail!("fallbackServices[{service_index}] must be rekor-v1"),
                 }
             }
-            if let Some(fpm) = &cfg.fallback_published_measurements {
-                if fpm.is_empty() {
+            if let Some(fallback_measurements) = &cfg.fallback_published_measurements {
+                if fallback_measurements.is_empty() {
                     anyhow::bail!("fallbackPublishedMeasurements non-empty");
                 }
-                let primary: std::collections::HashSet<&String> = pm.iter().collect();
-                for t in fpm {
-                    if !primary.contains(t) {
+                let validated_primary_types: std::collections::HashSet<&String> =
+                    published_measurements.iter().collect();
+                for fallback_type in fallback_measurements {
+                    if !validated_primary_types.contains(fallback_type) {
                         anyhow::bail!(
-                            "fallbackPublishedMeasurements type {t} not in publishedMeasurements"
+                            "fallbackPublishedMeasurements type {fallback_type} not in publishedMeasurements"
                         );
                     }
                 }
@@ -270,7 +311,10 @@ actual_measurement("tdx.kernel") := digest if {
 
 actual_measurement(type) := digest if {
     startswith(type, "container.image.")
-    repo := replace(type, "container.image.", "")
+    # Validation accepts only the unprefixed `container.image.<repo>` spelling,
+    # so trim exactly one prefix here; `trim_prefix` strips the same prefix the
+    # Rust side strips, keeping validation and extraction aligned on one string.
+    repo := trim_prefix(type, "container.image.")
     some e in input.tdx.uefi_event_logs
     e.details.unicode_name == "AAEL"
     e.details.data.domain == "alibabacloud.com"
@@ -440,82 +484,11 @@ pub(super) fn build_entry_rules(
     }
 }
 
-/// Evaluate a bundled rego policy against `input` and return the four AR4SI
-/// trust-vector values as (executables, hardware, configuration, file_system).
-#[cfg(test)]
-pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
-    use attestation_service::policy_engine::PolicyEngine as _;
-    use std::sync::Arc;
-
-    let rvps = attestation_service::rvps::builtin::BuiltinRvps::new(
-        reference_value_provider_service::config::Config {
-            storage_backend: None,
-            storage:
-                reference_value_provider_service::storage::ReferenceValueStorageConfig::InMemory(
-                    reference_value_provider_service::storage::in_memory::Config {},
-                ),
-        },
-    )
-    .expect("create in-memory RVPS for policy test");
-
-    let engine = attestation_service::policy_engine::opa::OPAInMemory::with_raw_default_policy(
-        policy,
-        super::super::DEFAULT_POLICY_ID,
-        // The artifact-server address is only consumed under
-        // attestation-service's `policy-artifact-server` feature (not
-        // enabled for these tests), so this value has no effect here.
-        // Pass trustee's own default to mirror upstream usage.
-        attestation_service::config::DEFAULT_ARTIFACT_SERVER_ADDRESS,
-    )
-    .expect("create OPA in-memory engine")
-    // Inject `tng.sha256` so the transparency-log rego policy's
-    // `tng.sha256(json.marshal(manifest))` call resolves to a real
-    // sha256 during the behavior test below. Under `crypto-rustcrypto`,
-    // `tng.verify_dsse_signature` is injected too; see
-    // `builtin_as_host_await_functions`.
-    .with_extra_extension_functions(
-        crate::tee::coco::converter::builtin::host_fns::builtin_as_host_await_functions(),
-    );
-    // The four rules our templates define. The real AS also queries four more
-    // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
-    // skipped when a policy leaves them undefined, so they need not be queried.
-    let rules = vec![
-        "executables".to_string(),
-        "hardware".to_string(),
-        "configuration".to_string(),
-        "file_system".to_string(),
-    ];
-    // The upstream `PolicyEngine::evaluate` resolves Rego
-    // `query_reference_value(...)` calls through a `ReferenceValueResolver`.
-    // None of these templates query reference values, so an empty in-memory
-    // RVPS resolver suffices.
-    let resolver = Arc::new(attestation_service::rvps::ReferenceValueResolver::new(
-        Arc::new(rvps) as Arc<dyn attestation_service::rvps::RvpsApi>,
-    ));
-    let result = engine
-        .evaluate(input, super::super::DEFAULT_POLICY_ID, rules, resolver)
-        .await
-        .expect("evaluate policy");
-    let get = |name: &str| -> i8 {
-        result
-            .rules_result
-            .get(name)
-            .and_then(|v| v.as_i64())
-            .and_then(|n| i8::try_from(n).ok())
-            .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
-    };
-    (
-        get("executables"),
-        get("hardware"),
-        get("configuration"),
-        get("file_system"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::load_policy;
     use super::super::modules::{build_modules_policy_with_resolved, parse_module_groups, Module};
+    use super::super::test_support::eval_policy_vector;
     use super::*;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
@@ -662,7 +635,7 @@ mod tests {
         tdx_quote_input(None, "0000001000000000", events)
     }
 
-    fn aael_event(digest: &str) -> Value {
+    fn aael_event_for_reference(reference: &str, digest: &str) -> Value {
         json!({
             "type_name": "EV_EVENT_TAG",
             "details": {
@@ -671,12 +644,16 @@ mod tests {
                     "domain": "alibabacloud.com",
                     "operation": "kangaroo/pull-image",
                     "content": {
-                        "reference": "registry.example.com/ns/cmaas-runtime:latest",
+                        "reference": reference,
                         "digest": digest,
                     },
                 },
             },
         })
+    }
+
+    fn aael_event(digest: &str) -> Value {
+        aael_event_for_reference("registry.example.com/ns/cmaas-runtime:latest", digest)
     }
 
     fn td_payload_event(event_b64: &str, digest: &str, index: i64) -> Value {
@@ -826,6 +803,65 @@ mod tests {
     }
 
     #[test]
+    fn published_measurement_type_parses_each_supported_family() {
+        assert!(matches!(
+            PublishedMeasurementType::parse("tdx.td-shim"),
+            Ok(PublishedMeasurementType::TdShim)
+        ));
+        assert!(matches!(
+            PublishedMeasurementType::parse("tdx.kernel"),
+            Ok(PublishedMeasurementType::TdKernel)
+        ));
+        for repository_name in ["busybox", "my-app.v2"] {
+            let measurement_type = format!("container.image.{repository_name}");
+            assert!(
+                matches!(
+                    PublishedMeasurementType::parse(&measurement_type),
+                    Ok(PublishedMeasurementType::ContainerImage)
+                ),
+                "expected container image for {measurement_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_invalid_container_repository() {
+        for measurement_type in [
+            "container.image.",
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            let error =
+                PublishedMeasurementType::parse(measurement_type).expect_err(measurement_type);
+            assert!(
+                format!("{error:#}").contains("invalid container image repository"),
+                "{measurement_type}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_prefixed_alias() {
+        let error = PublishedMeasurementType::parse("com.alibabacloud.container.image.busybox")
+            .expect_err("prefixed alias must be rejected");
+        assert!(
+            format!("{error:#}").contains("original spelling"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_unsupported_type() {
+        let error = PublishedMeasurementType::parse("tdx.uki")
+            .expect_err("tdx.uki is not a published measurement type");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn transparency_log_entry_validation_rejects() {
         fn entry_error(value: Value) -> String {
             let cfg: ModuleGroupsConfig =
@@ -866,6 +902,72 @@ mod tests {
             "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
         }))
         .contains("duplicate publishedMeasurements type"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["container.image.busybox", "container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("duplicate publishedMeasurements type"));
+
+        // Any single-segment container image repository is accepted.
+        let accepted = json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(accepted)])).expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        for measurement_type in [
+            "container.image.",
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            let error = entry_error(json!({
+                "publishedMeasurements": [measurement_type],
+                "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            }));
+            assert!(
+                error.contains("invalid container image repository"),
+                "{measurement_type}: {error}"
+            );
+        }
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["com.alibabacloud.container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("original spelling"));
+
+        let accepted_fallback = json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["container.image.busybox"],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(accepted_fallback)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["container.image.nginx"],
+        }))
+        .contains("not in publishedMeasurements"));
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": [],
+        }))
+        .contains("fallbackPublishedMeasurements non-empty"));
 
         // services.
         assert!(entry_error(json!({
@@ -1059,6 +1161,26 @@ mod tests {
         // Transparency gates only executables; hardware is recognition only.
         assert!(!policy.contains("group_0_hardware_ok"));
         assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
+    }
+
+    #[test]
+    fn transparency_log_renders_arbitrary_container_repo_with_trim_prefix() {
+        let resolved = ResolvedRekor {
+            payload_hash: "00".repeat(32),
+            dsse_signature: "sig".to_string(),
+            publisher_key: "key".to_string(),
+        };
+        let policy = render_rekor(&["container.image.busybox"], &resolved);
+
+        assert!(policy.contains("\"container.image.busybox\""), "{policy}");
+        assert!(
+            policy.contains("repo := trim_prefix(type, \"container.image.\")"),
+            "{policy}"
+        );
+        assert!(
+            !policy.contains("repo := replace(type, \"container.image.\", \"\")"),
+            "{policy}"
+        );
     }
 
     #[test]
@@ -1604,10 +1726,9 @@ mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
     async fn transparency_log_rekor_container_image_extracts_real_pai_event_log() {
-        // The real PAI AAEL pull-image event resolves to repo `busybox`. The
-        // allowed published measurement type is `container.image.cmaas-runtime`,
-        // so rewrite the reference's repo tail while keeping the real event
-        // structure and digest.
+        // The real PAI AAEL pull-image event resolves to repo `busybox`, which
+        // is the repository segment the logged manifest publishes, so the event
+        // log is used as-is.
         let image_digest =
             "sha256:16ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
 
@@ -1616,21 +1737,11 @@ mod tests {
                 .expect("read real PAI event-log fixture");
         let ccel: eventlog::CcEventLog =
             ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let mut parsed = serde_json::to_value(&ccel)
+        let parsed = serde_json::to_value(&ccel)
             .expect("serialize parsed CC event log")
             .as_object()
             .expect("parsed event log is an object")
             .clone();
-        for event in parsed["uefi_event_logs"]
-            .as_array_mut()
-            .expect("event log array")
-        {
-            if let Some(reference) = event.pointer_mut("/details/data/content/reference") {
-                if let Some(s) = reference.as_str() {
-                    *reference = json!(s.replace("busybox", "cmaas-runtime"));
-                }
-            }
-        }
 
         let mut tdx = serde_json::Map::new();
         tdx.insert(
@@ -1646,9 +1757,9 @@ mod tests {
         );
         let input = json!({"tdx": tdx}).to_string();
 
-        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", image_digest)]);
+        let logged = manifest("1.0.0", &[("container.image.busybox", image_digest)]);
         let policy = render_rekor(
-            &["container.image.cmaas-runtime"],
+            &["container.image.busybox"],
             &resolved_from_manifest(&logged),
         );
         assert_eq!(
@@ -1658,15 +1769,58 @@ mod tests {
         );
 
         let tampered = "sha256:26ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
-        let bad_logged = manifest("1.0.0", &[("container.image.cmaas-runtime", tampered)]);
+        let bad_logged = manifest("1.0.0", &[("container.image.busybox", tampered)]);
         let bad_policy = render_rekor(
-            &["container.image.cmaas-runtime"],
+            &["container.image.busybox"],
             &resolved_from_manifest(&bad_logged),
         );
         assert_eq!(
             eval_policy_vector(&bad_policy, &input).await,
             (97, 2, 2, 2),
             "a published image digest that differs from the real PAI AAEL event must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_accepts_dotted_repository_name() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let logged = manifest("1.0.0", &[("container.image.my-app.v2", digest)]);
+        let policy = render_rekor(
+            &["container.image.my-app.v2"],
+            &resolved_from_manifest(&logged),
+        );
+
+        let ok = tdx_input(&[aael_event_for_reference(
+            "registry.example.com/ns/my-app.v2:latest",
+            digest,
+        )]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "a repository name carrying '.' and '-' must affirm"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_strips_only_one_container_image_prefix() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        // The repo tail itself starts with `container.image.`. Trimming exactly
+        // one prefix leaves it intact; a global replace would reduce it to
+        // `foo`, which never equals the extracted repo tail.
+        let measurement_type = "container.image.container.image.foo";
+        let logged = manifest("1.0.0", &[(measurement_type, digest)]);
+        let policy = render_rekor(&[measurement_type], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[aael_event_for_reference(
+            "registry.example.com/ns/container.image.foo:v1",
+            digest,
+        )]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "trim_prefix must strip exactly one container.image. prefix"
         );
     }
 
@@ -2476,13 +2630,16 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             "correct config + evidence must affirm"
         );
 
-        // 1. An unsupported measurement type is rejected at load.
-        let cfg_t1 = cfg.replace("cmaas-runtime", "cmaas-WRONG");
+        // 1. An unsupported measurement type is rejected at load. Replace the whole
+        // type string: only swapping the repo suffix would leave a valid
+        // container image type and move the failure to the fetch instead.
+        let wrong_type = cfg.replace("container.image.cmaas-runtime", "tdx.uki");
+        let error = run_transparency_log_appraisal(&wrong_type, &quote, &cc_eventlog)
+            .await
+            .expect_err("unsupported publishedMeasurements type must fail at load");
         assert!(
-            run_transparency_log_appraisal(&cfg_t1, &quote, &cc_eventlog)
-                .await
-                .is_err(),
-            "wrong publishedMeasurements type must fail"
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
         );
 
         // 2. Wrong schemaVersion.

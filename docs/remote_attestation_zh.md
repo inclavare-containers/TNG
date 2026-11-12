@@ -504,7 +504,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **场景 4：transparency_log 锚定（高级）**
 
-目标：把可信度量集锚定到一个透明日志里的 ReleaseManifest，appraisal 时拿实际度量值和它比对。在 `modules` 策略里加一个 `transparency_log` 条目，提供 `publishedMeasurements` 和一个 service；`schemaVersion` 不写时为 `1.0.0`。需要平台姿态检查时，再加一个 `tdx` 条目。
+目标：把可信度量值放在透明日志记录的 release manifest 里，appraisal 时拿当前度量值和它比对。在 `modules` 策略里加一个 `transparency_log` 条目，提供 `publishedMeasurements` 和一个 service；`schemaVersion` 不写时为 `1.0.0`。需要平台姿态检查时，再加一个 `tdx` 条目。
 
 <details>
 <summary>示例：带 transparency_log 条目的 modules 策略</summary>
@@ -541,26 +541,25 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 <details>
 <summary><code>transparency_log</code> 条目校验什么</summary>
 
-条目把可信度量集锚定到透明日志中的 ReleaseManifest。primary 有两种，区别在可信参考从哪里来。
+条目把可信度量值放在透明日志记录的 release manifest 里。primary 有两种，区别在日志基线从哪里来。
 
 **primary 为 `rekor-v1`，策略加载时：**
 
 - 按配置的 `logUrl` 与 `logIndex` 拉取条目。
-- 认证条目：校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
-- 把可信的 `payloadHash` 与 DSSE 发布者签名烘焙进生成的规则。
+- 校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
 
 **primary 为 `artifact-server`，appraisal 时：**
 
-- 把重建的 manifest 发往配置的 `url` 解析。
-- 可选的 fallback 只在 primary 返回 `fail` 时启用。`ok` 不回退；被撤销的度量返回 `deny`（硬拒绝），也不回退。primary 失败且没有 fallback 即拒绝。
+- 把当前证据里的度量值发往配置的 `url` 比对。
+- 可选的 fallback 只在 primary 返回 `fail` 时启用。`ok` 不回退；被撤销的度量返回 `deny`，也不回退。primary 失败且没有 fallback 即拒绝。
 
-**两种 primary 共用的 appraisal 步骤：**
+**两种 primary 都会检查：**
 
-- 从 TDX quote（如 `tdx.td-shim` 对应的 `mr_td`）与 UEFI 事件日志（如 `container.image.cmaas-runtime` 对应的 AAEL `kangaroo/pull-image` 事件）中提取实际度量值。
-- 按度量类型排序后重建 manifest，把它的哈希与可信 `payloadHash` 比对。类型集合、某个值、`schemaVersion` 或日志 manifest 自身的顺序不匹配即拒绝。配置里的顺序无关紧要，因为重建前会先排序。
-- DSSE 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
+- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件。
+- 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
+- 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
-**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志 manifest 的值。
+**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`。容器镜像类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
 
 **平台姿态：** 由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别；需要 non-debug 与事件日志检查时，加一个 `tdx` 条目，并把属性位门设为 `allow`。
 
@@ -571,7 +570,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`container.image.cmaas-runtime`，同一类型不得重复。重建前会按类型排序，配置顺序不影响结果 |
+| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`。容器镜像类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复。顺序不影响结果 |
 | `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
