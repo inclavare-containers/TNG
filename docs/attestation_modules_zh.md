@@ -78,7 +78,7 @@
 以下情况在策略加载期即被拒绝，不会进入运行期：
 
 - 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.`、`rootfs.cc` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
-- 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
+- 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。有两类例外：`transparency_log` 可以在同一组内重复，以便多条日志锚定基线都必须通过；容器镜像类型可以重复，用来列出同一仓库接受的多个 digest，同一仓库的规范名与别名算作同一个类型。其他类型（包括 `ai.model.<model-id>`）不得重复；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象，或 `tdx`/`nvidia` 给了字符串；
 - `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。`fallbackServices` 单独出现会被接受，但没有效果；
 - `tdx`、`nvidia` 或 `com.alibabacloud.gpu` 配置对象里出现未知字段；`com.alibabacloud.gpu` 的取值必须是空对象 `{}`；
@@ -134,7 +134,11 @@
 { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
 ```
 
-该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住工作负载镜像的 OCI manifest digest。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `kangaroo/pull-image` 事件。条目看的是仓库名为 `<repo>` 的事件。至少要有这样一条事件，每条都带 `digest`，并且所有事件的 digest 相同，等于钉住的 `sha256:` 值。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。同一个类型写在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中时，要与透明日志里的记录一致，通常就是同一个最后一段路径。没有匹配的拉取事件时，条目失败。
+该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住工作负载镜像的 OCI manifest digest。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `kangaroo/pull-image` 事件。条目看的是仓库名为 `<repo>` 的事件。至少要有这样一条事件，每条都带 `digest`。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。
+
+同一个仓库在目标环境中可能同时运行多个版本，因此它的拉取事件可能报出多个不同的 digest。这时同一个 `com.alibabacloud.container.image.<repo>` 类型可以在同一组内出现多次，各条目的取值组成期望 digest 集合，证据中的 digest 集合必须与该集合完全一致：多一个或少一个都失败。同一个值重复写会被接受，只算一次。只写一条时钉住单个 digest，只接受报告该 digest 的证据。
+
+同一个类型写在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中时，要与透明日志里的记录一致，通常就是同一个最后一段路径。没有匹配的拉取事件时，条目失败。
 
 ### 模型：`com.alibabacloud.ai.model.<model-id>`
 
@@ -254,13 +258,13 @@
 
 **加载期与 appraisal 期。** primary 为 `rekor-v1` 时，TNG 在策略加载时拉取并检查日志条目：按 `logIndex` 取出条目，校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。条目逐个拉取，因此包含多个 `rekor-v1` 条目的策略会为每个条目各做一次查询。primary 为 `artifact-server` 时，策略加载不访问网络，条目在 appraisal 时解析。
 
-**校验内容。** 条目把当前 TDX 证据里的度量值与透明日志记录的基线比对。度量类型、任一取值或 `schemaVersion` 与基线不一致时，验证失败。`publishedMeasurements` 的顺序不影响结果。证据缺少任一配置的度量时，验证失败；TNG 不会拿少了这一项的基线与证据比对。发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
+**校验内容。** 条目把当前 TDX 证据里的度量值与透明日志记录的基线比对。度量类型、任一取值或 `schemaVersion` 与基线不一致时，验证失败。`publishedMeasurements` 的顺序不影响结果。容器镜像类型覆盖证据里该仓库报出的全部 digest：manifest 中同一类型可以按 digest 各出现一条，证据中的 digest 集合必须与 manifest 里该类型的 digest 集合完全一致，多一个或少一个都失败。证据缺少任一配置的度量时，验证失败；TNG 不会拿少了这一项的基线与证据比对。发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
 
 **fallback。** 可选的 fallback 只在 primary 返回 `fail` 时使用。`ok` 不会触发；`deny` 表示度量被撤销，是直接拒绝，不会回退。primary 因为缺少配置的度量而无法评定时，按 `fail` 处理，fallback 仍会被咨询。primary 失败且没有配置 fallback，条目拒绝。
 
 **和 `tdx` 条目的关系。** 这个条目只检查度量，平台属性由独立的 `tdx` 条目检查。
 
-**同一组里出现多次。** `transparency_log` 是唯一可以在同一组里重复出现的条目类型。同一组的多个条目必须全部通过；分在不同组的条目互为备选，任意一组通过即可。前者用于要求多条日志同时成立，后者用于接受多个版本中的任意一个。
+**同一组里出现多次。** `transparency_log` 可以在同一组里重复出现。同一组的多个条目必须全部通过；分在不同组的条目互为备选，任意一组通过即可。前者用于要求多条日志同时成立，后者用于接受多个版本中的任意一个。
 
 ```json
 "modules": [
@@ -278,7 +282,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`，同一类型不得重复。容器镜像与 `rootfs.cc` 类型要和透明日志里记录的名字完全一致；`com.alibabacloud.` 别名与日志记录不一致，会在加载时被拒绝。顺序不影响结果 |
+| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`，同一类型不得重复，但容器镜像类型会按证据里观察到的每个 digest 各展开成一条 manifest 条目，这些 digest 必须与日志里该类型记录的完全一致。容器镜像与 `rootfs.cc` 类型要和透明日志里记录的名字完全一致；`com.alibabacloud.` 别名与日志记录不一致，会在加载时被拒绝。顺序不影响结果 |
 | `schemaVersion` | string | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | 列表 | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | string | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
@@ -288,7 +292,7 @@
 | `services[].publisherPublicKeyPem` | string | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
 | `services[].url` | string | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | 列表 | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
-| `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
+| `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。容器镜像类型在这里也按每个 digest 各展开一条。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
 | `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 **从顶层类型迁移。** 把旧策略的取值包进一个 `modules` 条目：`{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`。若需要旧的 non-debug 与事件日志检查，再加一个 `tdx` 条目（TDX 识别是自动的）；只有 `transparency_log` 条目时 `hardware` 退化为仅要求该识别。删除任何非空 `reference_values`，新策略会在加载期拒绝它。

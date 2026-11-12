@@ -555,11 +555,11 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **两种 primary 都会检查：**
 
-- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。
-- 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
+- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件报出的 digest，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。容器镜像类型按 digest 集合比对：仓库运行多个版本时，manifest 中同一类型可以按 digest 各出现一条，证据里的 digest 必须与 manifest 的集合完全一致。
+- 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝；容器镜像类型多一个或少一个 digest 也算不一致。`publishedMeasurements` 的顺序不影响结果。
 - 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
-**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
+**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复，但容器镜像类型会按每个 digest 各展开成一条 manifest 条目，证据里的 digest 集合必须与日志里该类型的集合一致。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
 
 **平台姿态：** 由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别；需要 non-debug 与事件日志检查时，加一个 `tdx` 条目，并把属性位门设为 `allow`。
 
@@ -570,7 +570,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复。顺序不影响结果 |
+| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复；容器镜像类型会按每个 digest 各展开成一条 manifest 条目，证据里的 digest 集合必须与日志里该类型的集合一致。顺序不影响结果 |
 | `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
@@ -580,7 +580,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `services[].url` | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
 | `services[].publisherPublicKeyPem` | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
-| `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
+| `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。容器镜像类型在这里也按每个 digest 各展开一条。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
 | `fallbackServices` | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 </details>
