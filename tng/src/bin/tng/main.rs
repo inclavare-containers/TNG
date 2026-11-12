@@ -336,10 +336,9 @@ async fn main() -> anyhow::Result<()> {
             }
             GlobalSubcommand::Tools(cmd) => {
                 show_banner("tools");
-                crate::tools::run(cmd).await.map_err(|error| {
-                    tracing::error!(?error, "tools command failed");
-                    error
-                })?;
+                crate::tools::run(cmd)
+                    .await
+                    .context("tools command failed")?;
                 Ok::<i32, anyhow::Error>(0)
             }
         }

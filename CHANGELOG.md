@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python wheels tagged manylinux_2_17 now bundle a tng binary that actually runs on glibc 2.17; previously it required glibc 2.29, so installs on systems between 2.17 and 2.28 broke at runtime.
 - `/status/egress/{id}/` advertises only the configured protocol's subtree (`ohttp` or `rats_tls`); previously a rats_tls egress advertised an `ohttp` node whose every path 404s.
 - The `transparency_log` entry no longer silently drops a published measurement that cannot be extracted from the evidence: a manifest is built only when every configured published measurement is extractable, so an incomplete published type set fails the entry instead of comparing a shortened manifest.
+- A failing `tng tools` command logs its error once instead of twice; the remaining line still carries the `tools command failed` context and the full cause chain.
 
 ## [2.12.0] - 2026-10-25
 
