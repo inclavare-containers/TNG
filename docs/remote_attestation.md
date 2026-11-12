@@ -555,7 +555,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 **What both primaries check:**
 
-- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`.
+- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` digests for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`. A container image type compares digest sets: when the repository runs several versions the manifest may list that type once per digest, and the evidence must equal it exactly.
 - If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
 - The publisher signature is always checked: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 

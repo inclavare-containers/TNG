@@ -555,7 +555,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **两种 primary 都会检查：**
 
-- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。
+- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件报出的 digest，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。容器镜像类型按 digest 集合比对：仓库运行多个版本时，manifest 中同一类型可以按 digest 各出现一条，证据必须与之完全一致。
 - 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
 - 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
