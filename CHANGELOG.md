@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-12
+
 ### Added
 
 - Configuration files accept JSONC: `//` and `/* */` comments, trailing commas in objects and arrays, and a leading UTF-8 BOM. Strict JSON remains valid, and the Go SDK's `Config.FromJSON` accepts the same syntax. Configurations that use the new syntax do not load on older TNG releases.
@@ -77,5 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A measurement revoked by the transparency-log artifact server now denies attestation instead of being rescued by the rekor fallback: the append-only rekor entry of a revoked manifest still authenticates, so the previous behavior let the fallback bypass the revocation.
 - Transparency-log resolve successes are cached per artifact-server URL and expire after 5 minutes, so a revocation published after a successful appraisal takes effect without a restart, and a cached success cannot satisfy a policy that points at a different artifact server.
 
-[Unreleased]: https://github.com/inclavare-containers/TNG/compare/v2.12.0...HEAD
+[Unreleased]: https://github.com/inclavare-containers/TNG/compare/v2.13.0...HEAD
+[2.13.0]: https://github.com/inclavare-containers/TNG/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/inclavare-containers/TNG/compare/v2.11.0...v2.12.0
