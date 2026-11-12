@@ -14,6 +14,7 @@ pub(crate) mod rekor_v1;
 enum PublishedMeasurementType {
     TdShim,
     TdKernel,
+    RootfsCc,
     ContainerImage,
 }
 
@@ -22,6 +23,7 @@ impl PublishedMeasurementType {
         match measurement_type {
             "tdx.td-shim" => Ok(Self::TdShim),
             "tdx.kernel" => Ok(Self::TdKernel),
+            "rootfs.cc" => Ok(Self::RootfsCc),
             _ => match measurement_type.strip_prefix("container.image.") {
                 Some(repository_name) if is_valid_image_repo_name(repository_name) => {
                     Ok(Self::ContainerImage)
@@ -29,11 +31,6 @@ impl PublishedMeasurementType {
                 Some(repository_name) => anyhow::bail!(
                     "publishedMeasurements type {measurement_type:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
                 ),
-                None if measurement_type.starts_with("com.alibabacloud.container.image.") => {
-                    anyhow::bail!(
-                        "publishedMeasurements type {measurement_type:?} must use the log manifest's original spelling container.image.<repo>, not the com.alibabacloud. alias"
-                    )
-                }
                 None => anyhow::bail!(
                     "unsupported publishedMeasurements type {measurement_type}"
                 ),
@@ -572,6 +569,19 @@ mod tests {
         })
     }
 
+    /// A `td_payload_info` platform-config-flags event at RTMR1 whose cmdline
+    /// carries one `verity-root` dm-mod.create mapping for `root`.
+    fn rootfs_event(root: &str) -> Value {
+        json!({
+            "type_name": "EV_PLATFORM_CONFIG_FLAGS",
+            "details": {"string": format!(
+                "td_payload_info reboot=k root=/dev/vda1 dm-mod.create=\"verity-root,,,ro,0 1011712 verity 1 /dev/vda1 /dev/vda2 4096 4096 126464 0 sha256 {root} {tail};\"",
+                tail = "0".repeat(64)
+            )},
+            "index": 2,
+        })
+    }
+
     // --- bundled templates --------------------------------------------------
 
     #[tokio::test]
@@ -718,6 +728,10 @@ mod tests {
             PublishedMeasurementType::parse("tdx.kernel"),
             Ok(PublishedMeasurementType::TdKernel)
         ));
+        assert!(matches!(
+            PublishedMeasurementType::parse("rootfs.cc"),
+            Ok(PublishedMeasurementType::RootfsCc)
+        ));
         for repository_name in ["busybox", "my-app.v2"] {
             let measurement_type = format!("container.image.{repository_name}");
             assert!(
@@ -752,7 +766,7 @@ mod tests {
         let error = PublishedMeasurementType::parse("com.alibabacloud.container.image.busybox")
             .expect_err("prefixed alias must be rejected");
         assert!(
-            format!("{error:#}").contains("original spelling"),
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
             "{error:#}"
         );
     }
@@ -765,6 +779,50 @@ mod tests {
             format!("{error:#}").contains("unsupported publishedMeasurements type"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_rootfs_spellings() {
+        // `rootfs.cc` is a fixed type, not a `rootfs.<name>` namespace.
+        for measurement_type in ["rootfs.foo", "rootfs."] {
+            let error = PublishedMeasurementType::parse(measurement_type)
+                .expect_err("only rootfs.cc is supported");
+            assert!(
+                format!("{error:#}").contains("unsupported publishedMeasurements type"),
+                "{measurement_type}: {error:#}"
+            );
+        }
+
+        // The vendor-prefixed spelling is not a published type; the manifest
+        // records the unprefixed one.
+        let error = PublishedMeasurementType::parse("com.alibabacloud.rootfs.cc")
+            .expect_err("prefixed rootfs alias must be rejected");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn published_measurement_types_all_map_to_dimensions() {
+        // A published type that parses but has no extraction family would be
+        // emitted with no dimension gating it, so the entry would not be
+        // enforced. Keep the two allowlists in step.
+        for measurement_type in [
+            "tdx.td-shim",
+            "tdx.kernel",
+            "rootfs.cc",
+            "container.image.busybox",
+        ] {
+            assert!(
+                PublishedMeasurementType::parse(measurement_type).is_ok(),
+                "{measurement_type}"
+            );
+            assert!(
+                super::super::measurements::dimension_for_type(measurement_type).is_some(),
+                "{measurement_type} must map to an extraction family and dimension"
+            );
+        }
     }
 
     #[test]
@@ -814,9 +872,10 @@ mod tests {
         }))
         .contains("duplicate publishedMeasurements type"));
 
-        // Any single-segment container image repository is accepted.
+        // Any single-segment container image repository is accepted, as is the
+        // rootfs measurement type.
         let accepted = json!({
-            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "publishedMeasurements": ["tdx.td-shim", "rootfs.cc", "container.image.busybox"],
             "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
         });
         let cfg: ModuleGroupsConfig =
@@ -843,7 +902,13 @@ mod tests {
             "publishedMeasurements": ["com.alibabacloud.container.image.busybox"],
             "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
         }))
-        .contains("original spelling"));
+        .contains("unsupported publishedMeasurements type"));
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["com.alibabacloud.rootfs.cc"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("unsupported publishedMeasurements type"));
 
         let accepted_fallback = json!({
             "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
@@ -1092,10 +1157,10 @@ mod tests {
         let policy = render(
             json!([
                 transparency_entry(rekor_entry_value(
-                    &["tdx.td-shim", "container.image.cmaas-runtime"],
+                    &["tdx.td-shim", "rootfs.cc", "container.image.cmaas-runtime"],
                     1
                 )),
-                transparency_entry(rekor_entry_value(&["tdx.kernel"], 2)),
+                transparency_entry(rekor_entry_value(&["tdx.kernel", "rootfs.cc"], 2)),
             ]),
             &resolved,
         );
@@ -1125,6 +1190,12 @@ mod tests {
         assert_eq!(policy.matches("actual_measurement(type) :=").count(), 1);
         assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
         assert_eq!(policy.matches("has_sha384_digest(e) if {").count(), 1);
+        assert_eq!(
+            policy
+                .matches("actual_measurement(\"rootfs.cc\") :=")
+                .count(),
+            1
+        );
         // Manifest construction is a literal, not an array comprehension, so a
         // missing extraction cannot silently drop an entry.
         assert!(!policy.contains("| some t in"), "{policy}");
@@ -1148,8 +1219,13 @@ mod tests {
         assert!(policy.contains("default executables := 97"));
         assert!(policy.contains("group_0_executables_ok if {\n\tm_0_0\n\tm_0_1\n}"));
         assert!(policy.contains("executables := 2 if {\n\tgroup_0_executables_ok\n}"));
+        // Both entries publish a rootfs measurement, so the file_system
+        // dimension is constrained too, still with one shared extraction rule.
+        assert!(policy.contains("default file_system := 97"));
+        assert!(policy.contains("group_0_file_system_ok if {\n\tm_0_0\n\tm_0_1\n}"));
+        assert!(policy.contains("file_system := 2 if {\n\tgroup_0_file_system_ok\n}"));
 
-        // Transparency gates only executables; hardware is recognition only.
+        // Transparency gates no hardware; hardware is recognition only.
         assert!(!policy.contains("group_0_hardware_ok"));
         assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
     }
@@ -1793,6 +1869,102 @@ mod tests {
             eval_policy_vector(&bad_policy, &input).await,
             (97, 2, 2, 2),
             "a published kernel that differs from the real PAI event-log kernel must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_rootfs_cc_matching_and_tamper() {
+        const ROOT: &str = "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230";
+        const TAMPERED: &str = "54f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230";
+
+        let logged = manifest("1.0.0", &[("rootfs.cc", ROOT)]);
+        let policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[rootfs_event(ROOT)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "a matching rootfs measurement must affirm file_system"
+        );
+
+        let bad = tdx_input(&[rootfs_event(TAMPERED)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (2, 2, 2, 97),
+            "a tampered root hash must reject file_system, not executables"
+        );
+
+        let none = tdx_input(&[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &none).await,
+            (2, 2, 2, 97),
+            "a missing td_payload_info event must reject file_system (fail-closed)"
+        );
+    }
+
+    /// A transparency-log entry gates every dimension its published types
+    /// imply: `rootfs.cc` drives `file_system`, the kernel/image types drive
+    /// `executables`, and a mixed entry constrains both.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_published_types_choose_their_dimensions() {
+        let root = hex64('a');
+        let kernel = hex96('b');
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        // Rootfs only: the entry gates file_system alone.
+        let rootfs_manifest = manifest("1.0.0", &[("rootfs.cc", root.as_str())]);
+        let rootfs_policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&rootfs_manifest));
+        assert!(rootfs_policy.contains("group_0_file_system_ok if {"));
+        assert!(!rootfs_policy.contains("group_0_executables_ok"));
+        assert_eq!(
+            eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(&root)])).await,
+            (2, 2, 2, 2)
+        );
+        assert_eq!(
+            eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(&hex64('c'))])).await,
+            (2, 2, 2, 97),
+            "a rootfs-only entry must not move executables"
+        );
+
+        // Rootfs + kernel in one entry: the entry gates both dimensions, so a
+        // measurement it cannot reconstruct rejects both.
+        let mixed_manifest = manifest(
+            "1.0.0",
+            &[
+                ("rootfs.cc", root.as_str()),
+                ("tdx.kernel", kernel.as_str()),
+            ],
+        );
+        let mixed_policy = render_rekor(
+            &["rootfs.cc", "tdx.kernel"],
+            &resolved_from_manifest(&mixed_manifest),
+        );
+        assert!(mixed_policy.contains("group_0_file_system_ok if {"));
+        assert!(mixed_policy.contains("group_0_executables_ok if {"));
+
+        let both = tdx_input(&[
+            rootfs_event(&root),
+            td_payload_event(event_32mib, &kernel, 2),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &both).await,
+            (2, 2, 2, 2),
+            "both published measurements matching must affirm"
+        );
+
+        let no_rootfs = tdx_input(&[td_payload_event(event_32mib, &kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &no_rootfs).await,
+            (97, 2, 2, 97),
+            "a mixed entry that cannot reconstruct rootfs rejects both dimensions"
+        );
+        let no_kernel = tdx_input(&[rootfs_event(&root)]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &no_kernel).await,
+            (97, 2, 2, 97),
+            "a mixed entry that cannot reconstruct the kernel rejects both dimensions"
         );
     }
 
@@ -2622,6 +2794,46 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             eval_policy_vector(&policy, &input).await,
             (97, 2, 2, 2),
             "a declared type missing from the evidence must reject the primary"
+        );
+        server.verify().await;
+    }
+
+    /// With no fallback baseline configured, a missing rootfs measurement
+    /// fails the entry. The fallback is the only alternative path; without
+    /// one, the primary failure is final.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    #[serial]
+    async fn transparency_log_artifact_server_rootfs_missing_without_fallback_rejects() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
+
+        artifact_server::invalidate_host_await_caches_for_test();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .expect(0) // the undefined full manifest must never reach the resolve call
+            .mount(&server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["container.image.cmaas-runtime", "rootfs.cc"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": server.uri(),
+                "logServices": [{"type": "rekor-v1", "url": entry_url}],
+            }],
+        });
+        let policy = render(json!([transparency_entry(value)]), &[None]);
+        // The evidence carries the image but no td_payload_info event, so the
+        // full manifest is undefined and there is no fallback to consult.
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (97, 2, 2, 97),
+            "a missing rootfs measurement without a fallback must reject both dimensions"
         );
         server.verify().await;
     }

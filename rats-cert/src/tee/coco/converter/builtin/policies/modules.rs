@@ -31,6 +31,10 @@ pub(crate) enum Module {
     Uki {
         value: String,
     },
+    /// `td_payload_info` boot-cmdline dm-verity root hash, 64 hex.
+    RootfsCc {
+        value: String,
+    },
     /// AAEL `kangaroo/pull-image` digest for the named repo, `sha256:`64 hex.
     ContainerImage {
         repo: String,
@@ -46,24 +50,30 @@ pub(crate) enum Module {
     /// `com.alibabacloud.gpu`: the guest-reported AAEL attestation event.
     Gpu,
     /// `transparency_log`: a ReleaseManifest baseline anchored in a
-    /// transparency log. Gates `executables`; platform posture is expressed by
-    /// a separate `tdx` entry.
+    /// transparency log. Gates the dimensions implied by its published
+    /// measurement types; platform posture is expressed by a separate `tdx`
+    /// entry.
     TransparencyLog(TransparencyLogEntryConfig),
 }
 
 impl Module {
-    /// The AR4SI dimension this module gates. Measurements describe what the
-    /// platform executes; posture modules describe the hardware/TCB state.
-    fn dimension(&self) -> Dimension {
+    /// The AR4SI dimensions this module gates. Measurements describe what the
+    /// platform executes, except the rootfs hash which describes the file
+    /// system; posture modules describe the hardware/TCB state. A
+    /// transparency-log entry can publish several measurement types, so it
+    /// gates every dimension those types imply.
+    fn dimensions(&self) -> std::collections::BTreeSet<Dimension> {
         match self {
-            Module::TdShim { .. }
-            | Module::Ovmf { .. }
-            | Module::Kernel { .. }
-            | Module::Uki { .. }
-            | Module::ContainerImage { .. }
-            | Module::AiModel { .. }
-            | Module::TransparencyLog(_) => Dimension::Executables,
-            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => Dimension::Hardware,
+            Module::TransparencyLog(cfg) => cfg
+                .published_measurements
+                .iter()
+                .filter_map(|t| measurements::dimension_for_type(t))
+                .collect(),
+            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => {
+                std::iter::once(Dimension::Hardware).collect()
+            }
+            Module::RootfsCc { .. } => std::iter::once(Dimension::FileSystem).collect(),
+            _ => std::iter::once(Dimension::Executables).collect(),
         }
     }
 
@@ -112,6 +122,7 @@ enum EntryType<'a> {
     Ovmf,
     Kernel,
     Uki,
+    RootfsCc,
     ContainerImage { repo: &'a str },
     AiModel { model_id: &'a str },
     TransparencyLog,
@@ -129,6 +140,9 @@ impl<'a> EntryType<'a> {
         if let Some(model_id) = raw.strip_prefix("com.alibabacloud.ai.model.") {
             return Ok(Self::AiModel { model_id });
         }
+        if raw == "com.alibabacloud.rootfs.cc" {
+            return Ok(Self::RootfsCc);
+        }
 
         // Unprefixed non-vendor types.
         match raw {
@@ -138,10 +152,11 @@ impl<'a> EntryType<'a> {
             "tdx.ovmf" => Ok(Self::Ovmf),
             "tdx.kernel" => Ok(Self::Kernel),
             "tdx.uki" => Ok(Self::Uki),
+            "rootfs.cc" => Ok(Self::RootfsCc),
             "transparency_log" => Ok(Self::TransparencyLog),
             _ => {
-                // Permanent unprefixed aliases of the two vendor measurement
-                // families.
+                // Permanent unprefixed aliases of the vendor-prefixed
+                // measurement families.
                 if let Some(repo) = raw.strip_prefix("container.image.") {
                     Ok(Self::ContainerImage { repo })
                 } else if let Some(model_id) = raw.strip_prefix("ai.model.") {
@@ -164,6 +179,7 @@ impl<'a> EntryType<'a> {
             Self::Ovmf => "tdx.ovmf".to_string(),
             Self::Kernel => "tdx.kernel".to_string(),
             Self::Uki => "tdx.uki".to_string(),
+            Self::RootfsCc => "com.alibabacloud.rootfs.cc".to_string(),
             Self::ContainerImage { repo } => {
                 format!("com.alibabacloud.container.image.{repo}")
             }
@@ -177,9 +193,10 @@ fn unknown_module_type(raw: &str) -> anyhow::Error {
     anyhow::anyhow!("unknown module type {raw:?}")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Dimension {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Dimension {
     Executables,
+    FileSystem,
     Hardware,
 }
 
@@ -325,6 +342,16 @@ impl ModuleEntryConfig {
                 }
                 Ok(Module::Uki { value: v })
             }
+            EntryType::RootfsCc => {
+                let v = value_str()?;
+                if !is_lower_hex(&v, 64) {
+                    anyhow::bail!(
+                        "module type {:?} value must be 64 lowercase hex chars",
+                        self.module_type
+                    );
+                }
+                Ok(Module::RootfsCc { value: v })
+            }
             EntryType::TransparencyLog => {
                 value_obj()?;
                 let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
@@ -406,13 +433,14 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 
 /// Build the `modules` Rego policy.
 ///
-/// Each entry emits an entry predicate and belongs to exactly one AR4SI
-/// dimension: measurements and `transparency_log` baselines gate `executables`,
-/// posture entries gate `hardware`. Per group and dimension a
-/// `group_<i>_<dimension>_ok` predicate ANDs that group's entries of the
-/// dimension; a dimension aggregates with OR over the groups that carry
-/// entries of it. A dimension with no entries stays at its affirming default,
-/// so a failing posture cannot drag down `executables` and vice versa.
+/// Each entry emits an entry predicate and gates one or more AR4SI dimensions:
+/// measurements gate `executables`, except `rootfs.cc` which gates
+/// `file_system`; `transparency_log` baselines gate every dimension their
+/// published measurement types imply; posture entries gate `hardware`. Per
+/// group and dimension a `group_<i>_<dimension>_ok` predicate ANDs that group's
+/// entries of the dimension; a dimension aggregates with OR over the groups
+/// that carry entries of it. A dimension with no entries stays at its affirming
+/// default, so a failing posture cannot drag down `executables` and vice versa.
 ///
 /// Every entry declares the TEE platform its evidence is rooted at, and
 /// `hardware` affirms only when that platform is recognised and the group's
@@ -481,8 +509,10 @@ fn render_modules_policy(
     let mut helpers: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
+    let mut file_system_rules: Vec<String> = Vec::new();
     let mut hardware_rules: Vec<String> = Vec::new();
     let mut has_executables = false;
+    let mut has_file_system = false;
     // Measurement-extraction families the policy needs, emitted once for the
     // whole policy. Measurement entries select their own family;
     // transparency_log entries contribute the families their declared
@@ -496,6 +526,7 @@ fn render_modules_policy(
 
     for (gi, group) in groups.iter().enumerate() {
         let mut executables_preds: Vec<String> = Vec::new();
+        let mut file_system_preds: Vec<String> = Vec::new();
         let mut hardware_preds: Vec<String> = Vec::new();
         for (j, module) in group.iter().enumerate() {
             let pred = format!("m_{gi}_{j}");
@@ -530,9 +561,12 @@ fn render_modules_policy(
                     })?
                 }
             };
-            match module.dimension() {
-                Dimension::Executables => executables_preds.push(pred),
-                Dimension::Hardware => hardware_preds.push(pred),
+            for dimension in module.dimensions() {
+                match dimension {
+                    Dimension::Executables => executables_preds.push(pred.clone()),
+                    Dimension::FileSystem => file_system_preds.push(pred.clone()),
+                    Dimension::Hardware => hardware_preds.push(pred.clone()),
+                }
             }
             helpers.push(body);
         }
@@ -545,6 +579,16 @@ fn render_modules_policy(
             ));
             executables_rules.push(format!(
                 "executables := 2 if {{\n\tgroup_{gi}_executables_ok\n}}"
+            ));
+        }
+        if !file_system_preds.is_empty() {
+            has_file_system = true;
+            group_dimension_rules.push(format!(
+                "group_{gi}_file_system_ok if {{\n{}\n}}",
+                indent(&file_system_preds)
+            ));
+            file_system_rules.push(format!(
+                "file_system := 2 if {{\n\tgroup_{gi}_file_system_ok\n}}"
             ));
         }
         if !hardware_preds.is_empty() {
@@ -566,8 +610,9 @@ fn render_modules_policy(
 
     // Without executable-dimension entries the dimension stays affirming;
     // requiring a measurement that was never configured would be fail-closed
-    // in the wrong direction.
+    // in the wrong direction. The file-system dimension behaves the same way.
     let executables_default = if has_executables { 97 } else { 2 };
+    let file_system_default = if has_file_system { 97 } else { 2 };
 
     // With entries but no posture entries, hardware reduces to recognition of
     // the platform the entries depend on. With no entries at all, no
@@ -604,29 +649,36 @@ fn render_modules_policy(
         format!("{}\n\n", group_dimension_rules.join("\n\n"))
     };
     let executables_block = executables_rules.join("\n\n");
+    let file_system_block = if file_system_rules.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n\n", file_system_rules.join("\n\n"))
+    };
 
     let policy = format!(
         r#"package policy
 
 import rego.v1
 
-# Modular verification rules. Each entry belongs to one AR4SI dimension:
-# boot/workload measurements gate `executables`, platform posture (TDX, GPU)
-# gates `hardware`. Within a group the entries of one dimension AND; a
-# dimension is OR-ed over the groups that carry entries of it, so a group
-# without entries of a dimension does not constrain it. A dimension with no
-# entries stays affirming, except `hardware`, which depends on the platform
-# every entry's evidence comes from: it affirms only when that platform is
-# recognised. An empty module list declares no dependency and emits no
-# recognition rule, so `hardware` stays at its non-affirming default.
+# Modular verification rules. Each entry gates one or more AR4SI dimensions:
+# boot/workload measurements gate `executables`, the rootfs dm-verity hash
+# gates `file_system`, and platform posture (TDX, GPU) gates `hardware`.
+# `transparency_log` entries gate every dimension their published measurement
+# types imply. Within a group the entries of one dimension AND; a dimension is
+# OR-ed over the groups that carry entries of it, so a group without entries of
+# a dimension does not constrain it. A dimension with no entries stays
+# affirming, except `hardware`, which depends on the platform every entry's
+# evidence comes from: it affirms only when that platform is recognised. An
+# empty module list declares no dependency and emits no recognition rule, so
+# `hardware` stays at its non-affirming default.
 default configuration := 2
-default file_system := 2
+default file_system := {file_system_default}
 default hardware := 97
 default executables := {executables_default}
 
 {helper_block}{dimension_block}{executables_block}
 
-{hardware_block}{recognition_block}
+{file_system_block}{hardware_block}{recognition_block}
 "#,
         hardware_block = hardware_rules.join("\n\n"),
     );
@@ -945,6 +997,7 @@ mod tests {
                 "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
                 ok_hex64.clone(),
             ),
+            ("com.alibabacloud.rootfs.cc", ok_hex64.clone()),
         ] {
             let entry = ModuleEntryConfig {
                 module_type: t.to_string(),
@@ -957,6 +1010,7 @@ mod tests {
         for (t, v) in [
             ("container.image.model-server", ok_sha.clone()),
             ("ai.model.Qwen/Qwen3.8-27B", ok_hex64.clone()),
+            ("rootfs.cc", ok_hex64.clone()),
         ] {
             let entry = ModuleEntryConfig {
                 module_type: t.to_string(),
@@ -979,6 +1033,31 @@ mod tests {
         }
         .to_module_parsed()
         .is_err());
+        // The rootfs root hash is exactly 64 lowercase hex chars; any other
+        // `rootfs.` spelling is an unknown type.
+        assert!(ModuleEntryConfig {
+            module_type: "com.alibabacloud.rootfs.cc".to_string(),
+            value: json!("A".repeat(64)),
+        }
+        .to_module_parsed()
+        .is_err());
+        assert!(ModuleEntryConfig {
+            module_type: "rootfs.cc".to_string(),
+            value: json!("a".repeat(63)),
+        }
+        .to_module_parsed()
+        .is_err());
+        for t in ["rootfs.foo", "rootfs."] {
+            assert!(
+                ModuleEntryConfig {
+                    module_type: t.to_string(),
+                    value: json!("a".repeat(64)),
+                }
+                .to_module_parsed()
+                .is_err(),
+                "unknown type {t} must be rejected"
+            );
+        }
         // container.image needs sha256: prefix
         assert!(ModuleEntryConfig {
             module_type: "container.image.foo".to_string(),
@@ -1044,7 +1123,13 @@ mod tests {
         .is_err());
 
         // Each measurement family rejects its own malformed baseline value.
-        for t in ["tdx.kernel", "tdx.uki", "ai.model.Qwen/Qwen3.8-27B"] {
+        for t in [
+            "tdx.kernel",
+            "tdx.uki",
+            "ai.model.Qwen/Qwen3.8-27B",
+            "rootfs.cc",
+            "com.alibabacloud.rootfs.cc",
+        ] {
             assert!(
                 ModuleEntryConfig {
                     module_type: t.to_string(),
@@ -1221,6 +1306,7 @@ mod tests {
                 "ai.model.Qwen/Qwen3.8-27B",
                 json!(hash),
             ),
+            ("com.alibabacloud.rootfs.cc", "rootfs.cc", json!(hex64('e'))),
         ] {
             let canonical_module = ModuleEntryConfig {
                 module_type: canonical.to_string(),
@@ -1253,6 +1339,119 @@ mod tests {
             .expect("build alias");
             assert_eq!(canonical_policy, alias_policy);
         }
+    }
+
+    /// Build the `td_payload_info` platform-config-flags event carrying a
+    /// `verity-root` dm-mod.create mapping for `root`.
+    fn rootfs_event(index: Option<i64>, root: &str) -> serde_json::Value {
+        let details = format!(
+            "td_payload_info reboot=k root=/dev/vda1 dm-mod.create=\"verity-root,,,ro,0 1011712 verity 1 /dev/vda1 /dev/vda2 4096 4096 126464 0 sha256 {root} {tail};\"",
+            tail = "0".repeat(64)
+        );
+        let mut e = json!({
+            "type_name": "EV_PLATFORM_CONFIG_FLAGS",
+            "details": { "string": details },
+        });
+        if let Some(index) = index {
+            e["index"] = json!(index);
+        }
+        e
+    }
+
+    #[test]
+    fn modules_rootfs_cc_gates_file_system() {
+        let root = hex64('a');
+        let policy = build_policy(&modules_cfg(&format!(
+            r#"[{{"type":"rootfs.cc","value":"{root}"}}]"#
+        )))
+        .expect("build");
+
+        // The rootfs entry is attributed to `file_system`, which becomes
+        // non-affirming by default; `executables` keeps its affirming default.
+        assert!(policy.contains("default file_system := 97"));
+        assert!(policy.contains("default executables := 2"));
+        assert!(policy.contains("group_0_file_system_ok if {"));
+        assert!(policy.contains("file_system := 2 if {\n\tgroup_0_file_system_ok\n}"));
+        assert!(!policy.contains("group_0_executables_ok"));
+        assert_eq!(
+            policy
+                .matches("actual_measurement(\"rootfs.cc\") :=")
+                .count(),
+            1
+        );
+
+        // A config without a rootfs entry keeps the affirming default and
+        // emits no file_system rules.
+        let old = build_policy(&modules_cfg(&format!(
+            r#"[{{"type":"tdx.ovmf","value":"{}"}}]"#,
+            hex96('1')
+        )))
+        .expect("build");
+        assert!(old.contains("default file_system := 2"));
+        assert!(!old.contains("group_0_file_system_ok"));
+        assert!(!old.contains("file_system := 2 if {"));
+    }
+
+    #[tokio::test]
+    async fn modules_rootfs_cc_matches_and_rejects() {
+        let root = hex64('a');
+        let cfg = format!(r#"[{{"type":"rootfs.cc","value":"{root}"}}]"#);
+
+        let ok = tdx_input(serde_json::Value::Null, &[rootfs_event(Some(2), &root)]);
+        assert_eq!(
+            eval_modules(&cfg, &ok).await,
+            (2, 2, 2, 2),
+            "a matching rootfs measurement must affirm file_system"
+        );
+
+        // A mismatched root hash moves only the file_system dimension.
+        let mismatch = tdx_input(
+            serde_json::Value::Null,
+            &[rootfs_event(Some(2), &hex64('b'))],
+        );
+        assert_eq!(
+            eval_modules(&cfg, &mismatch).await,
+            (2, 2, 2, 97),
+            "a tampered root hash must reject file_system, leaving executables affirming"
+        );
+
+        // A missing or mis-indexed event is fail-closed.
+        let none = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
+        assert_eq!(
+            eval_modules(&cfg, &none).await,
+            (2, 2, 2, 97),
+            "a missing td_payload_info event must reject file_system"
+        );
+        let bad_index = tdx_input(serde_json::Value::Null, &[rootfs_event(Some(1), &root)]);
+        assert_eq!(
+            eval_modules(&cfg, &bad_index).await,
+            (2, 2, 2, 97),
+            "an event at a non-RTMR1 index must reject file_system"
+        );
+    }
+
+    /// `rootfs.cc` reads `input.tdx`, so it depends on TDX recognition for the
+    /// `hardware` dimension even though the measurement itself only gates
+    /// `file_system`.
+    #[tokio::test]
+    async fn modules_rootfs_cc_requires_tdx_recognition() {
+        let root = hex64('a');
+        let cfg = format!(r#"[{{"type":"rootfs.cc","value":"{root}"}}]"#);
+        let input = json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "00000000", "vendor_id": "deadbeef"},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [rootfs_event(Some(2), &root)],
+            }
+        })
+        .to_string();
+        assert_eq!(
+            eval_modules(&cfg, &input).await,
+            (2, 97, 2, 2),
+            "a non-TDX quote must leave hardware non-affirming while file_system matches"
+        );
     }
 
     // The loop is the extension point: every Platform variant must be listed
@@ -1291,6 +1490,8 @@ mod tests {
             "container.image.model-server",
             "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
             "ai.model.Qwen/Qwen3.8-27B",
+            "com.alibabacloud.rootfs.cc",
+            "rootfs.cc",
         ];
         for spelling in accepted {
             assert!(
@@ -1298,6 +1499,11 @@ mod tests {
                 "accepted spelling {spelling:?} must parse"
             );
         }
+
+        // `rootfs.` is a fixed type, not a namespace: any other spelling is
+        // unknown.
+        assert!(EntryType::parse("rootfs.foo").is_err());
+        assert!(EntryType::parse("rootfs.").is_err());
 
         // The diagnostic no longer enumerates the accepted types.
         let err = unknown_module_type("not.a.module").to_string();
@@ -1348,6 +1554,7 @@ mod tests {
                 "ai.model.Qwen/Qwen3.8-27B",
                 hex64('d'),
             ),
+            ("com.alibabacloud.rootfs.cc", "rootfs.cc", hex64('e')),
         ] {
             let mixed = ModuleGroupsConfig::Single(vec![
                 ModuleEntryConfig {

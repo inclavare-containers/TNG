@@ -555,11 +555,11 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 **两种 primary 都会检查：**
 
-- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件。
+- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。
 - 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
 - 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
-**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`。容器镜像类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
+**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
 
 **平台姿态：** 由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别；需要 non-debug 与事件日志检查时，加一个 `tdx` 条目，并把属性位门设为 `allow`。
 
@@ -570,7 +570,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`。容器镜像类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复。顺序不影响结果 |
+| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复。顺序不影响结果 |
 | `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |

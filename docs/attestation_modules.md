@@ -1,6 +1,6 @@
 # The `modules` Attestation Policy
 
-`modules` is a builtin attestation policy type that expresses verification as a modular list of rules. Each entry is one typed check over one part of the evidence: a boot measurement (guest firmware, kernel, UKI, container image, model), a GPU appraisal, the TDX platform attributes, or a measurement baseline anchored in a transparency log. Entry types whose evidence comes from Alibaba AAEL events carry the `com.alibabacloud.` vendor prefix; the two measurement families keep their unprefixed spellings as permanent aliases. Measurement and platform-attribute entries pin their expected values inline, and the generated verification rule compares the evidence against those constants directly; a `transparency_log` entry instead anchors its baseline in a transparency log. Set it on the verify side under `as_type: "builtin"` in `attestation_policy`; placement and the other policy types are covered in [Remote Attestation](remote_attestation.md).
+`modules` is a builtin attestation policy type that expresses verification as a modular list of rules. Each entry is one typed check over one part of the evidence: a boot or workload measurement (guest firmware, kernel, UKI, root filesystem, container image, model), a GPU appraisal, the TDX platform attributes, or a measurement baseline anchored in a transparency log. The container image, model, and root filesystem types use the `com.alibabacloud.` vendor prefix as their canonical spelling. Container image and model evidence comes from Alibaba AAEL events, while `rootfs.cc` reads the `td_payload_info` platform config flags event. Measurement and platform-attribute entries pin their expected values inline, and the generated verification rule compares the evidence against those constants directly; a `transparency_log` entry instead anchors its baseline in a transparency log. Set it on the verify side under `as_type: "builtin"` in `attestation_policy`; placement and the other policy types are covered in [Remote Attestation](remote_attestation.md).
 
 ## Policy shape
 
@@ -56,29 +56,28 @@ Baseline evidence checks run regardless of the policy: quote signature verificat
 
 ## Trustworthiness dimensions
 
-Each module type gates one AR4SI trustworthiness dimension:
+Each module type gates one or more AR4SI trustworthiness dimensions:
 
 | Module type | Dimension |
 |---|---|
 | `tdx.td-shim`, `tdx.ovmf`, `tdx.kernel`, `tdx.uki` | `executables` |
 | `com.alibabacloud.container.image.<repo>` | `executables` |
 | `com.alibabacloud.ai.model.<model-id>` | `executables` |
-| `transparency_log` | `executables` |
+| `com.alibabacloud.rootfs.cc` | `file_system` |
+| `transparency_log` | the dimensions of the types in its `publishedMeasurements` |
 | `tdx` | `hardware` |
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
 
-Within one group, the entries of a dimension AND with each other, and each dimension is OR-ed over the groups that carry entries of it. A dimension with no entries of it stays affirming (2), with one exception: `hardware` depends on the platform the entries' evidence comes from. With at least one entry in the policy, `hardware` requires that platform to be recognised even when there are no platform-attribute entries; with no entries at all it stays non-affirming. `configuration` and `file_system` have no module types at all, so they always stay affirming. As a result a failing measurement moves `executables` only, while a failing platform-attribute entry moves `hardware` only and leaves `executables` affirming.
+A dimension with no entries stays affirming (2). `configuration` has no module types and always stays affirming. `hardware` is the exception: once the policy has any entry, it requires the platform the entries' evidence comes from to be recognised. A modules policy recognises only TDX (quote header `tee_type` `81000000`, `vendor_id` `939a7233f79c4ca9940a0db3957f0607`); the CSV, TPM, and system recognition paths of `hardware_only` do not apply. A `tdx` entry adds attribute checks on top of recognition, so it fails closed on non-TDX evidence.
 
-The `hardware` dimension is gated on the TEE platform every entry's evidence comes from. Every current entry reads evidence under `input.tdx` (the quote and event-log measurements, the AAEL event-log families, and the evaluated GPU claims), so a modules policy recognises only TDX: the quote header with the Intel quoting-enclave tee type `81000000` and vendor id `939a7233f79c4ca9940a0db3957f0607`. The CSV, TPM, and system recognition paths of `hardware_only` are not part of a modules policy, and their evidence is never consumed by an entry. Platform-attribute entries add constraints on top of recognition; they do not replace it. An entry such as `{"type": "tdx", "value": {}}` requires both a recognized TDX platform and the attribute checks, so it fails closed on non-TDX evidence.
-
-An empty module list declares no platform dependency, so no recognition rule is emitted: `executables`, `configuration`, and `file_system` affirm, while `hardware` stays at its non-affirming default (97). This differs from `hardware_only`, which recognises TDX and the legacy platforms; to assert hardware recognition with modules, add a `tdx` entry, or use the `hardware_only` policy directly.
+A `transparency_log` entry's dimensions come from the types in its `publishedMeasurements`; `fallbackPublishedMeasurements` is a subset and adds no dimension. An entry that fails affects only the dimensions it gates.
 
 ## Configuration errors
 
 These are rejected when the policy loads, before any appraisal runs:
 
-- an entry `type` outside the set listed below, including a mistyped family prefix; the `com.alibabacloud.` prefix is only legal on `container.image.`, `ai.model.`, and the exact type `gpu`, and unprefixed `gpu` is not a type;
+- an entry `type` outside the set listed below, including a mistyped family prefix; the `com.alibabacloud.` prefix is only legal on `container.image.`, `ai.model.`, `rootfs.cc`, and the exact type `gpu`, and unprefixed `gpu` is not a type;
 - the same `type` twice within one group, including the canonical and alias spellings of one family (the same type in different groups is legal; the groups are independent baselines). `transparency_log` is the one exception: it may repeat within a group so several log-anchored baselines must all verify;
 - a value in the wrong shape or format: wrong digest length or uppercase hex (all digests are lowercase), a `com.alibabacloud.container.image.*` value without the `sha256:` prefix, an object given where the type expects a string or the reverse;
 - a `transparency_log` entry whose value violates the field constraints in the Transparency log section below. A `fallbackServices` list without `fallbackPublishedMeasurements` is accepted but has no effect;
@@ -89,20 +88,19 @@ These are rejected when the policy loads, before any appraisal runs:
 
 ## Module types
 
-| Type | Value shape | Measured against |
+| Type | Alias | Value shape | Measured against |
 |---|---|---|
-| `tdx.td-shim` | 96 lowercase hex | quote `mr_td`, TD booted through td-shim guest firmware |
-| `tdx.ovmf` | 96 lowercase hex | quote `mr_td`, TD booted through OVMF firmware |
-| `tdx.kernel` | 96 lowercase hex | the `td_payload` event in the UEFI event log, recorded in RTMR1 (SHA-384) |
-| `tdx.uki` | 96 lowercase hex | the UKI boot-application event of the UEFI event log (SHA-384) |
-| `com.alibabacloud.container.image.<repo>` | `sha256:<64 lowercase hex>` | AAEL `kangaroo/pull-image` events for repo tail `<repo>` |
-| `com.alibabacloud.ai.model.<model-id>` | 64 lowercase hex | AAEL `pai/load-model` events for that model |
-| `transparency_log` | options object | a ReleaseManifest recorded in a transparency log (rekor-v1 or artifact-server primary) |
-| `tdx` | options object | quote attributes and event log (platform attribute checks) |
-| `nvidia` | options object | appraised per-GPU claims (standard NVIDIA appraisal) |
-| `com.alibabacloud.gpu` | empty object `{}` | AAEL `gpu/attestation` events and their result codes |
-
-`container.image.<repo>` and `ai.model.<model-id>` are permanent aliases of their `com.alibabacloud.` spellings and produce byte-identical policies. `com.alibabacloud.gpu` has no unprefixed alias.
+| `tdx.td-shim` | — | 96 lowercase hex | quote `mr_td`, TD booted through td-shim guest firmware |
+| `tdx.ovmf` | — | 96 lowercase hex | quote `mr_td`, TD booted through OVMF firmware |
+| `tdx.kernel` | — | 96 lowercase hex | the `td_payload` event in the UEFI event log, recorded in RTMR1 (SHA-384) |
+| `tdx.uki` | — | 96 lowercase hex | the UKI boot-application event of the UEFI event log (SHA-384) |
+| `com.alibabacloud.container.image.<repo>` | `container.image.<repo>` | `sha256:<64 lowercase hex>` | AAEL `kangaroo/pull-image` events for repo tail `<repo>` |
+| `com.alibabacloud.ai.model.<model-id>` | `ai.model.<model-id>` | 64 lowercase hex | AAEL `pai/load-model` events for that model |
+| `com.alibabacloud.rootfs.cc` | `rootfs.cc` | 64 lowercase hex | the `td_payload_info` event in the UEFI event log, dm-verity root hash of the root filesystem |
+| `transparency_log` | — | options object | a ReleaseManifest recorded in a transparency log (rekor-v1 or artifact-server primary) |
+| `tdx` | — | options object | quote attributes and event log (platform attribute checks) |
+| `nvidia` | — | options object | appraised per-GPU claims (standard NVIDIA appraisal) |
+| `com.alibabacloud.gpu` | — | empty object `{}` | AAEL `gpu/attestation` events and their result codes |
 
 To see the exact Rego a configuration generates, run `tng tools policy export` (see [TNG Tools](tools.md#tng-tools-policy)).
 
@@ -136,7 +134,7 @@ Pins the unified kernel image (UKI) measurement. The firmware measures the UKI a
 { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
 ```
 
-The unprefixed `container.image.<repo>` spelling is a permanent alias. This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins the OCI manifest digest of a workload image. The evidence is the AAEL `kangaroo/pull-image` event with event type `EV_EVENT_TAG`. The entry looks at the events whose repository name is `<repo>`. There must be at least one, each must carry a `digest`, and all must report the same digest, equal to the pinned `sha256:` value. `<repo>` is the last path segment of the image reference, after removing the registry host, path prefix, tag, and digest. Use only ASCII letters, digits, `.`, `_`, and `-`; a name with `/`, `@`, or `:` cannot match the reference and is rejected when the policy loads. When the same type appears in a `transparency_log` entry's `publishedMeasurements` or `fallbackPublishedMeasurements`, write it exactly as the log records it, usually the same last path segment. If no pull event matches, the entry fails.
+This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins the OCI manifest digest of a workload image. The evidence is the AAEL `kangaroo/pull-image` event with event type `EV_EVENT_TAG`. The entry looks at the events whose repository name is `<repo>`. There must be at least one, each must carry a `digest`, and all must report the same digest, equal to the pinned `sha256:` value. `<repo>` is the last path segment of the image reference, after removing the registry host, path prefix, tag, and digest. Use only ASCII letters, digits, `.`, `_`, and `-`; a name with `/`, `@`, or `:` cannot match the reference and is rejected when the policy loads. When the same type appears in a `transparency_log` entry's `publishedMeasurements` or `fallbackPublishedMeasurements`, write it exactly as the log records it, usually the same last path segment. If no pull event matches, the entry fails.
 
 ### Model: `com.alibabacloud.ai.model.<model-id>`
 
@@ -144,7 +142,17 @@ The unprefixed `container.image.<repo>` spelling is a permanent alias. This entr
 { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
 ```
 
-The unprefixed `ai.model.<model-id>` spelling is a permanent alias. This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins a model's measured integrity hash, 64 lowercase hex. The evidence is the AAEL `pai/load-model` event with event type `EV_EVENT_TAG`. `<model-id>` must match the model identifier in the event exactly (a modelscope-id style name is the convention); it may contain ASCII letters, digits, `.`, `_`, `/`, `@`, `:`, `+`, and `-`, and any other character is rejected at load. There must be at least one load event. Every event must carry both `model-id` and `hash`; all `model-id` values must equal `<model-id>`, and all `hash` values must equal the pinned value. A load event for another model fails the entry. Each model defines how its hash is computed, for example an fs-verity digest over the stored model.
+This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins a model's measured integrity hash, 64 lowercase hex. The evidence is the AAEL `pai/load-model` event with event type `EV_EVENT_TAG`. `<model-id>` must match the model identifier in the event exactly (a modelscope-id style name is the convention); it may contain ASCII letters, digits, `.`, `_`, `/`, `@`, `:`, `+`, and `-`, and any other character is rejected at load. There must be at least one load event. Every event must carry both `model-id` and `hash`; all `model-id` values must equal `<model-id>`, and all `hash` values must equal the pinned value. A load event for another model fails the entry. Each model defines how its hash is computed, for example an fs-verity digest over the stored model.
+
+### Root filesystem: `rootfs.cc`
+
+```json
+{ "type": "com.alibabacloud.rootfs.cc", "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230" }
+```
+
+This entry pins the dm-verity hash tree root hash of the confidential-container root filesystem, 64 lowercase hex without a `sha256:` prefix. The evidence is the `EV_PLATFORM_CONFIG_FLAGS` event in the UEFI event log whose `details.string` starts with `td_payload_info `. Every such event must be recorded in RTMR1 (register index 2); an event at another index or with no index fails the entry. The root hash is read from the `dm-mod.create="verity-root,..."` table in the event string: the device name must be `verity-root`, the algorithm `sha256`, and the hash lowercase hex. Other dm devices in the same string are not read. An event whose string has no `verity-root` table is ignored, at least one event must carry the table, and every extracted root hash must be identical and equal to the pinned value. No matching event, no `verity-root` table, or two different root hashes fails the entry.
+
+In a `transparency_log` entry's `publishedMeasurements` or `fallbackPublishedMeasurements`, write `rootfs.cc`. The prefixed spelling is rejected there at load.
 
 ### Platform attributes: `tdx`
 
@@ -250,7 +258,7 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 
 **Fallback.** The optional fallback is used only when the primary returns `fail`. `ok` never triggers it, and `deny` (a revoked measurement) is a hard rejection that never falls back. If the primary cannot be evaluated because a configured measurement is missing, that counts as `fail`, so the fallback baseline is still consulted. A failed primary with no fallback rejects.
 
-**Relationship to `tdx`.** This entry only checks measurements. Platform attributes are a separate `tdx` entry. TDX recognition is automatic, so a policy with only `transparency_log` entries requires TDX recognition and nothing else for `hardware`.
+**Relationship to `tdx`.** This entry only checks measurements. Platform attributes are a separate `tdx` entry.
 
 **Several entries.** `transparency_log` may appear more than once in the same group. Entries in one group must all pass; entries in different groups are alternatives, so any one passing is enough. Use the first shape when several logs must agree, the second when any of several versions is acceptable.
 
@@ -270,7 +278,7 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types; allowed values are `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`; a type may not repeat. Write the container image type exactly as the transparency log records it; the `com.alibabacloud.` alias does not match the logged name and is rejected at load. Order does not matter |
+| `publishedMeasurements` | list of strings | — | (required) Non-empty measurement types; allowed values are `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`; a type may not repeat. Write the container image and `rootfs.cc` types exactly as the transparency log records them; the `com.alibabacloud.` aliases do not match the logged names and are rejected at load. Order does not matter |
 | `schemaVersion` | string | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | list | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | string | — | (required) `"rekor-v1"` or `"artifact-server"` |

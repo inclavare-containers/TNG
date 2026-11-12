@@ -555,11 +555,11 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 **What both primaries check:**
 
-- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`.
+- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` event for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`.
 - If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
 - The publisher signature is always checked: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 
-**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`. For the container image type, use exactly the name the transparency log records; the `com.alibabacloud.` alias does not match and is rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
+**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For the container image and `rootfs.cc` types, use exactly the names the transparency log records; the `com.alibabacloud.` aliases do not match and are rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
 
 **Platform posture:** expressed by a separate `tdx` entry. With only a `transparency_log` entry, `hardware` depends on TDX platform recognition alone; add a `tdx` entry with its attribute-bit gates set to `allow` when you need the non-debug and event-log checks.
 
@@ -570,7 +570,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 | Field | Default | Description |
 |---|---|---|
-| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, and any single-segment `container.image.<repo>`. For container images, use exactly the name the transparency log records; the `com.alibabacloud.` alias is rejected at load. A type may not repeat. Order does not matter |
+| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For container images and `rootfs.cc`, use exactly the names the transparency log records; the `com.alibabacloud.` aliases are rejected at load. A type may not repeat. Order does not matter |
 | `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
 | `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
 | `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |

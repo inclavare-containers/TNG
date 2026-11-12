@@ -1,6 +1,6 @@
 # `modules` 证明策略
 
-`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动度量（客户机固件、内核、UKI、容器镜像、模型）、GPU 评定、TDX 平台属性，或锚定在透明日志中的度量基线。证据来自阿里云 AAEL 事件的条目带 `com.alibabacloud.` 厂商前缀；两个度量家族保留无前缀写法作为永久别名。度量与平台属性条目把预期值内联钉住，生成的校验规则直接用这些常量比对证据；`transparency_log` 条目则把基线锚定在透明日志中。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
+`modules` 是内置 AS 的一种证明策略类型，把校验表达为一条模块化规则列表：每个条目是对证据某一部分的具类型校验，覆盖启动或工作负载度量（客户机固件、内核、UKI、根文件系统、容器镜像、模型）、GPU 评定、TDX 平台属性，或锚定在透明日志中的度量基线。容器镜像、模型与根文件系统类型以带 `com.alibabacloud.` 前缀的写法为规范拼写。容器镜像与模型的证据来自阿里云 AAEL 事件，`rootfs.cc` 读取 `td_payload_info` platform config flags 事件。度量与平台属性条目把预期值内联钉住，生成的校验规则直接用这些常量比对证据；`transparency_log` 条目则把基线锚定在透明日志中。在 verify 侧 `as_type: "builtin"` 的 `attestation_policy` 字段配置；策略类型的选取与其他配置见[远程证明](remote_attestation_zh.md)。
 
 ## 策略形态
 
@@ -56,29 +56,28 @@
 
 ## 信任度维度归属
 
-每类模块固定门控一个 AR4SI 信任度维度：
+每类模块门控一个或多个 AR4SI 信任度维度：
 
 | 模块类型 | 维度 |
 |---|---|
 | `tdx.td-shim`、`tdx.ovmf`、`tdx.kernel`、`tdx.uki` | `executables` |
 | `com.alibabacloud.container.image.<repo>` | `executables` |
 | `com.alibabacloud.ai.model.<model-id>` | `executables` |
-| `transparency_log` | `executables` |
+| `com.alibabacloud.rootfs.cc` | `file_system` |
+| `transparency_log` | `publishedMeasurements` 中各类型的维度 |
 | `tdx` | `hardware` |
 | `nvidia` | `hardware` |
 | `com.alibabacloud.gpu` | `hardware` |
 
-同一组内同一维度的条目彼此 AND，每个维度再在带有该维度条目的组之间 OR。没有条目的维度保持 affirming（2），但 `hardware` 例外：它依赖条目证据所属的平台。策略里至少有一个条目时，即使没有平台属性条目，`hardware` 也要求该平台被识别；完全没有条目时保持非 affirming。`configuration` 与 `file_system` 没有对应模块类型，始终为 affirming。因此度量条目失败只影响 `executables`，平台属性条目失败只影响 `hardware`，`executables` 仍为 affirming。
+没有条目的维度保持 affirming（2）。`configuration` 没有对应模块类型，始终如此。`hardware` 例外：策略里只要有条目，它就要求条目证据所属的平台被识别。modules 只识别 TDX（quote 头部 `tee_type` 为 `81000000`、`vendor_id` 为 `939a7233f79c4ca9940a0db3957f0607`），`hardware_only` 的 CSV、TPM、system 路径不适用。`tdx` 条目在识别之上追加属性检查，因此在非 TDX 证据上失败。
 
-`hardware` 维度门控在条目证据所属的 TEE 平台上。现有每个条目的证据都位于 `input.tdx` 下（quote 与事件日志度量、AAEL 事件日志家族、经评定的 GPU claims），因此 modules 策略只识别 TDX：quote 头部 tee type 为 `81000000`、vendor id 为 `939a7233f79c4ca9940a0db3957f0607`。`hardware_only` 的 CSV、TPM、system 识别路径不属于 modules 策略，这些平台的证据也不会被任何条目消费。平台属性条目在识别之上叠加约束，不替代识别。`{"type": "tdx", "value": {}}` 这类条目同时要求平台被识别为 TDX 且属性检查通过，因此在非 TDX 证据上 fail-closed。
-
-空 modules 列表不声明任何平台依赖，因此不生成识别规则：`executables`、`configuration`、`file_system` 为 affirming，`hardware` 保持非 affirming 默认值（97）。这与 `hardware_only` 不同，后者会识别 TDX 及遗留平台；要在 modules 中断言硬件识别，请写 `tdx` 条目，或直接使用 `hardware_only` 策略。
+`transparency_log` 条目的维度由其 `publishedMeasurements` 中各类型决定；`fallbackPublishedMeasurements` 是其子集，不增加维度。条目失败只影响它门控的维度。
 
 ## 配置错误
 
 以下情况在策略加载期即被拒绝，不会进入运行期：
 
-- 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
+- 条目 `type` 不在下述类型集合内（包括家族前缀拼错）；`com.alibabacloud.` 前缀只对 `container.image.`、`ai.model.`、`rootfs.cc` 与精确类型 `gpu` 合法，无前缀的 `gpu` 不是合法类型；
 - 同一 `type` 在同一组内出现两次，同一家族的规范名与别名也算重复（不同组重复同一 `type` 合法，各组是独立基线）。`transparency_log` 是唯一例外：它可以在同一组内重复，以便多条日志锚定基线都必须通过；
 - 取值形态或格式不对：摘要长度不符或含大写十六进制（摘要一律小写 hex）、`com.alibabacloud.container.image.*` 取值缺 `sha256:` 前缀、度量类给了对象，或 `tdx`/`nvidia` 给了字符串；
 - `transparency_log` 条目的 `value` 不满足下方“透明日志”一节的字段约束。`fallbackServices` 单独出现会被接受，但没有效果；
@@ -89,20 +88,19 @@
 
 ## 模块类型
 
-| 类型 | 取值形态 | 被测对象 |
-|---|---|---|
-| `tdx.td-shim` | 96 位小写 hex | quote 的 `mr_td`，td-shim 客户机固件启动的 TD |
-| `tdx.ovmf` | 96 位小写 hex | quote 的 `mr_td`，OVMF 固件启动的 TD |
-| `tdx.kernel` | 96 位小写 hex | UEFI 事件日志的 `td_payload` 事件（SHA-384，记录在 RTMR1） |
-| `tdx.uki` | 96 位小写 hex | UEFI 事件日志的 UKI 启动应用事件（SHA-384） |
-| `com.alibabacloud.container.image.<repo>` | `sha256:<64 位小写 hex>` | repo 尾段为 `<repo>` 的 AAEL `kangaroo/pull-image` 事件 |
-| `com.alibabacloud.ai.model.<model-id>` | 64 位小写 hex | 该模型的 AAEL `pai/load-model` 事件 |
-| `transparency_log` | 配置对象 | 记录在透明日志中的 ReleaseManifest（rekor-v1 或 artifact-server primary） |
-| `tdx` | 配置对象 | quote 属性位与事件日志（平台属性检查） |
-| `nvidia` | 配置对象 | 经评定的逐 GPU claims（标准 NVIDIA 验证） |
-| `com.alibabacloud.gpu` | 空对象 `{}` | AAEL `gpu/attestation` 事件及其结果码 |
-
-`container.image.<repo>` 与 `ai.model.<model-id>` 是各自 `com.alibabacloud.` 写法的永久别名，生成逐字节相同的策略。`com.alibabacloud.gpu` 没有无前缀别名。
+| 类型 | 别名 | 取值形态 | 被测对象 |
+|---|---|---|---|
+| `tdx.td-shim` | — | 96 位小写 hex | quote 的 `mr_td`，td-shim 客户机固件启动的 TD |
+| `tdx.ovmf` | — | 96 位小写 hex | quote 的 `mr_td`，OVMF 固件启动的 TD |
+| `tdx.kernel` | — | 96 位小写 hex | UEFI 事件日志的 `td_payload` 事件（SHA-384，记录在 RTMR1） |
+| `tdx.uki` | — | 96 位小写 hex | UEFI 事件日志的 UKI 启动应用事件（SHA-384） |
+| `com.alibabacloud.container.image.<repo>` | `container.image.<repo>` | `sha256:<64 位小写 hex>` | repo 尾段为 `<repo>` 的 AAEL `kangaroo/pull-image` 事件 |
+| `com.alibabacloud.ai.model.<model-id>` | `ai.model.<model-id>` | 64 位小写 hex | 该模型的 AAEL `pai/load-model` 事件 |
+| `com.alibabacloud.rootfs.cc` | `rootfs.cc` | 64 位小写 hex | UEFI 事件日志的 `td_payload_info` 事件，根文件系统的 dm-verity 根哈希 |
+| `transparency_log` | — | 配置对象 | 记录在透明日志中的 ReleaseManifest（rekor-v1 或 artifact-server primary） |
+| `tdx` | — | 配置对象 | quote 属性位与事件日志（平台属性检查） |
+| `nvidia` | — | 配置对象 | 经评定的逐 GPU claims（标准 NVIDIA 验证） |
+| `com.alibabacloud.gpu` | — | 空对象 `{}` | AAEL `gpu/attestation` 事件及其结果码 |
 
 要查看一份配置生成的确切 Rego，运行 `tng tools policy export`（见 [TNG 工具](tools_zh.md#tng-tools-policy)）。
 
@@ -136,7 +134,7 @@
 { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
 ```
 
-无前缀的 `container.image.<repo>` 是永久别名。该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住工作负载镜像的 OCI manifest digest。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `kangaroo/pull-image` 事件。条目看的是仓库名为 `<repo>` 的事件。至少要有这样一条事件，每条都带 `digest`，并且所有事件的 digest 相同，等于钉住的 `sha256:` 值。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。同一个类型写在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中时，要与透明日志里的记录一致，通常就是同一个最后一段路径。没有匹配的拉取事件时，条目失败。
+该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住工作负载镜像的 OCI manifest digest。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `kangaroo/pull-image` 事件。条目看的是仓库名为 `<repo>` 的事件。至少要有这样一条事件，每条都带 `digest`，并且所有事件的 digest 相同，等于钉住的 `sha256:` 值。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。同一个类型写在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中时，要与透明日志里的记录一致，通常就是同一个最后一段路径。没有匹配的拉取事件时，条目失败。
 
 ### 模型：`com.alibabacloud.ai.model.<model-id>`
 
@@ -144,7 +142,17 @@
 { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
 ```
 
-无前缀的 `ai.model.<model-id>` 是永久别名。该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住模型的完整性度量哈希，64 位小写 hex。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `pai/load-model` 事件。`<model-id>` 要与事件里的模型标识逐字一致（建议用 modelscope-id 风格），可以包含 ASCII 字母、数字、`.`、`_`、`/`、`@`、`:`、`+`、`-`；其它字符在加载期即被拒绝。至少要有这样一条加载事件。每条事件都要带 `model-id` 和 `hash`；所有 `model-id` 都等于 `<model-id>`，所有 `hash` 都等于钉住的值。出现另一个模型的加载事件也会让条目失败。哈希怎么算由模型自己的度量约定决定，例如对落盘模型算 fs-verity digest。
+该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住模型的完整性度量哈希，64 位小写 hex。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `pai/load-model` 事件。`<model-id>` 要与事件里的模型标识逐字一致（建议用 modelscope-id 风格），可以包含 ASCII 字母、数字、`.`、`_`、`/`、`@`、`:`、`+`、`-`；其它字符在加载期即被拒绝。至少要有这样一条加载事件。每条事件都要带 `model-id` 和 `hash`；所有 `model-id` 都等于 `<model-id>`，所有 `hash` 都等于钉住的值。出现另一个模型的加载事件也会让条目失败。哈希怎么算由模型自己的度量约定决定，例如对落盘模型算 fs-verity digest。
+
+### 根文件系统：`rootfs.cc`
+
+```json
+{ "type": "com.alibabacloud.rootfs.cc", "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230" }
+```
+
+该条目钉住机密容器根文件系统的 dm-verity hash tree 根哈希，64 位小写 hex，不带 `sha256:` 前缀。证据是 UEFI 事件日志里 `details.string` 以 `td_payload_info ` 开头的 `EV_PLATFORM_CONFIG_FLAGS` 事件。所有这类事件都必须记录在 RTMR1（寄存器索引 2）；索引不是 2 或缺失时条目失败。根哈希取自事件字符串里的 `dm-mod.create="verity-root,..."` 表：设备名必须是 `verity-root`，算法为 `sha256`，哈希为小写 hex。同一字符串里的其它 dm 设备不参与提取。不带 `verity-root` 表的事件被忽略，但至少要有一条事件带表，且提取出的所有根哈希必须相同并等于钉住的值。没有匹配事件、没有 `verity-root` 表，或者出现两个不同的根哈希，条目都失败。
+
+在 `transparency_log` 条目的 `publishedMeasurements` 或 `fallbackPublishedMeasurements` 中写 `rootfs.cc`。带前缀的写法会在加载时被拒绝。
 
 ### TDX 平台属性：`tdx`
 
@@ -250,7 +258,7 @@
 
 **fallback。** 可选的 fallback 只在 primary 返回 `fail` 时使用。`ok` 不会触发；`deny` 表示度量被撤销，是直接拒绝，不会回退。primary 因为缺少配置的度量而无法评定时，按 `fail` 处理，fallback 仍会被咨询。primary 失败且没有配置 fallback，条目拒绝。
 
-**和 `tdx` 条目的关系。** 这个条目只检查度量。平台属性由独立的 `tdx` 条目检查。TDX 平台识别是自动的，所以只有 `transparency_log` 条目的策略，`hardware` 只要求识别。
+**和 `tdx` 条目的关系。** 这个条目只检查度量，平台属性由独立的 `tdx` 条目检查。
 
 **同一组里出现多次。** `transparency_log` 是唯一可以在同一组里重复出现的条目类型。同一组的多个条目必须全部通过；分在不同组的条目互为备选，任意一组通过即可。前者用于要求多条日志同时成立，后者用于接受多个版本中的任意一个。
 
@@ -270,7 +278,7 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel` 以及任意单段 `container.image.<repo>`，同一类型不得重复。容器镜像类型要和透明日志里记录的名字完全一致；`com.alibabacloud.` 别名与日志记录不一致，会在加载时被拒绝。顺序不影响结果 |
+| `publishedMeasurements` | string 列表 | — | （必填）非空度量类型列表；允许值为 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`，同一类型不得重复。容器镜像与 `rootfs.cc` 类型要和透明日志里记录的名字完全一致；`com.alibabacloud.` 别名与日志记录不一致，会在加载时被拒绝。顺序不影响结果 |
 | `schemaVersion` | string | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
 | `services` | 列表 | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
 | `services[].type` | string | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
