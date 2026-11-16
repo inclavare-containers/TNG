@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use super::modules::{Dimension, Module};
+use super::{Dimension, Module};
 
 /// One measurement-extraction family. Families are emitted independently; a
 /// policy selects the ones its measurement entries and transparency-log
@@ -327,7 +327,7 @@ image_repo_name(ref) := name if {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::eval_policy_vector;
+    use super::super::super::test_support::eval_policy_vector;
     use super::*;
     use serde_json::json;
 

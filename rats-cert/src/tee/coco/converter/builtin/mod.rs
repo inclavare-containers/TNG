@@ -9,6 +9,7 @@ mod policies;
 mod policy_config;
 mod reference_values;
 mod signer;
+mod transparency;
 
 pub use converter::BuiltinCocoConverter;
 // The config types were all public before the split into `policy_config`; keep

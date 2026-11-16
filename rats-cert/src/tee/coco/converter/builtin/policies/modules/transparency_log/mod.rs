@@ -1,11 +1,9 @@
-//! The `transparency_log` module entry: config validation, Rego fragments, and
-//! the rekor-v1 and artifact-server service implementations.
+//! The `transparency_log` module entry: config validation and Rego fragments.
+//! The rekor-v1 and artifact-server services live in `builtin/transparency`.
 
-use super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
-use super::modules::is_valid_image_repo_name;
-
-pub(crate) mod artifact_server;
-pub(crate) mod rekor_v1;
+use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
+use super::super::super::transparency::{artifact_server, rekor_v1};
+use super::is_valid_image_repo_name;
 
 /// A `publishedMeasurements` entry, parsed in one place. The raw string stays
 /// the manifest `type` and is preserved byte-for-byte; the enum only names the
@@ -169,7 +167,7 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
 /// The authenticated data a rekor-v1 primary contributes to an entry: the baked
 /// payloadHash plus the DSSE signature and publisher key used at appraisal.
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedRekor {
+pub(in crate::tee::coco::converter::builtin::policies) struct ResolvedRekor {
     pub payload_hash: String,
     pub dsse_signature: String,
     pub publisher_key: String,
@@ -182,7 +180,7 @@ pub(super) struct ResolvedRekor {
 pub(super) async fn resolve_entry(
     cfg: &TransparencyLogEntryConfig,
 ) -> anyhow::Result<Option<ResolvedRekor>> {
-    use super::super::host_fns::resolve_dsse_signature;
+    use super::super::super::host_fns::resolve_dsse_signature;
 
     let TransparencyServiceConfig::RekorV1 {
         log_url,
@@ -422,9 +420,9 @@ pub(super) fn build_entry_rules(
 
 #[cfg(test)]
 mod tests {
-    use super::super::load_policy;
-    use super::super::modules::{build_modules_policy_with_resolved, parse_module_groups, Module};
-    use super::super::test_support::eval_policy_vector;
+    use super::super::super::load_policy;
+    use super::super::super::test_support::eval_policy_vector;
+    use super::super::{build_modules_policy_with_resolved, parse_module_groups, Module};
     use super::*;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
@@ -619,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rego_hardware_only_recognizes_known_tees() {
-        let policy = include_str!("../static/hardware_only.rego");
+        let policy = include_str!("../../static/hardware_only.rego");
 
         // TDX with the canonical Intel quoting-enclave vendor_id -> all affirming.
         let tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}}}}"#;
@@ -638,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rego_hardware_only_rejects_unrecognized_hardware() {
-        let policy = include_str!("../static/hardware_only.rego");
+        let policy = include_str!("../../static/hardware_only.rego");
 
         // A valid TDX tee_type but a WRONG vendor_id: hardware must stay at its
         // "unrecognized" default (97 -> Contraindicated), while the other three
@@ -655,7 +653,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rego_hardware_only_strict_requires_non_debug_tdx_eventlog() {
-        let policy = include_str!("../static/hardware_only_strict.rego");
+        let policy = include_str!("../../static/hardware_only_strict.rego");
 
         let valid_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
         assert_eq!(eval_policy_vector(policy, valid_tdx).await, (2, 2, 2, 2));
@@ -672,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rego_trust_all_affirms_everything() {
-        let policy = include_str!("../static/trust_all.rego");
+        let policy = include_str!("../../static/trust_all.rego");
 
         // trust_all affirms every dimension regardless of input, even with no
         // TEE evidence and an unrecognized vendor_id.
@@ -2508,7 +2506,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[tokio::test]
     async fn transparency_log_rekor_dsse_verifies_against_builtin_publisher_key() {
         // Extract the real DSSE signature from the fixture entry.
-        let entry_raw = include_str!("../../tests/fixtures/rekor_v1_entry.json");
+        let entry_raw = include_str!("../../../tests/fixtures/rekor_v1_entry.json");
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -2584,7 +2582,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     fn verify_dsse_signature_validates_real_fixture_signature() {
         use p256::ecdsa::signature::Verifier;
 
-        let entry_raw = include_str!("../../tests/fixtures/rekor_v1_entry.json");
+        let entry_raw = include_str!("../../../tests/fixtures/rekor_v1_entry.json");
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -2784,7 +2782,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// `(release_manifest, log_entry, entry_url, log_index)` tuple.
     fn cmaas_transparency_tuple() -> (Value, Value, String, i64) {
         let evidence: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
         ))
         .expect("parse evidence fixture");
         let manifest = evidence["transparency"]["release_manifest"].clone();
@@ -3195,7 +3193,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         });
 
         let evidence: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
         ))
         .unwrap();
         let manifest = evidence["transparency"]["release_manifest"].clone();
@@ -3333,7 +3331,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
     fn cmaas_fixture_quote_and_eventlog() -> (String, String) {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
+            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
         ))
         .expect("parse evidence fixture");
         let ev = &fixture["evidence"];

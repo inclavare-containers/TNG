@@ -3,7 +3,7 @@
 
 use base64::Engine as _;
 
-use super::policies::transparency_log::{artifact_server, rekor_v1};
+use super::transparency::{artifact_server, rekor_v1};
 
 /// Resolve the DSSE signature to bake into the `transparency_log` entry.
 ///

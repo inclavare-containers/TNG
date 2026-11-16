@@ -1,16 +1,19 @@
 //! The `modules` attestation policy: entry parsing, validation, and Rego
 //! generation.
 
+use self::measurements::Families;
+use self::transparency_log::ResolvedRekor;
 use super::super::policy_config::{
     value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
     TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
     TdxTcbConfig, TransparencyLogEntryConfig,
 };
-use super::measurements::{self, Families};
-use super::transparency_log::{self, ResolvedRekor};
 use crate::errors::*;
 use anyhow::Context;
 use std::collections::BTreeSet;
+
+pub(crate) mod measurements;
+pub(crate) mod transparency_log;
 
 /// A parsed, validated measurement/posture module: the concrete variant the
 /// generator switches on.
@@ -2218,7 +2221,7 @@ mod tests {
 
         // Documented difference from hardware_only: on TDX evidence the empty
         // list still does not recognise the platform, while hardware_only does.
-        let hardware_only = include_str!("static/hardware_only.rego");
+        let hardware_only = include_str!("../static/hardware_only.rego");
         assert_eq!(
             eval_policy_vector(hardware_only, &tdx).await,
             (2, 2, 2, 2),
@@ -2422,7 +2425,7 @@ mod tests {
         // strict modules posture reproduces hardware_only_strict.
         let cfg = r#"[{"type":"tdx","value":{"sept_ve_disable":"allow","perfmon":"allow","service_td":"allow"}}]"#;
         let modules = build_policy(&modules_cfg(cfg)).expect("build");
-        let strict = include_str!("static/hardware_only_strict.rego");
+        let strict = include_str!("../static/hardware_only_strict.rego");
 
         let ok = tdx_input(serde_json::Value::Null, &[json!({ "event": "ok" })]);
         assert_eq!(

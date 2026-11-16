@@ -7,11 +7,9 @@ use base64::Engine;
 use super::policy_config::PolicyConfig;
 use crate::errors::*;
 
-pub(crate) mod measurements;
 pub(crate) mod modules;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod transparency_log;
 
 /// Render the Rego source a builtin AS loads for `policy`.
 ///
