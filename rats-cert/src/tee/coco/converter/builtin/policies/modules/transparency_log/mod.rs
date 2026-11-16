@@ -2,7 +2,7 @@
 //! The rekor-v1 and artifact-server services live in `builtin/transparency`.
 
 use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
-use super::super::super::transparency::{artifact_server, rekor_v1};
+use super::super::super::transparency::rekor_v1;
 
 /// The authenticated data a rekor-v1 primary contributes to an entry: the baked
 /// payloadHash plus the DSSE signature and publisher key used at appraisal.
@@ -20,7 +20,9 @@ pub(crate) struct ResolvedRekor {
 pub(super) async fn resolve_entry(
     cfg: &TransparencyLogEntryConfig,
 ) -> anyhow::Result<Option<ResolvedRekor>> {
-    use super::super::super::host_fns::resolve_dsse_signature;
+    use super::super::super::transparency::dsse::{
+        effective_publisher_pem, require_dsse_signature,
+    };
 
     let TransparencyServiceConfig::RekorV1 {
         log_url,
@@ -45,13 +47,10 @@ pub(super) async fn resolve_entry(
             .await?;
     // DSSE verification is mandatory: fall back to the built-in publisher key
     // when the config leaves it empty.
-    let publisher_key = publisher_public_key_pem
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(artifact_server::BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+    let publisher_key = effective_publisher_pem(publisher_public_key_pem.as_deref());
     Ok(Some(ResolvedRekor {
         payload_hash: auth.payload_hash,
-        dsse_signature: resolve_dsse_signature(&auth.dsse_signature)?.to_string(),
+        dsse_signature: require_dsse_signature(&auth.dsse_signature)?.to_string(),
         publisher_key: publisher_key.to_string(),
     }))
 }
@@ -275,10 +274,13 @@ mod tests {
     use super::*;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
-    use crate::tee::coco::converter::builtin::host_fns::{dsse_pae, DSSE_PAYLOAD_TYPE};
     use crate::tee::coco::converter::builtin::policy_config::{
         ArtifactLogService, ModuleGroupsConfig, PolicyConfig, ReferenceValueConfig,
         SampleProvenancePayloadConfig, TransparencyServiceConfig,
+    };
+    use crate::tee::coco::converter::builtin::transparency::artifact_server;
+    use crate::tee::coco::converter::builtin::transparency::dsse::{
+        self, dsse_pae, DSSE_PAYLOAD_TYPE,
     };
     use crate::tee::coco::evidence::{tee_from_str, CocoEvidence};
     use crate::tee::{GenericConverter, GenericVerifier, ReportData};
@@ -1968,7 +1970,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         let mut resolved = ResolvedRekor {
             payload_hash: payload_hash.to_string(),
             dsse_signature: dsse_signature.clone(),
-            publisher_key: artifact_server::BUILTIN_LOG_ENTRY_PUB_KEY_PEM.to_string(),
+            publisher_key: dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM.to_string(),
         };
         let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
         assert_eq!(
@@ -2034,7 +2036,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
         let verify = |payload_str: &str, sig_b64: &str, key_pem: &str| -> bool {
             (|| -> anyhow::Result<bool> {
-                let key = rekor_v1::parse_p256_public_key(key_pem)?;
+                let key = dsse::parse_p256_public_key(key_pem)?;
                 let sig_bytes = BASE64_STANDARD.decode(sig_b64)?;
                 let signature = p256::ecdsa::Signature::from_der(&sig_bytes)?;
                 let pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload_str.as_bytes());

@@ -12,6 +12,11 @@
 use anyhow::{Context, Result};
 use base64::Engine;
 use serde::Deserialize;
+use sha2::Digest as _;
+
+#[cfg(feature = "crypto-rustcrypto")]
+use super::key_table::verify_log_id;
+use super::key_table::{rekor_public_key, RekorKey};
 
 /// A Rekor v1 transparency-log entry (the raw object returned by
 /// `GET /api/v1/log/entries?logIndex=<n>`).
@@ -90,12 +95,12 @@ pub(crate) struct RekorSignature {
 /// in-band DSSE signature (`body.spec.signatures[0].signature`) extracted for
 /// downstream policy verification.
 #[cfg(feature = "crypto-rustcrypto")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AuthenticatedRekorEntry {
     pub(crate) payload_hash: String,
-    // Read in the non-test build via `resolve_dsse_signature` (builtin/mod.rs),
-    // which threads it into the generated Rego policy as the DSSE signature
-    // literal for `tng.verify_dsse_signature`.
+    // Read by the seam's rekor adapter: the load path threads it into the
+    // generated Rego policy for `tng.verify_dsse_signature`, and the on-demand
+    // path verifies it directly.
     pub(crate) dsse_signature: String,
 }
 
@@ -103,24 +108,6 @@ pub(crate) struct AuthenticatedRekorEntry {
 pub(crate) struct PayloadHash {
     pub(crate) algorithm: String,
     pub(crate) value: String,
-}
-
-/// Serialize a `serde_json::Value` as RFC 8785 JCS canonical JSON (sorted
-/// keys, compact) via the `canon-json` crate. The manifest shapes here are
-/// number-free, so this also equals Rego's `json.marshal` output, keeping the
-/// init-bake `payloadHash` consistent with the appraisal-time recomputation.
-///
-/// Shared by the load-time bake tests (via `mod.rs`) and the on-demand
-/// `tng.fetch_rekor_on_demand` host-await
-/// (`artifact_server::canonical_manifest_sha256`) so both paths compute the
-/// identical canonical bytes for the same manifest.
-#[cfg(any(feature = "attester-coco", feature = "crypto-rustcrypto"))]
-pub(crate) fn canonical_json(value: &serde_json::Value) -> Result<String> {
-    let mut buf = Vec::new();
-    let mut ser =
-        serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
-    serde::Serialize::serialize(value, &mut ser).context("serialize canonical JSON")?;
-    String::from_utf8(buf).context("canonical JSON is not valid UTF-8")
 }
 
 /// Base64-decode `entry.body` and deserialize into [`RekorBody`]. Requires
@@ -139,330 +126,198 @@ pub(crate) fn decode_rekor_body(entry: &RekorEntry) -> Result<RekorBody> {
     Ok(body)
 }
 
-#[cfg(feature = "crypto-rustcrypto")]
-mod key {
-    use super::{InclusionProof, RekorEntry};
-    use anyhow::{Context, Result};
-    use base64::Engine;
-    use p256::ecdsa::signature::Verifier;
-    use p256::ecdsa::VerifyingKey;
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
-    use p256::EncodedPoint;
-    use serde::Serialize;
-    use sha2::{Digest, Sha256};
-    use x509_cert::der::Decode as _;
-    use x509_cert::spki::SubjectPublicKeyInfoRef;
-
-    /// A resolved Rekor public key: the P-256 verifying key plus its PKIX-SPKI
-    /// DER bytes (needed because `logID` = `sha256(SPKI DER)`).
-    #[derive(Debug)]
-    pub(crate) struct RekorKey {
-        pub(crate) verifying_key: VerifyingKey,
-        pub(crate) spki_der: Vec<u8>,
-    }
-
-    /// Sigstore Rekor v1 public key as base64 SPKI.
-    const SIGSTORE_REKOR_V1_SPKI_B64: &str =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwrkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==";
-
-    /// OpenAnolis Rekor v1 public key as base64 SPKI.
-    const OPENANOLIS_REKOR_V1_SPKI_B64: &str =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXQ2ngaAbWq3XILAb3ZlIpZ/AIdUjkcjkZNjAeQmDGY9qqbNmT/eQZ1nBJw6vd6S0Rq5F9rb3oYLTNejEEhCd0A==";
-
-    /// Built-in Rekor v1 `(hostname, base64-SPKI)` pairs, the single source
-    /// of truth that `rekor_public_key` matches on below. Callers needing to
-    /// enumerate every built-in key (e.g. `resolve_rekor_key`'s logID fallback
-    /// in `artifact_server`) iterate THIS table instead of restating the
-    /// hostnames, so a third built-in added here is picked up automatically
-    /// rather than silently missed.
-    pub(crate) fn known_rekor_keys() -> &'static [(&'static str, &'static str)] {
-        &[
-            ("rekor.sigstore.dev", SIGSTORE_REKOR_V1_SPKI_B64),
-            ("rekor.openanolis.cn", OPENANOLIS_REKOR_V1_SPKI_B64),
-        ]
-    }
-
-    /// Resolve the Rekor public key: an explicit PEM if provided, else a built-in
-    /// table keyed by `log_url` hostname, using base64 SPKI + `x509_cert` decode
-    /// with the v1 keys.
-    pub(crate) fn rekor_public_key(log_url: &str, explicit: Option<&str>) -> Result<RekorKey> {
-        let spki_b64: String = match explicit {
-            Some(p) if !p.is_empty() => pem_to_spki_b64(p)?,
-            _ => match hostname_of(log_url)?.as_str() {
-                "rekor.sigstore.dev" => SIGSTORE_REKOR_V1_SPKI_B64.to_string(),
-                "rekor.openanolis.cn" => OPENANOLIS_REKOR_V1_SPKI_B64.to_string(),
-                other => {
-                    anyhow::bail!(
-                        "no built-in Rekor v1 public key for {other:?}; set rekorPublicKeyPem"
-                    )
-                }
-            },
-        };
-        let spki_der = base64::engine::general_purpose::STANDARD
-            .decode(spki_b64.as_bytes())
-            .context("base64-decode Rekor public key SPKI")?;
-        let spki = SubjectPublicKeyInfoRef::from_der(&spki_der).context("parse Rekor SPKI DER")?;
-        let encoded_point = EncodedPoint::from_bytes(spki.subject_public_key.raw_bytes())
-            .context("decode Rekor public key point")?;
-        let verifying_key = VerifyingKey::from_encoded_point(&encoded_point)
-            .context("construct Rekor verifying key")?;
-        Ok(RekorKey {
-            verifying_key,
-            spki_der,
-        })
-    }
-
-    /// Strip PEM `-----BEGIN/END PUBLIC KEY-----` wrappers, return the base64 body.
-    fn pem_to_spki_b64(pem: &str) -> Result<String> {
-        let b64: String = pem
-            .lines()
-            .filter(|l| !l.starts_with("-----"))
-            .flat_map(|l| l.chars())
-            .collect();
-        Ok(b64)
-    }
-
-    /// Parse a PEM-encoded P-256 public key (`-----BEGIN PUBLIC KEY-----`) into
-    /// a `VerifyingKey`. Reused by the `tng.verify_dsse_signature` host-await
-    /// primitive to parse the transparency-log publisher key — the same SPKI
-    /// decode path as `rekor_public_key`, minus the built-in hostname table.
-    pub(crate) fn parse_p256_public_key(pem: &str) -> Result<VerifyingKey> {
-        let spki_b64 = pem_to_spki_b64(pem)?;
-        let spki_der = base64::engine::general_purpose::STANDARD
-            .decode(spki_b64.as_bytes())
-            .context("base64-decode publisher public key SPKI")?;
-        let spki = SubjectPublicKeyInfoRef::from_der(&spki_der)
-            .context("parse publisher public key SPKI DER")?;
-        let encoded_point = EncodedPoint::from_bytes(spki.subject_public_key.raw_bytes())
-            .context("decode publisher public key point")?;
-        VerifyingKey::from_encoded_point(&encoded_point)
-            .context("construct publisher verifying key")
-    }
-
-    fn hostname_of(url: &str) -> Result<String> {
-        let no_scheme = url
-            .strip_prefix("https://")
-            .or_else(|| url.strip_prefix("http://"))
-            .unwrap_or(url);
-        let host = no_scheme.split('/').next().unwrap_or(no_scheme);
-        Ok(host.to_string())
-    }
-
-    /// RFC 6962 SHA-256 tree hashing, matching Go's
-    /// `github.com/transparency-dev/merkle/rfc6962.DefaultHasher`.
-    fn hash_leaf(data: &[u8]) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update([0x00]); // leaf prefix
-        h.update(data);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&h.finalize());
-        out
-    }
-
-    fn hash_intermediate(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update([0x01]); // node prefix
-        h.update(left);
-        h.update(right);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&h.finalize());
-        out
-    }
-
-    /// Merkle inclusion proof verification. Leaf =
-    /// `HashLeaf(base64-decoded entry.body bytes)`; walk `proof.hashes` per RFC
-    /// 6962 inclusion (transparency-dev/merkle/proof `VerifyInclusion`) and
-    /// require the final hash == `proof.root_hash`.
-    ///
-    /// The proof list carries only the siblings that *exist* along the path, so
-    /// it is shorter than the tree height: at each level the current node is
-    /// combined with the next proof hash only when its sibling exists; when the
-    /// node is the last in its level (no right sibling) it is carried up
-    /// unchanged and no hash is consumed. This mirrors the canonical
-    /// transparency-dev walk: track `fn` (current node index) and `sn` (index of
-    /// the last node at the current level, starting at `treeSize - 1`); loop
-    /// until both reach the root (`fn == sn && sn == 0`).
-    pub(crate) fn verify_inclusion_proof(entry: &RekorEntry) -> Result<()> {
-        let proof = &entry.verification.inclusion_proof;
-        if proof.tree_size <= 0 {
-            anyhow::bail!("non-positive treeSize");
-        }
-        if !(0..proof.tree_size).contains(&proof.log_index) {
-            anyhow::bail!("logIndex out of range for treeSize");
-        }
-        let leaf_input = base64::engine::general_purpose::STANDARD
-            .decode(&entry.body)
-            .context("base64-decode entry body for leaf hash")?;
-        let mut node = hash_leaf(&leaf_input);
-        // Pre-decode all sibling hashes once.
-        let siblings: Vec<[u8; 32]> = proof
-            .hashes
-            .iter()
-            .map(|hb| {
-                let h =
-                    hex::decode(hb).with_context(|| format!("hex-decode inclusion hash {hb}"))?;
-                h.as_slice()
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("inclusion hash not 32 bytes: {hb}"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut fn_ = proof.log_index as u64;
-        let mut sn = (proof.tree_size - 1) as u64;
-        let mut pi = 0usize;
-        while fn_ != sn || sn != 0 {
-            if pi >= siblings.len() {
-                anyhow::bail!("Merkle inclusion proof too short for treeSize/logIndex");
-            }
-            // RFC 6962: a right child (odd index) is hashed with its sibling on
-            // the left; a left child (even index) is hashed with its right
-            // sibling only if that sibling exists (`fn < sn`); otherwise the
-            // node is the last in its level and is carried up unchanged.
-            if fn_ % 2 == 1 {
-                node = hash_intermediate(&siblings[pi], &node);
-                pi += 1;
-            } else if fn_ < sn {
-                node = hash_intermediate(&node, &siblings[pi]);
-                pi += 1;
-            }
-            fn_ >>= 1;
-            // Parent of the last node: a right child (odd) collapses with its
-            // left sibling (`(sn - 1) >> 1`); a left child (even) is the sole
-            // node of its subtree and its parent is `sn >> 1`.
-            sn = if sn % 2 == 1 { (sn - 1) >> 1 } else { sn >> 1 };
-        }
-        if pi != siblings.len() {
-            anyhow::bail!(
-                "Merkle inclusion proof failed: consumed {pi} of {} sibling hashes",
-                siblings.len()
-            );
-        }
-        let root = hex::decode(&proof.root_hash).context("hex-decode rootHash")?;
-        if node.as_slice() != root.as_slice() {
-            anyhow::bail!("Merkle inclusion proof failed: computed root != proof rootHash");
-        }
-        Ok(())
-    }
-
-    /// Compute the Rekor public key ID: `hex(sha256(PKIX-SPKI DER))`.
-    pub(crate) fn public_key_id(spki_der: &[u8]) -> String {
-        let mut h = Sha256::new();
-        h.update(spki_der);
-        hex::encode(h.finalize())
-    }
-
-    /// Verify the Rekor log ID: entry.log_id == public_key_id(key), compared
-    /// case-insensitively. Rekor logIDs are lowercase hex sha256(SPKI), but a
-    /// response/fixture may carry an uppercase encoding; the identity check is
-    /// encoding-agnostic.
-    pub(crate) fn verify_log_id(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
-        let want = public_key_id(&key.spki_der);
-        if !entry.log_id.eq_ignore_ascii_case(&want) {
-            anyhow::bail!("Rekor logID mismatch: entry={} key={}", entry.log_id, want);
-        }
-        Ok(())
-    }
-
-    /// Rekor v1 checkpoint verification. The checkpoint is a Sigstore
-    /// "note"-signed blob: split on `"\n\u{2014} "` into noteBody + signature line;
-    /// the signature line is `"<origin> <base64-sig>"`; base64-decode, skip the
-    /// first 4 bytes (note name/hash-alg header), verify ECDSA P-256 SHA-256 over
-    /// `noteBody`. Then require checkpoint treeSize == proof.tree_size and
-    /// checkpoint rootHash (base64) == proof.root_hash (hex).
-    pub(crate) fn verify_checkpoint(proof: &InclusionProof, key: &RekorKey) -> Result<()> {
-        let parts: Vec<&str> = proof.checkpoint.splitn(2, "\n\u{2014} ").collect();
-        if parts.len() != 2 {
-            anyhow::bail!("invalid Rekor checkpoint format (missing note signature)");
-        }
-        let note_body = parts[0];
-        let sig_line = parts[1].trim_end_matches('\n');
-        let sig_parts: Vec<&str> = sig_line.splitn(2, ' ').collect();
-        if sig_parts.len() != 2 {
-            anyhow::bail!("invalid Rekor checkpoint signature line");
-        }
-        let sig_bytes = base64::engine::general_purpose::STANDARD
-            .decode(sig_parts[1])
-            .context("base64-decode checkpoint signature")?;
-        if sig_bytes.len() < 5 {
-            anyhow::bail!("Rekor checkpoint signature too short");
-        }
-        let raw_sig = &sig_bytes[4..]; // skip 4-byte Sigstore note header
-        let signature = p256::ecdsa::Signature::from_der(raw_sig)
-            .context("parse checkpoint ECDSA signature")?;
-        // p256 VerifyingKey::verify hashes the message with SHA-256 internally —
-        // equivalent to `sha256(noteBody); VerifyASN1`.
-        key.verifying_key
-            .verify(note_body.as_bytes(), &signature)
-            .context("Rekor checkpoint signature verification failed")?;
-
-        // Parse noteBody lines: origin / treeSize / rootHash(base64).
-        let lines: Vec<&str> = note_body.trim_end_matches('\n').split('\n').collect();
-        if lines.len() < 3 {
-            anyhow::bail!("Rekor checkpoint noteBody has too few lines");
-        }
-        let cp_tree_size: i64 = lines[1]
-            .parse()
-            .with_context(|| format!("parse checkpoint treeSize {}", lines[1]))?;
-        let cp_root = base64::engine::general_purpose::STANDARD
-            .decode(lines[2])
-            .context("base64-decode checkpoint rootHash")?;
-        let proof_root = hex::decode(&proof.root_hash).context("hex-decode proof rootHash")?;
-        if cp_tree_size != proof.tree_size {
-            anyhow::bail!(
-                "checkpoint treeSize {cp_tree_size} != proof treeSize {}",
-                proof.tree_size
-            );
-        }
-        if cp_root != proof_root {
-            anyhow::bail!("checkpoint rootHash != proof rootHash");
-        }
-        Ok(())
-    }
-
-    /// SET payload with fixed field order + key names matching the signed SET
-    /// payload: body, integratedTime, logID, logIndex. Field
-    /// declaration order here == serialization order (serde preserves it for
-    /// structs). `logID` is an explicit rename (camelCase would yield `logId`).
-    #[derive(Serialize)]
-    struct SetPayload<'a> {
-        body: &'a str,
-        #[serde(rename = "integratedTime")]
-        integrated_time: i64,
-        #[serde(rename = "logID")]
-        log_id: &'a str,
-        #[serde(rename = "logIndex")]
-        log_index: i64,
-    }
-
-    /// Signed Entry Timestamp verification. Serialize the 4-field payload with
-    /// fixed key order/names, `sha256` it (p256 verify hashes internally), verify
-    /// ECDSA P-256 over it with the Rekor public key. Signature is base64-decoded
-    /// DER, no prefix skip (unlike checkpoint).
-    pub(crate) fn verify_set(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
-        let payload = SetPayload {
-            body: &entry.body,
-            integrated_time: entry.integrated_time,
-            log_id: &entry.log_id,
-            log_index: entry.log_index,
-        };
-        // serde_json::to_vec preserves struct field declaration order == Go json.Marshal order.
-        let canonical = serde_json::to_vec(&payload).context("serialize SET payload")?;
-        let sig_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&entry.verification.signed_entry_timestamp)
-            .context("base64-decode signedEntryTimestamp")?;
-        let signature =
-            p256::ecdsa::Signature::from_der(&sig_bytes).context("parse SET ECDSA signature")?;
-        key.verifying_key
-            .verify(&canonical, &signature)
-            .context("Rekor SET signature verification failed")?;
-        Ok(())
-    }
+/// RFC 6962 SHA-256 tree hashing, matching Go's
+/// `github.com/transparency-dev/merkle/rfc6962.DefaultHasher`.
+fn hash_leaf(data: &[u8]) -> [u8; 32] {
+    let mut h = sha2::Sha256::new();
+    sha2::Digest::update(&mut h, [0x00]); // leaf prefix
+    sha2::Digest::update(&mut h, data);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&sha2::Digest::finalize(h));
+    out
 }
 
-#[cfg(feature = "crypto-rustcrypto")]
-pub(crate) use key::{
-    known_rekor_keys, parse_p256_public_key, public_key_id, rekor_public_key, verify_checkpoint,
-    verify_inclusion_proof, verify_log_id, verify_set, RekorKey,
-};
+fn hash_intermediate(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = sha2::Sha256::new();
+    sha2::Digest::update(&mut h, [0x01]); // node prefix
+    sha2::Digest::update(&mut h, left);
+    sha2::Digest::update(&mut h, right);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&sha2::Digest::finalize(h));
+    out
+}
+
+/// Merkle inclusion proof verification. Leaf =
+/// `HashLeaf(base64-decoded entry.body bytes)`; walk `proof.hashes` per RFC
+/// 6962 inclusion (transparency-dev/merkle/proof `VerifyInclusion`) and
+/// require the final hash == `proof.root_hash`.
+///
+/// The proof list carries only the siblings that *exist* along the path, so
+/// it is shorter than the tree height: at each level the current node is
+/// combined with the next proof hash only when its sibling exists; when the
+/// node is the last in its level (no right sibling) it is carried up
+/// unchanged and no hash is consumed. This mirrors the canonical
+/// transparency-dev walk: track `fn` (current node index) and `sn` (index of
+/// the last node at the current level, starting at `treeSize - 1`); loop
+/// until both reach the root (`fn == sn && sn == 0`).
+pub(crate) fn verify_inclusion_proof(entry: &RekorEntry) -> Result<()> {
+    let proof = &entry.verification.inclusion_proof;
+    if proof.tree_size <= 0 {
+        anyhow::bail!("non-positive treeSize");
+    }
+    if !(0..proof.tree_size).contains(&proof.log_index) {
+        anyhow::bail!("logIndex out of range for treeSize");
+    }
+    let leaf_input = base64::engine::general_purpose::STANDARD
+        .decode(&entry.body)
+        .context("base64-decode entry body for leaf hash")?;
+    let mut node = hash_leaf(&leaf_input);
+    // Pre-decode all sibling hashes once.
+    let siblings: Vec<[u8; 32]> = proof
+        .hashes
+        .iter()
+        .map(|hb| {
+            let h = hex::decode(hb).with_context(|| format!("hex-decode inclusion hash {hb}"))?;
+            h.as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("inclusion hash not 32 bytes: {hb}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut fn_ = proof.log_index as u64;
+    let mut sn = (proof.tree_size - 1) as u64;
+    let mut pi = 0usize;
+    while fn_ != sn || sn != 0 {
+        if pi >= siblings.len() {
+            anyhow::bail!("Merkle inclusion proof too short for treeSize/logIndex");
+        }
+        // RFC 6962: a right child (odd index) is hashed with its sibling on
+        // the left; a left child (even index) is hashed with its right
+        // sibling only if that sibling exists (`fn < sn`); otherwise the
+        // node is the last in its level and is carried up unchanged.
+        if fn_ % 2 == 1 {
+            node = hash_intermediate(&siblings[pi], &node);
+            pi += 1;
+        } else if fn_ < sn {
+            node = hash_intermediate(&node, &siblings[pi]);
+            pi += 1;
+        }
+        fn_ >>= 1;
+        // Parent of the last node: a right child (odd) collapses with its
+        // left sibling (`(sn - 1) >> 1`); a left child (even) is the sole
+        // node of its subtree and its parent is `sn >> 1`.
+        sn = if sn % 2 == 1 { (sn - 1) >> 1 } else { sn >> 1 };
+    }
+    if pi != siblings.len() {
+        anyhow::bail!(
+            "Merkle inclusion proof failed: consumed {pi} of {} sibling hashes",
+            siblings.len()
+        );
+    }
+    let root = hex::decode(&proof.root_hash).context("hex-decode rootHash")?;
+    if node.as_slice() != root.as_slice() {
+        anyhow::bail!("Merkle inclusion proof failed: computed root != proof rootHash");
+    }
+    Ok(())
+}
+
+/// Rekor v1 checkpoint verification. The checkpoint is a Sigstore
+/// "note"-signed blob: split on `"\n\u{2014} "` into noteBody + signature line;
+/// the signature line is `"<origin> <base64-sig>"`; base64-decode, skip the
+/// first 4 bytes (note name/hash-alg header), verify ECDSA P-256 SHA-256 over
+/// `noteBody`. Then require checkpoint treeSize == proof.tree_size and
+/// checkpoint rootHash (base64) == proof.root_hash (hex).
+pub(crate) fn verify_checkpoint(proof: &InclusionProof, key: &RekorKey) -> Result<()> {
+    use p256::ecdsa::signature::Verifier as _;
+
+    let parts: Vec<&str> = proof.checkpoint.splitn(2, "\n\u{2014} ").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("invalid Rekor checkpoint format (missing note signature)");
+    }
+    let note_body = parts[0];
+    let sig_line = parts[1].trim_end_matches('\n');
+    let sig_parts: Vec<&str> = sig_line.splitn(2, ' ').collect();
+    if sig_parts.len() != 2 {
+        anyhow::bail!("invalid Rekor checkpoint signature line");
+    }
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(sig_parts[1])
+        .context("base64-decode checkpoint signature")?;
+    if sig_bytes.len() < 5 {
+        anyhow::bail!("Rekor checkpoint signature too short");
+    }
+    let raw_sig = &sig_bytes[4..]; // skip 4-byte Sigstore note header
+    let signature =
+        p256::ecdsa::Signature::from_der(raw_sig).context("parse checkpoint ECDSA signature")?;
+    // p256 VerifyingKey::verify hashes the message with SHA-256 internally —
+    // equivalent to `sha256(noteBody); VerifyASN1`.
+    key.verifying_key
+        .verify(note_body.as_bytes(), &signature)
+        .context("Rekor checkpoint signature verification failed")?;
+
+    // Parse noteBody lines: origin / treeSize / rootHash(base64).
+    let lines: Vec<&str> = note_body.trim_end_matches('\n').split('\n').collect();
+    if lines.len() < 3 {
+        anyhow::bail!("Rekor checkpoint noteBody has too few lines");
+    }
+    let cp_tree_size: i64 = lines[1]
+        .parse()
+        .with_context(|| format!("parse checkpoint treeSize {}", lines[1]))?;
+    let cp_root = base64::engine::general_purpose::STANDARD
+        .decode(lines[2])
+        .context("base64-decode checkpoint rootHash")?;
+    let proof_root = hex::decode(&proof.root_hash).context("hex-decode proof rootHash")?;
+    if cp_tree_size != proof.tree_size {
+        anyhow::bail!(
+            "checkpoint treeSize {cp_tree_size} != proof treeSize {}",
+            proof.tree_size
+        );
+    }
+    if cp_root != proof_root {
+        anyhow::bail!("checkpoint rootHash != proof rootHash");
+    }
+    Ok(())
+}
+
+/// SET payload with fixed field order + key names matching the signed SET
+/// payload: body, integratedTime, logID, logIndex. Field declaration order
+/// here == serialization order (serde preserves it for structs). `logID` is an
+/// explicit rename (camelCase would yield `logId`).
+#[derive(serde::Serialize)]
+struct SetPayload<'a> {
+    body: &'a str,
+    #[serde(rename = "integratedTime")]
+    integrated_time: i64,
+    #[serde(rename = "logID")]
+    log_id: &'a str,
+    #[serde(rename = "logIndex")]
+    log_index: i64,
+}
+
+/// Signed Entry Timestamp verification. Serialize the 4-field payload with
+/// fixed key order/names, `sha256` it (p256 verify hashes internally), verify
+/// ECDSA P-256 over it with the Rekor public key. Signature is base64-decoded
+/// DER, no prefix skip (unlike checkpoint).
+pub(crate) fn verify_set(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
+    use p256::ecdsa::signature::Verifier as _;
+
+    let payload = SetPayload {
+        body: &entry.body,
+        integrated_time: entry.integrated_time,
+        log_id: &entry.log_id,
+        log_index: entry.log_index,
+    };
+    // serde_json::to_vec preserves struct field declaration order == Go json.Marshal order.
+    let canonical = serde_json::to_vec(&payload).context("serialize SET payload")?;
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&entry.verification.signed_entry_timestamp)
+        .context("base64-decode signedEntryTimestamp")?;
+    let signature =
+        p256::ecdsa::Signature::from_der(&sig_bytes).context("parse SET ECDSA signature")?;
+    key.verifying_key
+        .verify(&canonical, &signature)
+        .context("Rekor SET signature verification failed")?;
+    Ok(())
+}
 
 /// Fetch a Rekor v1 entry: `GET {log_url}/api/v1/log/entries?logIndex={n}`,
 /// 30s timeout, `Accept: application/json`. The response is a map `{uuid: entry}`;
@@ -582,6 +437,8 @@ pub async fn fetch_trusted_payload_hash(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::key_table::{rekor_public_key, verify_log_id};
     use super::*;
     use crate::tee::coco::converter::builtin::policies::test_support::fixtures;
 

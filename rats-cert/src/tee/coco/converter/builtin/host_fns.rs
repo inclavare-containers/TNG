@@ -1,27 +1,7 @@
 //! Host-await extension functions and DSSE helpers injected into the
 //! builtin attestation service's OPA engine.
 
-use base64::Engine as _;
-
-use super::transparency::{artifact_server, rekor_v1};
-
-/// Resolve the DSSE signature to bake into the `transparency_log` entry.
-///
-/// A real rekor v1 `dsse` entry always carries a signature in
-/// `body.spec.signatures[0].signature`. An empty `dsse_signature` therefore
-/// means a malformed/non-dsse entry — fail closed rather than silently emitting
-/// a weaker payloadHash-only policy. The publisher key is resolved
-/// unconditionally by the caller (configured `publisherPublicKeyPem` or the
-/// built-in publisher key), so DSSE verification is always wired.
-pub(crate) fn resolve_dsse_signature(dsse_signature: &str) -> anyhow::Result<&str> {
-    if dsse_signature.is_empty() {
-        anyhow::bail!(
-            "rekor entry has no DSSE signature (malformed/non-dsse entry; \
-             body.spec.signatures[0].signature is required)"
-        );
-    }
-    Ok(dsse_signature)
-}
+use super::transparency::{artifact_server, dsse};
 
 /// Host-await function that injects the `tng.sha256` builtin regorus 0.11
 /// omits by design. It sha256-hashes its single string argument and resumes
@@ -63,23 +43,7 @@ fn crypto_sha256_host_await() -> attestation_service::policy_engine::opa::Extens
 /// release-manifest payload type
 /// `application/vnd.alibabacloud.confidential-computing.release+json`
 /// (the `payloadType` the publisher signs over).
-pub(crate) const DSSE_PAYLOAD_TYPE: &str =
-    "application/vnd.alibabacloud.confidential-computing.release+json";
-/// DSSE v1 pre-authentication encoding:
-/// `DSSEv1 {len(ptype)} {ptype} {len(payload)} {payload}`. The PAE (with the
-/// payload bytes appended after the space-terminated prefix) is what a DSSE
-/// publisher signature is computed over.
-pub(crate) fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
-    let prefix = format!(
-        "DSSEv1 {} {} {} ",
-        payload_type.len(),
-        payload_type,
-        payload.len()
-    );
-    let mut out = prefix.into_bytes();
-    out.extend_from_slice(payload);
-    out
-}
+pub(crate) use dsse::{dsse_pae, DSSE_PAYLOAD_TYPE};
 
 /// Host-await function that verifies a DSSE publisher signature over a
 /// reconstructed ReleaseManifest. regorus 0.11 ships no ECDSA builtin, so the
@@ -106,7 +70,6 @@ pub(crate) fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
 fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa::ExtensionFunction
 {
     use attestation_service::policy_engine::PolicyError;
-    use p256::ecdsa::signature::Verifier;
 
     std::sync::Arc::new(|argument: regorus::Value| {
         Box::pin(async move {
@@ -134,18 +97,12 @@ fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa
                     "tng.verify_dsse_signature: missing publisher key"
                 ))
             })?;
-            let verified = (|| -> anyhow::Result<bool> {
-                let key = rekor_v1::parse_p256_public_key(key_pem.as_ref())?;
-                let sig_bytes =
-                    base64::engine::general_purpose::STANDARD.decode(sig_b64.as_ref())?;
-                let signature = p256::ecdsa::Signature::from_der(&sig_bytes)?;
-                let pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload.as_bytes());
-                // p256 VerifyingKey::verify hashes the PAE with SHA-256
-                // internally == ECDSA P-256 over sha256(pae) (VerifyASN1).
-                key.verify(&pae, &signature)?;
-                Ok(true)
-            })()
-            .unwrap_or(false);
+            let verified = dsse::verify_publisher_signature(
+                key_pem.as_ref(),
+                payload.as_bytes(),
+                sig_b64.as_ref(),
+            )
+            .is_ok();
             Ok(regorus::Value::Bool(verified))
         })
     })
@@ -196,28 +153,9 @@ pub(crate) fn builtin_as_host_await_functions() -> Vec<(
 mod tests {
     use super::*;
 
-    /// `resolve_dsse_signature` always returns the signature to bake: a real
-    /// rekor v1 `dsse` entry always carries a signature in
-    /// `body.spec.signatures[0].signature`, so an empty signature means a
-    /// malformed/non-dsse entry → fail closed. The publisher key is resolved
-    /// unconditionally by the caller (configured or built-in publisher key), so
-    /// DSSE verification is always mandatory — there is no payloadHash-only
-    /// fallback in the production init-bake path.
-    #[test]
-    fn resolve_dsse_signature_matches_expectations() {
-        // non-empty signature -> bake it (DSSE always mandatory)
-        assert_eq!(resolve_dsse_signature("sig").expect("sig -> Ok"), "sig");
-        // empty signature -> malformed/non-dsse entry -> fail closed
-        let err = resolve_dsse_signature("").expect_err("empty must fail closed");
-        assert!(
-            err.to_string().contains("no DSSE signature"),
-            "error should describe the missing signature, got: {err}"
-        );
-    }
-
-    // Gate mirrors the `#[cfg(feature = "crypto-rustcrypto")]` on the
-    // `tng.verify_dsse_signature` registration this test asserts; `tng.sha256`
-    // (always registered) is still checked under the same gate when crypto is on.
+    // The `tng.verify_dsse_signature` registration this test asserts is gated
+    // on `crypto-rustcrypto`; `tng.sha256` (always registered) is still
+    // checked under the same gate when crypto is on.
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn host_await_functions_use_tng_prefix() {

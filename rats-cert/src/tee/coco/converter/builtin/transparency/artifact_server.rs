@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 use sha2::Digest;
 
 #[cfg(feature = "crypto-rustcrypto")]
-use super::rekor_v1;
+use super::{dsse, key_table, rekor_v1};
 
 // Wire types and the resolve POST live in the upstream `artifact-resolve-sdk`
 // crate (`ResolveRequest`, `ReleaseManifest`, `LogService`, `ResolveResponse`,
@@ -92,6 +92,7 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
                 let log_url = arr[0].as_string().ok()?.to_string();
                 let log_index = arr[1].as_i64().ok()?;
                 let manifest_json = arr[2].as_string().ok()?.to_string();
+                let manifest: serde_json::Value = serde_json::from_str(&manifest_json).ok()?;
                 // Optional 4th arg: configured publisher PEM. Empty/absent →
                 // built-in publisher key (there is always a trusted publisher
                 // key).
@@ -100,7 +101,7 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
                 } else {
                     None
                 };
-                let expected = canonical_manifest_sha256(&manifest_json).ok()?;
+                let expected = dsse::canonical_manifest_sha256(&manifest).ok()?;
 
                 let cached = REKOR_ON_DEMAND_CACHE
                     .get(&(log_url.clone(), log_index))
@@ -111,7 +112,7 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
                         let entry = rekor_v1::fetch_rekor_entry(&log_url, log_index)
                             .await
                             .ok()?;
-                        let key = resolve_rekor_key(&entry, &log_url).ok()?;
+                        let key = key_table::resolve_rekor_key(&entry, &log_url).ok()?;
                         let auth = rekor_v1::authenticate_entry(&entry, &key).ok()?;
                         // Cache the authenticated payload_hash + DSSE signature
                         // on success. A manifest mismatch (below) still counts
@@ -134,11 +135,9 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
                 if dsse_signature.is_empty() {
                     return None;
                 }
-                let publisher_pem = configured_publisher_pem
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
-                let canonical_manifest = canonical_manifest_bytes(&manifest_json).ok()?;
-                verify_dsse_publisher_signature(
+                let publisher_pem = dsse::effective_publisher_pem(configured_publisher_pem);
+                let canonical_manifest = dsse::canonical_manifest_bytes(&manifest).ok()?;
+                dsse::verify_publisher_signature(
                     publisher_pem,
                     canonical_manifest.as_bytes(),
                     &dsse_signature,
@@ -150,91 +149,6 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
         })
     })
 }
-
-/// Resolve the Rekor public key for a fetched entry. Tries hostname-based
-/// resolution first (`rekor_v1::rekor_public_key`); if that fails (the
-/// `log_url` is an artifact-server proxy whose hostname matches no built-in
-/// key, e.g. a wiremock test URL or an internal proxy), fall back to trying
-/// each built-in key (Sigstore, OpenAnolis) by `verify_log_id` against the
-/// entry's `logID` (= `sha256(SPKI DER)`). This keeps the on-demand fallback
-/// working when the artifact-server proxy fronts a real Rekor instance under
-/// a different hostname, without duplicating the key table.
-#[cfg(feature = "crypto-rustcrypto")]
-fn resolve_rekor_key(entry: &rekor_v1::RekorEntry, log_url: &str) -> Result<rekor_v1::RekorKey> {
-    // Fast path: hostname-based resolution.
-    if let Ok(key) = rekor_v1::rekor_public_key(log_url, None) {
-        return Ok(key);
-    }
-    // Fallback: unknown hostname (artifact-server proxy / test mock). Try the
-    // built-in keys by logID match. Iterate the single-source-of-truth table in
-    // `rekor_v1` so a third built-in added there is picked up automatically
-    // (rather than silently missed by a restated hostname list here).
-    for (host, _) in rekor_v1::known_rekor_keys() {
-        if let Ok(key) = rekor_v1::rekor_public_key(&format!("https://{host}"), None) {
-            if rekor_v1::verify_log_id(entry, &key).is_ok() {
-                return Ok(key);
-            }
-        }
-    }
-    anyhow::bail!(
-        "could not resolve Rekor public key for log_url {log_url} \
-         (entry logID {} matched no built-in key; set rekorPublicKeyPem)",
-        entry.log_id
-    );
-}
-
-/// Canonicalize a manifest JSON string and sha256 it. The canonical form is
-/// RFC 8785 JCS (sorted compact), exactly what Rego's `json.marshal` produces
-/// for this manifest shape (object keys sorted, compact separators, no
-/// numbers: `schemaVersion` is a string and measurement `value`s are digest
-/// strings). So `sha256(canonical_manifest_sha256(m))` agrees with the Rego
-/// `tng.sha256(json.marshal(manifest))` used in the init-bake path.
-///
-/// Parses the manifest string as a `serde_json::Value` (so a caller-supplied
-/// manifest with unsorted / whitespace-padded keys is normalized) then
-/// re-serializes via the shared `rekor_v1::canonical_json` (single source of
-/// truth shared with the init-bake tests in `mod.rs`) and sha256s it.
-#[cfg(feature = "crypto-rustcrypto")]
-fn canonical_manifest_sha256(manifest_json: &str) -> Result<String> {
-    let canon = canonical_manifest_bytes(manifest_json)?;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(canon.as_bytes());
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// JCS (RFC 8785) canonical bytes of a manifest JSON string, the shared
-/// intermediate used by both `canonical_manifest_sha256` (for the payloadHash
-/// comparison) and the DSSE PAE construction (for the publisher-signature
-/// verification), so both paths agree on the canonical payload for a given
-/// manifest. See `canonical_manifest_sha256` for the canonicalization rationale.
-#[cfg(feature = "crypto-rustcrypto")]
-fn canonical_manifest_bytes(manifest_json: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(manifest_json)?;
-    rekor_v1::canonical_json(&v)
-}
-
-/// DSSE Pre-Authentication Encoding (DSSEv1). Format:
-/// `DSSEv1 <len(type)> <type> <len(payload)> <payload>` where `<len>` is the
-/// ASCII decimal byte length. The DSSE publisher signature is verified over
-/// `sha256(PAE(canonical_manifest))`; the verify step is
-/// `h := sha256(pae); ecdsa.verify(pub, h, sig)`, where
-/// `pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload)`.
-#[cfg(feature = "crypto-rustcrypto")]
-fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
-    let prefix = format!(
-        "DSSEv1 {} {} {} ",
-        payload_type.len(),
-        payload_type,
-        payload.len()
-    );
-    let mut out = prefix.into_bytes();
-    out.extend_from_slice(payload);
-    out
-}
-
-/// The DSSE payload type for a release manifest.
-#[cfg(feature = "crypto-rustcrypto")]
-const DSSE_PAYLOAD_TYPE: &str = "application/vnd.alibabacloud.confidential-computing.release+json";
 
 /// Process-global cache for `tng.resolve_artifact_server`: successes only,
 /// keyed by `(artifact_server_url, manifest_hash, canonical_log_services)`.
@@ -328,7 +242,8 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                     None
                 };
 
-                let expected = canonical_manifest_sha256(&manifest_json).ok()?;
+                let manifest: serde_json::Value = serde_json::from_str(&manifest_json).ok()?;
+                let expected = dsse::canonical_manifest_sha256(&manifest).ok()?;
 
                 // Decode the hex sha256 to a 32-byte array for the cache key. A
                 // non-32-byte hash (e.g. a malformed manifest that produced a
@@ -478,7 +393,8 @@ async fn resolve_and_authenticate(
     // Canonical manifest bytes, shared by the payloadHash comparison and the
     // DSSE PAE construction (publisher-signature verification) below, computed
     // once so every entry sees the same canonical payload.
-    let canonical_manifest = canonical_manifest_bytes(manifest_json)?;
+    let manifest_value: serde_json::Value = serde_json::from_str(manifest_json)?;
+    let canonical_manifest = dsse::canonical_manifest_bytes(&manifest_value)?;
     for entry in &resp.log_entries {
         if entry.type_ != "rekor-v1" {
             anyhow::bail!("unsupported log entry type {:?}", entry.type_);
@@ -507,9 +423,9 @@ async fn resolve_and_authenticate(
         // the built-in hostname→logID resolution when the response omits it
         // (so proxy / mock URLs still resolve via the built-in key table).
         let key = if !entry.log_verifier.public_key_pem.is_empty() {
-            rekor_v1::rekor_public_key(&entry.url, Some(&entry.log_verifier.public_key_pem))?
+            key_table::rekor_public_key(&entry.url, Some(&entry.log_verifier.public_key_pem))?
         } else {
-            resolve_rekor_key(&rekor_entry, &entry.url)?
+            key_table::resolve_rekor_key(&rekor_entry, &entry.url)?
         };
         let auth = rekor_v1::authenticate_entry(&rekor_entry, &key)?;
         if auth.payload_hash != expected_hash {
@@ -530,7 +446,7 @@ async fn resolve_and_authenticate(
         // `sha256(DSSEPAE(canonical_manifest))`.
         let (publisher_pem, used_response_key) =
             resolve_publisher_key(entry, configured_publisher_pem)?;
-        verify_dsse_publisher_signature(
+        dsse::verify_publisher_signature(
             &publisher_pem,
             canonical_manifest.as_bytes(),
             &auth.dsse_signature,
@@ -542,7 +458,7 @@ async fn resolve_and_authenticate(
         // a proxy URL with no built-in hostname match), skip that compare
         // silently rather than denying.
         if !entry.log_verifier.public_key_pem.is_empty() {
-            if let Ok(builtin) = rekor_v1::rekor_public_key(&entry.url, None) {
+            if let Ok(builtin) = key_table::rekor_public_key(&entry.url, None) {
                 if key.spki_der != builtin.spki_der {
                     tracing::warn!(
                         url = %entry.url,
@@ -559,12 +475,10 @@ async fn resolve_and_authenticate(
             // Compare by the encoded SEC1 point bytes (VerifyingKey has no
             // SPKI DER field, but the encoded point is a canonical public-key
             // identity).
-            let baseline_pem = configured_publisher_pem
-                .filter(|s| !s.is_empty())
-                .unwrap_or(BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+            let baseline_pem = dsse::effective_publisher_pem(configured_publisher_pem);
             if let (Ok(resp_key), Ok(baseline_key)) = (
-                rekor_v1::parse_p256_public_key(&publisher_pem),
-                rekor_v1::parse_p256_public_key(baseline_pem),
+                dsse::parse_p256_public_key(&publisher_pem),
+                dsse::parse_p256_public_key(baseline_pem),
             ) {
                 use p256::elliptic_curve::sec1::ToEncodedPoint;
                 if resp_key.to_encoded_point(false) != baseline_key.to_encoded_point(false) {
@@ -586,45 +500,6 @@ async fn resolve_and_authenticate(
     }
     Ok(ResolveStatus::Verified)
 }
-
-/// Core DSSE publisher-signature verification for the artifact-server primary
-/// path and the on-demand rekor fallback
-/// (`fetch_rekor_on_demand_host_await`, which has the extracted signature
-/// string from `authenticate_entry`). Verifies the base64-decoded DER ECDSA
-/// signature over `sha256(DSSEPAE(canonical_manifest))` with the P-256
-/// publisher key — `VerifyingKey::verify` hashes the PAE with SHA-256
-/// internally, equivalent to `h := sha256(pae); ecdsa.verify(pub, h, sig)`.
-#[cfg(feature = "crypto-rustcrypto")]
-fn verify_dsse_publisher_signature(
-    publisher_pem: &str,
-    canonical_manifest: &[u8],
-    dsse_signature_b64: &str,
-) -> Result<()> {
-    use anyhow::Context;
-    use base64::Engine;
-    use p256::ecdsa::signature::Verifier;
-
-    let publisher_key = rekor_v1::parse_p256_public_key(publisher_pem)?;
-    let sig_bytes = base64::engine::general_purpose::STANDARD
-        .decode(dsse_signature_b64)
-        .context("base64-decode DSSE publisher signature")?;
-    let signature = p256::ecdsa::Signature::from_der(&sig_bytes)
-        .context("parse DSSE publisher ECDSA signature")?;
-    let pae = dsse_pae(DSSE_PAYLOAD_TYPE, canonical_manifest);
-    publisher_key
-        .verify(&pae, &signature)
-        .context("DSSE publisher signature verification failed")?;
-    Ok(())
-}
-
-/// The built-in DSSE publisher key, used as the fail-closed default when
-/// neither the response nor the config supplies a publisher key. DSSE
-/// verification is mandatory; the publisher key is response-supplied when
-/// present and falls back to this built-in otherwise. Exposed `pub(crate)` so
-/// the legacy rekor-v1 init-bake loader (mod.rs) shares the same built-in
-/// baseline when no `publisherPublicKeyPem` is configured.
-#[cfg(feature = "crypto-rustcrypto")]
-pub(crate) const BUILTIN_LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
 
 /// Resolve the trusted DSSE publisher key for a resolve response entry
 /// (response-key vs configured-key rule):
@@ -694,9 +569,7 @@ fn resolve_publisher_key(
         // Both absent (genuinely empty struct) → configured-or-built-in
         // publisher key (R5: the built-in BUILTIN_LOG_ENTRY_PUB_KEY_PEM is
         // the config-default DSSE key when no publisherPublicKeyPem is set).
-        let pem = configured_publisher_pem
-            .filter(|s| !s.is_empty())
-            .unwrap_or(BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+        let pem = dsse::effective_publisher_pem(configured_publisher_pem);
         return Ok((pem.to_string(), false));
     }
     // Both verifiers are present (`type_ == "public_key"`). A
@@ -713,12 +586,12 @@ fn resolve_publisher_key(
 
 /// Canonicalize a `log_services_json` string into a stable cache-key component:
 /// parse to a `serde_json::Value` (normalizing key order / whitespace) then
-/// re-serialize via the shared `rekor_v1::canonical_json` (RFC 8785 JCS). Two
+/// re-serialize via the shared `dsse::canonical_json` (RFC 8785 JCS). Two
 /// semantically-equal log-services lists produce the same canonical string.
 #[cfg(feature = "crypto-rustcrypto")]
 fn canonicalize_log_services(log_services_json: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(log_services_json)?;
-    rekor_v1::canonical_json(&v)
+    dsse::canonical_json(&v)
 }
 
 /// Test-only helper: clear both process-global host-await caches so a test can
@@ -1466,36 +1339,6 @@ mod tests {
         ]);
         let r = invoke_extension(&hv, arg).await;
         assert_eq!(r, regorus::Value::from("fail"));
-    }
-
-    /// Lines 152-154: `resolve_rekor_key` bails when the entry's logID
-    /// matches no built-in key. Called directly (pure, no I/O) with an entry
-    /// whose log_id is a bogus value.
-    #[test]
-    fn resolve_rekor_key_bails_when_no_key_matches() {
-        let entry = rekor_v1::RekorEntry {
-            body: String::new(),
-            integrated_time: 0,
-            log_id: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            log_index: 0,
-            verification: rekor_v1::RekorVerification {
-                inclusion_proof: rekor_v1::InclusionProof {
-                    checkpoint: String::new(),
-                    hashes: vec![],
-                    log_index: 0,
-                    root_hash: String::new(),
-                    tree_size: 1,
-                },
-                signed_entry_timestamp: String::new(),
-            },
-        };
-        // A wiremock-style URL with no built-in hostname match.
-        let err = resolve_rekor_key(&entry, "http://127.0.0.1:99999").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("could not resolve Rekor public key"),
-            "got: {err}"
-        );
     }
 
     /// Lines 357-358: resolve status != "resolved" → `Ok(Bool(false))`.

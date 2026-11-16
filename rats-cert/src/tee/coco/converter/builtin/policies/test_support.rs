@@ -38,7 +38,7 @@ pub(crate) const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY---
 /// instead of maintaining a second literal.
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) const DSSE_PUBLISHER_PUB_KEY_PEM: &str =
-    super::super::transparency::artifact_server::BUILTIN_LOG_ENTRY_PUB_KEY_PEM;
+    super::super::transparency::dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM;
 
 /// Lowercase hex string of `len` characters made of `ch` repeated.
 pub(crate) fn hex_repeat(ch: char, len: usize) -> String {
@@ -65,7 +65,7 @@ pub(crate) fn manifest(schema: &str, measurements: &[(&str, &str)]) -> Value {
 /// Canonical (RFC 8785 JCS) JSON, the form `json.marshal` produces and the
 /// form the publisher signs over.
 pub(crate) fn jcs_compact(value: &Value) -> String {
-    super::super::transparency::rekor_v1::canonical_json(value).expect("canonical JSON serialize")
+    super::super::transparency::dsse::canonical_json(value).expect("canonical JSON serialize")
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -471,8 +471,8 @@ pub(crate) fn sign_dsse_for_manifest(manifest: &Value) -> (String, String) {
     let signing_key =
         p256::ecdsa::SigningKey::from_bytes((&secret_bytes).into()).expect("fixed test key valid");
     let payload = jcs_compact(manifest);
-    let pae = super::super::host_fns::dsse_pae(
-        super::super::host_fns::DSSE_PAYLOAD_TYPE,
+    let pae = super::super::transparency::dsse::dsse_pae(
+        super::super::transparency::dsse::DSSE_PAYLOAD_TYPE,
         payload.as_bytes(),
     );
     let sig: p256::ecdsa::Signature = signing_key.sign(&pae);
