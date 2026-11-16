@@ -227,7 +227,6 @@ mod tests {
         ArtifactLogService, ModuleGroupsConfig, PolicyConfig, ReferenceValueConfig,
         SampleProvenancePayloadConfig, TransparencyServiceConfig,
     };
-    use crate::tee::coco::converter::builtin::transparency::artifact_server;
     use crate::tee::coco::converter::builtin::transparency::dsse::{
         self, dsse_pae, DSSE_PAYLOAD_TYPE,
     };
@@ -238,7 +237,6 @@ mod tests {
     use base64::Engine as _;
     use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
     use serde_json::{json, Value};
-    use serial_test::serial;
 
     // --- bundled templates --------------------------------------------------
 
@@ -2176,7 +2174,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_primary_and_fallback() {
         let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
@@ -2185,7 +2182,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
         // Primary success; the fallback points at a dead port and must not be
         // consulted.
-        artifact_server::invalidate_host_await_caches_for_test();
         {
             let server = wiremock::MockServer::start().await;
             wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -2208,7 +2204,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
         // Artifact-server 500; the fallback rekor mock serves the fixture
         // entry and authenticates it.
-        artifact_server::invalidate_host_await_caches_for_test();
         {
             let as_server = wiremock::MockServer::start().await;
             wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -2242,7 +2237,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         }
 
         // Both fail -> executables stays at its contraindicated default.
-        artifact_server::invalidate_host_await_caches_for_test();
         {
             let as_server = wiremock::MockServer::start().await;
             wiremock::Mock::given(wiremock::matchers::method("POST"))
@@ -2278,13 +2272,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// fixture, reach the mock, and affirm.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_rejects_declared_type_missing() {
         let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
         let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
 
-        artifact_server::invalidate_host_await_caches_for_test();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
@@ -2319,13 +2311,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// one, the primary failure is final.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_rootfs_missing_without_fallback_rejects() {
         let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
         let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
 
-        artifact_server::invalidate_host_await_caches_for_test();
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
@@ -2358,13 +2348,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// complete fallback baseline is still consulted and can pass.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_missing_primary_measurement_uses_fallback() {
         let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
         let rekor_body = rekor_entries_body(&log_entry);
 
-        artifact_server::invalidate_host_await_caches_for_test();
         let rekor_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/v1/log/entries"))
@@ -2408,13 +2396,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     /// fallback manifest is undefined and no rekor query is made.
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_incomplete_fallback_rejects() {
         let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
         let rekor_body = rekor_entries_body(&log_entry);
 
-        artifact_server::invalidate_host_await_caches_for_test();
         let rekor_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/v1/log/entries"))
@@ -2451,13 +2437,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_revoked_skips_fallback() {
         let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
         let input = cmaas_tdx_input(&manifest);
         let rekor_body = rekor_entries_body(&log_entry);
 
-        artifact_server::invalidate_host_await_caches_for_test();
         let as_server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
@@ -2503,13 +2487,10 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[allow(clippy::disallowed_methods)]
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    #[serial]
     async fn transparency_log_artifact_server_does_not_call_fallback_when_primary_ok() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use tokio::net::TcpListener;
-
-        artifact_server::invalidate_host_await_caches_for_test();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fallback_addr = listener.local_addr().unwrap();

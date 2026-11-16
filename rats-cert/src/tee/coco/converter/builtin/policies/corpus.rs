@@ -8,10 +8,9 @@
 //! Bundled templates and `modules` entries run against evidence constructed in
 //! memory. `transparency_log` cases use the resolved-data injection seam for a
 //! rekor-v1 primary and a local wiremock server for an artifact-server primary,
-//! so no case touches the network. Artifact-server cases share the
-//! process-global host-await caches and therefore stay `#[serial]`.
+//! so no case touches the network. Every evaluation gets a fresh cache, so the
+//! artifact-server cases run independently.
 
-use super::super::transparency::artifact_server;
 use super::test_support::{
     aael_event, artifact_entry_value, cmaas_tdx_input, cmaas_transparency_tuple,
     eval_policy_vector, gpu_attestation_event, hex64, hex96, load_model_event, manifest,
@@ -20,7 +19,6 @@ use super::test_support::{
     tdx_input, tdx_input_full, tdx_input_with_body, transparency_entry, uki_event, TDX_VENDOR_ID,
 };
 use serde_json::{json, Value};
-use serial_test::serial;
 
 type Vector = (i8, i8, i8, i8);
 
@@ -803,7 +801,6 @@ async fn corpus_matches_expected_trust_vectors() {
 }
 
 #[tokio::test]
-#[serial]
 async fn corpus_artifact_server_cases() {
     let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
     let resolve_body = resolve_response_body(&manifest, &log_entry, &entry_url);
@@ -822,7 +819,6 @@ async fn corpus_artifact_server_cases() {
         else {
             unreachable!()
         };
-        artifact_server::invalidate_host_await_caches_for_test();
 
         let primary_server = wiremock::MockServer::start().await;
         mount_resolve(&primary_server, *primary, &resolve_body).await;

@@ -4,7 +4,7 @@
 //! measurement is retried on the next appraisal; caching it would keep a stale
 //! failure (or a stale revocation) alive until eviction.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use moka::future::Cache;
@@ -97,21 +97,38 @@ pub(crate) struct RekorCacheKey {
 /// default or injects its own instance, which is what tests do to keep
 /// evaluations independent.
 pub struct TransparencyCaches {
-    resolve: Cache<ResolveCacheKey, ResolveCacheValue>,
-    rekor: Cache<RekorCacheKey, AuthenticatedRekorEntry>,
+    resolve: OnceLock<Cache<ResolveCacheKey, ResolveCacheValue>>,
+    rekor: OnceLock<Cache<RekorCacheKey, AuthenticatedRekorEntry>>,
 }
 
 impl TransparencyCaches {
     pub fn new() -> Self {
-        // Capacity 1024 covers the small set of manifests one builtin-AS
-        // instance appraises; 64 covers the handful of rekor entries a policy
-        // falls back to.
-        let resolve = Cache::builder()
-            .max_capacity(1024)
-            .time_to_live(RESOLVE_CACHE_TTL)
-            .build();
-        let rekor = Cache::builder().max_capacity(64).build();
-        Self { resolve, rekor }
+        // Build each cache on first use, not here: moka reads the system clock
+        // (`Instant::now`) when a cache is constructed, and browser wasm panics
+        // on that. A converter constructed on wasm must not touch moka until a
+        // host-await call actually needs a cache.
+        Self {
+            resolve: OnceLock::new(),
+            rekor: OnceLock::new(),
+        }
+    }
+
+    fn resolve_cache(&self) -> &Cache<ResolveCacheKey, ResolveCacheValue> {
+        self.resolve.get_or_init(|| {
+            // Capacity 1024 covers the small set of manifests one builtin-AS
+            // instance appraises.
+            Cache::builder()
+                .max_capacity(1024)
+                .time_to_live(RESOLVE_CACHE_TTL)
+                .build()
+        })
+    }
+
+    fn rekor_cache(&self) -> &Cache<RekorCacheKey, AuthenticatedRekorEntry> {
+        // Capacity 64 covers the handful of rekor entries a policy falls back
+        // to.
+        self.rekor
+            .get_or_init(|| Cache::builder().max_capacity(64).build())
     }
 
     /// The process-wide default instance. Converters created with
@@ -124,28 +141,21 @@ impl TransparencyCaches {
     }
 
     pub(crate) async fn resolve_hit(&self, key: &ResolveCacheKey) -> bool {
-        self.resolve.get(key).await.is_some()
+        self.resolve_cache().get(key).await.is_some()
     }
 
     pub(crate) async fn insert_resolve(&self, key: ResolveCacheKey) {
-        self.resolve
+        self.resolve_cache()
             .insert(key, ResolveCacheValue::verified())
             .await;
     }
 
     pub(crate) async fn rekor_entry(&self, key: &RekorCacheKey) -> Option<AuthenticatedRekorEntry> {
-        self.rekor.get(key).await
+        self.rekor_cache().get(key).await
     }
 
     pub(crate) async fn insert_rekor(&self, key: RekorCacheKey, entry: AuthenticatedRekorEntry) {
-        self.rekor.insert(key, entry).await;
-    }
-
-    /// Mark every entry invalid. `moka` evicts lazily, which is enough for
-    /// tests that force the network path.
-    pub(crate) fn invalidate_all(&self) {
-        self.resolve.invalidate_all();
-        self.rekor.invalidate_all();
+        self.rekor_cache().insert(key, entry).await;
     }
 }
 

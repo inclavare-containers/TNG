@@ -112,10 +112,11 @@ fn verify_dsse_signature_host_await() -> attestation_service::policy_engine::opa
 /// always `tng.sha256`, plus `tng.verify_dsse_signature` (DSSEPAE + sha256 +
 /// ECDSA P-256) under `crypto-rustcrypto` — it needs p256/x509-cert, and the
 /// transparency-log rego that calls it is itself only generated under that
-/// feature. Both `OPAInMemory` construction sites (the prod converter and the
-/// `eval_policy_vector` test helper) share this so the injected set stays in
-/// sync.
-pub(crate) fn builtin_as_host_await_functions() -> Vec<(
+/// feature. The transparency caches are threaded through so an isolated caller
+/// (or a test) can inject its own instance.
+pub(crate) fn builtin_as_host_await_functions(
+    caches: std::sync::Arc<super::transparency::TransparencyCaches>,
+) -> Vec<(
     String,
     attestation_service::policy_engine::opa::ExtensionFunction,
 )> {
@@ -133,7 +134,7 @@ pub(crate) fn builtin_as_host_await_functions() -> Vec<(
     #[cfg(feature = "crypto-rustcrypto")]
     fns.push((
         "tng.fetch_rekor_on_demand".to_string(),
-        artifact_server::fetch_rekor_on_demand_host_await(),
+        artifact_server::fetch_rekor_on_demand_host_await(caches.clone()),
     ));
     // Primary artifact-server path: resolve the manifest via the Artifact
     // Server `POST /api/v1/transparency/resolve`, authenticate each returned
@@ -144,7 +145,7 @@ pub(crate) fn builtin_as_host_await_functions() -> Vec<(
     #[cfg(feature = "crypto-rustcrypto")]
     fns.push((
         "tng.resolve_artifact_server".to_string(),
-        artifact_server::resolve_artifact_server_host_await(),
+        artifact_server::resolve_artifact_server_host_await(caches),
     ));
     fns
 }
@@ -159,7 +160,9 @@ mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn host_await_functions_use_tng_prefix() {
-        let fns = builtin_as_host_await_functions();
+        let fns = builtin_as_host_await_functions(std::sync::Arc::new(
+            crate::tee::coco::converter::builtin::TransparencyCaches::new(),
+        ));
         let names: Vec<&str> = fns.iter().map(|(n, _)| n.as_str()).collect();
         assert!(names.contains(&"tng.sha256"));
         assert!(names.contains(&"tng.verify_dsse_signature"));

@@ -98,10 +98,13 @@ pub(crate) async fn authenticate(
 /// `Err`. An `Err` would abort the entire policy evaluation and break the
 /// fallback contract.
 #[cfg(feature = "crypto-rustcrypto")]
-pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
+pub(crate) fn fetch_rekor_on_demand_host_await(
+    caches: Arc<TransparencyCaches>,
+) -> ExtensionFunction {
     use regorus::Value;
 
     Arc::new(move |argument: regorus::Value| {
+        let caches = caches.clone();
         Box::pin(async move {
             let inner = async {
                 let arr = argument.as_array().ok()?;
@@ -123,9 +126,7 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
                     rekor_public_key_pem: None,
                     publisher_public_key_pem,
                 };
-                match super::authenticate(Some(&manifest), &service, &TransparencyCaches::shared())
-                    .await
-                {
+                match super::authenticate(Some(&manifest), &service, &caches).await {
                     Ok(Authentication::Verified) => Some(true),
                     _ => None,
                 }
@@ -153,10 +154,13 @@ pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
 ///
 /// Fail-closed / clean-deny: all outcomes return `Ok(String)`, never `Err`.
 #[cfg(feature = "crypto-rustcrypto")]
-pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
+pub(crate) fn resolve_artifact_server_host_await(
+    caches: Arc<TransparencyCaches>,
+) -> ExtensionFunction {
     use regorus::Value;
 
     Arc::new(move |argument: regorus::Value| {
+        let caches = caches.clone();
         Box::pin(async move {
             let inner = async {
                 let arr = argument.as_array().ok()?;
@@ -178,9 +182,7 @@ pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
                     log_services,
                     publisher_public_key_pem,
                 };
-                match super::authenticate(Some(&manifest), &service, &TransparencyCaches::shared())
-                    .await
-                {
+                match super::authenticate(Some(&manifest), &service, &caches).await {
                     Ok(Authentication::Verified) => Some("ok"),
                     Ok(Authentication::Revoked) => Some("deny"),
                     _ => None,
@@ -463,14 +465,6 @@ fn resolve_publisher_key(
     Ok((ev.content.clone(), true))
 }
 
-/// Test-only helper: clear the shared transparency caches so a test can
-/// exercise the real network path (and avoid cross-test cache pollution).
-#[cfg(test)]
-#[cfg(feature = "crypto-rustcrypto")]
-pub(crate) fn invalidate_host_await_caches_for_test() {
-    TransparencyCaches::shared().invalidate_all();
-}
-
 #[cfg(test)]
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
@@ -481,6 +475,12 @@ mod tests {
     };
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A fresh cache per host-await instance: tests must not share
+    /// resolve/on-demand results.
+    fn test_caches() -> std::sync::Arc<super::TransparencyCaches> {
+        std::sync::Arc::new(super::TransparencyCaches::new())
+    }
 
     /// Link smoke for the `artifact-resolve-sdk` crate: construct the basic
     /// request types and assert the wire-shape constants are reachable, so a
@@ -539,7 +539,7 @@ mod tests {
             .await;
 
         let url = server.uri();
-        let hv = fetch_rekor_on_demand_host_await();
+        let hv = fetch_rekor_on_demand_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from(url.as_str()),
             regorus::Value::from(2279770888i64),
@@ -569,7 +569,7 @@ mod tests {
         // Use a distinct (log_url, log_index) not exercised by the cache test
         // so the process-global cache cannot short-circuit this into a hit.
         let url = "http://127.0.0.1:1";
-        let hv = fetch_rekor_on_demand_host_await();
+        let hv = fetch_rekor_on_demand_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from(url),
             regorus::Value::from(9999999999i64),
@@ -609,13 +609,10 @@ mod tests {
     /// returning the entry as the `{uuid: entry}` rekor response. Asserts
     /// directly on the raw `Result` (not `invoke_extension`'s `.expect()`, which
     /// would mask an `Err` as a test failure rather than proving the `Ok(true)`
-    /// outcome). `#[serial]` + `invalidate_host_await_caches_for_test()` avoids
-    /// cache cross-talk with the `caches_after_first_hit` test (distinct
-    /// logIndex, but the process-global cache is shared).
+    /// outcome). The per-instance cache keeps this independent of the other
+    /// host-await tests.
     #[tokio::test]
-    #[serial_test::serial]
     async fn fetch_rekor_on_demand_true_on_matched_payload_hash() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (body, manifest_json, log_index) = cmaas_fetch_rekor_response_body();
         Mock::given(method("GET"))
@@ -626,7 +623,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = fetch_rekor_on_demand_host_await();
+        let hv = fetch_rekor_on_demand_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from(server.uri().as_str()),
             regorus::Value::from(log_index),
@@ -649,9 +646,7 @@ mod tests {
     /// the Sigstore rekor key (a valid P-256 key that did NOT sign the envelope)
     /// is the wrong publisher → DSSE verify fails → clean-deny.
     #[tokio::test]
-    #[serial_test::serial]
     async fn fetch_rekor_on_demand_false_on_wrong_publisher_key() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (body, manifest_json, log_index) = cmaas_fetch_rekor_response_body();
         Mock::given(method("GET"))
@@ -662,7 +657,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = fetch_rekor_on_demand_host_await();
+        let hv = fetch_rekor_on_demand_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from(server.uri().as_str()),
             regorus::Value::from(log_index),
@@ -724,12 +719,10 @@ mod tests {
     /// rekor-v1 entry whose authenticated `payloadHash` matches
     /// `sha256(JCS(manifest))` → `Ok(Bool(true))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_true_on_valid_entries() {
         // The shared cache is process-global and `cargo test` runs tests in
         // parallel; clear it so a prior success in `caches_success` (same
         // cache key) cannot short-circuit this call into a no-network hit.
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -746,7 +739,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -762,9 +755,8 @@ mod tests {
     /// `Ok(Bool(false))`, never `Err`. Asserts on the raw `Result` (not
     /// `invoke_extension`'s `.expect()`, which would mask an `Err`).
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_network_error() {
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from("http://127.0.0.1:1"),
             regorus::Value::from(
@@ -787,7 +779,6 @@ mod tests {
     /// succeeds, the comparison fails → `Ok(Bool(false))`, and the failure is
     /// NOT cached.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_payload_hash_mismatch() {
         let server = MockServer::start().await;
         let (_manifest, log_entry, entry_url) = cmaas_resolve_triple();
@@ -806,7 +797,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&mismatch_manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -827,9 +818,7 @@ mod tests {
     /// authenticate and the call would (incorrectly) return `true`, so this
     /// test pins Finding 1's contract.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_duplicate_entry() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Two copies of the same (type, url) entry, a malicious resolver
@@ -862,7 +851,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -884,9 +873,7 @@ mod tests {
     /// `sha256(DSSEPAE(canonical_manifest))` → `Ok(Bool(false))`. This is the
     /// DSSE publisher-signature failure path.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_entry_verifier() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Wrong publisher PEM (the Sigstore rekor key, a valid P-256 key that
@@ -904,7 +891,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -924,9 +911,7 @@ mod tests {
     /// `logID` == `sha256(Sigstore SPKI)`, not `sha256(wrong SPKI)`) →
     /// `Ok(Bool(false))`. This is the rekor logID verification failure path.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_log_verifier() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Wrong rekor PEM (the DSSE publisher key, a valid P-256 key whose
@@ -944,7 +929,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -962,9 +947,7 @@ mod tests {
     /// → `Ok(Bool(false))`. Pins Finding 1's "all requested must be covered"
     /// contract.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_missing_requested_log_service() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -980,7 +963,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         // Request two log services; only the sigstore one is returned.
         let ls = format!(
@@ -1006,9 +989,7 @@ mod tests {
     /// prevents cross-test pollution from `true_on_valid_entries`, which
     /// shares the same `(manifest_hash, canonical_log_services)` cache key.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_caches_success() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -1025,7 +1006,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1047,9 +1028,7 @@ mod tests {
     /// mock (`expect(2)`), the second would be served from the cache if a
     /// revocation were cached like a success.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_deny_on_revoked() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1065,7 +1044,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1092,9 +1071,7 @@ mod tests {
     /// fallback allowed), NOT a hard denial: only an explicit revocation
     /// denies. Pins the deny/fail boundary.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_fail_on_measurement_not_found() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1109,7 +1086,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1133,9 +1110,7 @@ mod tests {
     /// server). Server B's mock requires exactly one hit; a URL-less cache
     /// key would serve the second call from the cache and starve it.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_cache_key_includes_url() {
-        invalidate_host_await_caches_for_test();
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
             &manifest,
@@ -1159,7 +1134,7 @@ mod tests {
             .mount(&server_b)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg_for = |uri: &str| {
@@ -1183,7 +1158,7 @@ mod tests {
     /// when the argument array has the wrong length (!= 3).
     #[tokio::test]
     async fn fetch_rekor_on_demand_false_on_wrong_arg_count() {
-        let hv = fetch_rekor_on_demand_host_await();
+        let hv = fetch_rekor_on_demand_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from("http://example.com"),
             regorus::Value::from(1i64), // only 2 args, not 3
@@ -1196,7 +1171,7 @@ mod tests {
     /// (clean-deny) when the argument array has the wrong length (!= 3).
     #[tokio::test]
     async fn resolve_artifact_server_false_on_wrong_arg_count() {
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let arg = regorus::Value::from(vec![
             regorus::Value::from("http://example.com"),
             regorus::Value::from("{}"), // only 2 args, not 3
@@ -1207,9 +1182,7 @@ mod tests {
 
     /// Lines 357-358: resolve status != "resolved" → `Ok(Bool(false))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_non_resolved_status() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Valid response structure but with status != "resolved" so the SDK
@@ -1232,7 +1205,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1248,9 +1221,7 @@ mod tests {
 
     /// Line 363: resolve returns zero log entries → `Ok(Bool(false))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_empty_log_entries() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1265,7 +1236,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1281,9 +1252,7 @@ mod tests {
 
     /// Line 371: log entry type != "rekor-v1" → `Ok(Bool(false))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_unsupported_entry_type() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1304,7 +1273,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1328,9 +1297,7 @@ mod tests {
     /// a fail-open gap. After the fix `resolve_publisher_key` rejects
     /// present-but-empty instead of falling back → `Ok(Bool(false))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_empty_verifier_content() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Both verifiers present-but-empty (`type_ == "public_key"`, empty
@@ -1347,7 +1314,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1374,9 +1341,7 @@ mod tests {
     /// `entry_verifier.type_ == "other"` (not `public_key`, so treated as
     /// absent) while `log_verifier` is present → mixed → `Ok(Bool(false))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_mixed_verifiers() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1397,7 +1362,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1426,9 +1391,7 @@ mod tests {
     /// it) and the resolve would SUCCEED — a wrong-type verifier silently
     /// bypassed. After R2 the wrong-type check fires first → reject (false).
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_type_entry_verifier_with_absent_log_verifier() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // entry_verifier carries an unsupported type ("other"); log_verifier is
@@ -1454,7 +1417,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{entry_url}"}}]"#);
         let arg = regorus::Value::from(vec![
@@ -1479,9 +1442,7 @@ mod tests {
     /// finds `sigstore.spki != openanolis.spki` → `tracing::warn!`. The path
     /// still succeeds → `Ok(Bool(true))`.
     #[tokio::test]
-    #[serial_test::serial]
     async fn resolve_artifact_server_warns_on_baseline_key_mismatch() {
-        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, _entry_url) = cmaas_resolve_triple();
         // Use the OpenAnolis URL so the built-in baseline key differs from
@@ -1501,7 +1462,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let hv = resolve_artifact_server_host_await();
+        let hv = resolve_artifact_server_host_await(test_caches());
         let manifest_json = serde_json::to_string(&manifest).unwrap();
         let ls = format!(r#"[{{"type":"rekor-v1","url":"{openanolis_url}"}}]"#);
         let arg = regorus::Value::from(vec![

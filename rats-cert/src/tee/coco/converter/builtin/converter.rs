@@ -9,6 +9,7 @@ use super::super::convert_additional_evidence;
 use super::host_fns::builtin_as_host_await_functions;
 use super::policy_config::{PolicyConfig, ReferenceValueConfig};
 use super::signer::SelfSignedSigner;
+use super::transparency::TransparencyCaches;
 use super::DEFAULT_POLICY_ID;
 use crate::errors::*;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
@@ -38,6 +39,19 @@ impl BuiltinCocoConverter {
     pub async fn new(
         policy: &PolicyConfig,
         reference_values: &[ReferenceValueConfig],
+    ) -> Result<Self> {
+        Self::new_with_caches(policy, reference_values, TransparencyCaches::shared()).await
+    }
+
+    /// Create a converter with an explicit transparency-cache instance.
+    ///
+    /// Tests and isolated callers use this so their appraisals do not share
+    /// resolve/on-demand results with other converters in the same process.
+    /// `new` uses the process-wide shared instance.
+    pub async fn new_with_caches(
+        policy: &PolicyConfig,
+        reference_values: &[ReferenceValueConfig],
+        caches: Arc<TransparencyCaches>,
     ) -> Result<Self> {
         // These policies' verification rules never consume reference values,
         // so a non-empty external `reference_values` list would be silently
@@ -95,7 +109,7 @@ impl BuiltinCocoConverter {
                         // `crypto-rustcrypto`, `tng.verify_dsse_signature`
                         // (DSSEPAE + ECDSA P-256) is injected too — see
                         // `builtin_as_host_await_functions`.
-                        .with_extra_extension_functions(builtin_as_host_await_functions()),
+                        .with_extra_extension_functions(builtin_as_host_await_functions(caches)),
                     ),
                 ),
             )

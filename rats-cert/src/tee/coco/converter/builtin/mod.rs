@@ -12,6 +12,9 @@ mod signer;
 mod transparency;
 
 pub use converter::BuiltinCocoConverter;
+/// The transparency caches a converter uses. Re-exported so isolated callers
+/// can construct their own instance for [`BuiltinCocoConverter::new_with_caches`].
+pub use transparency::TransparencyCaches;
 // The config types were all public before the split into `policy_config`; keep
 // that reachability for downstream users of the builtin converter.
 pub use policy_config::{

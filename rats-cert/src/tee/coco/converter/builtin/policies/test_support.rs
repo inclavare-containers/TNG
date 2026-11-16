@@ -525,9 +525,11 @@ pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8
     // Inject `tng.sha256` so the transparency-log rego policy's
     // `tng.sha256(json.marshal(manifest))` call resolves to a real
     // sha256 during the behavior tests. Under `crypto-rustcrypto`,
-    // `tng.verify_dsse_signature` is injected too; see
-    // `builtin_as_host_await_functions`.
-    .with_extra_extension_functions(super::super::host_fns::builtin_as_host_await_functions());
+    // `tng.verify_dsse_signature` is injected too. Each evaluation gets a
+    // fresh cache instance so tests cannot pollute one another.
+    .with_extra_extension_functions(super::super::host_fns::builtin_as_host_await_functions(
+        Arc::new(super::super::transparency::TransparencyCaches::new()),
+    ));
     // The four rules our templates define. The real AS also queries four more
     // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
     // skipped when a policy leaves them undefined, so they need not be queried.
