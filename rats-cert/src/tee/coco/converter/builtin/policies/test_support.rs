@@ -298,6 +298,15 @@ pub(crate) fn rekor_entries_body(log_entry: &Value) -> String {
     json!({ uuid: log_entry }).to_string()
 }
 
+/// A TDX appraisal input carrying the image measurement of the fixture
+/// manifest.
+pub(crate) fn cmaas_tdx_input(manifest: &Value) -> String {
+    let digest = manifest["measurements"][0]["value"]
+        .as_str()
+        .expect("fixture manifest measurement value");
+    tdx_input(&[aael_event(digest)])
+}
+
 /// The artifact-server `resolve` response body carrying the fixture entry and
 /// both verifiers.
 #[cfg(feature = "crypto-rustcrypto")]

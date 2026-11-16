@@ -424,10 +424,10 @@ mod tests {
     use super::super::super::test_support::fixtures;
     use super::super::super::test_support::{
         aael_event, aael_event_for_reference, artifact_entry_value,
-        cmaas_fixture_quote_and_eventlog, cmaas_transparency_tuple, eval_policy_vector, hex64,
-        hex96, jcs_compact, manifest, pai_tdx_input, rekor_entries_body, rekor_entry_value,
-        render_modules_json as render, render_rekor, rootfs_event, sha256_hex, td_payload_event,
-        tdx_input, tdx_quote_input, transparency_entry, TDX_VENDOR_ID,
+        cmaas_fixture_quote_and_eventlog, cmaas_tdx_input, cmaas_transparency_tuple,
+        eval_policy_vector, hex64, hex96, jcs_compact, manifest, pai_tdx_input, rekor_entries_body,
+        rekor_entry_value, render_modules_json as render, render_rekor, rootfs_event, sha256_hex,
+        td_payload_event, tdx_input, tdx_quote_input, transparency_entry, TDX_VENDOR_ID,
     };
     #[cfg(feature = "crypto-rustcrypto")]
     use super::super::super::test_support::{resolve_response_body, resolved_from_manifest};
@@ -448,17 +448,6 @@ mod tests {
     use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
     use serde_json::{json, Value};
     use serial_test::serial;
-
-    // --- helpers -----------------------------------------------------------
-
-    /// The real PAI AAEL pull-image event resolves to repo `cmaas-runtime`,
-    /// whose digest the fixture manifest carries.
-    fn cmaas_tdx_input(manifest: &Value) -> String {
-        let digest = manifest["measurements"][0]["value"]
-            .as_str()
-            .expect("fixture manifest measurement value");
-        tdx_input(&[aael_event(digest)])
-    }
 
     // --- bundled templates --------------------------------------------------
 

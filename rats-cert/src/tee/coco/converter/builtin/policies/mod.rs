@@ -7,6 +7,8 @@ use base64::Engine;
 use super::policy_config::PolicyConfig;
 use crate::errors::*;
 
+#[cfg(test)]
+pub(crate) mod corpus;
 pub(crate) mod modules;
 #[cfg(test)]
 pub(crate) mod test_support;
