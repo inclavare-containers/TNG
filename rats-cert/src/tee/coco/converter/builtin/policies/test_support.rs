@@ -7,7 +7,7 @@
 #![allow(dead_code)] // each test module uses a different subset
 
 use super::super::policy_config::ModuleGroupsConfig;
-use super::modules::transparency_log::ResolvedRekor;
+use super::super::transparency::AuthenticatedRekor;
 use super::modules::{parse_module_groups, render_modules_policy, Module};
 use serde_json::{json, Value};
 
@@ -383,7 +383,7 @@ pub(crate) fn artifact_entry_value(
 /// the pure render phase runs.
 pub(in crate::tee::coco::converter::builtin::policies) fn render_modules(
     config: &ModuleGroupsConfig,
-    resolved: &[Option<ResolvedRekor>],
+    resolved: &[Option<AuthenticatedRekor>],
 ) -> String {
     let mut groups = parse_module_groups(config).expect("parse modules policy");
     attach_resolved(&mut groups, resolved);
@@ -392,7 +392,7 @@ pub(in crate::tee::coco::converter::builtin::policies) fn render_modules(
 
 /// Attach injected resolved data to the transparency entries of a parsed
 /// module tree, in flatten order.
-fn attach_resolved(groups: &mut [Vec<Module>], resolved: &[Option<ResolvedRekor>]) {
+fn attach_resolved(groups: &mut [Vec<Module>], resolved: &[Option<AuthenticatedRekor>]) {
     let mut slots = resolved.iter();
     for module in groups.iter_mut().flatten() {
         if let Module::TransparencyLog { resolved: slot, .. } = module {
@@ -411,7 +411,7 @@ fn attach_resolved(groups: &mut [Vec<Module>], resolved: &[Option<ResolvedRekor>
 /// [`render_modules`] from a JSON entries value.
 pub(in crate::tee::coco::converter::builtin::policies) fn render_modules_json(
     entries: Value,
-    resolved: &[Option<ResolvedRekor>],
+    resolved: &[Option<AuthenticatedRekor>],
 ) -> String {
     let cfg: ModuleGroupsConfig = serde_json::from_value(entries).expect("modules config parses");
     render_modules(&cfg, resolved)
@@ -421,7 +421,7 @@ pub(in crate::tee::coco::converter::builtin::policies) fn render_modules_json(
 /// `published`.
 pub(in crate::tee::coco::converter::builtin::policies) fn render_rekor(
     published: &[&str],
-    resolved: &ResolvedRekor,
+    resolved: &AuthenticatedRekor,
 ) -> String {
     render_modules_json(
         json!([transparency_entry(rekor_entry_value(published, 1))]),
@@ -448,10 +448,10 @@ pub(crate) fn cmaas_fixture_quote_and_eventlog() -> (String, String) {
 #[cfg(feature = "crypto-rustcrypto")]
 pub(in crate::tee::coco::converter::builtin::policies) fn resolved_from_manifest(
     manifest: &Value,
-) -> ResolvedRekor {
+) -> AuthenticatedRekor {
     let payload_hash = sha256_hex(jcs_compact(manifest).as_bytes());
     let (dsse_signature, publisher_key) = sign_dsse_for_manifest(manifest);
-    ResolvedRekor {
+    AuthenticatedRekor {
         payload_hash,
         dsse_signature,
         publisher_key,

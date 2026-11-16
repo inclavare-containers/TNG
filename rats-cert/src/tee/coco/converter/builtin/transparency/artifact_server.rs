@@ -1,15 +1,11 @@
-//! Artifact-server and on-demand rekor host-await functions for the
-//! transparency_log policy (artifact-server primary path).
+//! Artifact-server and on-demand rekor authentication for the
+//! transparency_log policy.
 //!
-//! The generated Rego policy calls `tng.fetch_rekor_on_demand` at appraisal
-//! time as the **fallback** when the artifact-server primary path fails to
-//! resolve a measurement. It fetches a Rekor v1 entry by `logIndex` on demand,
-//! authenticates it (reusing the offline auth in `rekor_v1.rs`), and compares
-//! the entry's trusted `payloadHash` to `sha256(canonical manifest)`.
-//!
-//! Successes are cached in a process-global `moka` cache keyed by
-//! `(log_url, log_index)`; failures are never cached (re-try every failed
-//! appraisal, then Rego falls back).
+//! The generated Rego policy calls `tng.resolve_artifact_server` for the
+//! artifact-server primary and `tng.fetch_rekor_on_demand` as the fallback
+//! when the primary fails to resolve a measurement. Both are thin wrappers
+//! over the transparency seam; the authentication and caching live in
+//! [`super::authenticate`] and the two adapters.
 
 #[cfg(feature = "crypto-rustcrypto")]
 use std::sync::Arc;
@@ -19,181 +15,133 @@ use anyhow::Result;
 
 #[cfg(feature = "crypto-rustcrypto")]
 use attestation_service::policy_engine::opa::ExtensionFunction;
-#[cfg(feature = "crypto-rustcrypto")]
-use moka::future::Cache;
-#[cfg(feature = "crypto-rustcrypto")]
-use once_cell::sync::Lazy;
-#[cfg(feature = "crypto-rustcrypto")]
-use sha2::Digest;
 
 #[cfg(feature = "crypto-rustcrypto")]
-use super::{dsse, key_table, rekor_v1};
+use super::cache::{
+    CanonicalLogServices, ManifestDigest, PublisherKeyId, ResolveCacheKey, TransparencyCaches,
+};
+#[cfg(feature = "crypto-rustcrypto")]
+use super::{dsse, key_table, rekor_v1, Authentication};
+use crate::tee::coco::converter::builtin::policy_config::{
+    ArtifactLogService, TransparencyServiceConfig,
+};
 
 // Wire types and the resolve POST live in the upstream `artifact-resolve-sdk`
 // crate (`ResolveRequest`, `ReleaseManifest`, `LogService`, `ResolveResponse`,
 // `LogEntry`, `EntryVerifier`, `LogVerifier`, `Client`).
 
-/// Process-global cache: `(log_url, log_index) -> (authenticated payload_hash,
-/// DSSE publisher signature)`. Successes only; failures are never cached
-/// (re-try every failed appraisal). The DSSE signature is cached alongside the
-/// payload_hash so the mandatory DSSE verification runs on cache hits too
-/// without re-fetching the entry.
-// Capacity 64 is plenty for the small set of transparency-log entries a single
-// builtin-AS instance appraises (one per published measurement, typically
-// 1-3). `moka` evicts LRU past capacity; cached values are immutable strings.
-#[cfg(feature = "crypto-rustcrypto")]
-static REKOR_ON_DEMAND_CACHE: Lazy<Cache<(String, i64), (String, String)>> =
-    Lazy::new(|| Cache::builder().max_capacity(64).build());
+/// The artifact-server adapter for the transparency seam.
+///
+/// Resolve the manifest, authenticate every returned rekor-v1 entry, verify
+/// each entry's publisher signature over the canonical manifest, and compare
+/// each trusted `payloadHash`. The resolve is cached under the server URL, the
+/// manifest digest, the canonical log-services list, and the publisher key, so
+/// a success is only reused for the identical trust configuration. An explicit
+/// revocation is returned as [`Authentication::Revoked`] and never cached.
+pub(crate) async fn authenticate(
+    manifest: &serde_json::Value,
+    service: &TransparencyServiceConfig,
+    caches: &TransparencyCaches,
+) -> Result<Authentication> {
+    let TransparencyServiceConfig::ArtifactServer {
+        url,
+        log_services,
+        publisher_public_key_pem,
+    } = service
+    else {
+        anyhow::bail!("artifact_server::authenticate called with a non-artifact service");
+    };
+    let expected = dsse::canonical_manifest_sha256(manifest)?;
+    let cache_key = ResolveCacheKey {
+        artifact_server_url: url.clone(),
+        manifest_digest: ManifestDigest::new(&expected)?,
+        log_services: CanonicalLogServices::new(&serde_json::to_string(log_services)?)?,
+        publisher_key: PublisherKeyId::new(publisher_public_key_pem.as_deref()),
+    };
+    if caches.resolve_hit(&cache_key).await {
+        return Ok(Authentication::Verified);
+    }
+    match resolve_and_authenticate(
+        manifest,
+        url,
+        log_services,
+        &expected,
+        publisher_public_key_pem.as_deref(),
+    )
+    .await?
+    {
+        ResolveStatus::Verified => {
+            caches.insert_resolve(cache_key).await;
+            Ok(Authentication::Verified)
+        }
+        ResolveStatus::Revoked => Ok(Authentication::Revoked),
+    }
+}
 
 /// `tng.fetch_rekor_on_demand(log_url, log_index, manifest_json,
 /// publisher_key_pem?) -> bool`.
 ///
 /// Fallback path: fetch a Rekor v1 entry by `logIndex` on demand, authenticate
-/// it (checkpoint + Merkle inclusion + SET, reusing `rekor_v1`), verify its DSSE
-/// publisher signature over `sha256(DSSEPAE(canonical manifest))` with the
-/// configured-or-built-in publisher key, and compare its trusted
-/// `payloadHash` to `sha256(canonical manifest)`. The canonical manifest is the
-/// JCS (RFC 8785) sorted-compact serialization, exactly what Rego's
+/// it (checkpoint + Merkle inclusion + SET), verify its DSSE publisher
+/// signature over `sha256(DSSEPAE(canonical manifest))` with the
+/// configured-or-built-in publisher key, and compare its trusted `payloadHash`
+/// to `sha256(canonical manifest)`. The canonical manifest is the JCS (RFC
+/// 8785) sorted-compact serialization, exactly what Rego's
 /// `json.marshal(manifest)` produces for this (number-free) shape, so the
-/// comparison agrees with the init-bake `tng.sha256` path.
+/// comparison agrees with the load-time `tng.sha256` path.
 ///
 /// The optional 4th arg is a configured publisher PEM (from the fallback
 /// `RekorV1` service's `publisherPublicKeyPem`); empty/absent falls back to
-/// the built-in publisher key — there is always a trusted publisher key
-/// (configured-or-built-in), so DSSE verification is mandatory,
-/// never skipped.
+/// the built-in publisher key.
 ///
-/// Cache **successes only**: after a successful fetch+authenticate, the
-/// authenticated `(payload_hash, dsse_signature)` is cached under
-/// `(log_url, log_index)`; subsequent calls re-verify DSSE + compare the
-/// manifest hash to the cached value without hitting the network. The cache
-/// insert happens only AFTER `authenticate_entry` succeeds, so returning
-/// `Ok(false)` on fetch/auth failure still never caches and still re-tries the
-/// next appraisal.
-///
-/// Fail-closed / clean-deny: ALL failures (bad args, fetch failure, key
-/// resolution failure, auth failure, DSSE verification failure, manifest
-/// mismatch) return `Ok(Bool(false))`, never `Err`.
+/// Fail-closed / clean-deny: all failures return `Ok(Bool(false))`, never
+/// `Err`. An `Err` would abort the entire policy evaluation and break the
+/// fallback contract.
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) fn fetch_rekor_on_demand_host_await() -> ExtensionFunction {
     use regorus::Value;
 
     Arc::new(move |argument: regorus::Value| {
         Box::pin(async move {
-            // All failures map to a clean `false` (clean-deny, never `Err`).
-            // `inner` returns `Option<bool>`: `Some(true)` on a successful
-            // fetch+auth+DSSE-verify+compare, `None` on any failure.
-            // `.unwrap_or(false)` then yields the clean deny.
-            let inner = || async {
+            let inner = async {
                 let arr = argument.as_array().ok()?;
                 if !(arr.len() == 3 || arr.len() == 4) {
                     return None;
                 }
                 let log_url = arr[0].as_string().ok()?.to_string();
                 let log_index = arr[1].as_i64().ok()?;
-                let manifest_json = arr[2].as_string().ok()?.to_string();
-                let manifest: serde_json::Value = serde_json::from_str(&manifest_json).ok()?;
-                // Optional 4th arg: configured publisher PEM. Empty/absent →
-                // built-in publisher key (there is always a trusted publisher
-                // key).
-                let configured_publisher_pem: Option<&str> = if arr.len() == 4 {
-                    Some(arr[3].as_string().ok()?)
+                let manifest: serde_json::Value =
+                    serde_json::from_str(arr[2].as_string().ok()?).ok()?;
+                let publisher_public_key_pem = if arr.len() == 4 {
+                    Some(arr[3].as_string().ok()?.to_string())
                 } else {
                     None
                 };
-                let expected = dsse::canonical_manifest_sha256(&manifest).ok()?;
-
-                let cached = REKOR_ON_DEMAND_CACHE
-                    .get(&(log_url.clone(), log_index))
-                    .await;
-                let (payload_hash, dsse_signature) = match cached {
-                    Some(v) => v,
-                    None => {
-                        let entry = rekor_v1::fetch_rekor_entry(&log_url, log_index)
-                            .await
-                            .ok()?;
-                        let key = key_table::resolve_rekor_key(&entry, &log_url).ok()?;
-                        let auth = rekor_v1::authenticate_entry(&entry, &key).ok()?;
-                        // Cache the authenticated payload_hash + DSSE signature
-                        // on success. A manifest mismatch (below) still counts
-                        // as a successful fetch+auth; the entry is authentic,
-                        // just not the one this manifest claims to be, so its
-                        // hash+sig are cached; the mismatch is reported as
-                        // `false`, not a cache miss.
-                        REKOR_ON_DEMAND_CACHE
-                            .insert(
-                                (log_url, log_index),
-                                (auth.payload_hash.clone(), auth.dsse_signature.clone()),
-                            )
-                            .await;
-                        (auth.payload_hash, auth.dsse_signature)
-                    }
+                let service = TransparencyServiceConfig::RekorV1 {
+                    log_url,
+                    log_index,
+                    rekor_public_key_pem: None,
+                    publisher_public_key_pem,
                 };
-                // Mandatory DSSE publisher-signature verification. An empty
-                // dsse_signature means the entry has no DSSE signature → fail
-                // closed.
-                if dsse_signature.is_empty() {
-                    return None;
+                match super::authenticate(Some(&manifest), &service, &TransparencyCaches::shared())
+                    .await
+                {
+                    Ok(Authentication::Verified) => Some(true),
+                    _ => None,
                 }
-                let publisher_pem = dsse::effective_publisher_pem(configured_publisher_pem);
-                let canonical_manifest = dsse::canonical_manifest_bytes(&manifest).ok()?;
-                dsse::verify_publisher_signature(
-                    publisher_pem,
-                    canonical_manifest.as_bytes(),
-                    &dsse_signature,
-                )
-                .ok()?;
-                Some(payload_hash == expected)
             };
-            Ok(Value::Bool(inner().await.unwrap_or(false)))
+            Ok(Value::Bool(inner.await.unwrap_or(false)))
         })
     })
 }
 
-/// Process-global cache for `tng.resolve_artifact_server`: successes only,
-/// keyed by `(artifact_server_url, manifest_hash, canonical_log_services)`.
-/// Failures and revocations are never cached (re-try every failed appraisal,
-/// then Rego falls back to `tng.fetch_rekor_on_demand`).
-///
-/// The URL is part of the key: the cache is process-global and outlives
-/// policy reloads, so a success cached under one artifact-server URL must not
-/// satisfy a later policy pointing at a different server.
-///
-/// The TTL bounds how long a cached success keeps passing appraisals after
-/// the artifact server revokes the measurement. Without it, a revocation
-/// stays invisible until capacity eviction or process restart.
-#[cfg(feature = "crypto-rustcrypto")]
-const RESOLVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// `(artifact_server_url, manifest sha256 bytes, canonical log_services JSON)`.
-#[cfg(feature = "crypto-rustcrypto")]
-type ResolveCacheKey = (String, [u8; 32], String);
-
-#[cfg(feature = "crypto-rustcrypto")]
-static RESOLVE_CACHE: Lazy<Cache<ResolveCacheKey, ()>> = Lazy::new(|| {
-    Cache::builder()
-        .max_capacity(1024)
-        .time_to_live(RESOLVE_CACHE_TTL)
-        .build()
-});
-
 /// `tng.resolve_artifact_server(artifact_server_url, manifest_json,
 /// log_services_json, publisher_key_pem?) -> "ok" | "deny" | "fail"`.
-///
-/// Primary artifact-server path. Resolve the manifest via the Artifact Server
-/// `POST /api/v1/transparency/resolve` (upstream `artifact_resolve_sdk::Client`,
-/// see `resolve_and_authenticate`), then authenticate each returned rekor-v1 entry (checkpoint + Merkle
-/// inclusion + SET, reusing `rekor_v1::authenticate_entry`), verify each entry's
-/// DSSE publisher signature over `sha256(DSSEPAE(canonical manifest))` with the
-/// response `entry_verifier` key (or the configured/built-in publisher key when
-/// the response omits both verifiers), and verify each
-/// entry's authenticated `payloadHash == sha256(JCS(manifest))`.
 ///
 /// Returns a tri-state string so the Rego policy can tell an explicit
 /// revocation apart from an ordinary failure:
 /// - `"ok"`: resolve succeeded and every entry authenticated (or a cached
-///   prior success). Cached keyed by `(artifact_server_url, manifest_hash,
-///   canonical_log_services)` with a TTL (see `RESOLVE_CACHE`).
+///   prior success).
 /// - `"deny"`: the artifact server answered `measurement_revoked`. A hard
 ///   denial: the rekor fallback MUST NOT run for it, because the append-only
 ///   rekor log still carries the revoked manifest's (immutable, fully
@@ -203,108 +151,42 @@ static RESOLVE_CACHE: Lazy<Cache<ResolveCacheKey, ()>> = Lazy::new(|| {
 ///   auth, manifest mismatch, `measurement_not_found`, ...). The Rego caller
 ///   falls back to `tng.fetch_rekor_on_demand`. Never cached.
 ///
-/// The optional 4th arg is a configured publisher PEM (from the
-/// `ArtifactServer` `publisherPublicKeyPem` config); empty/absent falls back to
-/// the built-in publisher key when the response omits the publisher key.
-///
-/// Fail-closed / clean-deny: ALL outcomes (including bad args, HTTP, decode,
-/// key resolution, auth, manifest mismatch) return `Ok(String)`, never `Err`.
-/// An `Err` would abort the entire policy evaluation (verified via the
-/// in-tree `evaluate_with_regovm_propagates_async_builtin_error` test),
-/// breaking the fail-closed fallback contract. This mirrors the established
-/// `fetch_rekor_on_demand` pattern (Option + `unwrap_or`).
+/// Fail-closed / clean-deny: all outcomes return `Ok(String)`, never `Err`.
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) fn resolve_artifact_server_host_await() -> ExtensionFunction {
     use regorus::Value;
 
     Arc::new(move |argument: regorus::Value| {
         Box::pin(async move {
-            // All failures map to a clean `"fail"` string (clean-deny, never
-            // `Err`). `inner` returns `Option<&'static str>`: `"ok"` on a
-            // successful resolve+authenticate+compare, `"deny"` on an
-            // explicit server-side revocation, `None` on any other failure.
-            // `.unwrap_or("fail")` then yields the clean deny.
-            let inner = || async {
+            let inner = async {
                 let arr = argument.as_array().ok()?;
                 if !(arr.len() == 3 || arr.len() == 4) {
                     return None;
                 }
                 let url = arr[0].as_string().ok()?.to_string();
-                let manifest_json = arr[1].as_string().ok()?.to_string();
-                let log_services_json = arr[2].as_string().ok()?.to_string();
-                // Optional 4th arg: configured publisher PEM (from the
-                // artifact-server `publisherPublicKeyPem` config). Empty/absent
-                // → resolve_publisher_key falls back to the built-in publisher
-                // key.
-                let configured_publisher_pem: Option<&str> = if arr.len() == 4 {
-                    Some(arr[3].as_string().ok()?)
+                let manifest: serde_json::Value =
+                    serde_json::from_str(arr[1].as_string().ok()?).ok()?;
+                let log_services: Vec<ArtifactLogService> =
+                    serde_json::from_str(arr[2].as_string().ok()?).ok()?;
+                let publisher_public_key_pem = if arr.len() == 4 {
+                    Some(arr[3].as_string().ok()?.to_string())
                 } else {
                     None
                 };
-
-                let manifest: serde_json::Value = serde_json::from_str(&manifest_json).ok()?;
-                let expected = dsse::canonical_manifest_sha256(&manifest).ok()?;
-
-                // Decode the hex sha256 to a 32-byte array for the cache key. A
-                // non-32-byte hash (e.g. a malformed manifest that produced a
-                // non-sha256 digest) is reported via tracing and maps to
-                // `None`→`Ok("fail")` (clean-deny), the `inner` closure
-                // returns `Option<&'static str>`, so the `return None` below
-                // keeps the `Ok(String)` contract intact (never `Err`).
-                let expected_bytes: [u8; 32] = match hex::decode(&expected) {
-                    Ok(b) => match b.as_slice().try_into() {
-                        Ok(arr) => arr,
-                        Err(_) => {
-                            tracing::warn!(
-                                len = b.len(),
-                                "resolve_artifact_server: manifest sha256 must be 32 bytes, got {} bytes, denying",
-                                b.len()
-                            );
-                            return None;
-                        }
-                    },
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            "resolve_artifact_server: manifest sha256 hex decode failed; denying"
-                        );
-                        return None;
-                    }
+                let service = TransparencyServiceConfig::ArtifactServer {
+                    url,
+                    log_services,
+                    publisher_public_key_pem,
                 };
-                let ls_canon = canonicalize_log_services(&log_services_json).ok()?;
-
-                if RESOLVE_CACHE
-                    .get(&(url.clone(), expected_bytes, ls_canon.clone()))
+                match super::authenticate(Some(&manifest), &service, &TransparencyCaches::shared())
                     .await
-                    .is_some()
                 {
-                    return Some("ok");
-                }
-
-                match resolve_and_authenticate(
-                    &url,
-                    &manifest_json,
-                    &log_services_json,
-                    &expected,
-                    configured_publisher_pem,
-                )
-                .await
-                {
-                    Ok(ResolveStatus::Verified) => {
-                        RESOLVE_CACHE
-                            .insert((url, expected_bytes, ls_canon), ())
-                            .await;
-                        Some("ok")
-                    }
-                    // Explicit revocation: report the hard denial so the Rego
-                    // fallback gate (`primary_status == "fail"`) does not
-                    // fire. Never cached: the revocation state is the
-                    // server's to change.
-                    Ok(ResolveStatus::Revoked) => Some("deny"),
-                    Err(_) => None,
+                    Ok(Authentication::Verified) => Some("ok"),
+                    Ok(Authentication::Revoked) => Some("deny"),
+                    _ => None,
                 }
             };
-            Ok(Value::from(inner().await.unwrap_or("fail")))
+            Ok(Value::from(inner.await.unwrap_or("fail")))
         })
     })
 }
@@ -344,34 +226,32 @@ enum ResolveStatus {
 
 #[cfg(feature = "crypto-rustcrypto")]
 async fn resolve_and_authenticate(
+    manifest: &serde_json::Value,
     url: &str,
-    manifest_json: &str,
-    log_services_json: &str,
+    log_services: &[ArtifactLogService],
     expected_hash: &str,
     configured_publisher_pem: Option<&str>,
 ) -> Result<ResolveStatus> {
-    let manifest: artifact_resolve_sdk::ReleaseManifest = serde_json::from_str(manifest_json)?;
-    let log_services: Vec<artifact_resolve_sdk::LogService> =
-        serde_json::from_str(log_services_json)?;
-    // Build the requested (type, url) set BEFORE moving `log_services` into
-    // the request, used to verify the response covers exactly the requested
-    // services (no unrequested / duplicate / missing entries). URLs are
-    // normalized by trimming trailing slashes so a caller that appends `/`
+    let sdk_manifest: artifact_resolve_sdk::ReleaseManifest =
+        serde_json::from_value(manifest.clone())?;
+    let sdk_log_services: Vec<artifact_resolve_sdk::LogService> = log_services
+        .iter()
+        .map(|ls| artifact_resolve_sdk::LogService {
+            type_: ls.type_.clone(),
+            url: Some(ls.url.clone()),
+        })
+        .collect();
+    // Build the requested (type, url) set BEFORE moving `sdk_log_services`
+    // into the request, used to verify the response covers exactly the
+    // requested services (no unrequested / duplicate / missing entries). URLs
+    // are normalized by trimming trailing slashes so a caller that appends `/`
     // still matches a response without one.
     let mut remaining: std::collections::HashSet<(String, String)> = log_services
         .iter()
-        .map(|ls| {
-            (
-                ls.type_.clone(),
-                ls.url
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim_end_matches('/')
-                    .to_string(),
-            )
-        })
+        .map(|ls| (ls.type_.clone(), ls.url.trim_end_matches('/').to_string()))
         .collect();
-    let req = artifact_resolve_sdk::ResolveRequest::new(manifest).with_log_services(log_services);
+    let req =
+        artifact_resolve_sdk::ResolveRequest::new(sdk_manifest).with_log_services(sdk_log_services);
     let resp = match artifact_resolve_sdk::Client::new(url)?.resolve(&req).await {
         Ok(resp) => resp,
         // An explicit revocation is a hard denial, not an ordinary failure:
@@ -393,8 +273,7 @@ async fn resolve_and_authenticate(
     // Canonical manifest bytes, shared by the payloadHash comparison and the
     // DSSE PAE construction (publisher-signature verification) below, computed
     // once so every entry sees the same canonical payload.
-    let manifest_value: serde_json::Value = serde_json::from_str(manifest_json)?;
-    let canonical_manifest = dsse::canonical_manifest_bytes(&manifest_value)?;
+    let canonical_manifest = dsse::canonical_manifest_bytes(manifest)?;
     for entry in &resp.log_entries {
         if entry.type_ != "rekor-v1" {
             anyhow::bail!("unsupported log entry type {:?}", entry.type_);
@@ -584,27 +463,12 @@ fn resolve_publisher_key(
     Ok((ev.content.clone(), true))
 }
 
-/// Canonicalize a `log_services_json` string into a stable cache-key component:
-/// parse to a `serde_json::Value` (normalizing key order / whitespace) then
-/// re-serialize via the shared `dsse::canonical_json` (RFC 8785 JCS). Two
-/// semantically-equal log-services lists produce the same canonical string.
-#[cfg(feature = "crypto-rustcrypto")]
-fn canonicalize_log_services(log_services_json: &str) -> Result<String> {
-    let v: serde_json::Value = serde_json::from_str(log_services_json)?;
-    dsse::canonical_json(&v)
-}
-
-/// Test-only helper: clear both process-global host-await caches so a test can
-/// exercise the real network path (and avoid cross-test cache pollution). The
-/// mod.rs short-circuit test uses this to force the artifact-server
-/// mock to be hit rather than served from a stale `RESOLVE_CACHE` entry.
-/// `moka`'s `invalidate_all` is synchronous (it marks entries for lazy
-/// eviction); no `async` needed.
+/// Test-only helper: clear the shared transparency caches so a test can
+/// exercise the real network path (and avoid cross-test cache pollution).
 #[cfg(test)]
 #[cfg(feature = "crypto-rustcrypto")]
 pub(crate) fn invalidate_host_await_caches_for_test() {
-    RESOLVE_CACHE.invalidate_all();
-    REKOR_ON_DEMAND_CACHE.invalidate_all();
+    TransparencyCaches::shared().invalidate_all();
 }
 
 #[cfg(test)]
@@ -862,10 +726,10 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_true_on_valid_entries() {
-        // `RESOLVE_CACHE` is process-global and `cargo test` runs tests in
+        // The shared cache is process-global and `cargo test` runs tests in
         // parallel; clear it so a prior success in `caches_success` (same
         // cache key) cannot short-circuit this call into a no-network hit.
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -965,7 +829,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_duplicate_entry() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Two copies of the same (type, url) entry, a malicious resolver
@@ -1022,7 +886,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_entry_verifier() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Wrong publisher PEM (the Sigstore rekor key, a valid P-256 key that
@@ -1062,7 +926,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_log_verifier() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Wrong rekor PEM (the DSSE publisher key, a valid P-256 key whose
@@ -1100,7 +964,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_missing_requested_log_service() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -1144,7 +1008,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_caches_success() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
@@ -1185,7 +1049,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_deny_on_revoked() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1230,7 +1094,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_fail_on_measurement_not_found() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1271,7 +1135,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_cache_key_includes_url() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = resolve_response_body(
             &manifest,
@@ -1345,7 +1209,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_non_resolved_status() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Valid response structure but with status != "resolved" so the SDK
@@ -1386,7 +1250,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_empty_log_entries() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1419,7 +1283,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_unsupported_entry_type() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, _log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1466,7 +1330,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_empty_verifier_content() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // Both verifiers present-but-empty (`type_ == "public_key"`, empty
@@ -1512,7 +1376,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_mixed_verifiers() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         let body = serde_json::json!({
@@ -1564,7 +1428,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_false_on_wrong_type_entry_verifier_with_absent_log_verifier() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // entry_verifier carries an unsupported type ("other"); log_verifier is
@@ -1617,7 +1481,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn resolve_artifact_server_warns_on_baseline_key_mismatch() {
-        RESOLVE_CACHE.invalidate_all();
+        invalidate_host_await_caches_for_test();
         let server = MockServer::start().await;
         let (manifest, log_entry, _entry_url) = cmaas_resolve_triple();
         // Use the OpenAnolis URL so the built-in baseline key differs from

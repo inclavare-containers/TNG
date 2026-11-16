@@ -2,58 +2,7 @@
 //! The rekor-v1 and artifact-server services live in `builtin/transparency`.
 
 use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
-use super::super::super::transparency::rekor_v1;
-
-/// The authenticated data a rekor-v1 primary contributes to an entry: the baked
-/// payloadHash plus the DSSE signature and publisher key used at appraisal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedRekor {
-    pub payload_hash: String,
-    pub dsse_signature: String,
-    pub publisher_key: String,
-}
-
-/// Fetch and authenticate the rekor-v1 entry a `transparency_log` module entry
-/// names, returning the data baked into its Rego. An artifact-server primary
-/// resolves at appraisal time, so it contributes no resolved data.
-#[cfg(feature = "crypto-rustcrypto")]
-pub(super) async fn resolve_entry(
-    cfg: &TransparencyLogEntryConfig,
-) -> anyhow::Result<Option<ResolvedRekor>> {
-    use super::super::super::transparency::dsse::{
-        effective_publisher_pem, require_dsse_signature,
-    };
-
-    let TransparencyServiceConfig::RekorV1 {
-        log_url,
-        log_index,
-        rekor_public_key_pem,
-        publisher_public_key_pem,
-    } = cfg
-        .services
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("services must be non-empty"))?
-    else {
-        return Ok(None);
-    };
-
-    tracing::info!(
-        log_url,
-        log_index,
-        "Loading transparency_log entry: fetching Rekor v1 entry"
-    );
-    let auth =
-        rekor_v1::fetch_trusted_payload_hash(log_url, *log_index, rekor_public_key_pem.as_deref())
-            .await?;
-    // DSSE verification is mandatory: fall back to the built-in publisher key
-    // when the config leaves it empty.
-    let publisher_key = effective_publisher_pem(publisher_public_key_pem.as_deref());
-    Ok(Some(ResolvedRekor {
-        payload_hash: auth.payload_hash,
-        dsse_signature: require_dsse_signature(&auth.dsse_signature)?.to_string(),
-        publisher_key: publisher_key.to_string(),
-    }))
-}
+use super::super::super::transparency::AuthenticatedRekor;
 
 /// Render the Rego that reconstructs one ReleaseManifest and binds it to
 /// `name`.
@@ -109,7 +58,7 @@ fn manifest_rules(types: &[String], schema_expr: &str, name: &str) -> String {
 /// resolves its manifest at appraisal time and ignores `resolved`.
 pub(super) fn build_entry_rules(
     cfg: &TransparencyLogEntryConfig,
-    resolved: Option<&ResolvedRekor>,
+    resolved: Option<&AuthenticatedRekor>,
     pred: &str,
     prefix: &str,
 ) -> anyhow::Result<String> {
@@ -858,12 +807,12 @@ mod tests {
     #[test]
     fn transparency_log_rego_shape_contract() {
         let resolved = [
-            Some(ResolvedRekor {
+            Some(AuthenticatedRekor {
                 payload_hash: "00".repeat(32),
                 dsse_signature: "sig-a".to_string(),
                 publisher_key: "key-a".to_string(),
             }),
-            Some(ResolvedRekor {
+            Some(AuthenticatedRekor {
                 payload_hash: "11".repeat(32),
                 dsse_signature: "sig-b".to_string(),
                 publisher_key: "key-b".to_string(),
@@ -1967,7 +1916,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         let ok = tdx_input(&[aael_event(digest)]);
 
         // Built-in key + real signature -> DSSE verifies -> affirm.
-        let mut resolved = ResolvedRekor {
+        let mut resolved = AuthenticatedRekor {
             payload_hash: payload_hash.to_string(),
             dsse_signature: dsse_signature.clone(),
             publisher_key: dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM.to_string(),

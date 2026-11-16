@@ -14,9 +14,13 @@ use base64::Engine;
 use serde::Deserialize;
 use sha2::Digest as _;
 
+use super::cache::{RekorCacheKey, TransparencyCaches};
+use super::dsse;
 #[cfg(feature = "crypto-rustcrypto")]
 use super::key_table::verify_log_id;
 use super::key_table::{rekor_public_key, RekorKey};
+use super::{AuthenticatedRekor, Authentication};
+use crate::tee::coco::converter::builtin::policy_config::TransparencyServiceConfig;
 
 /// A Rekor v1 transparency-log entry (the raw object returned by
 /// `GET /api/v1/log/entries?logIndex=<n>`).
@@ -422,17 +426,82 @@ pub(crate) fn authenticate_entry(
     })
 }
 
-/// Full init pipeline: fetch + authenticate + return the authenticated entry
-/// (trusted payloadHash + in-band DSSE signature).
-#[cfg(feature = "crypto-rustcrypto")]
-pub async fn fetch_trusted_payload_hash(
-    log_url: &str,
-    log_index: i64,
-    rekor_public_key_pem: Option<&str>,
-) -> Result<AuthenticatedRekorEntry> {
-    let entry = fetch_rekor_entry(log_url, log_index).await?;
-    let key = rekor_public_key(log_url, rekor_public_key_pem)?;
-    authenticate_entry(&entry, &key)
+/// The rekor-direct adapter for the transparency seam.
+///
+/// With `manifest == None` this is the policy-load path: fetch the entry,
+/// authenticate it against the configured-or-built-in rekor key, and return
+/// the trusted payload hash plus the in-band DSSE signature for the Rego bake.
+/// The entry is deliberately not cached here: a load must re-authenticate
+/// against the configured `rekorPublicKeyPem`, so a cached success from a
+/// different key configuration must not satisfy it.
+///
+/// With a bound manifest this is the appraisal-time fallback: fetch and
+/// authenticate the entry (caching the authenticated entry on success), verify
+/// the publisher signature over the canonical manifest, and compare the
+/// trusted payload hash. A cached entry still goes through the publisher
+/// signature check, so a cache hit does not weaken the binding.
+pub(crate) async fn authenticate(
+    manifest: Option<&serde_json::Value>,
+    service: &TransparencyServiceConfig,
+    caches: &TransparencyCaches,
+) -> Result<Authentication> {
+    let TransparencyServiceConfig::RekorV1 {
+        log_url,
+        log_index,
+        rekor_public_key_pem,
+        publisher_public_key_pem,
+    } = service
+    else {
+        anyhow::bail!("rekor_v1::authenticate called with a non-rekor service");
+    };
+
+    let Some(manifest) = manifest else {
+        tracing::info!(
+            log_url,
+            log_index,
+            "Loading transparency_log entry: fetching Rekor v1 entry"
+        );
+        let entry = fetch_rekor_entry(log_url, *log_index).await?;
+        let key = rekor_public_key(log_url, rekor_public_key_pem.as_deref())?;
+        let auth = authenticate_entry(&entry, &key)?;
+        return Ok(Authentication::Rekor(AuthenticatedRekor {
+            payload_hash: auth.payload_hash,
+            dsse_signature: dsse::require_dsse_signature(&auth.dsse_signature)?.to_string(),
+            publisher_key: dsse::effective_publisher_pem(publisher_public_key_pem.as_deref())
+                .to_string(),
+        }));
+    };
+
+    let expected = dsse::canonical_manifest_sha256(manifest)?;
+    let cache_key = RekorCacheKey {
+        log_url: log_url.clone(),
+        log_index: *log_index,
+    };
+    let entry = match caches.rekor_entry(&cache_key).await {
+        Some(entry) => entry,
+        None => {
+            let entry = fetch_rekor_entry(log_url, *log_index).await?;
+            let key = super::key_table::resolve_rekor_key(&entry, log_url)?;
+            let entry = authenticate_entry(&entry, &key)?;
+            // The entry is authentic even when the bound manifest does not
+            // match it, so cache it before the manifest-specific checks.
+            caches.insert_rekor(cache_key, entry.clone()).await;
+            entry
+        }
+    };
+
+    let dsse_signature = dsse::require_dsse_signature(&entry.dsse_signature)?;
+    let publisher_pem = dsse::effective_publisher_pem(publisher_public_key_pem.as_deref());
+    let canonical_manifest = dsse::canonical_manifest_bytes(manifest)?;
+    dsse::verify_publisher_signature(publisher_pem, canonical_manifest.as_bytes(), dsse_signature)?;
+    if entry.payload_hash != expected {
+        anyhow::bail!(
+            "payloadHash mismatch: entry={} expected={}",
+            entry.payload_hash,
+            expected
+        );
+    }
+    Ok(Authentication::Verified)
 }
 
 #[cfg(test)]
