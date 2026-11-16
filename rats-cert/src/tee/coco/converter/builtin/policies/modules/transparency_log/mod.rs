@@ -2839,7 +2839,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             ))],
         });
         let cfg: PolicyConfig = serde_json::from_value(cfg_json).expect("parse cfg");
-        let encoded = load_policy(&cfg).await.expect("encode").expect("policy");
+        let encoded = load_policy(&cfg).await.expect("policy");
         String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap()
     }
 
@@ -3220,7 +3220,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             ))],
         });
         let cfg: PolicyConfig = serde_json::from_value(cfg_json).unwrap();
-        let encoded = load_policy(&cfg).await.unwrap().expect("policy");
+        let encoded = load_policy(&cfg).await.unwrap();
         let policy = String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
 
         let digest = manifest["measurements"][0]["value"]

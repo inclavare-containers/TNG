@@ -11,7 +11,6 @@ use super::policy_config::{PolicyConfig, ReferenceValueConfig};
 use super::signer::SelfSignedSigner;
 use super::DEFAULT_POLICY_ID;
 use crate::errors::*;
-use crate::tee::coco::converter::CoCoNonce;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
 use crate::tee::GenericConverter;
 
@@ -123,15 +122,14 @@ impl BuiltinCocoConverter {
             )
         };
 
-        // Install the configured policy. Every variant now yields one: the
-        // bundled templates are embedded, `modules` generates Rego, and
+        // Install the configured policy. Every variant yields one: the bundled
+        // templates are embedded, `modules` generates Rego, and
         // `inline`/`path` pass user content through.
-        if let Some(policy_content) = super::policies::load_policy(policy).await? {
-            attestation_service
-                .set_policy(DEFAULT_POLICY_ID.to_string(), policy_content)
-                .await
-                .map_err(Error::AttestationServiceSetPolicyFailed)?;
-        }
+        let policy_content = super::policies::load_policy(policy).await?;
+        attestation_service
+            .set_policy(DEFAULT_POLICY_ID.to_string(), policy_content)
+            .await
+            .map_err(Error::AttestationServiceSetPolicyFailed)?;
 
         // Load reference values
         super::reference_values::load_reference_values(&mut attestation_service, reference_values)
@@ -294,7 +292,7 @@ impl BuiltinCocoConverter {
 impl GenericConverter for BuiltinCocoConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
-    type Nonce = CoCoNonce;
+    type Nonce = String;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!("Convert CoCo evidence to CoCo AS token via builtin-as");
@@ -403,7 +401,7 @@ impl GenericConverter for BuiltinCocoConverter {
                     "missing `extra-params.jwt` in attestation challenge response"
                 ))
             })?;
-        Ok(CoCoNonce::Jwt(jwt.to_string()))
+        Ok(jwt.to_string())
     }
 }
 

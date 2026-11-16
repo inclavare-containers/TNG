@@ -83,38 +83,6 @@ impl Module {
             _ => std::iter::once(Dimension::Executables).collect(),
         }
     }
-
-    /// The TEE platform this entry's evidence is rooted at. Every current
-    /// variant reads from `input.tdx`: the quote and event-log measurements,
-    /// the AAEL event-log families, and the evaluated `nvidia_gpu.*` claims.
-    fn platform(&self) -> Platform {
-        Platform::Tdx
-    }
-}
-
-/// TEE platforms a module entry can depend on. Only TDX exists today; the
-/// generated policy uses the platform's recognition predicate as the hardware
-/// base, and a second platform would add its own variant and predicate.
-enum Platform {
-    Tdx,
-}
-
-impl Platform {
-    /// The predicate that recognises this platform in the appraisal input.
-    fn recognition(&self) -> &'static str {
-        match self {
-            Platform::Tdx => "tdx_recognized",
-        }
-    }
-
-    /// The Rego helper that defines [`Self::recognition`].
-    fn recognition_rule(&self) -> &'static str {
-        match self {
-            Platform::Tdx => {
-                "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
-            }
-        }
-    }
 }
 
 /// A module entry type, parsed from the raw `type` string in one place.
@@ -553,11 +521,10 @@ fn render_modules_policy(
     // transparency_log entries contribute the families their declared
     // published types need.
     let mut families = Families::default();
-    // The platform the policy depends on. No entry means no dependency and no
-    // recognition predicate is emitted. While only one platform exists, one
-    // shared recognition block covers every group; when a second platform
-    // lands, the block must be emitted once per distinct platform in use.
-    let mut policy_platform: Option<Platform> = None;
+    // The policy depends on TDX recognition only when it declares at least one
+    // module entry. No entry means no dependency and no recognition predicate
+    // is emitted; every group shares the one recognition block.
+    let mut policy_depends_on_platform = false;
 
     for (gi, group) in groups.iter().enumerate() {
         let mut executables_preds: Vec<String> = Vec::new();
@@ -565,7 +532,7 @@ fn render_modules_policy(
         let mut hardware_preds: Vec<String> = Vec::new();
         for (j, module) in group.iter().enumerate() {
             let pred = format!("m_{gi}_{j}");
-            policy_platform.get_or_insert_with(|| module.platform());
+            policy_depends_on_platform = true;
             let body = match module {
                 Module::Tdx(cfg) => {
                     let (body, extra) = tdx_posture_rule(cfg, &pred)?;
@@ -631,13 +598,10 @@ fn render_modules_policy(
                 "group_{gi}_hardware_ok if {{\n{}\n}}",
                 indent(&hardware_preds)
             ));
-            // One shared recognition predicate covers every group while only
-            // one platform exists. With multiple platforms this per-group rule
-            // must select the group's own platform predicate.
-            if let Some(platform) = policy_platform.as_ref() {
+            // One shared recognition predicate covers every group.
+            if policy_depends_on_platform {
                 hardware_rules.push(format!(
-                    "hardware := 2 if {{\n\t{}\n\tgroup_{gi}_hardware_ok\n}}",
-                    platform.recognition()
+                    "hardware := 2 if {{\n\ttdx_recognized\n\tgroup_{gi}_hardware_ok\n}}"
                 ));
             }
         }
@@ -652,17 +616,13 @@ fn render_modules_policy(
     // With entries but no posture entries, hardware reduces to recognition of
     // the platform the entries depend on. With no entries at all, no
     // recognition rule is emitted and the non-affirming default applies.
-    if hardware_rules.is_empty() {
-        if let Some(platform) = policy_platform.as_ref() {
-            hardware_rules.push(format!(
-                "hardware := 2 if {{\n\t{}\n}}",
-                platform.recognition()
-            ));
-        }
+    if hardware_rules.is_empty() && policy_depends_on_platform {
+        hardware_rules.push("hardware := 2 if {\n\ttdx_recognized\n}".to_string());
     }
-    let recognition_block = match policy_platform.as_ref() {
-        Some(platform) => format!("\n\n{}", platform.recognition_rule()),
-        None => String::new(),
+    let recognition_block = if policy_depends_on_platform {
+        "\n\ntdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}".to_string()
+    } else {
+        String::new()
     };
 
     // The shared measurement-extraction rules are emitted once, ahead of the
@@ -1487,25 +1447,6 @@ mod tests {
             (2, 97, 2, 2),
             "a non-TDX quote must leave hardware non-affirming while file_system matches"
         );
-    }
-
-    // The loop is the extension point: every Platform variant must be listed
-    // here, and the lint only fires while the list has one entry.
-    #[allow(clippy::single_element_loop)]
-    #[test]
-    fn platform_recognition_predicate_matches_its_rule() {
-        // Every Platform variant must be listed here. The rule text has to
-        // define the predicate that recognition() names, so a second platform
-        // cannot ship with a mismatched helper name.
-        for platform in [Platform::Tdx] {
-            let name = platform.recognition();
-            let rule = platform.recognition_rule();
-            let expected = format!("{name} if {{");
-            assert!(
-                rule.starts_with(&expected),
-                "platform rule must define {name:?}: {rule}"
-            );
-        }
     }
 
     #[test]

@@ -50,10 +50,8 @@ pub async fn render_policy_source(policy: &PolicyConfig) -> Result<String> {
 
 /// Load policy from configuration
 /// Returns a URL-safe base64 encoding of the policy source.
-pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<Option<String>> {
-    Ok(Some(
-        URL_SAFE_NO_PAD.encode(render_policy_source(policy).await?),
-    ))
+pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<String> {
+    Ok(URL_SAFE_NO_PAD.encode(render_policy_source(policy).await?))
 }
 
 #[cfg(test)]
@@ -77,9 +75,7 @@ default file_system := 2"#;
 
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
-        let encoded_content = result
-            .unwrap()
-            .expect("Should return Some for Inline policy");
+        let encoded_content = result.unwrap();
         // Decode the URL_SAFE_NO_PAD encoded content to verify
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&encoded_content)
@@ -94,9 +90,7 @@ default file_system := 2"#;
         let policy_config = PolicyConfig::HardwareOnly;
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
-        let encoded = result
-            .unwrap()
-            .expect("Should return Some for HardwareOnly policy");
+        let encoded = result.unwrap();
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&encoded)
             .expect("Failed to decode policy");
@@ -112,9 +106,7 @@ default file_system := 2"#;
         let policy_config = PolicyConfig::HardwareOnlyStrict;
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
-        let encoded = result
-            .unwrap()
-            .expect("Should return Some for HardwareOnlyStrict policy");
+        let encoded = result.unwrap();
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&encoded)
             .expect("Failed to decode policy");
@@ -134,9 +126,7 @@ default file_system := 2"#;
         };
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
-        let encoded = result
-            .unwrap()
-            .expect("Should return Some for Modules policy");
+        let encoded = result.unwrap();
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&encoded)
             .expect("Failed to decode policy");
@@ -154,9 +144,7 @@ default file_system := 2"#;
         let policy_config = PolicyConfig::TrustAll;
         let result = load_policy(&policy_config).await;
         assert!(result.is_ok());
-        let encoded = result
-            .unwrap()
-            .expect("Should return Some for TrustAll policy");
+        let encoded = result.unwrap();
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&encoded)
             .expect("Failed to decode policy");
@@ -208,10 +196,7 @@ default file_system := 2"#;
 
         for policy in cases {
             let source = render_policy_source(&policy).await.expect("render source");
-            let loaded = load_policy(&policy)
-                .await
-                .expect("load policy")
-                .expect("every current variant yields a policy");
+            let loaded = load_policy(&policy).await.expect("load policy");
             assert_eq!(
                 URL_SAFE_NO_PAD.encode(source.as_bytes()),
                 loaded,

@@ -34,17 +34,13 @@ impl CocoConverter {
     }
 }
 
-pub enum CoCoNonce {
-    Jwt(String),
-}
-
 #[cfg_attr(wasm, async_trait::async_trait(?Send))]
 #[cfg_attr(not(wasm), async_trait::async_trait)]
 
 impl GenericConverter for CocoConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
-    type Nonce = CoCoNonce;
+    type Nonce = String;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         match self {

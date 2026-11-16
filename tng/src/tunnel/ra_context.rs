@@ -679,7 +679,6 @@ mod tests {
             PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
             SlsaReferenceValuePayloadConfig,
         };
-        use rats_cert::tee::coco::converter::CoCoNonce;
         use rats_cert::tee::GenericConverter;
         use serial_test::serial;
 
@@ -856,7 +855,7 @@ mod tests {
                             "Failed to generate challenge: {:?}",
                             challenge_result.err()
                         );
-                        let CoCoNonce::Jwt(challenge) = challenge_result.unwrap();
+                        let challenge = challenge_result.unwrap();
                         assert!(!challenge.is_empty(), "Challenge should be non-empty");
                     }
                     TngConverter::Coco(c) => panic!(

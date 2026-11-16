@@ -61,34 +61,8 @@ pub(crate) async fn load_reference_values(
                     .await
                     .map_err(Error::RegisterSampleReferenceValueFailed)?;
             }
-            ReferenceValueConfig::Slsa { payload } => {
-                let payload_value = match payload {
-                    SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
-                    #[cfg(not(wasm))]
-                    SlsaReferenceValuePayloadConfig::Path { path } => {
-                        let content_str = tokio::fs::read_to_string(path).await.map_err(|e| {
-                            Error::ReadReferenceValueFileFailed {
-                                path: path.clone(),
-                                source: e,
-                            }
-                        })?;
-                        serde_json::from_str::<ReferenceValueListPayload>(&content_str).map_err(
-                            |e| Error::ParseReferenceValuePayloadFailed {
-                                path: path.clone(),
-                                source: e,
-                            },
-                        )?
-                    }
-                };
-
-                let payload_str = serde_json::to_string(&payload_value)
-                    .map_err(Error::SerializeSlsaReferenceValueListFailed)?;
-                attestation_service
-                    .set_reference_value_list(&payload_str)
-                    .await
-                    .map_err(Error::SetSlsaReferenceValueListFailed)?;
-            }
-            ReferenceValueConfig::ReleaseManifest { payload } => {
+            ReferenceValueConfig::Slsa { payload }
+            | ReferenceValueConfig::ReleaseManifest { payload } => {
                 let payload_value = match payload {
                     SlsaReferenceValuePayloadConfig::Inline { content } => content.clone(),
                     #[cfg(not(wasm))]

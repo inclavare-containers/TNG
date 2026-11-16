@@ -1,5 +1,5 @@
 use rats_cert::errors::*;
-use rats_cert::tee::coco::converter::{CoCoNonce, CocoConverter};
+use rats_cert::tee::coco::converter::CocoConverter;
 use rats_cert::tee::ita::ItaConverter;
 use rats_cert::tee::GenericConverter;
 
@@ -52,10 +52,7 @@ impl GenericConverter for TngConverter {
 
     async fn get_nonce(&self) -> Result<String> {
         match self {
-            Self::Coco(c) => {
-                let CoCoNonce::Jwt(token) = c.get_nonce().await?;
-                Ok(token)
-            }
+            Self::Coco(c) => c.get_nonce().await,
             Self::Ita(c) => c.get_nonce().await,
         }
     }

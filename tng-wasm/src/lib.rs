@@ -43,7 +43,6 @@ mod tests {
 
     use rats_cert::cert::verify::PolicyConfig;
     use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-    use rats_cert::tee::coco::converter::CoCoNonce;
     use rats_cert::tee::GenericConverter;
 
     // Run these in a real browser so `window.crypto.subtle` (the Web Crypto API
@@ -68,7 +67,7 @@ mod tests {
             Err(error) => panic!("failed to get nonce: {error:?}"),
         };
 
-        let CoCoNonce::Jwt(jwt) = nonce;
+        let jwt = nonce;
         assert_eq!(
             jwt.split('.').count(),
             3,

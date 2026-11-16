@@ -216,9 +216,9 @@ fn canonical_manifest_bytes(manifest_json: &str) -> Result<String> {
 /// DSSE Pre-Authentication Encoding (DSSEv1). Format:
 /// `DSSEv1 <len(type)> <type> <len(payload)> <payload>` where `<len>` is the
 /// ASCII decimal byte length. The DSSE publisher signature is verified over
-/// `sha256(PAE(canonical_manifest))`; see `verify_entry_dsse_signature`
-/// (the verify step is `h := sha256(pae); ecdsa.verify(pub, h, sig)`, where
-/// `pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload)`).
+/// `sha256(PAE(canonical_manifest))`; the verify step is
+/// `h := sha256(pae); ecdsa.verify(pub, h, sig)`, where
+/// `pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload)`.
 #[cfg(feature = "crypto-rustcrypto")]
 fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
     let prefix = format!(
@@ -530,7 +530,11 @@ async fn resolve_and_authenticate(
         // `sha256(DSSEPAE(canonical_manifest))`.
         let (publisher_pem, used_response_key) =
             resolve_publisher_key(entry, configured_publisher_pem)?;
-        verify_entry_dsse_signature(&rekor_entry, &publisher_pem, canonical_manifest.as_bytes())?;
+        verify_dsse_publisher_signature(
+            &publisher_pem,
+            canonical_manifest.as_bytes(),
+            &auth.dsse_signature,
+        )?;
         // Baseline-compare + warn (#9): after successful verification, compare
         // BOTH the rekor key AND the publisher key to the SDK built-in
         // baseline by SPKI DER. A mismatch is logged but NOT rejected
@@ -583,37 +587,8 @@ async fn resolve_and_authenticate(
     Ok(ResolveStatus::Verified)
 }
 
-/// Verify the DSSE publisher signature carried in a Rekor v1 entry body
-/// against the response-supplied `entry_verifier` public key. The signature
-/// (`body.spec.signatures[0].signature`, base64) is verified over
-/// `sha256(DSSEPAE(canonical_manifest))`; `VerifyingKey::verify` hashes the PAE
-/// with SHA-256 internally, which is equivalent to
-/// `h := sha256(pae); ecdsa.VerifyASN1(pub, h, sig)`. Returns `Err` on any
-/// decode/parse/verify failure (the caller's `inner` closure maps `Err`→`None`
-/// → fail-closed `Ok(Bool(false))`, per the fallback contract).
-#[cfg(feature = "crypto-rustcrypto")]
-fn verify_entry_dsse_signature(
-    entry: &rekor_v1::RekorEntry,
-    publisher_pem: &str,
-    canonical_manifest: &[u8],
-) -> Result<()> {
-    use anyhow::Context;
-    use base64::Engine;
-
-    let body = rekor_v1::decode_rekor_body(entry)?;
-    let sigs = body
-        .spec
-        .signatures
-        .as_ref()
-        .context("Rekor body has no DSSE signatures")?;
-    let sig_str = sigs
-        .first()
-        .context("Rekor body has zero DSSE signatures")?;
-    verify_dsse_publisher_signature(publisher_pem, canonical_manifest, &sig_str.signature)
-}
-
-/// Core DSSE publisher-signature verification shared by the artifact-server
-/// primary path (`verify_entry_dsse_signature`) and the on-demand rekor fallback
+/// Core DSSE publisher-signature verification for the artifact-server primary
+/// path and the on-demand rekor fallback
 /// (`fetch_rekor_on_demand_host_await`, which has the extracted signature
 /// string from `authenticate_entry`). Verifies the base64-decoded DER ECDSA
 /// signature over `sha256(DSSEPAE(canonical_manifest))` with the P-256
@@ -811,7 +786,7 @@ mod tests {
 
     /// The DSSE publisher PEM that signed the fixture's DSSE envelope (the
     /// same key the fixture carries in `body.spec.signatures[0].verifier`).
-    /// `verify_entry_dsse_signature` verifies
+    /// `verify_dsse_publisher_signature` verifies
     /// `body.spec.signatures[0].signature` over
     /// `sha256(DSSEPAE(canonical_manifest))` with this key.
     const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";

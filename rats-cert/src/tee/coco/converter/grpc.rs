@@ -9,7 +9,7 @@ use super::super::evidence::{
     tee_to_string, AttestationServiceHashAlgo, CocoAsToken, CocoEvidence,
 };
 use crate::errors::*;
-use crate::tee::coco::converter::{convert_additional_evidence, CoCoNonce};
+use crate::tee::coco::converter::convert_additional_evidence;
 use crate::tee::GenericConverter;
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -75,7 +75,7 @@ impl CocoGrpcConverter {
 impl GenericConverter for CocoGrpcConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
-    type Nonce = CoCoNonce;
+    type Nonce = String;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!(
@@ -97,7 +97,7 @@ impl GenericConverter for CocoGrpcConverter {
         tracing::warn!(
             "Connected to an grpc-as instance that does not support challenge token retrieval; falling back to dummy nonce. This may compromise freshness guarantees of evidence."
         );
-        Ok(CoCoNonce::Jwt("dummy nonce".to_string()))
+        Ok("dummy nonce".to_string())
     }
 }
 

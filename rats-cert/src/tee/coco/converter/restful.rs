@@ -15,7 +15,6 @@ use serde_json::Value;
 use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use crate::errors::*;
 use crate::tee::coco::converter::convert_additional_evidence;
-use crate::tee::coco::converter::CoCoNonce;
 use crate::tee::GenericConverter;
 
 #[derive(Debug, Clone, Copy)]
@@ -138,7 +137,7 @@ mod as_api {
 impl GenericConverter for CocoRestfulConverter {
     type InEvidence = CocoEvidence;
     type OutEvidence = CocoAsToken;
-    type Nonce = CoCoNonce;
+    type Nonce = String;
 
     async fn convert(&self, in_evidence: &Self::InEvidence) -> Result<Self::OutEvidence> {
         tracing::debug!(
@@ -179,7 +178,7 @@ impl GenericConverter for CocoRestfulConverter {
                     tracing::warn!(
                         "Connected to an older version of restful-as that does not support challenge token retrieval; falling back to dummy nonce. This may compromise freshness guarantees of evidence."
                     );
-                    return Ok(CoCoNonce::Jwt("dummy nonce".to_string()));
+                    return Ok("dummy nonce".to_string());
                 }
 
                 return Err(Error::AttestationServiceChallengeHttpResponseError {
@@ -193,7 +192,7 @@ impl GenericConverter for CocoRestfulConverter {
         let challenge_response = serde_json::from_str::<GetChallengeResponse>(&body_text)
             .map_err(Error::ParseChallengeResponseFailed)?;
 
-        Ok(CoCoNonce::Jwt(challenge_response.extra_params.jwt))
+        Ok(challenge_response.extra_params.jwt)
     }
 }
 
@@ -336,7 +335,7 @@ impl CocoRestfulConverter {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetChallengeResponse {
+struct GetChallengeResponse {
     pub nonce: String,
     #[serde(rename = "extra_params")]
     #[serde(alias = "extra-params")]
@@ -344,6 +343,6 @@ pub struct GetChallengeResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ExtraParams {
+struct ExtraParams {
     pub jwt: String,
 }
