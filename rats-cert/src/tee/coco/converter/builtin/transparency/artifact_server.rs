@@ -738,6 +738,10 @@ pub(crate) fn invalidate_host_await_caches_for_test() {
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
     use super::*;
+    use crate::tee::coco::converter::builtin::policies::test_support::{
+        cmaas_transparency_tuple, fixtures, invoke_extension, rekor_entries_body,
+        DSSE_PUBLISHER_PUB_KEY_PEM, SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+    };
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -772,24 +776,9 @@ mod tests {
     // Reuse the existing rekor_v1 fixture entry to build a mock
     // /api/v1/log/entries response: the wire format is `{uuid: entry}`.
     fn rekor_entries_response_body() -> String {
-        let raw = include_str!("../tests/fixtures/rekor_v1_entry.json");
-        let uuid = "00000000-0000-0000-0000-000000000000";
-        serde_json::json!({ uuid: serde_json::from_str::<serde_json::Value>(raw).unwrap() })
-            .to_string()
+        let entry: serde_json::Value = serde_json::from_str(fixtures::REKOR_V1_ENTRY_JSON).unwrap();
+        rekor_entries_body(&entry)
     }
-
-    /// The Sigstore Rekor v1 public key PEM (checkpoint + SET verification key).
-    /// The fixture entry's `logID` == `sha256(SPKI)` of this key, so
-    /// `authenticate_entry` (logID + checkpoint + inclusion + SET) verifies
-    /// against it.
-    const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
-
-    /// The DSSE publisher PEM that signed the fixture's DSSE envelope (the
-    /// same key the fixture carries in `body.spec.signatures[0].verifier`).
-    /// `verify_dsse_publisher_signature` verifies
-    /// `body.spec.signatures[0].signature` over
-    /// `sha256(DSSEPAE(canonical_manifest))` with this key.
-    const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
 
     /// A manifest that does NOT hash to the fixture entry's payloadHash.
     /// Used to assert the *mismatch* path (bool false) while still exercising
@@ -799,18 +788,6 @@ mod tests {
     /// but authentication of the fixture entry succeeds (real crypto), so the
     /// authenticated payload_hash is cached.
     const DUMMY_MISMATCH_MANIFEST: &str = r#"{"schemaVersion":"1.0.0","measurements":[]}"#;
-
-    /// Call an `ExtensionFunction` closure the same way the regorus VM does:
-    /// the closure takes an owned `regorus::Value` and returns a boxed future.
-    /// Clone the Arc, hand over the Value, await, and unwrap the Result so a
-    /// host-side error surfaces as a test failure (not a silent `false`).
-    async fn invoke_extension(
-        hv: &attestation_service::policy_engine::opa::ExtensionFunction,
-        arg: regorus::Value,
-    ) -> regorus::Value {
-        let hv = hv.clone();
-        hv(arg).await.expect("host-await call must succeed")
-    }
 
     #[tokio::test]
     async fn fetch_rekor_on_demand_caches_after_first_hit() {
@@ -879,19 +856,12 @@ mod tests {
     /// release manifest exercises the full fetch → authenticate →
     /// payloadHash-compare → `Ok(Bool(true))` happy path.
     fn cmaas_fetch_rekor_response_body() -> (String, String, i64) {
-        let evidence: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
-        ))
-        .unwrap();
-        let manifest = evidence["transparency"]["release_manifest"].clone();
-        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
-        let log_index = evidence["transparency"]["log_entries"][0]["log_entry"]["logIndex"]
-            .as_i64()
-            .unwrap();
-        let uuid = "00000000-0000-0000-0000-000000000000";
-        let body = serde_json::json!({ uuid: log_entry }).to_string();
-        let manifest_json = serde_json::to_string(&manifest).unwrap();
-        (body, manifest_json, log_index)
+        let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
+        (
+            rekor_entries_body(&log_entry),
+            manifest.to_string(),
+            log_index,
+        )
     }
 
     /// True-path: `tng.fetch_rekor_on_demand` returns `Ok(Bool(true))` when a
@@ -981,16 +951,7 @@ mod tests {
     /// both `authenticate_entry` (real inclusion/checkpoint/SET crypto) and the
     /// payloadHash comparison → `true`.
     fn cmaas_resolve_triple() -> (serde_json::Value, serde_json::Value, String) {
-        let evidence: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
-        ))
-        .unwrap();
-        let manifest = evidence["transparency"]["release_manifest"].clone();
-        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
-        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
         (manifest, log_entry, entry_url)
     }
 
@@ -1038,7 +999,7 @@ mod tests {
             &manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         Mock::given(method("POST"))
@@ -1099,7 +1060,7 @@ mod tests {
             &mismatch_manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         Mock::given(method("POST"))
@@ -1145,14 +1106,14 @@ mod tests {
                     "type": "rekor-v1",
                     "url": entry_url,
                     "log_entry": log_entry,
-                    "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                    "entry_verifier": {"type": "public_key", "content": DSSE_PUBLISHER_PUB_KEY_PEM},
                     "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
                 },
                 {
                     "type": "rekor-v1",
                     "url": entry_url,
                     "log_entry": log_entry,
-                    "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
+                    "entry_verifier": {"type": "public_key", "content": DSSE_PUBLISHER_PUB_KEY_PEM},
                     "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
                 }
             ]
@@ -1237,8 +1198,8 @@ mod tests {
             &manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM, // correct publisher key
-            LOG_ENTRY_PUB_KEY_PEM, // wrong rekor key
+            DSSE_PUBLISHER_PUB_KEY_PEM, // correct publisher key
+            DSSE_PUBLISHER_PUB_KEY_PEM, // wrong rekor key
         );
         Mock::given(method("POST"))
             .and(path("/api/v1/transparency/resolve"))
@@ -1273,7 +1234,7 @@ mod tests {
             &manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         Mock::given(method("POST"))
@@ -1317,7 +1278,7 @@ mod tests {
             &manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         Mock::given(method("POST"))
@@ -1443,7 +1404,7 @@ mod tests {
             &manifest,
             &log_entry,
             &entry_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         let server_a = MockServer::start().await;
@@ -1823,7 +1784,7 @@ mod tests {
             &manifest,
             &log_entry,
             openanolis_url,
-            LOG_ENTRY_PUB_KEY_PEM,
+            DSSE_PUBLISHER_PUB_KEY_PEM,
             SIGSTORE_REKOR_V1_PUB_KEY_PEM,
         );
         Mock::given(method("POST"))

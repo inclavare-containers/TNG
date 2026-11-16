@@ -2852,35 +2852,7 @@ mod tests {
         // Parse the real CC event log through the production `eventlog` crate.
         // `CcEventLog` serializes with the `uefi_event_logs` field name, so its
         // JSON IS the Rego input's `tdx.uefi_event_logs` array.
-        let ccel_bytes =
-            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
-                .expect("read real PAI event-log fixture");
-        let ccel: eventlog::CcEventLog =
-            ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let parsed = serde_json::to_value(&ccel)
-            .expect("serialize parsed CC event log")
-            .as_object()
-            .expect("parsed event log is an object")
-            .clone();
-
-        // Mirror the synthetic tests' quote shape: recognized TDX header and
-        // non-debug attributes, with the parsed event log spliced in.
-        let mut tdx = serde_json::Map::new();
-        tdx.insert(
-            "quote".to_string(),
-            serde_json::json!({
-                "header": {
-                    "tee_type": "81000000",
-                    "vendor_id": "939a7233f79c4ca9940a0db3957f0607",
-                },
-                "body": { "td_attributes": "0000001000000000" },
-            }),
-        );
-        tdx.insert(
-            "uefi_event_logs".to_string(),
-            parsed["uefi_event_logs"].clone(),
-        );
-        let input = serde_json::json!({ "tdx": tdx }).to_string();
+        let input = super::super::test_support::pai_tdx_input();
 
         // A policy pinning the real busybox digest affirms; a tampered pin
         // rejects on the executables dimension.

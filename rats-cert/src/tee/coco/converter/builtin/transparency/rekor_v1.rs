@@ -583,9 +583,10 @@ pub async fn fetch_trusted_payload_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tee::coco::converter::builtin::policies::test_support::fixtures;
 
     fn fixture_entry() -> RekorEntry {
-        let raw = include_str!("../tests/fixtures/rekor_v1_entry.json");
+        let raw = fixtures::REKOR_V1_ENTRY_JSON;
         // The fixture is the raw entry object (body/integratedTime/logID/logIndex/verification).
         serde_json::from_str(raw).expect("parse fixture entry")
     }
@@ -699,7 +700,7 @@ mod tests {
     /// `RekorEntry`. Used to construct malformed entries for the error-path
     /// tests below without needing a full wire fixture for each case.
     fn mutated_fixture_entry(mutate: impl FnOnce(&mut serde_json::Value)) -> RekorEntry {
-        let raw = include_str!("../tests/fixtures/rekor_v1_entry.json");
+        let raw = fixtures::REKOR_V1_ENTRY_JSON;
         let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
         mutate(&mut v);
         serde_json::from_value(v).expect("mutated entry must still deserialize")

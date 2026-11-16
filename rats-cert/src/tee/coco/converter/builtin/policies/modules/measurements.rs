@@ -327,7 +327,9 @@ image_repo_name(ref) := name if {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::test_support::eval_policy_vector;
+    use super::super::super::test_support::{
+        eval_policy_vector, pai_event_log_events, tdx_input_with_body,
+    };
     use super::*;
     use serde_json::json;
 
@@ -982,33 +984,7 @@ mod tests {
     async fn rootfs_cc_extracts_real_pai_event_log() {
         let policy = rootfs_policy(ROOTFS_ROOT);
 
-        let ccel_bytes =
-            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
-                .expect("read real PAI event-log fixture");
-        let ccel: eventlog::CcEventLog =
-            ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let parsed = serde_json::to_value(&ccel)
-            .expect("serialize parsed CC event log")
-            .as_object()
-            .expect("parsed event log is an object")
-            .clone();
-
-        let mut tdx = serde_json::Map::new();
-        tdx.insert(
-            "quote".to_string(),
-            json!({
-                "header": {
-                    "tee_type": "81000000",
-                    "vendor_id": "939a7233f79c4ca9940a0db3957f0607",
-                },
-                "body": {"mr_td": "a".repeat(96)},
-            }),
-        );
-        tdx.insert(
-            "uefi_event_logs".to_string(),
-            parsed["uefi_event_logs"].clone(),
-        );
-        let input = json!({"tdx": tdx}).to_string();
+        let input = tdx_input_with_body(json!({"mr_td": "a".repeat(96)}), &pai_event_log_events());
 
         assert_eq!(
             eval_policy_vector(&policy, &input).await,

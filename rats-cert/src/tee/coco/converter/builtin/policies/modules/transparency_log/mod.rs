@@ -421,8 +421,17 @@ pub(super) fn build_entry_rules(
 #[cfg(test)]
 mod tests {
     use super::super::super::load_policy;
-    use super::super::super::test_support::eval_policy_vector;
-    use super::super::{build_modules_policy_with_resolved, parse_module_groups, Module};
+    use super::super::super::test_support::fixtures;
+    use super::super::super::test_support::{
+        aael_event, aael_event_for_reference, artifact_entry_value,
+        cmaas_fixture_quote_and_eventlog, cmaas_transparency_tuple, eval_policy_vector, hex64,
+        hex96, jcs_compact, manifest, pai_tdx_input, rekor_entries_body, rekor_entry_value,
+        render_modules_json as render, render_rekor, rootfs_event, sha256_hex, td_payload_event,
+        tdx_input, tdx_quote_input, transparency_entry, TDX_VENDOR_ID,
+    };
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::super::test_support::{resolve_response_body, resolved_from_manifest};
+    use super::super::{parse_module_groups, Module};
     use super::*;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
@@ -439,178 +448,16 @@ mod tests {
     use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
     use serde_json::{json, Value};
     use serial_test::serial;
-    use sha2::Digest;
-
-    const TDX_VENDOR_ID: &str = "939a7233f79c4ca9940a0db3957f0607";
 
     // --- helpers -----------------------------------------------------------
 
-    fn hex96(ch: char) -> String {
-        ch.to_string().repeat(96)
-    }
-
-    fn hex64(ch: char) -> String {
-        ch.to_string().repeat(64)
-    }
-
-    fn sha256_hex(bytes: &[u8]) -> String {
-        let mut h = sha2::Sha256::new();
-        sha2::Digest::update(&mut h, bytes);
-        hex::encode(sha2::Digest::finalize(h))
-    }
-
-    /// Canonical (RFC 8785 JCS) JSON, the form `json.marshal` produces and the
-    /// form the publisher signs over.
-    fn jcs_compact(value: &Value) -> String {
-        rekor_v1::canonical_json(value).expect("canonical JSON serialize")
-    }
-
-    fn manifest(schema: &str, measurements: &[(&str, &str)]) -> Value {
-        let measurements: Vec<Value> = measurements
-            .iter()
-            .map(|(t, v)| json!({"type": t, "value": v}))
-            .collect();
-        json!({"schemaVersion": schema, "measurements": measurements})
-    }
-
-    fn transparency_entry(value: Value) -> Value {
-        json!({"type": "transparency_log", "value": value})
-    }
-
-    fn rekor_entry_value(published_measurements: &[&str], log_index: i64) -> Value {
-        json!({
-            "publishedMeasurements": published_measurements,
-            "schemaVersion": "1.0.0",
-            "services": [{
-                "type": "rekor-v1",
-                "logUrl": "https://rekor.example.com",
-                "logIndex": log_index,
-            }],
-        })
-    }
-
-    fn artifact_entry_value(
-        artifact_url: &str,
-        log_url: &str,
-        fallback: Option<(&str, i64)>,
-    ) -> Value {
-        let mut value = json!({
-            "publishedMeasurements": ["container.image.cmaas-runtime"],
-            "schemaVersion": "1.0.0",
-            "services": [{
-                "type": "artifact-server",
-                "url": artifact_url,
-                "logServices": [{"type": "rekor-v1", "url": log_url}],
-            }],
-        });
-        if let Some((fallback_url, fallback_index)) = fallback {
-            value["fallbackPublishedMeasurements"] = json!(["container.image.cmaas-runtime"]);
-            value["fallbackServices"] = json!([{
-                "type": "rekor-v1",
-                "logUrl": fallback_url,
-                "logIndex": fallback_index,
-            }]);
-        }
-        value
-    }
-
-    /// Render a modules policy from an entries JSON value and already-resolved
-    /// rekor data (one slot per transparency entry, in flatten order).
-    fn render(entries: Value, resolved: &[Option<ResolvedRekor>]) -> String {
-        let cfg: ModuleGroupsConfig =
-            serde_json::from_value(entries).expect("modules config parses");
-        build_modules_policy_with_resolved(&cfg, resolved).expect("render modules policy")
-    }
-
-    fn render_rekor(published_measurements: &[&str], resolved: &ResolvedRekor) -> String {
-        render(
-            json!([transparency_entry(rekor_entry_value(
-                published_measurements,
-                1
-            ))]),
-            &[Some(resolved.clone())],
-        )
-    }
-
-    /// Build the resolved rekor data for a manifest: its JCS payload hash and a
-    /// DSSE signature bound to the test publisher key.
-    #[cfg(feature = "crypto-rustcrypto")]
-    fn resolved_from_manifest(manifest: &Value) -> ResolvedRekor {
-        let payload_hash = sha256_hex(jcs_compact(manifest).as_bytes());
-        let (dsse_signature, publisher_key) = sign_dsse_for_manifest(manifest);
-        ResolvedRekor {
-            payload_hash,
-            dsse_signature,
-            publisher_key,
-        }
-    }
-
-    /// A TDX appraisal input. `mr_td` is included only when given;
-    /// `td_attributes` defaults to the non-debug value used throughout these
-    /// tests.
-    fn tdx_quote_input(mr_td: Option<&str>, td_attributes: &str, events: &[Value]) -> String {
-        let mut body = json!({"td_attributes": td_attributes});
-        if let Some(mr_td) = mr_td {
-            body["mr_td"] = json!(mr_td);
-        }
-        json!({
-            "tdx": {
-                "quote": {
-                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
-                    "body": body,
-                },
-                "uefi_event_logs": events,
-            }
-        })
-        .to_string()
-    }
-
-    fn tdx_input(events: &[Value]) -> String {
-        tdx_quote_input(None, "0000001000000000", events)
-    }
-
-    fn aael_event_for_reference(reference: &str, digest: &str) -> Value {
-        json!({
-            "type_name": "EV_EVENT_TAG",
-            "details": {
-                "unicode_name": "AAEL",
-                "data": {
-                    "domain": "alibabacloud.com",
-                    "operation": "kangaroo/pull-image",
-                    "content": {
-                        "reference": reference,
-                        "digest": digest,
-                    },
-                },
-            },
-        })
-    }
-
-    fn aael_event(digest: &str) -> Value {
-        aael_event_for_reference("registry.example.com/ns/cmaas-runtime:latest", digest)
-    }
-
-    fn td_payload_event(event_b64: &str, digest: &str, index: i64) -> Value {
-        json!({
-            "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
-            "details": {"string": "td_payload"},
-            "event": event_b64,
-            "digests": [{"alg": "SHA-384", "digest": digest}],
-            "index": index,
-        })
-    }
-
-    /// A `td_payload_info` platform-config-flags event at RTMR1 whose cmdline
-    /// carries one `verity-root` dm-mod.create mapping for `root`.
-    fn rootfs_event(root: &str) -> Value {
-        json!({
-            "type_name": "EV_PLATFORM_CONFIG_FLAGS",
-            "details": {"string": format!(
-                "td_payload_info reboot=k root=/dev/vda1 dm-mod.create=\"verity-root,,,ro,0 1011712 verity 1 /dev/vda1 /dev/vda2 4096 4096 126464 0 sha256 {root} {tail};\"",
-                tail = "0".repeat(64)
-            )},
-            "index": 2,
-        })
+    /// The real PAI AAEL pull-image event resolves to repo `cmaas-runtime`,
+    /// whose digest the fixture manifest carries.
+    fn cmaas_tdx_input(manifest: &Value) -> String {
+        let digest = manifest["measurements"][0]["value"]
+            .as_str()
+            .expect("fixture manifest measurement value");
+        tdx_input(&[aael_event(digest)])
     }
 
     // --- bundled templates --------------------------------------------------
@@ -2014,30 +1861,7 @@ mod tests {
         // firmware-blob2 event at RTMR1 in `tdx_CCEL_data_pai`.
         let kernel = "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
 
-        let ccel_bytes =
-            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
-                .expect("read real PAI event-log fixture");
-        let ccel: eventlog::CcEventLog =
-            ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let parsed = serde_json::to_value(&ccel)
-            .expect("serialize parsed CC event log")
-            .as_object()
-            .expect("parsed event log is an object")
-            .clone();
-
-        let mut tdx = serde_json::Map::new();
-        tdx.insert(
-            "quote".to_string(),
-            json!({
-                "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
-                "body": {"td_attributes": "0000001000000000"},
-            }),
-        );
-        tdx.insert(
-            "uefi_event_logs".to_string(),
-            parsed["uefi_event_logs"].clone(),
-        );
-        let input = json!({"tdx": tdx}).to_string();
+        let input = pai_tdx_input();
 
         let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
         let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
@@ -2066,14 +1890,14 @@ mod tests {
         let logged = manifest("1.0.0", &[("rootfs.cc", ROOT)]);
         let policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&logged));
 
-        let ok = tdx_input(&[rootfs_event(ROOT)]);
+        let ok = tdx_input(&[rootfs_event(Some(2), ROOT)]);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
             (2, 2, 2, 2),
             "a matching rootfs measurement must affirm file_system"
         );
 
-        let bad = tdx_input(&[rootfs_event(TAMPERED)]);
+        let bad = tdx_input(&[rootfs_event(Some(2), TAMPERED)]);
         assert_eq!(
             eval_policy_vector(&policy, &bad).await,
             (2, 2, 2, 97),
@@ -2104,11 +1928,15 @@ mod tests {
         assert!(rootfs_policy.contains("group_0_file_system_ok if {"));
         assert!(!rootfs_policy.contains("group_0_executables_ok"));
         assert_eq!(
-            eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(&root)])).await,
+            eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(Some(2), &root)])).await,
             (2, 2, 2, 2)
         );
         assert_eq!(
-            eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(&hex64('c'))])).await,
+            eval_policy_vector(
+                &rootfs_policy,
+                &tdx_input(&[rootfs_event(Some(2), &hex64('c'))])
+            )
+            .await,
             (2, 2, 2, 97),
             "a rootfs-only entry must not move executables"
         );
@@ -2130,7 +1958,7 @@ mod tests {
         assert!(mixed_policy.contains("group_0_executables_ok if {"));
 
         let both = tdx_input(&[
-            rootfs_event(&root),
+            rootfs_event(Some(2), &root),
             td_payload_event(event_32mib, &kernel, 2),
         ]);
         assert_eq!(
@@ -2145,7 +1973,7 @@ mod tests {
             (97, 2, 2, 97),
             "a mixed entry that cannot reconstruct rootfs rejects both dimensions"
         );
-        let no_kernel = tdx_input(&[rootfs_event(&root)]);
+        let no_kernel = tdx_input(&[rootfs_event(Some(2), &root)]);
         assert_eq!(
             eval_policy_vector(&mixed_policy, &no_kernel).await,
             (97, 2, 2, 97),
@@ -2162,30 +1990,7 @@ mod tests {
         let image_digest =
             "sha256:16ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
 
-        let ccel_bytes =
-            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
-                .expect("read real PAI event-log fixture");
-        let ccel: eventlog::CcEventLog =
-            ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let parsed = serde_json::to_value(&ccel)
-            .expect("serialize parsed CC event log")
-            .as_object()
-            .expect("parsed event log is an object")
-            .clone();
-
-        let mut tdx = serde_json::Map::new();
-        tdx.insert(
-            "quote".to_string(),
-            json!({
-                "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
-                "body": {"td_attributes": "0000001000000000"},
-            }),
-        );
-        tdx.insert(
-            "uefi_event_logs".to_string(),
-            parsed["uefi_event_logs"].clone(),
-        );
-        let input = json!({"tdx": tdx}).to_string();
+        let input = pai_tdx_input();
 
         let logged = manifest("1.0.0", &[("container.image.busybox", image_digest)]);
         let policy = render_rekor(
@@ -2373,29 +2178,7 @@ mod tests {
         const REAL_KERNEL_DIGEST: &str =
             "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
 
-        let ccel_bytes =
-            std::fs::read("src/tee/coco/converter/builtin/tests/fixtures/tdx_CCEL_data_pai")
-                .expect("read real PAI event-log fixture");
-        let ccel: eventlog::CcEventLog =
-            ccel_bytes.try_into().expect("parse real PAI CC event log");
-        let parsed = serde_json::to_value(&ccel)
-            .expect("serialize parsed CC event log")
-            .as_object()
-            .expect("parsed event log is an object")
-            .clone();
-        let mut tdx = serde_json::Map::new();
-        tdx.insert(
-            "quote".to_string(),
-            json!({
-                "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
-                "body": {"td_attributes": "0000001000000000"},
-            }),
-        );
-        tdx.insert(
-            "uefi_event_logs".to_string(),
-            parsed["uefi_event_logs"].clone(),
-        );
-        let input = json!({"tdx": tdx}).to_string();
+        let input = pai_tdx_input();
 
         let logged = manifest("1.0.0", &[("tdx.kernel", REAL_KERNEL_DIGEST)]);
         let transparency = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
@@ -2506,7 +2289,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[tokio::test]
     async fn transparency_log_rekor_dsse_verifies_against_builtin_publisher_key() {
         // Extract the real DSSE signature from the fixture entry.
-        let entry_raw = include_str!("../../../tests/fixtures/rekor_v1_entry.json");
+        let entry_raw = fixtures::REKOR_V1_ENTRY_JSON;
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -2582,7 +2365,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     fn verify_dsse_signature_validates_real_fixture_signature() {
         use p256::ecdsa::signature::Verifier;
 
-        let entry_raw = include_str!("../../../tests/fixtures/rekor_v1_entry.json");
+        let entry_raw = fixtures::REKOR_V1_ENTRY_JSON;
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -2776,52 +2559,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             err.to_string().contains("fallbackServices is empty"),
             "{err}"
         );
-    }
-
-    /// Load the evidence fixture and extract the matched
-    /// `(release_manifest, log_entry, entry_url, log_index)` tuple.
-    fn cmaas_transparency_tuple() -> (Value, Value, String, i64) {
-        let evidence: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
-        ))
-        .expect("parse evidence fixture");
-        let manifest = evidence["transparency"]["release_manifest"].clone();
-        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
-        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
-            .as_str()
-            .expect("entry url")
-            .to_string();
-        let log_index = log_entry["logIndex"].as_i64().expect("logIndex");
-        (manifest, log_entry, entry_url, log_index)
-    }
-
-    fn resolve_response_body(manifest: &Value, log_entry: &Value, entry_url: &str) -> String {
-        const LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
-        const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
-        json!({
-            "status": "resolved",
-            "release_manifest": manifest,
-            "log_entries": [{
-                "type": "rekor-v1",
-                "url": entry_url,
-                "log_entry": log_entry,
-                "entry_verifier": {"type": "public_key", "content": LOG_ENTRY_PUB_KEY_PEM},
-                "log_verifier": {"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}
-            }]
-        })
-        .to_string()
-    }
-
-    fn rekor_entries_body(log_entry: &Value) -> String {
-        let uuid = "00000000-0000-0000-0000-000000000000";
-        json!({ uuid: log_entry }).to_string()
-    }
-
-    fn cmaas_tdx_input(manifest: &Value) -> String {
-        let digest = manifest["measurements"][0]["value"]
-            .as_str()
-            .expect("fixture manifest measurement value");
-        tdx_input(&[aael_event(digest)])
     }
 
     async fn build_branch_b_policy(
@@ -3192,10 +2929,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             }
         });
 
-        let evidence: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
-        ))
-        .unwrap();
+        let evidence: Value =
+            serde_json::from_str(fixtures::CMAAS_EVIDENCE_WITH_REKOR_V1_TRANSPARENCY_JSON).unwrap();
         let manifest = evidence["transparency"]["release_manifest"].clone();
         let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
         let entry_url = evidence["transparency"]["log_entries"][0]["url"]
@@ -3327,18 +3062,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         };
         verifier.verify_evidence(&token, &ReportData::None).await?;
         Ok(())
-    }
-
-    fn cmaas_fixture_quote_and_eventlog() -> (String, String) {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/cmaas_evidence_with_rekor_v1_transparency.json"
-        ))
-        .expect("parse evidence fixture");
-        let ev = &fixture["evidence"];
-        (
-            ev["quote"].as_str().expect("quote").to_string(),
-            ev["cc_eventlog"].as_str().expect("cc_eventlog").to_string(),
-        )
     }
 
     fn build_cmaas_evidence(quote: &str, cc_eventlog: &str) -> CocoEvidence {
@@ -3475,10 +3198,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn secure_proxy_readme_json_round_trips() {
-        let json = std::fs::read_to_string(
-            "src/tee/coco/converter/builtin/tests/fixtures/secure_proxy_artifact_server_config.json",
-        )
-        .expect("read fixture");
+        let json = fixtures::SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON;
         let policy: PolicyConfig = serde_json::from_str(&json).expect("parse into PolicyConfig");
         let PolicyConfig::Modules { modules } = &policy else {
             panic!("fixture must be a modules policy");
@@ -3515,37 +3235,5 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             format!("{err:?}").contains("exactly one rekor-v1 service"),
             "{err:?}"
         );
-    }
-
-    // --- DSSE signing helpers ----------------------------------------------
-
-    /// Sign a manifest with a fixed test P-256 key and return
-    /// `(dsse_signature_b64, publisher_key_pem)`.
-    #[cfg(feature = "crypto-rustcrypto")]
-    fn sign_dsse_for_manifest(manifest: &Value) -> (String, String) {
-        use p256::ecdsa::signature::Signer;
-
-        // Fixed deterministic test signing key (RFC 6979 nonce).
-        let secret_bytes: [u8; 32] = [0x42; 32];
-        let signing_key = p256::ecdsa::SigningKey::from_bytes((&secret_bytes).into())
-            .expect("fixed test key valid");
-        let payload = jcs_compact(manifest);
-        let pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload.as_bytes());
-        let sig: p256::ecdsa::Signature = signing_key.sign(&pae);
-        let sig_b64 = BASE64_STANDARD.encode(sig.to_der());
-        let verifying_key = p256::ecdsa::VerifyingKey::from(&signing_key);
-        let sec1 = verifying_key.to_sec1_bytes();
-        // P-256 SPKI DER: SEQUENCE { AlgId(ecPublicKey, prime256v1),
-        // BIT STRING(0x00 || SEC1 point) }.
-        let prefix: [u8; 26] = [
-            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06,
-            0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
-        ];
-        let mut spki = Vec::with_capacity(prefix.len() + sec1.len());
-        spki.extend_from_slice(&prefix);
-        spki.extend_from_slice(&sec1);
-        let b64 = BASE64_STANDARD.encode(&spki);
-        let pem = format!("-----BEGIN PUBLIC KEY-----\n{b64}\n-----END PUBLIC KEY-----\n");
-        (sig_b64, pem)
     }
 }
