@@ -214,7 +214,6 @@ impl ModuleEntryConfig {
                 value_obj()?;
                 let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
                     .context("invalid transparency_log config")?;
-                transparency_log::validate_entry(&cfg)?;
                 Ok(Module::TransparencyLog(cfg))
             }
         }

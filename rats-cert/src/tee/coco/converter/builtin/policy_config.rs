@@ -4,6 +4,8 @@ use reference_value_provider_service::extractors::extractor_modules::sample::Pro
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use serde::{Deserialize, Serialize};
 
+use super::policies::modules::families;
+
 /// Configuration for policy loading
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -46,6 +48,38 @@ pub enum PolicyConfig {
     Path { path: String },
 }
 
+impl PolicyConfig {
+    /// Whether this policy's verification rules may consume external
+    /// reference values. The bundled templates and `modules` pin or anchor
+    /// their baselines directly, so a non-empty `reference_values` list would
+    /// be silently inert; construction rejects it instead. `inline` and `path`
+    /// policies are user content and may query the reference-value store.
+    pub fn accepts_reference_values(&self) -> bool {
+        match self {
+            Self::Inline { .. } => true,
+            #[cfg(not(wasm))]
+            Self::Path { .. } => true,
+            Self::HardwareOnly
+            | Self::HardwareOnlyStrict
+            | Self::TrustAll
+            | Self::Modules { .. } => false,
+        }
+    }
+
+    /// Short policy name used in configuration errors.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::HardwareOnly => "hardware_only",
+            Self::HardwareOnlyStrict => "hardware_only_strict",
+            Self::TrustAll => "trust_all",
+            Self::Modules { .. } => "modules",
+            Self::Inline { .. } => "inline",
+            #[cfg(not(wasm))]
+            Self::Path { .. } => "path",
+        }
+    }
+}
+
 /// Default schema version for a transparency-log module entry.
 fn default_schema_version() -> String {
     "1.0.0".to_string()
@@ -62,26 +96,199 @@ fn default_schema_version() -> String {
 /// the reconstructed manifest keeps a repeated entry for that type; every other
 /// type contributes exactly one entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "TransparencyLogEntryConfigRepr")]
 pub struct TransparencyLogEntryConfig {
     /// Non-empty measurement types. At appraisal the policy
     /// reconstructs the manifest from the actual TDX measurement values and
     /// compares it to the logged reference.
     #[serde(rename = "publishedMeasurements")]
     pub published_measurements: Vec<String>,
-    #[serde(rename = "schemaVersion", default = "default_schema_version")]
+    #[serde(rename = "schemaVersion")]
     pub schema_version: String,
     pub services: Vec<TransparencyServiceConfig>,
     /// Fallback measurement types used when the artifact-server primary
     /// cannot resolve a measurement; must be a subset of
     /// `publishedMeasurements`.
-    #[serde(rename = "fallbackPublishedMeasurements", default)]
+    #[serde(rename = "fallbackPublishedMeasurements")]
     pub fallback_published_measurements: Option<Vec<String>>,
     /// Fallback transparency-log services (rekor-v1 only) used when the
     /// artifact-server primary cannot resolve a measurement; only supported
     /// when the primary service is an `artifact-server`.
-    #[serde(rename = "fallbackServices", default)]
+    #[serde(rename = "fallbackServices")]
     pub fallback_services: Option<Vec<TransparencyServiceConfig>>,
+}
+
+/// Deserialization mirror for [`TransparencyLogEntryConfig`]. The public type
+/// derives `Serialize`, so its field renames stay there; this mirror carries
+/// the defaults and `deny_unknown_fields` and feeds the validating conversion.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransparencyLogEntryConfigRepr {
+    #[serde(rename = "publishedMeasurements")]
+    published_measurements: Vec<String>,
+    #[serde(rename = "schemaVersion", default = "default_schema_version")]
+    schema_version: String,
+    services: Vec<TransparencyServiceConfig>,
+    #[serde(rename = "fallbackPublishedMeasurements", default)]
+    fallback_published_measurements: Option<Vec<String>>,
+    #[serde(rename = "fallbackServices", default)]
+    fallback_services: Option<Vec<TransparencyServiceConfig>>,
+}
+
+impl TryFrom<TransparencyLogEntryConfigRepr> for TransparencyLogEntryConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(repr: TransparencyLogEntryConfigRepr) -> anyhow::Result<Self> {
+        Self::try_new(
+            repr.published_measurements,
+            repr.schema_version,
+            repr.services,
+            repr.fallback_published_measurements,
+            repr.fallback_services,
+        )
+    }
+}
+
+impl TransparencyLogEntryConfig {
+    /// Construct a validated entry. Deserialization goes through this, and
+    /// callers that build one programmatically should use it too.
+    pub fn try_new(
+        published_measurements: Vec<String>,
+        schema_version: String,
+        services: Vec<TransparencyServiceConfig>,
+        fallback_published_measurements: Option<Vec<String>>,
+        fallback_services: Option<Vec<TransparencyServiceConfig>>,
+    ) -> anyhow::Result<Self> {
+        let cfg = Self {
+            published_measurements,
+            schema_version,
+            services,
+            fallback_published_measurements,
+            fallback_services,
+        };
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Check the entry's structural invariants. These run at policy load,
+    /// before any Rekor fetch or appraisal, so a malformed entry is a
+    /// configuration error rather than a panic downstream.
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.published_measurements.is_empty() {
+            anyhow::bail!("publishedMeasurements must be non-empty");
+        }
+        let mut seen_measurement_types = std::collections::HashSet::new();
+        for measurement_type in &self.published_measurements {
+            families::validate_published_type(measurement_type)?;
+            if !seen_measurement_types.insert(measurement_type) {
+                anyhow::bail!("duplicate publishedMeasurements type {measurement_type}");
+            }
+        }
+
+        if self.services.is_empty() {
+            anyhow::bail!("services must be non-empty");
+        }
+        let mut artifact_server = false;
+        for service in &self.services {
+            match service {
+                TransparencyServiceConfig::ArtifactServer {
+                    url, log_services, ..
+                } => {
+                    artifact_server = true;
+                    if self.services.len() != 1 {
+                        anyhow::bail!("artifact-server must be the only primary service");
+                    }
+                    if url.is_empty() {
+                        anyhow::bail!("artifact-server url is required");
+                    }
+                    if log_services.is_empty() {
+                        anyhow::bail!("artifact-server logServices non-empty");
+                    }
+                    let mut seen_log_services = std::collections::HashSet::new();
+                    for log_service in log_services {
+                        if log_service.type_ != "rekor-v1" {
+                            anyhow::bail!("artifact-server logServices type must be rekor-v1");
+                        }
+                        if log_service.url.is_empty() {
+                            anyhow::bail!("artifact-server logServices url required");
+                        }
+                        if !seen_log_services.insert((
+                            log_service.type_.clone(),
+                            log_service.url.trim_end_matches('/'),
+                        )) {
+                            anyhow::bail!("duplicate artifact-server logServices entry");
+                        }
+                    }
+                }
+                TransparencyServiceConfig::RekorV1 {
+                    log_url, log_index, ..
+                } => {
+                    if log_url.is_empty() {
+                        anyhow::bail!("rekor-v1 logUrl required");
+                    }
+                    if *log_index < 0 {
+                        anyhow::bail!("rekor-v1 logIndex must be >= 0");
+                    }
+                }
+            }
+        }
+
+        // A rekor-v1 primary is the entry's only service: it has no fallback
+        // and the renderer uses `services[0]` as the primary.
+        if !artifact_server && self.services.len() != 1 {
+            anyhow::bail!("services must contain exactly one rekor-v1 service");
+        }
+
+        match (
+            self.fallback_services.as_ref(),
+            self.fallback_published_measurements.as_ref(),
+        ) {
+            (None, Some(_)) => {
+                anyhow::bail!("fallbackPublishedMeasurements requires fallbackServices");
+            }
+            (None, None) => Ok(()),
+            (Some(fallback_services), _) => {
+                if !artifact_server {
+                    anyhow::bail!(
+                        "fallbackServices is only supported with an artifact-server primary"
+                    );
+                }
+                if fallback_services.is_empty() {
+                    anyhow::bail!("fallbackServices must be non-empty");
+                }
+                for service in fallback_services {
+                    match service {
+                        TransparencyServiceConfig::RekorV1 {
+                            log_url, log_index, ..
+                        } => {
+                            if log_url.is_empty() {
+                                anyhow::bail!("fallbackServices logUrl required");
+                            }
+                            if *log_index < 0 {
+                                anyhow::bail!("fallbackServices logIndex >= 0");
+                            }
+                        }
+                        _ => anyhow::bail!("fallbackServices must be rekor-v1"),
+                    }
+                }
+                if let Some(fallback_measurements) = &self.fallback_published_measurements {
+                    if fallback_measurements.is_empty() {
+                        anyhow::bail!("fallbackPublishedMeasurements non-empty");
+                    }
+                    let primary_types: std::collections::HashSet<&String> =
+                        self.published_measurements.iter().collect();
+                    for fallback_type in fallback_measurements {
+                        if !primary_types.contains(fallback_type) {
+                            anyhow::bail!(
+                                "fallbackPublishedMeasurements type {fallback_type} not in publishedMeasurements"
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// One entry in a `modules` attestation-policy group. `type` selects the
@@ -619,5 +826,114 @@ mod tests {
             },
             _ => panic!("Expected Slsa variant"),
         }
+    }
+
+    fn valid_rekor_entry() -> serde_json::Value {
+        json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.example.com",
+                "logIndex": 1,
+            }],
+        })
+    }
+
+    #[test]
+    fn transparency_log_entry_config_validates_on_deserialize() {
+        let cfg: TransparencyLogEntryConfig =
+            serde_json::from_value(valid_rekor_entry()).expect("valid entry parses");
+        // The schema version default still applies and the wire shape is
+        // unchanged.
+        assert_eq!(cfg.schema_version, "1.0.0");
+        let serialized = serde_json::to_value(&cfg).expect("serialize entry");
+        assert_eq!(serialized["schemaVersion"], "1.0.0");
+        assert!(serialized.get("fallbackServices").is_some());
+
+        // Structural invariants are rejected where the value is created, with
+        // no hand-built location strings.
+        for (value, message) in [
+            (
+                json!({"publishedMeasurements": [], "services": valid_rekor_entry()["services"]}),
+                "publishedMeasurements must be non-empty",
+            ),
+            (
+                json!({
+                    "publishedMeasurements": ["tdx.uki"],
+                    "services": valid_rekor_entry()["services"],
+                }),
+                "unsupported publishedMeasurements type",
+            ),
+            (
+                json!({
+                    "publishedMeasurements": ["tdx.td-shim"],
+                    "services": [],
+                }),
+                "services must be non-empty",
+            ),
+            (
+                json!({
+                    "publishedMeasurements": ["tdx.td-shim"],
+                    "services": [{
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.example.com",
+                        "logIndex": -1,
+                    }],
+                }),
+                "rekor-v1 logIndex must be >= 0",
+            ),
+            (
+                json!({
+                    "publishedMeasurements": ["tdx.td-shim"],
+                    "services": valid_rekor_entry()["services"],
+                    "fallbackPublishedMeasurements": ["tdx.td-shim"],
+                }),
+                "fallbackPublishedMeasurements requires fallbackServices",
+            ),
+        ] {
+            let error =
+                serde_json::from_value::<TransparencyLogEntryConfig>(value).expect_err(message);
+            assert!(error.to_string().contains(message), "{error}");
+        }
+
+        // The programmatic constructor applies the same check.
+        let error = TransparencyLogEntryConfig::try_new(
+            vec![],
+            "1.0.0".to_string(),
+            serde_json::from_value(valid_rekor_entry()["services"].clone())
+                .expect("services parse"),
+            None,
+            None,
+        )
+        .expect_err("empty publishedMeasurements must be rejected");
+        assert!(error
+            .to_string()
+            .contains("publishedMeasurements must be non-empty"));
+    }
+
+    #[test]
+    fn policy_config_accepts_reference_values_only_for_user_content() {
+        for policy in [
+            PolicyConfig::HardwareOnly,
+            PolicyConfig::HardwareOnlyStrict,
+            PolicyConfig::TrustAll,
+            PolicyConfig::Modules {
+                modules: ModuleGroupsConfig::default(),
+            },
+        ] {
+            assert!(
+                !policy.accepts_reference_values(),
+                "{policy:?} must reject external reference values"
+            );
+        }
+        assert!(PolicyConfig::Inline {
+            content: String::new(),
+        }
+        .accepts_reference_values());
+        #[cfg(not(wasm))]
+        assert!(PolicyConfig::Path {
+            path: String::new(),
+        }
+        .accepts_reference_values());
     }
 }

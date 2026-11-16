@@ -3,134 +3,6 @@
 
 use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
 use super::super::super::transparency::{artifact_server, rekor_v1};
-use super::families;
-
-/// Validate one `transparency_log` module entry. Runs at policy load, before
-/// any Rekor fetch or appraisal, so a malformed entry is a configuration error
-/// rather than a panic downstream.
-pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result<()> {
-    let published_measurements = cfg.published_measurements.as_slice();
-    if published_measurements.is_empty() {
-        anyhow::bail!("publishedMeasurements must be non-empty");
-    }
-    let mut seen_measurement_types = std::collections::HashSet::new();
-    for measurement_type in published_measurements {
-        families::parse_published_type(measurement_type)?;
-        if !seen_measurement_types.insert(measurement_type) {
-            anyhow::bail!("duplicate publishedMeasurements type {measurement_type}");
-        }
-    }
-
-    if cfg.services.is_empty() {
-        anyhow::bail!("services must be non-empty");
-    }
-    let mut artifact_server = false;
-    for (service_index, service) in cfg.services.iter().enumerate() {
-        match service {
-            TransparencyServiceConfig::ArtifactServer {
-                url,
-                log_services,
-                publisher_public_key_pem: _,
-            } => {
-                artifact_server = true;
-                if cfg.services.len() != 1 {
-                    anyhow::bail!("artifact-server must be the only primary service");
-                }
-                if url.is_empty() {
-                    anyhow::bail!("services[{service_index}] url is required");
-                }
-                if log_services.is_empty() {
-                    anyhow::bail!("services[{service_index}] logServices non-empty");
-                }
-                let mut seen_log_services = std::collections::HashSet::new();
-                for (log_service_index, log_service) in log_services.iter().enumerate() {
-                    if log_service.type_ != "rekor-v1" {
-                        anyhow::bail!(
-                            "services[{service_index}].logServices[{log_service_index}] type must be rekor-v1"
-                        );
-                    }
-                    if log_service.url.is_empty() {
-                        anyhow::bail!(
-                            "services[{service_index}].logServices[{log_service_index}] url required"
-                        );
-                    }
-                    if !seen_log_services.insert((
-                        log_service.type_.clone(),
-                        log_service.url.trim_end_matches('/'),
-                    )) {
-                        anyhow::bail!(
-                            "services[{service_index}].logServices[{log_service_index}] duplicate"
-                        );
-                    }
-                }
-            }
-            TransparencyServiceConfig::RekorV1 {
-                log_url, log_index, ..
-            } => {
-                if log_url.is_empty() {
-                    anyhow::bail!("services[{service_index}] logUrl required");
-                }
-                if *log_index < 0 {
-                    anyhow::bail!("services[{service_index}] logIndex must be >= 0");
-                }
-            }
-        }
-    }
-
-    // A rekor-v1 primary is the entry's only service: it has no fallback and
-    // the renderer uses `services[0]` as the primary.
-    if !artifact_server && cfg.services.len() != 1 {
-        anyhow::bail!("services must contain exactly one rekor-v1 service");
-    }
-
-    match (
-        cfg.fallback_services.as_ref(),
-        cfg.fallback_published_measurements.as_ref(),
-    ) {
-        (None, Some(_)) => {
-            anyhow::bail!("fallbackPublishedMeasurements requires fallbackServices");
-        }
-        (None, None) => return Ok(()),
-        (Some(fallback_services), _) => {
-            if !artifact_server {
-                anyhow::bail!("fallbackServices is only supported with an artifact-server primary");
-            }
-            if fallback_services.is_empty() {
-                anyhow::bail!("fallbackServices must be non-empty");
-            }
-            for (service_index, service) in fallback_services.iter().enumerate() {
-                match service {
-                    TransparencyServiceConfig::RekorV1 {
-                        log_url, log_index, ..
-                    } => {
-                        if log_url.is_empty() {
-                            anyhow::bail!("fallbackServices[{service_index}] logUrl required");
-                        }
-                        if *log_index < 0 {
-                            anyhow::bail!("fallbackServices[{service_index}] logIndex >= 0");
-                        }
-                    }
-                    _ => anyhow::bail!("fallbackServices[{service_index}] must be rekor-v1"),
-                }
-            }
-            if let Some(fallback_measurements) = &cfg.fallback_published_measurements {
-                if fallback_measurements.is_empty() {
-                    anyhow::bail!("fallbackPublishedMeasurements non-empty");
-                }
-                let validated_primary_types: std::collections::HashSet<&String> =
-                    published_measurements.iter().collect();
-                for fallback_type in fallback_measurements {
-                    if !validated_primary_types.contains(fallback_type) {
-                        anyhow::bail!(
-                            "fallbackPublishedMeasurements type {fallback_type} not in publishedMeasurements"
-                        );
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 /// The authenticated data a rekor-v1 primary contributes to an entry: the baked
 /// payloadHash plus the DSSE signature and publisher key used at appraisal.
@@ -399,7 +271,7 @@ mod tests {
     };
     #[cfg(feature = "crypto-rustcrypto")]
     use super::super::super::test_support::{resolve_response_body, resolved_from_manifest};
-    use super::super::{parse_module_groups, Module};
+    use super::super::{families, parse_module_groups, Module};
     use super::*;
     use crate::crypto::HashAlgo;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
@@ -555,7 +427,7 @@ mod tests {
 
     #[test]
     fn published_measurement_type_parses_each_supported_family() {
-        use super::families::MeasurementFamily;
+        use super::super::families::MeasurementFamily;
         assert_eq!(
             families::parse_published_type("tdx.td-shim").unwrap(),
             MeasurementFamily::TdxTdShim
@@ -653,7 +525,7 @@ mod tests {
                 "{measurement_type}"
             );
             assert!(
-                super::families::dimension_for_published_type(measurement_type).is_some(),
+                families::dimension_for_published_type(measurement_type).is_some(),
                 "{measurement_type} must map to an extraction family and dimension"
             );
         }
@@ -891,7 +763,7 @@ mod tests {
             "fallbackServices": [{"type": "rekor-v1", "logUrl": "", "logIndex": 1}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
-        .contains("fallbackServices[0] logUrl required"));
+        .contains("fallbackServices logUrl required"));
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",
@@ -899,7 +771,7 @@ mod tests {
             "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": -1}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
-        .contains("fallbackServices[0] logIndex >= 0"));
+        .contains("fallbackServices logIndex >= 0"));
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",

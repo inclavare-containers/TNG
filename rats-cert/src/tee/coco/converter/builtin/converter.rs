@@ -43,12 +43,11 @@ impl BuiltinCocoConverter {
         // so a non-empty external `reference_values` list would be silently
         // inert. Supplying one is a configuration error, rejected before any
         // state is built.
-        if !reference_values.is_empty() {
-            if let Some(policy_name) = Self::policy_without_reference_values(policy) {
-                return Err(Error::BuiltinPolicyTemplateFailed(anyhow::anyhow!(
-                    "attestation_policy \"{policy_name}\" does not accept external reference_values: its verification rules do not consume them"
-                )));
-            }
+        if !reference_values.is_empty() && !policy.accepts_reference_values() {
+            return Err(Error::BuiltinPolicyTemplateFailed(anyhow::anyhow!(
+                "attestation_policy \"{}\" does not accept external reference_values: its verification rules do not consume them",
+                policy.name()
+            )));
         }
 
         // Create AttestationService instance
@@ -141,21 +140,6 @@ impl BuiltinCocoConverter {
             #[cfg(test)]
             skip_runtime_data_check: false,
         })
-    }
-
-    /// Short policy name used in configuration errors, for the variants whose
-    /// verification rules do not consume reference values. `inline` and `path`
-    /// may read them, so they return `None`.
-    fn policy_without_reference_values(policy: &PolicyConfig) -> Option<&'static str> {
-        match policy {
-            PolicyConfig::HardwareOnly => Some("hardware_only"),
-            PolicyConfig::HardwareOnlyStrict => Some("hardware_only_strict"),
-            PolicyConfig::TrustAll => Some("trust_all"),
-            PolicyConfig::Modules { .. } => Some("modules"),
-            PolicyConfig::Inline { .. } => None,
-            #[cfg(not(wasm))]
-            PolicyConfig::Path { .. } => None,
-        }
     }
 
     /// Test-only builder: make `convert()` pass `runtime_data: None` to the

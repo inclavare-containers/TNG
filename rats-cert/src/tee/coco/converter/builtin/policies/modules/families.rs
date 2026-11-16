@@ -225,6 +225,12 @@ pub(super) fn parse_published_type(raw: &str) -> anyhow::Result<MeasurementFamil
     anyhow::bail!("unsupported publishedMeasurements type {raw}")
 }
 
+/// Validate a `transparency_log.publishedMeasurements` type where the caller
+/// only needs acceptance, not the family it selects.
+pub(crate) fn validate_published_type(raw: &str) -> anyhow::Result<()> {
+    parse_published_type(raw).map(|_| ())
+}
+
 /// The family a published type selects, without re-checking its spelling. Used
 /// to attribute a validated entry's dimensions and extraction rules.
 pub(super) fn family_for_published_type(raw: &str) -> Option<MeasurementFamily> {
