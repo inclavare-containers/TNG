@@ -1,7 +1,7 @@
 //! The `modules` attestation policy: entry parsing, validation, and Rego
 //! generation.
 
-use self::measurements::Families;
+use self::families::Families;
 use self::transparency_log::ResolvedRekor;
 use super::super::policy_config::{
     value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
@@ -12,7 +12,7 @@ use crate::errors::*;
 use anyhow::Context;
 use std::collections::BTreeSet;
 
-pub(crate) mod measurements;
+pub(crate) mod families;
 pub(crate) mod transparency_log;
 
 /// A parsed, validated measurement/posture module: the concrete variant the
@@ -64,82 +64,48 @@ pub(crate) enum Module {
 }
 
 impl Module {
-    /// The AR4SI dimensions this module gates. Measurements describe what the
-    /// platform executes, except the rootfs hash which describes the file
-    /// system; posture modules describe the hardware/TCB state. A
-    /// transparency-log entry can publish several measurement types, so it
-    /// gates every dimension those types imply.
+    /// The AR4SI dimensions this module gates. Measurement and posture
+    /// metadata come from the measurement-family registry; a transparency-log
+    /// entry gates every dimension its published types imply.
     fn dimensions(&self) -> std::collections::BTreeSet<Dimension> {
+        if let Some(family) = families::family_of_module(self) {
+            return std::iter::once(family.dimension()).collect();
+        }
         match self {
             Module::TransparencyLog(cfg) => cfg
                 .published_measurements
                 .iter()
-                .filter_map(|t| measurements::dimension_for_type(t))
+                .filter_map(|t| families::dimension_for_published_type(t))
                 .collect(),
-            Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu => {
-                std::iter::once(Dimension::Hardware).collect()
-            }
-            Module::RootfsCc { .. } => std::iter::once(Dimension::FileSystem).collect(),
-            _ => std::iter::once(Dimension::Executables).collect(),
+            _ => std::iter::once(Dimension::Hardware).collect(),
         }
     }
 }
 
 /// A module entry type, parsed from the raw `type` string in one place.
-/// A permanent unprefixed alias parses to the same variant as its canonical
-/// `com.alibabacloud.` spelling, so normalization and duplicate detection
-/// cannot disagree about what a spelling means.
+/// Measurement families come from the family registry, which owns every
+/// accepted spelling and its canonical form.
 enum EntryType<'a> {
     Tdx,
     Nvidia,
     AlibabaGpu,
-    TdShim,
-    Ovmf,
-    Kernel,
-    Uki,
-    RootfsCc,
-    ContainerImage { repo: &'a str },
-    AiModel { model_id: &'a str },
+    Measurement {
+        family: families::MeasurementFamily,
+        name: &'a str,
+    },
     TransparencyLog,
 }
 
 impl<'a> EntryType<'a> {
     fn parse(raw: &'a str) -> anyhow::Result<Self> {
-        // Vendor-prefixed canonical spellings first.
-        if raw == "com.alibabacloud.gpu" {
-            return Ok(Self::AlibabaGpu);
-        }
-        if let Some(repo) = raw.strip_prefix("com.alibabacloud.container.image.") {
-            return Ok(Self::ContainerImage { repo });
-        }
-        if let Some(model_id) = raw.strip_prefix("com.alibabacloud.ai.model.") {
-            return Ok(Self::AiModel { model_id });
-        }
-        if raw == "com.alibabacloud.rootfs.cc" {
-            return Ok(Self::RootfsCc);
-        }
-
-        // Unprefixed non-vendor types.
         match raw {
+            "com.alibabacloud.gpu" => Ok(Self::AlibabaGpu),
             "tdx" => Ok(Self::Tdx),
             "nvidia" => Ok(Self::Nvidia),
-            "tdx.td-shim" => Ok(Self::TdShim),
-            "tdx.ovmf" => Ok(Self::Ovmf),
-            "tdx.kernel" => Ok(Self::Kernel),
-            "tdx.uki" => Ok(Self::Uki),
-            "rootfs.cc" => Ok(Self::RootfsCc),
             "transparency_log" => Ok(Self::TransparencyLog),
-            _ => {
-                // Permanent unprefixed aliases of the vendor-prefixed
-                // measurement families.
-                if let Some(repo) = raw.strip_prefix("container.image.") {
-                    Ok(Self::ContainerImage { repo })
-                } else if let Some(model_id) = raw.strip_prefix("ai.model.") {
-                    Ok(Self::AiModel { model_id })
-                } else {
-                    Err(unknown_module_type(raw))
-                }
-            }
+            _ => families::parse_module_type(raw)
+                .map(|(family, name)| Self::Measurement { family, name })
+                .ok_or_else(|| unknown_module_type(raw)),
         }
     }
 
@@ -150,17 +116,23 @@ impl<'a> EntryType<'a> {
             Self::Tdx => "tdx".to_string(),
             Self::Nvidia => "nvidia".to_string(),
             Self::AlibabaGpu => "com.alibabacloud.gpu".to_string(),
-            Self::TdShim => "tdx.td-shim".to_string(),
-            Self::Ovmf => "tdx.ovmf".to_string(),
-            Self::Kernel => "tdx.kernel".to_string(),
-            Self::Uki => "tdx.uki".to_string(),
-            Self::RootfsCc => "com.alibabacloud.rootfs.cc".to_string(),
-            Self::ContainerImage { repo } => {
-                format!("com.alibabacloud.container.image.{repo}")
-            }
-            Self::AiModel { model_id } => format!("com.alibabacloud.ai.model.{model_id}"),
+            Self::Measurement { family, name } => family.canonical_spelling(name),
             Self::TransparencyLog => "transparency_log".to_string(),
         }
+    }
+
+    /// Whether the entry may repeat within one group. `transparency_log`
+    /// entries are separate baselines AND-ed together, and repeated container
+    /// image entries for one repo coalesce into one digest set.
+    fn may_repeat(&self) -> bool {
+        matches!(
+            self,
+            Self::TransparencyLog
+                | Self::Measurement {
+                    family: families::MeasurementFamily::ContainerImage,
+                    ..
+                }
+        )
     }
 }
 
@@ -175,40 +147,6 @@ pub(super) enum Dimension {
     Hardware,
 }
 
-/// Name segment charset: letters, digits and `. _ / @ : + -`.
-fn is_valid_module_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.chars().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '@' | ':' | '+' | '-')
-        })
-}
-
-/// The repository segment of an image reference that appraisal extracts:
-/// the last '/'-separated path component, with any tag or digest stripped.
-/// A name containing '/', '@', or ':' can never equal that segment, so it is
-/// rejected at load instead of failing closed only at appraisal.
-pub(super) fn is_valid_image_repo_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// A lowercase hex string of exactly `len` characters.
-fn is_lower_hex(s: &str, len: usize) -> bool {
-    s.len() == len
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-/// A `sha256:<64 lowercase hex>` OCI manifest digest.
-fn is_sha256_digest(s: &str) -> bool {
-    match s.strip_prefix("sha256:") {
-        Some(hex) => is_lower_hex(hex, 64),
-        None => false,
-    }
-}
-
 impl ModuleEntryConfig {
     /// Test helper: parse the type spelling and convert in one step, mirroring
     /// what `parse_module_groups` does.
@@ -221,14 +159,6 @@ impl ModuleEntryConfig {
     /// already parsed into an [`EntryType`] by the caller, so this only checks
     /// the value shape against that family.
     fn to_module(&self, entry_type: EntryType<'_>) -> anyhow::Result<Module> {
-        let value_str = || match &self.value {
-            serde_json::Value::String(s) => Ok(s.clone()),
-            other => anyhow::bail!(
-                "module type {:?} expects a string value, got {}",
-                self.module_type,
-                value_shape(other)
-            ),
-        };
         let value_obj = || match &self.value {
             serde_json::Value::Object(_) => Ok(()),
             other => anyhow::bail!(
@@ -239,6 +169,9 @@ impl ModuleEntryConfig {
         };
 
         match entry_type {
+            EntryType::Measurement { family, name } => {
+                families::build_measurement_module(family, name, &self.module_type, &self.value)
+            }
             EntryType::Tdx => {
                 value_obj()?;
                 let cfg: TdxPostureConfig = serde_json::from_value(self.value.clone())
@@ -269,7 +202,7 @@ impl ModuleEntryConfig {
                     anyhow::bail!("nvidia min_count must be at least 1");
                 }
                 for d in &cfg.measurement_digest {
-                    if !is_lower_hex(d, 96) {
+                    if !families::is_lower_hex(d, 96) {
                         anyhow::bail!(
                             "nvidia measurement_digest entries must be 96 lowercase hex chars"
                         );
@@ -277,94 +210,12 @@ impl ModuleEntryConfig {
                 }
                 Ok(Module::Nvidia(cfg))
             }
-            EntryType::TdShim => {
-                let v = value_str()?;
-                if !is_lower_hex(&v, 96) {
-                    anyhow::bail!(
-                        "module type {:?} value must be 96 lowercase hex chars",
-                        self.module_type
-                    );
-                }
-                Ok(Module::TdShim { value: v })
-            }
-            EntryType::Ovmf => {
-                let v = value_str()?;
-                if !is_lower_hex(&v, 96) {
-                    anyhow::bail!(
-                        "module type {:?} value must be 96 lowercase hex chars",
-                        self.module_type
-                    );
-                }
-                Ok(Module::Ovmf { value: v })
-            }
-            EntryType::Kernel => {
-                let v = value_str()?;
-                if !is_lower_hex(&v, 96) {
-                    anyhow::bail!(
-                        "module type {:?} value must be 96 lowercase hex chars",
-                        self.module_type
-                    );
-                }
-                Ok(Module::Kernel { value: v })
-            }
-            EntryType::Uki => {
-                let v = value_str()?;
-                if !is_lower_hex(&v, 96) {
-                    anyhow::bail!(
-                        "module type {:?} value must be 96 lowercase hex chars",
-                        self.module_type
-                    );
-                }
-                Ok(Module::Uki { value: v })
-            }
-            EntryType::RootfsCc => {
-                let v = value_str()?;
-                if !is_lower_hex(&v, 64) {
-                    anyhow::bail!(
-                        "module type {:?} value must be 64 lowercase hex chars",
-                        self.module_type
-                    );
-                }
-                Ok(Module::RootfsCc { value: v })
-            }
             EntryType::TransparencyLog => {
                 value_obj()?;
                 let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
                     .context("invalid transparency_log config")?;
                 transparency_log::validate_entry(&cfg)?;
                 Ok(Module::TransparencyLog(cfg))
-            }
-            EntryType::ContainerImage { repo } => {
-                if !is_valid_image_repo_name(repo) {
-                    anyhow::bail!(
-                        "container.image name {repo:?} must be a single repository segment using only ASCII letters, digits, '.', '_' and '-'"
-                    );
-                }
-                let digest = value_str()?;
-                if !is_sha256_digest(&digest) {
-                    anyhow::bail!(
-                        "com.alibabacloud.container.image.{repo} value must be sha256:<64 lowercase hex>"
-                    );
-                }
-                Ok(Module::ContainerImage {
-                    repo: repo.to_string(),
-                    digests: BTreeSet::from([digest]),
-                })
-            }
-            EntryType::AiModel { model_id } => {
-                if !is_valid_module_name(model_id) {
-                    anyhow::bail!("ai.model name {model_id:?} has an invalid character");
-                }
-                let digest = value_str()?;
-                if !is_lower_hex(&digest, 64) {
-                    anyhow::bail!(
-                        "com.alibabacloud.ai.model.{model_id} value must be 64 lowercase hex chars"
-                    );
-                }
-                Ok(Module::AiModel {
-                    model_id: model_id.to_string(),
-                    digest,
-                })
             }
         }
     }
@@ -394,11 +245,7 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
             // `container.image.<repo>` may repeat too, but those entries
             // coalesce below. Both spellings of one repo normalize to the same
             // type, so they merge as well.
-            if !matches!(
-                entry_type,
-                EntryType::TransparencyLog | EntryType::ContainerImage { .. }
-            ) && !seen.insert(entry_type.canonical())
-            {
+            if !entry_type.may_repeat() && !seen.insert(entry_type.canonical()) {
                 anyhow::bail!(
                     "duplicate module type {:?} within group {gi}",
                     entry_type.canonical()
@@ -555,10 +402,10 @@ fn render_modules_policy(
                     transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
                 }
                 measurement => {
-                    if let Some(family) = measurements::family_of_module(measurement) {
+                    if let Some(family) = families::family_of_module(measurement) {
                         families.insert(family);
                     }
-                    measurements::predicate(measurement, &pred).ok_or_else(|| {
+                    families::predicate(measurement, &pred).ok_or_else(|| {
                         anyhow::anyhow!("posture module passed to the measurement emitter")
                     })?
                 }

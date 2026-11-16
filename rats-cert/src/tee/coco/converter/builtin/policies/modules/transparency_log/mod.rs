@@ -3,39 +3,7 @@
 
 use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
 use super::super::super::transparency::{artifact_server, rekor_v1};
-use super::is_valid_image_repo_name;
-
-/// A `publishedMeasurements` entry, parsed in one place. The raw string stays
-/// the manifest `type` and is preserved byte-for-byte; the enum only names the
-/// family whose transparency_log-specific acceptance rule `parse` applies.
-#[derive(Debug)]
-enum PublishedMeasurementType {
-    TdShim,
-    TdKernel,
-    RootfsCc,
-    ContainerImage,
-}
-
-impl PublishedMeasurementType {
-    fn parse(measurement_type: &str) -> anyhow::Result<Self> {
-        match measurement_type {
-            "tdx.td-shim" => Ok(Self::TdShim),
-            "tdx.kernel" => Ok(Self::TdKernel),
-            "rootfs.cc" => Ok(Self::RootfsCc),
-            _ => match measurement_type.strip_prefix("container.image.") {
-                Some(repository_name) if is_valid_image_repo_name(repository_name) => {
-                    Ok(Self::ContainerImage)
-                }
-                Some(repository_name) => anyhow::bail!(
-                    "publishedMeasurements type {measurement_type:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
-                ),
-                None => anyhow::bail!(
-                    "unsupported publishedMeasurements type {measurement_type}"
-                ),
-            },
-        }
-    }
-}
+use super::families;
 
 /// Validate one `transparency_log` module entry. Runs at policy load, before
 /// any Rekor fetch or appraisal, so a malformed entry is a configuration error
@@ -47,7 +15,7 @@ pub(super) fn validate_entry(cfg: &TransparencyLogEntryConfig) -> anyhow::Result
     }
     let mut seen_measurement_types = std::collections::HashSet::new();
     for measurement_type in published_measurements {
-        PublishedMeasurementType::parse(measurement_type)?;
+        families::parse_published_type(measurement_type)?;
         if !seen_measurement_types.insert(measurement_type) {
             anyhow::bail!("duplicate publishedMeasurements type {measurement_type}");
         }
@@ -587,25 +555,24 @@ mod tests {
 
     #[test]
     fn published_measurement_type_parses_each_supported_family() {
-        assert!(matches!(
-            PublishedMeasurementType::parse("tdx.td-shim"),
-            Ok(PublishedMeasurementType::TdShim)
-        ));
-        assert!(matches!(
-            PublishedMeasurementType::parse("tdx.kernel"),
-            Ok(PublishedMeasurementType::TdKernel)
-        ));
-        assert!(matches!(
-            PublishedMeasurementType::parse("rootfs.cc"),
-            Ok(PublishedMeasurementType::RootfsCc)
-        ));
+        use super::families::MeasurementFamily;
+        assert_eq!(
+            families::parse_published_type("tdx.td-shim").unwrap(),
+            MeasurementFamily::TdxTdShim
+        );
+        assert_eq!(
+            families::parse_published_type("tdx.kernel").unwrap(),
+            MeasurementFamily::TdxKernel
+        );
+        assert_eq!(
+            families::parse_published_type("rootfs.cc").unwrap(),
+            MeasurementFamily::RootfsCc
+        );
         for repository_name in ["busybox", "my-app.v2"] {
             let measurement_type = format!("container.image.{repository_name}");
-            assert!(
-                matches!(
-                    PublishedMeasurementType::parse(&measurement_type),
-                    Ok(PublishedMeasurementType::ContainerImage)
-                ),
+            assert_eq!(
+                families::parse_published_type(&measurement_type).unwrap(),
+                MeasurementFamily::ContainerImage,
                 "expected container image for {measurement_type}"
             );
         }
@@ -620,7 +587,7 @@ mod tests {
             "container.image.foo:tag",
         ] {
             let error =
-                PublishedMeasurementType::parse(measurement_type).expect_err(measurement_type);
+                families::parse_published_type(measurement_type).expect_err(measurement_type);
             assert!(
                 format!("{error:#}").contains("invalid container image repository"),
                 "{measurement_type}: {error:#}"
@@ -630,7 +597,7 @@ mod tests {
 
     #[test]
     fn published_measurement_type_rejects_prefixed_alias() {
-        let error = PublishedMeasurementType::parse("com.alibabacloud.container.image.busybox")
+        let error = families::parse_published_type("com.alibabacloud.container.image.busybox")
             .expect_err("prefixed alias must be rejected");
         assert!(
             format!("{error:#}").contains("unsupported publishedMeasurements type"),
@@ -640,7 +607,7 @@ mod tests {
 
     #[test]
     fn published_measurement_type_rejects_unsupported_type() {
-        let error = PublishedMeasurementType::parse("tdx.uki")
+        let error = families::parse_published_type("tdx.uki")
             .expect_err("tdx.uki is not a published measurement type");
         assert!(
             format!("{error:#}").contains("unsupported publishedMeasurements type"),
@@ -652,7 +619,7 @@ mod tests {
     fn published_measurement_type_rejects_rootfs_spellings() {
         // `rootfs.cc` is a fixed type, not a `rootfs.<name>` namespace.
         for measurement_type in ["rootfs.foo", "rootfs."] {
-            let error = PublishedMeasurementType::parse(measurement_type)
+            let error = families::parse_published_type(measurement_type)
                 .expect_err("only rootfs.cc is supported");
             assert!(
                 format!("{error:#}").contains("unsupported publishedMeasurements type"),
@@ -662,7 +629,7 @@ mod tests {
 
         // The vendor-prefixed spelling is not a published type; the manifest
         // records the unprefixed one.
-        let error = PublishedMeasurementType::parse("com.alibabacloud.rootfs.cc")
+        let error = families::parse_published_type("com.alibabacloud.rootfs.cc")
             .expect_err("prefixed rootfs alias must be rejected");
         assert!(
             format!("{error:#}").contains("unsupported publishedMeasurements type"),
@@ -682,11 +649,11 @@ mod tests {
             "container.image.busybox",
         ] {
             assert!(
-                PublishedMeasurementType::parse(measurement_type).is_ok(),
+                families::parse_published_type(measurement_type).is_ok(),
                 "{measurement_type}"
             );
             assert!(
-                super::super::measurements::dimension_for_type(measurement_type).is_some(),
+                super::families::dimension_for_published_type(measurement_type).is_some(),
                 "{measurement_type} must map to an extraction family and dimension"
             );
         }

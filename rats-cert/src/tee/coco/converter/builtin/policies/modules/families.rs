@@ -1,6 +1,7 @@
-//! The shared measurement extraction rules: `actual_measurement(type)` for the
-//! single-valued families and `actual_measurement_set(type)` for a container
-//! image's digest set.
+//! The measurement-family registry: one row per extraction family owning every
+//! accepted spelling, the AR4SI dimension, the `actual_measurement` key, the
+//! extraction rule, the shared Rego helpers, and whether a `transparency_log`
+//! entry may publish it.
 //!
 //! Both the `modules` measurement entries and `transparency_log` manifest
 //! reconstruction read the same per-type value through these rules, so the two
@@ -9,6 +10,7 @@
 
 use std::collections::BTreeSet;
 
+use super::super::super::policy_config::value_shape;
 use super::{Dimension, Module};
 
 /// One measurement-extraction family. Families are emitted independently; a
@@ -25,76 +27,224 @@ pub(super) enum MeasurementFamily {
     AiModel,
 }
 
-/// The set of families a policy needs, with deterministic emission order.
-#[derive(Debug, Default, Clone)]
-pub(super) struct Families(BTreeSet<MeasurementFamily>);
+/// The registry row for one family. A parameterized family's prefixes end in
+/// `.` and take the entry name (repository or model id) as a suffix; a fixed
+/// family's spellings are complete type strings.
+struct FamilySpec {
+    family: MeasurementFamily,
+    /// Canonical module-entry spelling.
+    canonical: &'static str,
+    /// Permanent module-entry aliases. The vendor-prefixed spelling is
+    /// canonical; the unprefixed one is accepted alongside it.
+    aliases: &'static [&'static str],
+    /// The `transparency_log.publishedMeasurements` spelling, if this family
+    /// may be published. This is a stricter subset than module entries accept.
+    published: Option<&'static str>,
+    /// `actual_measurement` key, or prefix for a parameterized family.
+    measurement_key: &'static str,
+    dimension: Dimension,
+    /// Rego helpers the extraction rule calls. Emitted once per policy.
+    helpers: &'static [&'static str],
+}
 
-impl Families {
-    pub(super) fn insert(&mut self, family: MeasurementFamily) {
-        self.0.insert(family);
-    }
-
-    /// Add the families a transparency-log entry's declared published types
-    /// need. Validation restricts those types to the families below, so an
-    /// unrecognized spelling contributes nothing here (it is rejected earlier
-    /// as a configuration error).
-    pub(super) fn extend_published_types<'a>(
-        &mut self,
-        types: impl IntoIterator<Item = &'a String>,
-    ) {
-        for t in types {
-            if let Some(family) = family_for_type(t) {
-                self.0.insert(family);
-            }
-        }
-    }
-
-    /// The Rego extraction source for the selected families, or an empty
-    /// string when none are selected.
-    pub(super) fn rules(&self) -> String {
-        if self.0.is_empty() {
-            return String::new();
-        }
-        let mut parts: Vec<&str> = Vec::new();
-        if self.0.contains(&MeasurementFamily::TdxKernel)
-            || self.0.contains(&MeasurementFamily::TdxUki)
-        {
-            parts.push(HAS_SHA384_DIGEST);
-        }
-        if self.0.contains(&MeasurementFamily::ContainerImage) {
-            parts.push(IMAGE_REPO_NAME);
-        }
-        for family in &self.0 {
-            parts.push(family.rule());
-        }
-        let mut out = parts.join("\n\n");
-        out.push('\n');
-        out
+impl FamilySpec {
+    fn parameterized(&self) -> bool {
+        self.canonical.ends_with('.')
     }
 }
 
+const TD_SHIM: FamilySpec = FamilySpec {
+    family: MeasurementFamily::TdxTdShim,
+    canonical: "tdx.td-shim",
+    aliases: &[],
+    published: Some("tdx.td-shim"),
+    measurement_key: "tdx.td-shim",
+    dimension: Dimension::Executables,
+    helpers: &[],
+};
+
+const OVMF: FamilySpec = FamilySpec {
+    family: MeasurementFamily::TdxOvmf,
+    canonical: "tdx.ovmf",
+    aliases: &[],
+    published: None,
+    measurement_key: "tdx.ovmf",
+    dimension: Dimension::Executables,
+    helpers: &[],
+};
+
+const KERNEL: FamilySpec = FamilySpec {
+    family: MeasurementFamily::TdxKernel,
+    canonical: "tdx.kernel",
+    aliases: &[],
+    published: Some("tdx.kernel"),
+    measurement_key: "tdx.kernel",
+    dimension: Dimension::Executables,
+    helpers: &[HAS_SHA384_DIGEST],
+};
+
+const UKI: FamilySpec = FamilySpec {
+    family: MeasurementFamily::TdxUki,
+    canonical: "tdx.uki",
+    aliases: &[],
+    published: None,
+    measurement_key: "tdx.uki",
+    dimension: Dimension::Executables,
+    helpers: &[HAS_SHA384_DIGEST],
+};
+
+const ROOTFS_CC: FamilySpec = FamilySpec {
+    family: MeasurementFamily::RootfsCc,
+    canonical: "com.alibabacloud.rootfs.cc",
+    aliases: &["rootfs.cc"],
+    published: Some("rootfs.cc"),
+    measurement_key: "rootfs.cc",
+    dimension: Dimension::FileSystem,
+    helpers: &[],
+};
+
+const CONTAINER_IMAGE: FamilySpec = FamilySpec {
+    family: MeasurementFamily::ContainerImage,
+    canonical: "com.alibabacloud.container.image.",
+    aliases: &["container.image."],
+    published: Some("container.image."),
+    measurement_key: "container.image.",
+    dimension: Dimension::Executables,
+    helpers: &[IMAGE_REPO_NAME],
+};
+
+const AI_MODEL: FamilySpec = FamilySpec {
+    family: MeasurementFamily::AiModel,
+    canonical: "com.alibabacloud.ai.model.",
+    aliases: &["ai.model."],
+    published: None,
+    measurement_key: "ai.model.",
+    dimension: Dimension::Executables,
+    helpers: &[],
+};
+
+/// Every family in deterministic emission order. Declaration order is the
+/// order extraction rules render in.
+const FAMILIES: &[&FamilySpec] = &[
+    &TD_SHIM,
+    &OVMF,
+    &KERNEL,
+    &UKI,
+    &ROOTFS_CC,
+    &CONTAINER_IMAGE,
+    &AI_MODEL,
+];
+
 impl MeasurementFamily {
-    fn rule(self) -> &'static str {
+    fn spec(self) -> &'static FamilySpec {
         match self {
-            Self::TdxTdShim => TDX_TD_SHIM,
-            Self::TdxOvmf => TDX_OVMF,
-            Self::TdxKernel => TDX_KERNEL,
-            Self::TdxUki => TDX_UKI,
-            Self::RootfsCc => ROOTFS_CC,
-            Self::ContainerImage => CONTAINER_IMAGE,
-            Self::AiModel => AI_MODEL,
+            Self::TdxTdShim => &TD_SHIM,
+            Self::TdxOvmf => &OVMF,
+            Self::TdxKernel => &KERNEL,
+            Self::TdxUki => &UKI,
+            Self::RootfsCc => &ROOTFS_CC,
+            Self::ContainerImage => &CONTAINER_IMAGE,
+            Self::AiModel => &AI_MODEL,
         }
     }
 
     /// The AR4SI dimension a value extracted by this family describes. Rootfs
     /// integrity is a file-system property; every other family measures what
     /// the platform executes.
-    fn dimension(self) -> Dimension {
-        match self {
-            Self::RootfsCc => Dimension::FileSystem,
-            _ => Dimension::Executables,
+    pub(super) fn dimension(self) -> Dimension {
+        self.spec().dimension
+    }
+
+    /// The canonical type string for a module entry of this family. The name
+    /// is empty for a fixed family.
+    pub(super) fn canonical_spelling(self, name: &str) -> String {
+        let spec = self.spec();
+        if spec.parameterized() {
+            format!("{}{name}", spec.canonical)
+        } else {
+            spec.canonical.to_string()
         }
     }
+
+    /// The `actual_measurement` key for a module entry of this family. The
+    /// vendor-prefixed families are recorded without their prefix so the key
+    /// matches the transparency-log type spelling.
+    pub(super) fn measurement_key(self, name: &str) -> String {
+        let spec = self.spec();
+        if spec.parameterized() {
+            format!("{}{name}", spec.measurement_key)
+        } else {
+            spec.measurement_key.to_string()
+        }
+    }
+}
+
+/// Resolve a module-entry type spelling to its family and name. Accepts the
+/// canonical spelling and every permanent alias; `None` means the type is a
+/// posture or transparency entry, or unknown.
+pub(super) fn parse_module_type(raw: &str) -> Option<(MeasurementFamily, &str)> {
+    for spec in FAMILIES {
+        if spec.parameterized() {
+            if let Some(name) = raw.strip_prefix(spec.canonical) {
+                return Some((spec.family, name));
+            }
+            for alias in spec.aliases {
+                if let Some(name) = raw.strip_prefix(alias) {
+                    return Some((spec.family, name));
+                }
+            }
+        } else if raw == spec.canonical || spec.aliases.contains(&raw) {
+            return Some((spec.family, ""));
+        }
+    }
+    None
+}
+
+/// Resolve a `transparency_log.publishedMeasurements` type. Published types are
+/// a stricter subset than module entries: only the unprefixed spellings are
+/// recorded in a manifest, and a container image repository must be the single
+/// extracted segment.
+pub(super) fn parse_published_type(raw: &str) -> anyhow::Result<MeasurementFamily> {
+    for spec in FAMILIES {
+        let Some(published) = spec.published else {
+            continue;
+        };
+        if spec.parameterized() {
+            if let Some(repository_name) = raw.strip_prefix(published) {
+                if !is_valid_image_repo_name(repository_name) {
+                    anyhow::bail!(
+                        "publishedMeasurements type {raw:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
+                    );
+                }
+                return Ok(spec.family);
+            }
+        } else if raw == published {
+            return Ok(spec.family);
+        }
+    }
+    anyhow::bail!("unsupported publishedMeasurements type {raw}")
+}
+
+/// The family a published type selects, without re-checking its spelling. Used
+/// to attribute a validated entry's dimensions and extraction rules.
+pub(super) fn family_for_published_type(raw: &str) -> Option<MeasurementFamily> {
+    FAMILIES.iter().find_map(|spec| {
+        let published = spec.published?;
+        if spec.parameterized() {
+            raw.strip_prefix(published).map(|_| spec.family)
+        } else if raw == published {
+            Some(spec.family)
+        } else {
+            None
+        }
+    })
+}
+
+/// The AR4SI dimension a transparency-log published type describes. A
+/// transparency-log entry can publish several types; its predicate is
+/// attributed to every dimension this maps them to.
+pub(super) fn dimension_for_published_type(raw: &str) -> Option<Dimension> {
+    family_for_published_type(raw).map(MeasurementFamily::dimension)
 }
 
 /// The family a measurement module entry extracts from. Posture and
@@ -112,20 +262,26 @@ pub(super) fn family_of_module(module: &Module) -> Option<MeasurementFamily> {
     }
 }
 
-/// The `actual_measurement` key for a measurement module entry. The
-/// vendor-prefixed families drop their `com.alibabacloud.` prefix so the key
-/// matches the transparency-log type spelling.
-pub(super) fn measurement_key(module: &Module) -> Option<String> {
+/// The per-entry name a family's key takes: the repository or model id for a
+/// parameterized family, empty for a fixed one.
+fn measurement_name(module: &Module) -> Option<&str> {
     match module {
-        Module::TdShim { .. } => Some("tdx.td-shim".to_string()),
-        Module::Ovmf { .. } => Some("tdx.ovmf".to_string()),
-        Module::Kernel { .. } => Some("tdx.kernel".to_string()),
-        Module::Uki { .. } => Some("tdx.uki".to_string()),
-        Module::RootfsCc { .. } => Some("rootfs.cc".to_string()),
-        Module::ContainerImage { repo, .. } => Some(format!("container.image.{repo}")),
-        Module::AiModel { model_id, .. } => Some(format!("ai.model.{model_id}")),
+        Module::ContainerImage { repo, .. } => Some(repo),
+        Module::AiModel { model_id, .. } => Some(model_id),
+        Module::TdShim { .. }
+        | Module::Ovmf { .. }
+        | Module::Kernel { .. }
+        | Module::Uki { .. }
+        | Module::RootfsCc { .. } => Some(""),
         Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
     }
+}
+
+/// The `actual_measurement` key for a measurement module entry.
+pub(super) fn measurement_key(module: &Module) -> Option<String> {
+    let family = family_of_module(module)?;
+    let name = measurement_name(module)?;
+    Some(family.measurement_key(name))
 }
 
 /// The pinned value a single-valued measurement module entry compares against.
@@ -142,6 +298,77 @@ fn measurement_pin(module: &Module) -> Option<&str> {
         | Module::Nvidia(_)
         | Module::Gpu
         | Module::TransparencyLog(_) => None,
+    }
+}
+
+/// Build and validate one measurement module entry. The entry type was already
+/// parsed into its family by the caller, so this only checks that `value` fits
+/// that family.
+pub(super) fn build_measurement_module(
+    family: MeasurementFamily,
+    name: &str,
+    raw_type: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Module> {
+    let value_str = || match value {
+        serde_json::Value::String(s) => Ok(s.as_str()),
+        other => anyhow::bail!(
+            "module type {raw_type:?} expects a string value, got {}",
+            value_shape(other)
+        ),
+    };
+
+    let fixed_hex = |len: usize| -> anyhow::Result<String> {
+        let v = value_str()?;
+        if !is_lower_hex(v, len) {
+            anyhow::bail!("module type {raw_type:?} value must be {len} lowercase hex chars");
+        }
+        Ok(v.to_string())
+    };
+
+    match family {
+        MeasurementFamily::TdxTdShim => Ok(Module::TdShim {
+            value: fixed_hex(96)?,
+        }),
+        MeasurementFamily::TdxOvmf => Ok(Module::Ovmf {
+            value: fixed_hex(96)?,
+        }),
+        MeasurementFamily::TdxKernel => Ok(Module::Kernel {
+            value: fixed_hex(96)?,
+        }),
+        MeasurementFamily::TdxUki => Ok(Module::Uki {
+            value: fixed_hex(96)?,
+        }),
+        MeasurementFamily::RootfsCc => Ok(Module::RootfsCc {
+            value: fixed_hex(64)?,
+        }),
+        MeasurementFamily::ContainerImage => {
+            if !is_valid_image_repo_name(name) {
+                anyhow::bail!(
+                    "container.image name {name:?} must be a single repository segment using only ASCII letters, digits, '.', '_' and '-'"
+                );
+            }
+            let digest = value_str()?;
+            if !is_sha256_digest(digest) {
+                anyhow::bail!(
+                    "com.alibabacloud.container.image.{name} value must be sha256:<64 lowercase hex>"
+                );
+            }
+            Ok(Module::ContainerImage {
+                repo: name.to_string(),
+                digests: BTreeSet::from([digest.to_string()]),
+            })
+        }
+        MeasurementFamily::AiModel => {
+            if !is_valid_module_name(name) {
+                anyhow::bail!("ai.model name {name:?} has an invalid character");
+            }
+            let digest = fixed_hex(64)?;
+            Ok(Module::AiModel {
+                model_id: name.to_string(),
+                digest,
+            })
+        }
     }
 }
 
@@ -169,26 +396,105 @@ pub(super) fn predicate(module: &Module, pred: &str) -> Option<String> {
     ))
 }
 
-/// Map a transparency-log published type to its extraction family.
-fn family_for_type(t: &str) -> Option<MeasurementFamily> {
-    if t == "tdx.td-shim" {
-        Some(MeasurementFamily::TdxTdShim)
-    } else if t == "tdx.kernel" {
-        Some(MeasurementFamily::TdxKernel)
-    } else if t == "rootfs.cc" {
-        Some(MeasurementFamily::RootfsCc)
-    } else if t.starts_with("container.image.") {
-        Some(MeasurementFamily::ContainerImage)
-    } else {
-        None
+/// The set of families a policy needs, with deterministic emission order.
+#[derive(Debug, Default, Clone)]
+pub(super) struct Families(BTreeSet<MeasurementFamily>);
+
+impl Families {
+    pub(super) fn insert(&mut self, family: MeasurementFamily) {
+        self.0.insert(family);
+    }
+
+    /// Add the families a transparency-log entry's declared published types
+    /// need. Validation restricts those types to the families below, so an
+    /// unrecognized spelling contributes nothing here (it is rejected earlier
+    /// as a configuration error).
+    pub(super) fn extend_published_types<'a>(
+        &mut self,
+        types: impl IntoIterator<Item = &'a String>,
+    ) {
+        for t in types {
+            if let Some(family) = family_for_published_type(t) {
+                self.0.insert(family);
+            }
+        }
+    }
+
+    /// The Rego extraction source for the selected families, or an empty
+    /// string when none are selected. Shared helpers come first, once each, in
+    /// registry order; the extraction rules follow in the same order.
+    pub(super) fn rules(&self) -> String {
+        if self.0.is_empty() {
+            return String::new();
+        }
+        let mut parts: Vec<&str> = Vec::new();
+        for spec in FAMILIES {
+            if !self.0.contains(&spec.family) {
+                continue;
+            }
+            for helper in spec.helpers {
+                if !parts.contains(helper) {
+                    parts.push(*helper);
+                }
+            }
+        }
+        for spec in FAMILIES {
+            if self.0.contains(&spec.family) {
+                parts.push(spec.family.rule());
+            }
+        }
+        let mut out = parts.join("\n\n");
+        out.push('\n');
+        out
     }
 }
 
-/// The AR4SI dimension a transparency-log published type describes. A
-/// transparency-log entry can publish several types; its predicate is
-/// attributed to every dimension this maps them to.
-pub(super) fn dimension_for_type(t: &str) -> Option<Dimension> {
-    family_for_type(t).map(MeasurementFamily::dimension)
+impl MeasurementFamily {
+    fn rule(self) -> &'static str {
+        match self {
+            Self::TdxTdShim => TDX_TD_SHIM,
+            Self::TdxOvmf => TDX_OVMF,
+            Self::TdxKernel => TDX_KERNEL,
+            Self::TdxUki => TDX_UKI,
+            Self::RootfsCc => ROOTFS_CC_RULE,
+            Self::ContainerImage => CONTAINER_IMAGE_RULE,
+            Self::AiModel => AI_MODEL_RULE,
+        }
+    }
+}
+
+/// Name segment charset: letters, digits and `. _ / @ : + -`.
+fn is_valid_module_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '@' | ':' | '+' | '-')
+        })
+}
+
+/// The repository segment of an image reference that appraisal extracts:
+/// the last '/'-separated path component, with any tag or digest stripped.
+/// A name containing '/', '@', or ':' can never equal that segment, so it is
+/// rejected at load instead of failing closed only at appraisal.
+pub(super) fn is_valid_image_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// A lowercase hex string of exactly `len` characters.
+pub(super) fn is_lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A `sha256:<64 lowercase hex>` OCI manifest digest.
+fn is_sha256_digest(s: &str) -> bool {
+    match s.strip_prefix("sha256:") {
+        Some(hex) => is_lower_hex(hex, 64),
+        None => false,
+    }
 }
 
 const HAS_SHA384_DIGEST: &str = "\
@@ -252,7 +558,7 @@ actual_measurement(\"tdx.uki\") := digest if {
 /// flags events, and every such event must sit at RTMR1 (index 2). The root
 /// hash comes from the `verity-root` dm-mod.create mapping; every extracted
 /// hash must be the same, and an event without the mapping is ignored.
-const ROOTFS_CC: &str = "\
+const ROOTFS_CC_RULE: &str = "\
 actual_measurement(\"rootfs.cc\") := digest if {
 \tevents := [e |
 \t\tsome e in input.tdx.uefi_event_logs
@@ -274,7 +580,7 @@ actual_measurement(\"rootfs.cc\") := digest if {
 /// carry several digests. The rule returns the set of every digest and leaves
 /// the set-equality check to the caller; a repo with no matching event, or any
 /// matching event missing its digest, is undefined.
-const CONTAINER_IMAGE: &str = "\
+const CONTAINER_IMAGE_RULE: &str = "\
 actual_measurement_set(type) := digests if {
 \tstartswith(type, \"container.image.\")
 \trepo := trim_prefix(type, \"container.image.\")
@@ -293,7 +599,7 @@ actual_measurement_set(type) := digests if {
 \tdigests := {e.details.data.content.digest | some e in events}
 }";
 
-const AI_MODEL: &str = "\
+const AI_MODEL_RULE: &str = "\
 actual_measurement(type) := digest if {
 \tstartswith(type, \"ai.model.\")
 \tmodel_id := trim_prefix(type, \"ai.model.\")
@@ -324,7 +630,6 @@ image_repo_name(ref) := name if {
 \tlast := segs[count(segs) - 1]
 \tname := split(split(last, \"@\")[0], \":\")[0]
 }";
-
 #[cfg(test)]
 mod tests {
     use super::super::super::test_support::{
@@ -404,6 +709,95 @@ mod tests {
     }
 
     #[test]
+    fn registry_owns_every_accepted_module_spelling() {
+        for spec in FAMILIES {
+            let (family, name) = parse_module_type(spec.canonical)
+                .unwrap_or_else(|| panic!("canonical spelling {} must parse", spec.canonical));
+            assert_eq!(family, spec.family);
+            assert_eq!(name, "", "a canonical prefix carries no entry name");
+            let expected_name = if spec.parameterized() { "busybox" } else { "" };
+            assert_eq!(
+                family.canonical_spelling(expected_name),
+                format!("{}{}", spec.canonical, expected_name)
+            );
+
+            for alias in spec.aliases {
+                let (alias_family, _) = parse_module_type(alias)
+                    .unwrap_or_else(|| panic!("alias spelling {alias} must parse"));
+                assert_eq!(alias_family, spec.family);
+            }
+        }
+
+        // A fixed family is a name, not a namespace.
+        assert!(parse_module_type("rootfs.").is_none());
+        assert!(parse_module_type("rootfs.foo").is_none());
+        assert!(parse_module_type("tdx.quote").is_none());
+    }
+
+    #[test]
+    fn registry_published_subset_is_stricter_than_module_entries() {
+        for measurement_type in [
+            "tdx.td-shim",
+            "tdx.kernel",
+            "rootfs.cc",
+            "container.image.busybox",
+        ] {
+            assert_eq!(
+                parse_published_type(measurement_type).unwrap(),
+                family_for_published_type(measurement_type).unwrap()
+            );
+            assert!(dimension_for_published_type(measurement_type).is_some());
+        }
+
+        // Accepted as module entries but not publishable.
+        for measurement_type in [
+            "tdx.ovmf",
+            "tdx.uki",
+            "ai.model.Qwen/Qwen3.8-27B",
+            "com.alibabacloud.rootfs.cc",
+            "com.alibabacloud.container.image.busybox",
+            "rootfs.foo",
+        ] {
+            assert!(
+                parse_published_type(measurement_type).is_err(),
+                "{measurement_type} must not be a published type"
+            );
+            assert!(family_for_published_type(measurement_type).is_none());
+        }
+
+        for measurement_type in [
+            "container.image.",
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            let error = parse_published_type(measurement_type).expect_err(measurement_type);
+            assert!(
+                format!("{error:#}").contains("invalid container image repository"),
+                "{measurement_type}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_dimensions_match_each_family() {
+        assert_eq!(
+            MeasurementFamily::RootfsCc.dimension(),
+            Dimension::FileSystem
+        );
+        for family in [
+            MeasurementFamily::TdxTdShim,
+            MeasurementFamily::TdxOvmf,
+            MeasurementFamily::TdxKernel,
+            MeasurementFamily::TdxUki,
+            MeasurementFamily::ContainerImage,
+            MeasurementFamily::AiModel,
+        ] {
+            assert_eq!(family.dimension(), Dimension::Executables);
+        }
+    }
+
+    #[test]
     fn family_selection_drives_emission() {
         // No family: no extraction source at all.
         assert!(Families::default().rules().is_empty());
@@ -443,6 +837,19 @@ mod tests {
         assert!(rootfs.contains("actual_measurement(\"rootfs.cc\") :="));
         assert!(!rootfs.contains("has_sha384_digest"));
         assert!(!rootfs.contains("image_repo_name"));
+
+        // Helpers precede rules and follow registry order.
+        let mixed = families(&[
+            MeasurementFamily::AiModel,
+            MeasurementFamily::ContainerImage,
+            MeasurementFamily::TdxKernel,
+        ])
+        .rules();
+        assert!(mixed.find("has_sha384_digest").unwrap() < mixed.find("image_repo_name").unwrap());
+        assert!(
+            mixed.find("image_repo_name(ref) :=").unwrap()
+                < mixed.find("actual_measurement(\"tdx.kernel\")").unwrap()
+        );
     }
 
     #[test]
