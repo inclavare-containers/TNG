@@ -1353,38 +1353,29 @@ mod tests {
         e
     }
 
-    #[test]
-    fn modules_rootfs_cc_gates_file_system() {
+    #[tokio::test]
+    async fn modules_rootfs_cc_gates_only_file_system() {
         let root = hex64('a');
-        let policy = build_policy(&modules_cfg(&format!(
-            r#"[{{"type":"rootfs.cc","value":"{root}"}}]"#
-        )))
-        .expect("build");
+        let cfg = format!(r#"[{{"type":"rootfs.cc","value":"{root}"}}]"#);
 
-        // The rootfs entry is attributed to `file_system`, which becomes
-        // non-affirming by default; `executables` keeps its affirming default.
-        assert!(policy.contains("default file_system := 97"));
-        assert!(policy.contains("default executables := 2"));
-        assert!(policy.contains("group_0_file_system_ok if {"));
-        assert!(policy.contains("file_system := 2 if {\n\tgroup_0_file_system_ok\n}"));
-        assert!(!policy.contains("group_0_executables_ok"));
+        // A missing rootfs measurement rejects file_system. The entry does not
+        // gate executables, so that dimension stays affirming.
+        let missing = tdx_input(serde_json::Value::Null, &[]);
         assert_eq!(
-            policy
-                .matches("actual_measurement(\"rootfs.cc\") :=")
-                .count(),
-            1
+            eval_modules(&cfg, &missing).await,
+            (2, 2, 2, 97),
+            "a rootfs-only policy must move file_system, not executables"
         );
 
-        // A config without a rootfs entry keeps the affirming default and
-        // emits no file_system rules.
-        let old = build_policy(&modules_cfg(&format!(
-            r#"[{{"type":"tdx.ovmf","value":"{}"}}]"#,
-            hex96('1')
-        )))
-        .expect("build");
-        assert!(old.contains("default file_system := 2"));
-        assert!(!old.contains("group_0_file_system_ok"));
-        assert!(!old.contains("file_system := 2 if {"));
+        // Without a rootfs entry, file_system keeps its affirming default and
+        // evidence without a rootfs measurement changes nothing.
+        let no_rootfs = format!(r#"[{{"type":"tdx.ovmf","value":"{}"}}]"#, hex96('1'));
+        let ovmf_input = tdx_input(json!({"mr_td": hex96('1')}), &[]);
+        assert_eq!(
+            eval_modules(&no_rootfs, &ovmf_input).await,
+            (2, 2, 2, 2),
+            "a policy without a rootfs entry must not constrain file_system"
+        );
     }
 
     #[tokio::test]
@@ -1606,33 +1597,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn modules_container_image_renders_one_set_predicate() {
-        let digest_a = format!("sha256:{}", hex64('a'));
-        let digest_b = format!("sha256:{}", hex64('b'));
-        // Listing the digests out of order must still render a stable,
-        // ascending set literal, and the two entries must collapse to one
-        // predicate.
-        let policy = build_policy(&modules_cfg(&format!(
-            r#"[
-              {{"type":"container.image.runtime","value":"{digest_b}"}},
-              {{"type":"com.alibabacloud.container.image.runtime","value":"{digest_a}"}}
-            ]"#
-        )))
-        .expect("build");
-        assert!(policy.contains(&format!(
-            "m_0_0 if {{\n\tactual_measurement_set(\"container.image.runtime\") == {{\"{digest_a}\", \"{digest_b}\"}}\n}}"
-        )));
-        assert!(!policy.contains("m_0_1"), "{policy}");
-        assert_eq!(
-            policy
-                .matches("actual_measurement_set(\"container.image.runtime\") ==")
-                .count(),
-            1,
-            "{policy}"
-        );
-    }
-
     #[tokio::test]
     async fn modules_container_image_set_equality() {
         let digest_a = format!("sha256:{}", hex64('a'));
@@ -1694,145 +1658,89 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn modules_policy_posture_and_measurement_gate_their_dimensions() {
+        let ovmf = hex96('1');
+        let cfg =
+            format!(r#"[{{"type":"tdx","value":{{}}}},{{"type":"tdx.ovmf","value":"{ovmf}"}}]"#);
+
+        let ok = tdx_input(json!({"mr_td": ovmf}), &[json!({"event": "ok"})]);
+        assert_eq!(eval_modules(&cfg, &ok).await, (2, 2, 2, 2));
+
+        // A measurement failure moves executables only.
+        let bad_measurement = tdx_input(json!({"mr_td": hex96('9')}), &[json!({"event": "ok"})]);
+        assert_eq!(eval_modules(&cfg, &bad_measurement).await, (97, 2, 2, 2));
+
+        // A posture failure moves hardware only.
+        let bad_posture = tdx_input(
+            json!({"mr_td": ovmf, "td_attributes": "0100001000000000"}),
+            &[json!({"event": "ok"})],
+        );
+        assert_eq!(eval_modules(&cfg, &bad_posture).await, (2, 97, 2, 2));
+
+        // Non-TDX evidence satisfies neither gated dimension.
+        let csv = json!({"csv": {"version": "2"}}).to_string();
+        assert_eq!(eval_modules(&cfg, &csv).await, (97, 97, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn modules_posture_only_keeps_executables_affirming() {
+        let cfg = r#"[{"type":"tdx","value":{}}]"#;
+        // A posture failure moves hardware only: executables has no entries.
+        let debug = tdx_input(
+            json!({"td_attributes": "0100001000000000"}),
+            &[json!({"event": "ok"})],
+        );
+        assert_eq!(eval_modules(cfg, &debug).await, (2, 97, 2, 2));
+        let ok = tdx_input(serde_json::Value::Null, &[json!({"event": "ok"})]);
+        assert_eq!(eval_modules(cfg, &ok).await, (2, 2, 2, 2));
+    }
+
+    /// The generated Rego is the artifact the AS loads, so the few structural
+    /// guarantees behavior cannot observe directly stay pinned here. Semantics
+    /// are covered by the equivalence corpus.
     #[test]
-    fn modules_policy_rego_snapshot() {
+    fn modules_policy_rego_shape_contract() {
         let ovmf = hex96('1');
         let policy = build_policy(&modules_cfg(&format!(
-            r#"[
-          {{"type":"tdx","value":{{}}}},
-          {{"type":"tdx.ovmf","value":"{ovmf}"}}
-        ]"#,
+            r#"[{{"type":"tdx","value":{{}}}},{{"type":"tdx.ovmf","value":"{ovmf}"}}]"#
         )))
         .expect("build");
-        assert!(policy.contains("package policy"));
-        assert!(policy.contains("import rego.v1"));
-        // Both dimensions carry entries, so executables defaults non-affirming.
-        assert!(policy.contains("default executables := 97"));
-        assert!(policy.contains("default hardware := 97"));
-        // The pinned value is embedded as a literal in a one-line equality
-        // predicate; the extraction rule itself reads the quote field.
-        assert!(policy.contains(&format!(
-            "m_0_1 if {{\n\tactual_measurement(\"tdx.ovmf\") == \"{ovmf}\"\n}}"
-        )));
-        assert!(policy.contains("digest := input.tdx.quote.body.mr_td"));
-        // One extraction block for the whole policy.
+        // One extraction rule per family for the whole policy.
         assert_eq!(
             policy
                 .matches("actual_measurement(\"tdx.ovmf\") :=")
                 .count(),
             1
         );
+        // Every pin is inline; no reference-value lookup.
         assert!(!policy.contains("query_reference_value"));
-        // per-dimension group predicates
-        assert!(policy.contains("group_0_executables_ok if {"));
-        assert!(policy.contains("group_0_hardware_ok if {"));
-        // executables ORs the measurement groups; hardware requires recognition
-        assert!(policy.contains("executables := 2 if {\n\tgroup_0_executables_ok\n}"));
-        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
-        assert!(policy.contains("tdx_recognized if {"));
-        assert!(policy.contains(r#"input.tdx.quote.header.tee_type == "81000000""#));
-        assert!(policy
-            .contains(r#"input.tdx.quote.header.vendor_id == "939a7233f79c4ca9940a0db3957f0607""#));
-        // Only TDX is recognised; the legacy CSV/TPM/system paths are gone.
-        assert!(!policy.contains("input.csv"));
-        assert!(!policy.contains("input.tpm"));
-        assert!(!policy.contains("input.system"));
-        // tdx posture default: debug regex + eventlog count
-        assert!(policy
-            .contains("regex.match(\"^[0-9a-f][02468ace]\", input.tdx.quote.body.td_attributes)"));
-        assert!(policy.contains("count(input.tdx.uefi_event_logs) > 0"));
-    }
+        // The removed CSV/TPM/SYSTEM input paths are not referenced.
+        for legacy in ["input.csv", "input.tpm", "input.system"] {
+            assert!(
+                !policy.contains(legacy),
+                "legacy input {legacy} must be gone"
+            );
+        }
 
-    #[test]
-    fn modules_policy_no_executables_keeps_executables_affirming() {
-        // A posture-only policy must not make the executables dimension depend
-        // on the posture: there are no measurement entries to satisfy.
-        let policy = build_policy(&modules_cfg(r#"[{"type":"tdx","value":{}}]"#)).expect("build");
-        assert!(policy.contains("default executables := 2"));
-        assert!(!policy.contains("group_0_executables_ok"));
-        // No measurement entries, so hardware reduces to recognition plus the
-        // posture group.
-        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n\tgroup_0_hardware_ok\n}"));
-        // A posture-only policy needs no measurement extraction at all.
-        assert!(!policy.contains("actual_measurement"));
-    }
-
-    #[test]
-    fn modules_policy_measurement_entry_emits_extraction_once() {
-        // A measurement entry emits its extraction family once, whether or not
-        // a transparency_log entry is present.
-        let image = format!("sha256:{}", "c".repeat(64));
-        let policy = build_policy(&modules_cfg(&format!(
+        let image = format!("sha256:{}", hex64('c'));
+        let image_policy = build_policy(&modules_cfg(&format!(
             r#"[{{"type":"com.alibabacloud.container.image.model-server","value":"{image}"}}]"#
         )))
         .expect("build");
-        assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
+        // The image family emits its set extraction once, and never the
+        // single-value form. No digest format regex or blob-length host
+        // function is emitted either.
         assert_eq!(
-            policy.matches("actual_measurement_set(type) :=").count(),
-            1,
-            "{policy}"
-        );
-        assert!(!policy.contains("actual_measurement(type) :="), "{policy}");
-        // The one-line predicate names the canonical (unprefixed) key and
-        // compares a one-element set, which is the single-digest case.
-        assert!(policy.contains(&format!(
-            "m_0_0 if {{\n\tactual_measurement_set(\"container.image.model-server\") == {{\"{image}\"}}\n}}"
-        )));
-        // No format regex is emitted: the pin is validated at load instead.
-        assert!(!policy.contains("regex.match(\"^sha256:"), "{policy}");
-        // The blob-length host function is not part of any generated policy.
-        assert!(!policy.contains("td_payload_blob_length"), "{policy}");
-    }
-
-    #[test]
-    fn modules_policy_no_posture_uses_tdx_recognition_only() {
-        let ovmf = hex96('1');
-        let policy = build_policy(&modules_cfg(&format!(
-            r#"[{{"type":"tdx.ovmf","value":"{ovmf}"}}]"#
-        )))
-        .expect("build");
-        assert!(!policy.contains("group_0_hardware_ok"));
-        assert!(policy.contains("tdx_recognized if {"));
-        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
-        // The empty list declares no dependency: no recognition rule and no
-        // hardware-affirming rule, so the default hardware := 97 applies.
-        let empty = build_policy(&modules_cfg("[]")).expect("build");
-        assert!(empty.contains("default executables := 2"));
-        assert!(empty.contains("default hardware := 97"));
-        assert!(!empty.contains("tdx_recognized"));
-        assert!(!empty.contains("hardware := 2 if {"));
-    }
-
-    #[test]
-    fn modules_policy_rego_snapshot_groups_or() {
-        let policy = build_policy(&modules_cfg(
-        r#"[
-          [{"type":"tdx.ovmf","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
-          [{"type":"tdx.ovmf","value":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]
-        ]"#,
-    ))
-    .expect("build");
-        // two groups -> two OR-ed executables disjuncts
-        assert_eq!(
-            policy.matches("executables := 2 if {").count(),
-            2,
-            "{policy}"
-        );
-        assert_eq!(policy.matches("group_0_executables_ok if {").count(), 1);
-        assert_eq!(policy.matches("group_1_executables_ok if {").count(), 1);
-        // each group carries its own pinned literal; no group-suffixed reference names
-        let (a, b) = ("a".repeat(96), "b".repeat(96));
-        assert!(policy.contains(&format!("actual_measurement(\"tdx.ovmf\") == \"{a}\"")));
-        assert!(policy.contains(&format!("actual_measurement(\"tdx.ovmf\") == \"{b}\"")));
-        // Two entries share one extraction rule.
-        assert_eq!(
-            policy
-                .matches("actual_measurement(\"tdx.ovmf\") :=")
+            image_policy
+                .matches("actual_measurement_set(type) :=")
                 .count(),
             1
         );
-        assert!(!policy.contains("query_reference_value"));
-        assert!(!policy.contains(".g0") && !policy.contains(".g1"));
+        assert_eq!(image_policy.matches("image_repo_name(ref) :=").count(), 1);
+        assert!(!image_policy.contains("actual_measurement(type) :="));
+        assert!(!image_policy.contains("regex.match(\"^sha256:"));
+        assert!(!image_policy.contains("td_payload_blob_length"));
     }
 
     #[test]
@@ -1857,25 +1765,9 @@ mod tests {
     }
 
     #[test]
-    fn modules_policy_tdx_tcb_collateral_rules() {
-        let policy = build_policy(&modules_cfg(
-        r#"[{"type":"tdx","value":{
-            "tcb":{"min_status":"up_to_date","reject_advisories":["INTEL-SA-00001","INTEL-SA-00002"],"allow_advisories":["INTEL-SA-00002"]},
-            "collateral":{"allow_expired":false,"min_tcb_date":"2026-06-01","max_collateral_age_days":30}
-        }}]"#,
-    ))
-    .expect("build");
-        assert!(policy.contains("v.tcb_status != \"Revoked\""));
-        assert!(policy.contains("UpToDate"));
-        assert!(policy.contains("advisory_ids"));
-        // 2026-06-01 UTC midnight -> epoch seconds
-        let epoch = iso_date_to_epoch_secs("2026-06-01").expect("epoch");
-        assert_eq!(epoch, 1780272000);
-        assert!(policy.contains(&format!("tcb_level_date_tag >= {epoch}")));
-        assert!(policy.contains("30 * 86400") || policy.contains("2592000"));
-        assert!(policy.contains("time.now_ns()"));
-
-        // A malformed date is a config error.
+    fn modules_tdx_collateral_min_date_must_be_iso() {
+        // Behavior for valid TCB and collateral gates lives in the dedicated
+        // evaluation tests; this pins only the load-time date validation.
         let err = build_policy(&modules_cfg(
             r#"[{"type":"tdx","value":{"collateral":{"min_tcb_date":"06/01/2026"}}}]"#,
         ))

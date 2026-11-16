@@ -43,8 +43,10 @@ async fn export_config_writes_one_file_per_builtin_policy() -> Result<()> {
     let ingress =
         std::fs::read_to_string(out.join("add_ingress.0.verify.attestation_policy.rego"))?;
     let egress = std::fs::read_to_string(out.join("add_egress.0.verify.attestation_policy.rego"))?;
-    assert!(ingress.contains("package policy"), "{ingress}");
-    assert!(egress.contains("tdx_recognized"), "{egress}");
+    // The export contract is the file layout and that each file holds a Rego
+    // policy. Rule names are internal, so do not pin them here.
+    assert!(ingress.starts_with("package policy"), "{ingress}");
+    assert!(egress.starts_with("package policy"), "{egress}");
     assert!(!out
         .join("add_egress.1.verify.attestation_policy.rego")
         .exists());
@@ -66,6 +68,6 @@ async fn export_standalone_policy_names_the_file_attestation_policy() -> Result<
     .await?;
 
     let source = std::fs::read_to_string(out.join("attestation_policy.rego"))?;
-    assert!(source.contains("package policy"), "{source}");
+    assert!(source.starts_with("package policy"), "{source}");
     Ok(())
 }

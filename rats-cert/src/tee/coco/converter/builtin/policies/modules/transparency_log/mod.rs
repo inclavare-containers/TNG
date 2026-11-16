@@ -1007,8 +1007,11 @@ mod tests {
 
     // --- Rego shape --------------------------------------------------------
 
+    /// The generated Rego is the artifact the AS loads, so the structural
+    /// guarantees behavior cannot observe directly stay pinned here. Semantics
+    /// are covered by the equivalence corpus.
     #[test]
-    fn transparency_log_shared_rules_emitted_once() {
+    fn transparency_log_rego_shape_contract() {
         let resolved = [
             Some(ResolvedRekor {
                 payload_hash: "00".repeat(32),
@@ -1035,172 +1038,29 @@ mod tests {
         // Per-entry prefixes keep the two entries' baked data apart.
         assert!(policy.contains("t_0_0_payload_hash := "), "{policy}");
         assert!(policy.contains("t_0_1_payload_hash := "), "{policy}");
-        assert!(policy.contains("t_0_0_reconstructed_manifest"), "{policy}");
-        assert!(policy.contains("t_0_1_reconstructed_manifest"), "{policy}");
-        assert!(policy.contains("m_0_0 if {"), "{policy}");
-        assert!(policy.contains("m_0_1 if {"), "{policy}");
 
         // The shared extraction is emitted once per family for the whole
         // policy, and each needed helper once.
-        assert_eq!(
-            policy
-                .matches("actual_measurement(\"tdx.td-shim\") :=")
-                .count(),
-            1
-        );
-        assert_eq!(
-            policy
-                .matches("actual_measurement(\"tdx.kernel\") :=")
-                .count(),
-            1
-        );
-        assert_eq!(policy.matches("actual_measurement_set(type) :=").count(), 1);
+        for rule in [
+            "actual_measurement(\"tdx.td-shim\") :=",
+            "actual_measurement(\"tdx.kernel\") :=",
+            "actual_measurement(\"rootfs.cc\") :=",
+            "actual_measurement_set(type) :=",
+            "image_repo_name(ref) :=",
+            "has_sha384_digest(e) if {",
+        ] {
+            assert_eq!(
+                policy.matches(rule).count(),
+                1,
+                "rule {rule:?} must be emitted once"
+            );
+        }
+
+        // The single-value image extraction and the removed reference-value
+        // and blob-length helpers never appear.
         assert!(!policy.contains("actual_measurement(type) :="), "{policy}");
-        assert_eq!(policy.matches("image_repo_name(ref) :=").count(), 1);
-        assert_eq!(policy.matches("has_sha384_digest(e) if {").count(), 1);
-        assert_eq!(
-            policy
-                .matches("actual_measurement(\"rootfs.cc\") :=")
-                .count(),
-            1
-        );
-        // An image type expands to one entry per observed digest, sorted by
-        // digest; a non-image type stays a single literal entry.
-        assert!(
-            policy.contains(
-                "digests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
-            ),
-            "{policy}"
-        );
-        assert!(
-            policy.contains(
-                "{\"type\": \"container.image.cmaas-runtime\", \"value\": d} | some d in digests"
-            ),
-            "{policy}"
-        );
-        assert!(
-            policy.contains(
-                "{\"type\": \"tdx.kernel\", \"value\": actual_measurement(\"tdx.kernel\")}"
-            ),
-            "{policy}"
-        );
-        assert!(policy.contains("array.concat("), "{policy}");
         assert!(!policy.contains("query_reference_value"));
         assert!(!policy.contains("td_payload_blob_length"), "{policy}");
-
-        // Both predicates AND into the group's executables dimension, which is
-        // non-affirming by default.
-        assert!(policy.contains("default executables := 97"));
-        assert!(policy.contains("group_0_executables_ok if {\n\tm_0_0\n\tm_0_1\n}"));
-        assert!(policy.contains("executables := 2 if {\n\tgroup_0_executables_ok\n}"));
-        // Both entries publish a rootfs measurement, so the file_system
-        // dimension is constrained too, still with one shared extraction rule.
-        assert!(policy.contains("default file_system := 97"));
-        assert!(policy.contains("group_0_file_system_ok if {\n\tm_0_0\n\tm_0_1\n}"));
-        assert!(policy.contains("file_system := 2 if {\n\tgroup_0_file_system_ok\n}"));
-
-        // Transparency gates no hardware; hardware is recognition only.
-        assert!(!policy.contains("group_0_hardware_ok"));
-        assert!(policy.contains("hardware := 2 if {\n\ttdx_recognized\n}"));
-    }
-
-    #[test]
-    fn transparency_log_renders_arbitrary_container_repo_with_trim_prefix() {
-        let resolved = ResolvedRekor {
-            payload_hash: "00".repeat(32),
-            dsse_signature: "sig".to_string(),
-            publisher_key: "key".to_string(),
-        };
-        let policy = render_rekor(&["container.image.busybox"], &resolved);
-
-        assert!(policy.contains("\"container.image.busybox\""), "{policy}");
-        assert!(
-            policy.contains("repo := trim_prefix(type, \"container.image.\")"),
-            "{policy}"
-        );
-        assert!(
-            !policy.contains("repo := replace(type, \"container.image.\", \"\")"),
-            "{policy}"
-        );
-    }
-
-    #[test]
-    fn transparency_log_artifact_server_rego() {
-        let policy = render(
-            json!([transparency_entry(artifact_entry_value(
-                "https://attest.example.com",
-                "https://rekor.sigstore.dev",
-                Some(("https://fallback.example.com", 42)),
-            ))]),
-            &[None],
-        );
-
-        assert!(policy.contains("tng.resolve_artifact_server"), "{policy}");
-        assert!(policy.contains("tng.fetch_rekor_on_demand"), "{policy}");
-        assert!(
-            policy.contains("\"https://attest.example.com\""),
-            "{policy}"
-        );
-        assert!(
-            policy.contains("t_0_0_primary_status := tng.resolve_artifact_server"),
-            "{policy}"
-        );
-        // An undefined full manifest (a declaration whose measurement cannot
-        // be extracted) is "fail", not "deny", so the fallback is consulted.
-        assert!(
-            policy.contains("t_0_0_primary_status := \"fail\" if {"),
-            "{policy}"
-        );
-        assert!(policy.contains("not t_0_0_full_manifest"), "{policy}");
-        assert!(
-            policy.contains(
-                "tng.resolve_artifact_server([t_0_0_artifact_server_url, json.marshal(t_0_0_full_manifest)"
-            ),
-            "{policy}"
-        );
-        assert!(
-            policy.contains("json.marshal(t_0_0_log_services), t_0_0_publisher_key]) if {"),
-            "{policy}"
-        );
-        assert!(
-            policy.contains("m_0_0 if { t_0_0_primary_status == \"ok\" }"),
-            "{policy}"
-        );
-        assert!(
-            policy.contains("t_0_0_primary_status == \"fail\""),
-            "{policy}"
-        );
-        assert!(policy.contains("t_0_0_fallback_manifest"), "{policy}");
-        // Both the primary and the fallback expand an image type per digest
-        // through the same ordered assembly.
-        assert_eq!(
-            policy
-                .matches("sort(actual_measurement_set(\"container.image.cmaas-runtime\"))")
-                .count(),
-            2,
-            "{policy}"
-        );
-        // The artifact-server primary bakes no payloadHash.
-        assert!(!policy.contains("payload_hash :="), "{policy}");
-
-        // Without a fallback, no fallback rules are emitted.
-        let no_fallback = render(
-            json!([transparency_entry(artifact_entry_value(
-                "https://attest.example.com",
-                "https://rekor.sigstore.dev",
-                None,
-            ))]),
-            &[None],
-        );
-        assert!(!no_fallback.contains("t_0_0_fallback"), "{no_fallback}");
-        assert!(
-            !no_fallback.contains("fetch_rekor_on_demand"),
-            "{no_fallback}"
-        );
-        assert!(
-            no_fallback.contains("m_0_0 if { t_0_0_primary_status == \"ok\" }"),
-            "{no_fallback}"
-        );
     }
 
     // --- repeat semantics ---------------------------------------------------
@@ -1516,34 +1376,6 @@ mod tests {
             (2, 2, 2, 2),
             "a single published digest must still affirm"
         );
-    }
-
-    #[test]
-    fn transparency_log_artifact_server_fallback_expands_image_digests() {
-        let value = json!({
-            "publishedMeasurements": ["container.image.cmaas-runtime"],
-            "schemaVersion": "1.0.0",
-            "services": [{
-                "type": "artifact-server",
-                "url": "https://attest.example.com",
-                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
-            }],
-            "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
-            "fallbackServices": [{
-                "type": "rekor-v1",
-                "logUrl": "https://fallback.example.com",
-                "logIndex": 1,
-            }],
-        });
-        let policy = render(json!([transparency_entry(value)]), &[None]);
-        // Both manifests expand through the same per-type rule, so each image
-        // type gets one sorted-digest comprehension.
-        assert!(policy.contains(
-            "t_0_0_fallback_manifest_entries_0 := entries if {\n\tdigests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
-        ), "{policy}");
-        assert!(policy.contains(
-            "t_0_0_full_manifest_entries_0 := entries if {\n\tdigests := sort(actual_measurement_set(\"container.image.cmaas-runtime\"))"
-        ), "{policy}");
     }
 
     #[cfg(feature = "crypto-rustcrypto")]
@@ -1914,8 +1746,6 @@ mod tests {
         // Rootfs only: the entry gates file_system alone.
         let rootfs_manifest = manifest("1.0.0", &[("rootfs.cc", root.as_str())]);
         let rootfs_policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&rootfs_manifest));
-        assert!(rootfs_policy.contains("group_0_file_system_ok if {"));
-        assert!(!rootfs_policy.contains("group_0_executables_ok"));
         assert_eq!(
             eval_policy_vector(&rootfs_policy, &tdx_input(&[rootfs_event(Some(2), &root)])).await,
             (2, 2, 2, 2)
@@ -1943,8 +1773,6 @@ mod tests {
             &["rootfs.cc", "tdx.kernel"],
             &resolved_from_manifest(&mixed_manifest),
         );
-        assert!(mixed_policy.contains("group_0_file_system_ok if {"));
-        assert!(mixed_policy.contains("group_0_executables_ok if {"));
 
         let both = tdx_input(&[
             rootfs_event(Some(2), &root),
@@ -2314,23 +2142,6 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             (97, 2, 2, 2),
             "wrong DSSE signature must reject against the built-in publisher key"
         );
-    }
-
-    #[test]
-    fn transparency_log_rekor_always_emits_dsse_verify() {
-        let resolved = ResolvedRekor {
-            payload_hash: "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
-                .to_string(),
-            dsse_signature: "sig".to_string(),
-            publisher_key: "key".to_string(),
-        };
-        let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
-        assert!(
-            policy.contains("tng.verify_dsse_signature("),
-            "a rekor-v1 entry must always emit DSSE verification: {policy}"
-        );
-        assert!(policy.contains("t_0_0_dsse_signature := "));
-        assert!(policy.contains("t_0_0_publisher_key := "));
     }
 
     #[test]
@@ -3188,7 +2999,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[test]
     fn secure_proxy_readme_json_round_trips() {
         let json = fixtures::SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON;
-        let policy: PolicyConfig = serde_json::from_str(&json).expect("parse into PolicyConfig");
+        let policy: PolicyConfig = serde_json::from_str(json).expect("parse into PolicyConfig");
         let PolicyConfig::Modules { modules } = &policy else {
             panic!("fixture must be a modules policy");
         };
