@@ -264,7 +264,7 @@ pub(super) fn family_of_module(module: &Module) -> Option<MeasurementFamily> {
         Module::RootfsCc { .. } => Some(MeasurementFamily::RootfsCc),
         Module::ContainerImage { .. } => Some(MeasurementFamily::ContainerImage),
         Module::AiModel { .. } => Some(MeasurementFamily::AiModel),
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
+        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog { .. } => None,
     }
 }
 
@@ -279,7 +279,7 @@ fn measurement_name(module: &Module) -> Option<&str> {
         | Module::Kernel { .. }
         | Module::Uki { .. }
         | Module::RootfsCc { .. } => Some(""),
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog(_) => None,
+        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog { .. } => None,
     }
 }
 
@@ -303,7 +303,7 @@ fn measurement_pin(module: &Module) -> Option<&str> {
         | Module::Tdx(_)
         | Module::Nvidia(_)
         | Module::Gpu
-        | Module::TransparencyLog(_) => None,
+        | Module::TransparencyLog { .. } => None,
     }
 }
 

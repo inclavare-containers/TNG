@@ -7,8 +7,8 @@
 #![allow(dead_code)] // each test module uses a different subset
 
 use super::super::policy_config::ModuleGroupsConfig;
-use super::modules::build_modules_policy_with_resolved;
 use super::modules::transparency_log::ResolvedRekor;
+use super::modules::{parse_module_groups, render_modules_policy, Module};
 use serde_json::{json, Value};
 
 /// Compile-time fixture loading. A test that reads these passes regardless of
@@ -377,13 +377,35 @@ pub(crate) fn artifact_entry_value(
 
 // --- Policy rendering helpers ---------------------------------------------
 
-/// Render a modules policy from a parsed config and already-resolved rekor
-/// data (one slot per transparency entry, in flatten order).
+/// Render a modules policy from a parsed config and injected resolved rekor
+/// data, without network I/O. `resolved` holds one slot per transparency entry,
+/// in flatten order. The slots are attached to the parsed module tree before
+/// the pure render phase runs.
 pub(in crate::tee::coco::converter::builtin::policies) fn render_modules(
     config: &ModuleGroupsConfig,
     resolved: &[Option<ResolvedRekor>],
 ) -> String {
-    build_modules_policy_with_resolved(config, resolved).expect("render modules policy")
+    let mut groups = parse_module_groups(config).expect("parse modules policy");
+    attach_resolved(&mut groups, resolved);
+    render_modules_policy(&groups).expect("render modules policy")
+}
+
+/// Attach injected resolved data to the transparency entries of a parsed
+/// module tree, in flatten order.
+fn attach_resolved(groups: &mut [Vec<Module>], resolved: &[Option<ResolvedRekor>]) {
+    let mut slots = resolved.iter();
+    for module in groups.iter_mut().flatten() {
+        if let Module::TransparencyLog { resolved: slot, .. } = module {
+            *slot = slots
+                .next()
+                .expect("resolved data for every transparency_log entry")
+                .clone();
+        }
+    }
+    assert!(
+        slots.next().is_none(),
+        "no resolved data left over after every transparency_log entry"
+    );
 }
 
 /// [`render_modules`] from a JSON entries value.

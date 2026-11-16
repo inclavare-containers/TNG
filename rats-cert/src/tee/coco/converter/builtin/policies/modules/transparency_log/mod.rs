@@ -6,8 +6,8 @@ use super::super::super::transparency::{artifact_server, rekor_v1};
 
 /// The authenticated data a rekor-v1 primary contributes to an entry: the baked
 /// payloadHash plus the DSSE signature and publisher key used at appraisal.
-#[derive(Debug, Clone)]
-pub(in crate::tee::coco::converter::builtin::policies) struct ResolvedRekor {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedRekor {
     pub payload_hash: String,
     pub dsse_signature: String,
     pub publisher_key: String,
@@ -368,7 +368,11 @@ mod tests {
         let groups = parse_module_groups(&flat).expect("validate");
         assert_eq!(groups.len(), 1);
         match &groups[0][0] {
-            Module::TransparencyLog(cfg) => {
+            Module::TransparencyLog {
+                config: cfg,
+                resolved,
+            } => {
+                assert!(resolved.is_none(), "parse does not resolve rekor data");
                 assert_eq!(cfg.published_measurements, vec!["tdx.td-shim".to_string()]);
                 assert_eq!(cfg.schema_version, "1.0.0");
                 assert_eq!(cfg.services.len(), 1);
@@ -393,8 +397,8 @@ mod tests {
         .expect("parse");
         let groups = parse_module_groups(&nested).expect("validate");
         assert_eq!(groups.len(), 2);
-        assert!(matches!(groups[0][0], Module::TransparencyLog(_)));
-        assert!(matches!(groups[1][0], Module::TransparencyLog(_)));
+        assert!(matches!(groups[0][0], Module::TransparencyLog { .. }));
+        assert!(matches!(groups[1][0], Module::TransparencyLog { .. }));
     }
 
     #[test]
@@ -412,7 +416,7 @@ mod tests {
         let cfg: ModuleGroupsConfig =
             serde_json::from_value(json!([transparency_entry(value)])).expect("parse");
         let groups = parse_module_groups(&cfg).expect("validate");
-        let Module::TransparencyLog(entry) = &groups[0][0] else {
+        let Module::TransparencyLog { config: entry, .. } = &groups[0][0] else {
             panic!("expected TransparencyLog");
         };
         assert_eq!(entry.schema_version, "1.0.0");

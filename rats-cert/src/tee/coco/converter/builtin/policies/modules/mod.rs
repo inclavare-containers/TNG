@@ -60,7 +60,13 @@ pub(crate) enum Module {
     /// transparency log. Gates the dimensions implied by its published
     /// measurement types; platform posture is expressed by a separate `tdx`
     /// entry.
-    TransparencyLog(TransparencyLogEntryConfig),
+    TransparencyLog {
+        config: TransparencyLogEntryConfig,
+        /// Authenticated rekor data for a rekor-v1 primary, filled by the
+        /// resolve phase. An artifact-server primary resolves its manifest at
+        /// appraisal time and stays `None`.
+        resolved: Option<ResolvedRekor>,
+    },
 }
 
 impl Module {
@@ -72,7 +78,7 @@ impl Module {
             return std::iter::once(family.dimension()).collect();
         }
         match self {
-            Module::TransparencyLog(cfg) => cfg
+            Module::TransparencyLog { config, .. } => config
                 .published_measurements
                 .iter()
                 .filter_map(|t| families::dimension_for_published_type(t))
@@ -214,7 +220,10 @@ impl ModuleEntryConfig {
                 value_obj()?;
                 let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
                     .context("invalid transparency_log config")?;
-                Ok(Module::TransparencyLog(cfg))
+                Ok(Module::TransparencyLog {
+                    config: cfg,
+                    resolved: None,
+                })
             }
         }
     }
@@ -300,61 +309,34 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// their affirming defaults.
 ///
 /// A `transparency_log` entry with a rekor-v1 primary fetches and authenticates
-/// its log entry here, before rendering. An artifact-server primary defers to
+/// its log entry during the resolve phase. An artifact-server primary defers to
 /// appraisal time and does no I/O at load.
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
-    let groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
+    // Parse and validate the config, resolve the rekor primaries (the only
+    // load-time I/O), then render from the fully-resolved module tree.
+    let mut groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
+    resolve_module_groups(&mut groups).await?;
+    render_modules_policy(&groups).map_err(Error::BuiltinPolicyTemplateFailed)
+}
 
-    let resolved = {
-        let mut resolved = Vec::new();
-        for module in groups.iter().flatten() {
-            if let Module::TransparencyLog(cfg) = module {
-                resolved.push(
-                    transparency_log::resolve_entry(cfg)
-                        .await
-                        .map_err(Error::TransparencyLogFetchFailed)?,
-                );
-            }
+/// Fetch and authenticate every rekor-v1 primary, storing its data on the
+/// module entry. Artifact-server primaries resolve at appraisal time and stay
+/// unresolved here.
+async fn resolve_module_groups(groups: &mut [Vec<Module>]) -> Result<()> {
+    for module in groups.iter_mut().flatten() {
+        if let Module::TransparencyLog { config, resolved } = module {
+            *resolved = transparency_log::resolve_entry(config)
+                .await
+                .map_err(Error::TransparencyLogFetchFailed)?;
         }
-        resolved
-    };
-
-    render_modules_policy(&groups, &resolved).map_err(Error::BuiltinPolicyTemplateFailed)
-}
-
-/// Render a policy from already-parsed entries and already-resolved rekor data,
-/// performing no network I/O. `resolved` holds one slot per `transparency_log`
-/// entry in flatten order: `Some` for a rekor-v1 primary, `None` for an
-/// artifact-server primary.
-#[cfg(test)]
-pub(super) fn build_modules_policy_with_resolved(
-    config: &ModuleGroupsConfig,
-    resolved: &[Option<ResolvedRekor>],
-) -> anyhow::Result<String> {
-    let groups = parse_module_groups(config)?;
-    render_modules_policy(&groups, resolved)
-}
-
-fn render_modules_policy(
-    groups: &[Vec<Module>],
-    resolved: &[Option<ResolvedRekor>],
-) -> anyhow::Result<String> {
-    // Entries are associated with resolved slots by position, so the two
-    // sequences must line up exactly. Reject a mismatch up front: an
-    // over-supplied slice would otherwise be silently ignored.
-    let transparency_entries = groups
-        .iter()
-        .flatten()
-        .filter(|m| matches!(m, Module::TransparencyLog(_)))
-        .count();
-    if transparency_entries != resolved.len() {
-        anyhow::bail!(
-            "resolved rekor data has {} slots for {} transparency_log entries",
-            resolved.len(),
-            transparency_entries
-        );
     }
-    let mut resolved_entries = resolved.iter();
+    Ok(())
+}
+
+/// Render a policy from a parsed module tree, performing no I/O. A rekor-v1
+/// transparency entry renders from its resolved data; an artifact-server
+/// primary renders the appraisal-time resolve path.
+pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<String> {
     let mut helpers: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
@@ -387,18 +369,10 @@ fn render_modules_policy(
                 }
                 Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
                 Module::Gpu => gpu_posture_rule(&pred),
-                Module::TransparencyLog(cfg) => {
-                    // Every transparency entry consumes its own resolved slot,
-                    // in flatten order, so multiple entries cannot share or
-                    // overwrite each other's baked data.
-                    let entry = resolved_entries.next().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "no resolved rekor data for transparency_log entry m_{gi}_{j}"
-                        )
-                    })?;
-                    families.extend_published_types(&cfg.published_measurements);
+                Module::TransparencyLog { config, resolved } => {
+                    families.extend_published_types(&config.published_measurements);
                     let prefix = format!("t_{gi}_{j}");
-                    transparency_log::build_entry_rules(cfg, entry.as_ref(), &pred, &prefix)?
+                    transparency_log::build_entry_rules(config, resolved.as_ref(), &pred, &prefix)?
                 }
                 measurement => {
                     if let Some(family) = families::family_of_module(measurement) {
@@ -782,7 +756,8 @@ mod tests {
     /// Render a policy without network I/O. None of these tests use a
     /// `transparency_log` entry, so no resolved rekor data is needed.
     fn build_policy(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
-        build_modules_policy_with_resolved(config, &[])
+        let groups = parse_module_groups(config)?;
+        render_modules_policy(&groups)
     }
 
     #[test]
