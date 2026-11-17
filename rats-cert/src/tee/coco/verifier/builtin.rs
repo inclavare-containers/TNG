@@ -11,6 +11,7 @@ use crate::{errors::*, tee::GenericVerifier};
 
 pub struct BuiltinCocoVerifier {
     inner: CommonCocoVerifier,
+    trusted_certs: Vec<CertificateDer<'static>>,
 }
 
 impl BuiltinCocoVerifier {
@@ -18,7 +19,7 @@ impl BuiltinCocoVerifier {
         let config = AttestationTokenVerifierConfig {
             #[cfg(not(wasm))]
             trusted_certs_paths: Default::default(),
-            trusted_certs,
+            trusted_certs: trusted_certs.clone(),
             trusted_jwk_sets: Default::default(),
             as_addr: None,
             as_headers: None,
@@ -37,7 +38,14 @@ impl BuiltinCocoVerifier {
                 // Builtin AS does not support signer transparency verification
                 verify_signer_transparency: false,
             },
+            trusted_certs,
         })
+    }
+
+    /// The signer chain this verifier trusts. Exposed so a caller that pairs it
+    /// with a builtin converter can confirm both sides share one signer.
+    pub fn trusted_certs(&self) -> &[CertificateDer<'static>] {
+        &self.trusted_certs
     }
 }
 

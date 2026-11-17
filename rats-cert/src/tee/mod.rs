@@ -116,6 +116,45 @@ pub trait GenericConverter {
     async fn get_nonce(&self) -> Result<Self::Nonce>;
 }
 
+/// How a converter obtains the AS challenge nonce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonceCapability {
+    /// The AS issues a real signed challenge, so evidence freshness can be
+    /// bound to it.
+    Signed,
+    /// A real challenge on current servers, a fixed dummy value on servers
+    /// that predate the challenge API.
+    SignedOrDummy,
+    /// Always a fixed dummy value; freshness cannot be bound.
+    Dummy,
+}
+
+/// Whether a converter retries with an older AS request shape after a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallbackCapability {
+    /// No automatic protocol downgrade.
+    None,
+    /// Downgrades only for the error that identifies an old server.
+    OnSpecificError,
+    /// Downgrades on any conversion error.
+    OnAnyError,
+}
+
+/// Observable behavior differences between converter implementations.
+///
+/// These describe what a converter does today; they are not knobs. Callers use
+/// them to explain outcomes (for example why a nonce is not a real challenge)
+/// without re-deriving the behavior of each adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConverterCapabilities {
+    pub nonce: NonceCapability,
+    pub fallback: FallbackCapability,
+    /// Whether caller-supplied policy IDs reach the AS.
+    pub policy_ids: bool,
+    /// Whether additional evidence is forwarded to the AS.
+    pub additional_evidence: bool,
+}
+
 /// Blanket implementation for references to attesters.
 #[cfg_attr(wasm, async_trait::async_trait(?Send))]
 #[cfg_attr(not(wasm), async_trait::async_trait)]

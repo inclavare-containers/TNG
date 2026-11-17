@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use attestation_service::{AttestationService, HashAlgorithm, Tee};
+use rustls_pki_types::CertificateDer;
 
 use super::super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use super::super::convert_additional_evidence;
@@ -13,7 +14,7 @@ use super::transparency::TransparencyCaches;
 use super::DEFAULT_POLICY_ID;
 use crate::errors::*;
 use crate::tee::coco::verifier::builtin::BuiltinCocoVerifier;
-use crate::tee::GenericConverter;
+use crate::tee::{ConverterCapabilities, FallbackCapability, GenericConverter, NonceCapability};
 
 /// Builtin CoCo Converter
 ///
@@ -282,6 +283,24 @@ impl BuiltinCocoConverter {
 
     pub async fn new_verifier(&self) -> Result<BuiltinCocoVerifier> {
         BuiltinCocoVerifier::new(self.self_signed_signer.cert_chain.clone()).await
+    }
+
+    /// The self-signed certificate chain this in-process AS signs tokens with.
+    /// The matching verifier must trust exactly this chain.
+    pub fn signer_cert_chain(&self) -> &[CertificateDer<'static>] {
+        &self.self_signed_signer.cert_chain
+    }
+
+    /// The in-process AS has no remote address and no protocol to fall back
+    /// to, issues its own signed challenge, and evaluates the caller's
+    /// evidence directly, so `policy_ids` never leaves the process.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        ConverterCapabilities {
+            nonce: NonceCapability::Signed,
+            fallback: FallbackCapability::None,
+            policy_ids: false,
+            additional_evidence: true,
+        }
     }
 }
 

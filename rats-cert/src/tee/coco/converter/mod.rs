@@ -8,7 +8,7 @@ use super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use crate::errors::*;
 #[cfg(feature = "__builtin-as")]
 use crate::tee::coco::converter::builtin::BuiltinCocoConverter;
-use crate::tee::GenericConverter;
+use crate::tee::{ConverterCapabilities, GenericConverter};
 
 #[cfg(feature = "__builtin-as")]
 pub mod builtin;
@@ -30,6 +30,16 @@ impl CocoConverter {
             CocoConverter::Grpc(c) => c.as_addr(),
             #[cfg(feature = "__builtin-as")]
             CocoConverter::Builtin(c) => c.as_addr(),
+        }
+    }
+
+    /// The observable behavior of the selected adapter.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        match self {
+            CocoConverter::Restful(c) => c.capabilities(),
+            CocoConverter::Grpc(c) => c.capabilities(),
+            #[cfg(feature = "__builtin-as")]
+            CocoConverter::Builtin(c) => c.capabilities(),
         }
     }
 }
@@ -71,5 +81,85 @@ pub(crate) fn convert_additional_evidence(
         Ok(additional_evidence_map.into_iter().collect())
     } else {
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tee::{FallbackCapability, NonceCapability};
+    use std::collections::HashMap;
+
+    #[test]
+    fn restful_capabilities_match_its_fallback_and_nonce_behavior() {
+        let converter =
+            CocoRestfulConverter::new("http://127.0.0.1:8080", &Vec::new(), &HashMap::new())
+                .expect("restful converter builds without a connection");
+        assert_eq!(
+            converter.capabilities(),
+            ConverterCapabilities {
+                nonce: NonceCapability::SignedOrDummy,
+                fallback: FallbackCapability::OnSpecificError,
+                policy_ids: true,
+                additional_evidence: true,
+            }
+        );
+    }
+
+    #[test]
+    fn grpc_capabilities_match_its_fallback_and_nonce_behavior() {
+        let converter =
+            CocoGrpcConverter::new("http://127.0.0.1:5000", &Vec::new(), &HashMap::new())
+                .expect("grpc converter builds without a connection");
+        assert_eq!(
+            converter.capabilities(),
+            ConverterCapabilities {
+                nonce: NonceCapability::Dummy,
+                fallback: FallbackCapability::OnAnyError,
+                policy_ids: true,
+                additional_evidence: false,
+            }
+        );
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    async fn builtin_capabilities_match_its_in_process_behavior() {
+        use crate::tee::coco::converter::builtin::{BuiltinCocoConverter, PolicyConfig};
+
+        let converter = BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[])
+            .await
+            .expect("builtin converter builds");
+        assert_eq!(
+            converter.capabilities(),
+            ConverterCapabilities {
+                nonce: NonceCapability::Signed,
+                fallback: FallbackCapability::None,
+                policy_ids: false,
+                additional_evidence: true,
+            }
+        );
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    async fn builtin_converter_and_its_verifier_share_the_signer_chain() {
+        use crate::tee::coco::converter::builtin::{BuiltinCocoConverter, PolicyConfig};
+
+        let converter = BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[])
+            .await
+            .expect("builtin converter builds");
+        let verifier = converter
+            .new_verifier()
+            .await
+            .expect("builtin verifier builds from the converter");
+        assert_eq!(verifier.trusted_certs(), converter.signer_cert_chain());
+
+        // Each converter generates a fresh self-signed identity, so a verifier
+        // built from a different converter does not share this chain.
+        let other = BuiltinCocoConverter::new(&PolicyConfig::HardwareOnly, &[])
+            .await
+            .expect("second builtin converter builds");
+        assert_ne!(other.signer_cert_chain(), converter.signer_cert_chain());
     }
 }

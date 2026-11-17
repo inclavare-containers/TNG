@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::super::evidence::{AttestationServiceHashAlgo, CocoAsToken, CocoEvidence};
 use crate::errors::*;
 use crate::tee::coco::converter::convert_additional_evidence;
-use crate::tee::GenericConverter;
+use crate::tee::{ConverterCapabilities, FallbackCapability, GenericConverter, NonceCapability};
 
 #[derive(Debug, Clone, Copy)]
 pub enum RestfulAsApiVersion {
@@ -70,6 +70,18 @@ impl CocoRestfulConverter {
     /// The attestation-service base address this converter targets.
     pub fn as_addr(&self) -> &str {
         &self.as_addr
+    }
+
+    /// The v1.6.0 request shape is primary; only the old-server error text
+    /// triggers the v1.5.2 fallback. The challenge API likewise yields a real
+    /// nonce unless the server predates it.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        ConverterCapabilities {
+            nonce: NonceCapability::SignedOrDummy,
+            fallback: FallbackCapability::OnSpecificError,
+            policy_ids: true,
+            additional_evidence: true,
+        }
     }
 }
 

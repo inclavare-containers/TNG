@@ -10,7 +10,7 @@ use super::super::evidence::{
 };
 use crate::errors::*;
 use crate::tee::coco::converter::convert_additional_evidence;
-use crate::tee::GenericConverter;
+use crate::tee::{ConverterCapabilities, FallbackCapability, GenericConverter, NonceCapability};
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod as_api {
@@ -67,6 +67,17 @@ impl CocoGrpcConverter {
     /// The attestation-service gRPC address this converter targets.
     pub fn as_addr(&self) -> &str {
         &self.as_addr
+    }
+
+    /// gRPC has no challenge API, so the nonce is always a dummy value, and
+    /// any v1.6.0 failure is retried with the v1.5.2 request shape.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        ConverterCapabilities {
+            nonce: NonceCapability::Dummy,
+            fallback: FallbackCapability::OnAnyError,
+            policy_ids: true,
+            additional_evidence: false,
+        }
     }
 }
 

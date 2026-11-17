@@ -7,7 +7,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::*;
-use crate::tee::GenericConverter;
+use crate::tee::{ConverterCapabilities, FallbackCapability, GenericConverter, NonceCapability};
 
 use super::evidence::{ItaEvidence, ItaNonce};
 use super::token::ItaToken;
@@ -87,6 +87,18 @@ impl ItaConverter {
     /// The ITA portal base URL this converter targets.
     pub fn as_addr(&self) -> &str {
         &self.base_url
+    }
+
+    /// ITA issues a real verifier nonce, has no older request shape to fall
+    /// back to, and takes the caller's policy IDs in the appraisal request.
+    /// Its retry loop is transport-level and does not change the request.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        ConverterCapabilities {
+            nonce: NonceCapability::Signed,
+            fallback: FallbackCapability::None,
+            policy_ids: true,
+            additional_evidence: false,
+        }
     }
 
     fn is_retryable_error(status: reqwest::StatusCode, body: &str) -> bool {
@@ -242,6 +254,20 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -- is_retryable_error --
+
+    #[test]
+    fn capabilities_describe_the_ita_request_path() {
+        let converter = ItaConverter::new("key", "https://unused.example.com", &[]).unwrap();
+        assert_eq!(
+            converter.capabilities(),
+            ConverterCapabilities {
+                nonce: NonceCapability::Signed,
+                fallback: FallbackCapability::None,
+                policy_ids: true,
+                additional_evidence: false,
+            }
+        );
+    }
 
     #[test]
     fn retryable_on_server_error() {
