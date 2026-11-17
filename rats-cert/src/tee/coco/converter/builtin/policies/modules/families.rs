@@ -638,9 +638,8 @@ image_repo_name(ref) := name if {
 }";
 #[cfg(test)]
 mod tests {
-    use super::super::super::test_support::{
-        eval_policy_vector, pai_event_log_events, tdx_input_with_body,
-    };
+    use super::super::super::super::test_fixtures::{pai_event_log_events, tdx_input_with_body};
+    use super::super::super::test_harness::eval_policy_vector;
     use super::*;
     use serde_json::json;
 

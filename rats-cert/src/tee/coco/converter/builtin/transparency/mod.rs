@@ -66,12 +66,12 @@ pub(crate) async fn authenticate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tee::coco::converter::builtin::policies::test_support::{
-        cmaas_transparency_tuple, rekor_entries_body, resolve_response_body,
-        DSSE_PUBLISHER_PUB_KEY_PEM, SIGSTORE_REKOR_V1_PUB_KEY_PEM,
-    };
     use crate::tee::coco::converter::builtin::policy_config::{
         ArtifactLogService, TransparencyServiceConfig,
+    };
+    use crate::tee::coco::converter::builtin::test_fixtures::{
+        cmaas_transparency_tuple, rekor_entries_body, resolve_response_body,
+        DSSE_PUBLISHER_PUB_KEY_PEM, SIGSTORE_REKOR_V1_PUB_KEY_PEM,
     };
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};

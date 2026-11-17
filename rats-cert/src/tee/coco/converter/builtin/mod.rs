@@ -9,6 +9,8 @@ mod policies;
 mod policy_config;
 mod reference_values;
 mod signer;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 mod transparency;
 
 pub use converter::BuiltinCocoConverter;

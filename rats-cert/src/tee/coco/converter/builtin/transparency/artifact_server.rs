@@ -469,9 +469,10 @@ fn resolve_publisher_key(
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
     use super::*;
-    use crate::tee::coco::converter::builtin::policies::test_support::{
-        cmaas_transparency_tuple, fixtures, invoke_extension, rekor_entries_body,
-        DSSE_PUBLISHER_PUB_KEY_PEM, SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+    use crate::tee::coco::converter::builtin::policies::test_harness::invoke_extension;
+    use crate::tee::coco::converter::builtin::test_fixtures::{
+        cmaas_transparency_tuple, rekor_entries_body, DSSE_PUBLISHER_PUB_KEY_PEM,
+        SIGSTORE_REKOR_V1_PUB_KEY_PEM,
     };
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -513,7 +514,10 @@ mod tests {
     // Reuse the existing rekor_v1 fixture entry to build a mock
     // /api/v1/log/entries response: the wire format is `{uuid: entry}`.
     fn rekor_entries_response_body() -> String {
-        let entry: serde_json::Value = serde_json::from_str(fixtures::REKOR_V1_ENTRY_JSON).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(
+            crate::tee::coco::converter::builtin::test_fixtures::REKOR_V1_ENTRY_JSON,
+        )
+        .unwrap();
         rekor_entries_body(&entry)
     }
 

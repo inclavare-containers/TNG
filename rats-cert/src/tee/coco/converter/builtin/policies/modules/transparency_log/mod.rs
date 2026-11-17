@@ -208,17 +208,22 @@ pub(super) fn build_entry_rules(
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::load_policy;
-    use super::super::super::test_support::fixtures;
-    use super::super::super::test_support::{
-        aael_event, aael_event_for_reference, artifact_entry_value,
-        cmaas_fixture_quote_and_eventlog, cmaas_tdx_input, cmaas_transparency_tuple,
-        eval_policy_vector, hex64, hex96, jcs_compact, manifest, pai_tdx_input, rekor_entries_body,
-        rekor_entry_value, render_modules_json as render, render_rekor, rootfs_event, sha256_hex,
-        td_payload_event, tdx_input, tdx_quote_input, transparency_entry, TDX_VENDOR_ID,
-    };
+    use super::super::super::super::test_fixtures;
     #[cfg(feature = "crypto-rustcrypto")]
-    use super::super::super::test_support::{resolve_response_body, resolved_from_manifest};
+    use super::super::super::super::test_fixtures::resolve_response_body;
+    use super::super::super::super::test_fixtures::{
+        aael_event, aael_event_for_reference, artifact_entry_value,
+        cmaas_fixture_quote_and_eventlog, cmaas_tdx_input, cmaas_transparency_tuple, hex64, hex96,
+        jcs_compact, manifest, pai_tdx_input, rekor_entries_body, rekor_entry_value, rootfs_event,
+        sha256_hex, td_payload_event, tdx_input, tdx_quote_input, transparency_entry,
+        TDX_VENDOR_ID,
+    };
+    use super::super::super::load_policy;
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::super::test_harness::resolved_from_manifest;
+    use super::super::super::test_harness::{
+        eval_policy_vector, render_modules_json as render, render_rekor,
+    };
     use super::super::{families, parse_module_groups, Module};
     use super::*;
     use crate::crypto::HashAlgo;
@@ -1898,7 +1903,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[tokio::test]
     async fn transparency_log_rekor_dsse_verifies_against_builtin_publisher_key() {
         // Extract the real DSSE signature from the fixture entry.
-        let entry_raw = fixtures::REKOR_V1_ENTRY_JSON;
+        let entry_raw = test_fixtures::REKOR_V1_ENTRY_JSON;
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -1957,7 +1962,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     fn verify_dsse_signature_validates_real_fixture_signature() {
         use p256::ecdsa::signature::Verifier;
 
-        let entry_raw = fixtures::REKOR_V1_ENTRY_JSON;
+        let entry_raw = test_fixtures::REKOR_V1_ENTRY_JSON;
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
         let body_bytes = BASE64_STANDARD
             .decode(entry["body"].as_str().expect("body"))
@@ -2505,7 +2510,8 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         });
 
         let evidence: Value =
-            serde_json::from_str(fixtures::CMAAS_EVIDENCE_WITH_REKOR_V1_TRANSPARENCY_JSON).unwrap();
+            serde_json::from_str(test_fixtures::CMAAS_EVIDENCE_WITH_REKOR_V1_TRANSPARENCY_JSON)
+                .unwrap();
         let manifest = evidence["transparency"]["release_manifest"].clone();
         let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
         let entry_url = evidence["transparency"]["log_entries"][0]["url"]
@@ -2773,7 +2779,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
     fn secure_proxy_readme_json_round_trips() {
-        let json = fixtures::SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON;
+        let json = test_fixtures::SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON;
         let policy: PolicyConfig = serde_json::from_str(json).expect("parse into PolicyConfig");
         let PolicyConfig::Modules { modules } = &policy else {
             panic!("fixture must be a modules policy");

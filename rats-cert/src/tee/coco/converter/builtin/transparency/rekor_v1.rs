@@ -509,10 +509,10 @@ mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
     use super::super::key_table::{rekor_public_key, verify_log_id};
     use super::*;
-    use crate::tee::coco::converter::builtin::policies::test_support::fixtures;
+    use crate::tee::coco::converter::builtin::test_fixtures;
 
     fn fixture_entry() -> RekorEntry {
-        let raw = fixtures::REKOR_V1_ENTRY_JSON;
+        let raw = test_fixtures::REKOR_V1_ENTRY_JSON;
         // The fixture is the raw entry object (body/integratedTime/logID/logIndex/verification).
         serde_json::from_str(raw).expect("parse fixture entry")
     }
@@ -626,7 +626,7 @@ mod tests {
     /// `RekorEntry`. Used to construct malformed entries for the error-path
     /// tests below without needing a full wire fixture for each case.
     fn mutated_fixture_entry(mutate: impl FnOnce(&mut serde_json::Value)) -> RekorEntry {
-        let raw = fixtures::REKOR_V1_ENTRY_JSON;
+        let raw = test_fixtures::REKOR_V1_ENTRY_JSON;
         let mut v: serde_json::Value = serde_json::from_str(raw).unwrap();
         mutate(&mut v);
         serde_json::from_value(v).expect("mutated entry must still deserialize")

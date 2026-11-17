@@ -11,13 +11,14 @@
 //! so no case touches the network. Every evaluation gets a fresh cache, so the
 //! artifact-server cases run independently.
 
-use super::test_support::{
+use super::super::test_fixtures::{
     aael_event, artifact_entry_value, cmaas_tdx_input, cmaas_transparency_tuple,
-    eval_policy_vector, gpu_attestation_event, hex64, hex96, load_model_event, manifest,
-    pai_tdx_input, rekor_entries_body, rekor_entry_value, render_modules_json,
-    resolve_response_body, resolved_from_manifest, rootfs_event, sha384_digests, td_payload_event,
-    tdx_input, tdx_input_full, tdx_input_with_body, transparency_entry, uki_event, TDX_VENDOR_ID,
+    gpu_attestation_event, hex64, hex96, load_model_event, manifest, pai_tdx_input,
+    rekor_entries_body, rekor_entry_value, resolve_response_body, rootfs_event, sha384_digests,
+    td_payload_event, tdx_input, tdx_input_full, tdx_input_with_body, transparency_entry,
+    uki_event, TDX_VENDOR_ID,
 };
+use super::test_harness::{eval_policy_vector, render_modules_json, resolved_from_manifest};
 use serde_json::{json, Value};
 
 type Vector = (i8, i8, i8, i8);
@@ -706,7 +707,7 @@ fn cases() -> Vec<Case> {
 
 /// An AAEL pull-image event whose reference resolves to `repo`.
 fn aael_event_for_repo(repo: &str, digest: &str) -> Value {
-    super::test_support::aael_event_for_reference(
+    super::super::test_fixtures::aael_event_for_reference(
         &format!("registry.example.com/ns/{repo}:latest"),
         digest,
     )

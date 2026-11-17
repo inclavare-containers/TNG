@@ -794,7 +794,7 @@ fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::eval_policy_vector;
+    use super::super::test_harness::eval_policy_vector;
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
     use crate::tee::coco::converter::builtin::policy_config::{
@@ -2640,7 +2640,7 @@ mod tests {
         // Parse the real CC event log through the production `eventlog` crate.
         // `CcEventLog` serializes with the `uefi_event_logs` field name, so its
         // JSON IS the Rego input's `tdx.uefi_event_logs` array.
-        let input = super::super::test_support::pai_tdx_input();
+        let input = super::super::super::test_fixtures::pai_tdx_input();
 
         // A policy pinning the real busybox digest affirms; a tampered pin
         // rejects on the executables dimension.

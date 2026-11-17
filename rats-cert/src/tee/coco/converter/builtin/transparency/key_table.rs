@@ -125,10 +125,10 @@ pub(crate) fn verify_log_id(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tee::coco::converter::builtin::policies::test_support::fixtures;
+    use crate::tee::coco::converter::builtin::test_fixtures;
 
     fn fixture_entry() -> RekorEntry {
-        serde_json::from_str(fixtures::REKOR_V1_ENTRY_JSON).expect("parse fixture entry")
+        serde_json::from_str(test_fixtures::REKOR_V1_ENTRY_JSON).expect("parse fixture entry")
     }
 
     #[test]
