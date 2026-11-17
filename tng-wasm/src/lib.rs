@@ -1,12 +1,27 @@
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 
+use gloo::utils::format::JsValueSerdeExt;
+use tng::config::ra::PolicyConfig;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::Layer;
 use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
 use wasm_bindgen::prelude::*;
 
 pub mod fetch;
+
+/// The builtin-AS policy kinds, as an array of
+/// `{ type, name, accepts_reference_values, is_default, has_content }`.
+///
+/// Rust owns this list and the reference-value rule; the demo page only
+/// renders the result. `path` is absent because wasm has no file access.
+#[wasm_bindgen]
+pub fn policy_capabilities() -> Result<JsValue, JsValue> {
+    let capabilities = PolicyConfig::capabilities();
+    JsValue::from_serde(&capabilities).map_err(|error| {
+        JsError::new(&format!("Failed to serialize policy capabilities: {error}")).into()
+    })
+}
 
 #[wasm_bindgen(start)]
 pub fn init_tng() {
@@ -73,5 +88,43 @@ mod tests {
             3,
             "builtin challenge nonce should be a bare 3-segment JWT, got: {jwt}"
         );
+    }
+
+    // The exported list must match the policy kinds compiled for wasm: `path`
+    // is absent because there is no file access.
+    #[wasm_bindgen_test]
+    fn policy_capabilities_match_the_wasm_policy_set() {
+        use wasm_bindgen::JsCast as _;
+
+        let value = match crate::policy_capabilities() {
+            Ok(value) => value,
+            Err(error) => panic!("policy capabilities did not serialize: {error:?}"),
+        };
+        let array: js_sys::Array = match value.dyn_into() {
+            Ok(array) => array,
+            Err(_) => panic!("policy_capabilities did not return an array"),
+        };
+
+        let types: Vec<String> = array
+            .iter()
+            .map(|entry| {
+                let value =
+                    match js_sys::Reflect::get(&entry, &wasm_bindgen::JsValue::from_str("type")) {
+                        Ok(value) => value,
+                        Err(_) => panic!("entry has no type property"),
+                    };
+                match value.as_string() {
+                    Some(value) => value,
+                    None => panic!("entry type is not a string"),
+                }
+            })
+            .collect();
+
+        assert!(types.contains(&"hardware_only".to_string()));
+        assert!(types.contains(&"hardware_only_strict".to_string()));
+        assert!(types.contains(&"modules".to_string()));
+        assert!(types.contains(&"trust_all".to_string()));
+        assert!(types.contains(&"inline".to_string()));
+        assert!(!types.contains(&"path".to_string()));
     }
 }

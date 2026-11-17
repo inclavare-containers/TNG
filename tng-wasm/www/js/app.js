@@ -3,6 +3,7 @@ import { HTTP_METHODS, BODY_METHODS, METHOD_EXAMPLE_BODIES, LLM_ENDPOINTS, LLM_E
 import { readSseStream } from "./sse.js";
 import {
   buildTngConfig as buildTngConfigFromInputs,
+  initPolicyCapabilities,
   visibleFields,
   DEFAULT_ITA_API_URL,
 } from "./config.js";
@@ -58,10 +59,14 @@ async function initSdk() {
     tng_init = mod.default;
     tng_fetch = mod.fetch;
     await tng_init();
+    // Policy kinds and the reference-value rule come from Rust.
+    await initPolicyCapabilities(mod);
     sdkState = "ready";
     sdkReady = true;
     updateInitBadge();
     updateFormValidity();
+    // The config preview may have been opened before the capabilities loaded.
+    renderConfigPreview();
   } catch (err) {
     console.error("SDK init failed", err);
     sdkState = "failed";

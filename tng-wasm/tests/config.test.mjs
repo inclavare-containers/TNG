@@ -5,10 +5,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTngConfig,
+  initPolicyCapabilities,
   visibleFields,
   DEFAULT_ITA_API_URL,
   DEFAULT_ITA_JWKS_URL,
 } from "../www/js/config.js";
+
+// Rust owns the policy-kind list and the reference-value rule; the browser
+// gets them from the wasm SDK. Node cannot load the wasm module, so inject the
+// same shape the export produces.
+await initPolicyCapabilities({
+  policy_capabilities: async () => [
+    { type: "hardware_only", name: "Hardware only", accepts_reference_values: false, is_default: true, has_content: false },
+    { type: "hardware_only_strict", name: "Hardware only, strict", accepts_reference_values: false, is_default: false, has_content: false },
+    { type: "modules", name: "Modules", accepts_reference_values: false, is_default: false, has_content: false },
+    { type: "trust_all", name: "Trust all", accepts_reference_values: false, is_default: false, has_content: false },
+    { type: "inline", name: "Inline", accepts_reference_values: true, is_default: false, has_content: true },
+  ],
+});
 
 const base = { model: "background_check", policyIds: ["default"] };
 
@@ -420,6 +434,19 @@ test("coco builtin background_check: inline policy emits both attestation_policy
       },
     ],
   });
+});
+
+test("coco builtin background_check: unknown policy is rejected", () => {
+  assert.throws(
+    () =>
+      buildTngConfig({
+        ...base,
+        provider: "coco",
+        asType: "builtin",
+        builtinPolicy: "not_a_policy",
+      }),
+    /unknown builtin attestation policy/
+  );
 });
 
 test("coco restful background_check: asType omitted still produces restful-default config (backward compat)", () => {
