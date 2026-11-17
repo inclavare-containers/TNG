@@ -17,8 +17,8 @@ use sha2::Digest as _;
 use super::cache::{RekorCacheKey, TransparencyCaches};
 use super::dsse;
 #[cfg(feature = "crypto-rustcrypto")]
-use super::key_table::verify_log_id;
-use super::key_table::{rekor_public_key, RekorKey};
+use super::rekor_keys::verify_log_id;
+use super::rekor_keys::{rekor_public_key, RekorPublicKey};
 use super::{AuthenticatedRekor, Authentication};
 use crate::tee::coco::converter::builtin::policy_config::TransparencyServiceConfig;
 
@@ -41,7 +41,7 @@ pub(crate) struct RekorEntry {
 pub(crate) struct RekorVerification {
     pub(crate) inclusion_proof: InclusionProof,
     // An entry may legitimately carry no SET. With `#[serde(default)]` an absent
-    // `signedEntryTimestamp` deserializes to empty, and `authenticate_entry`
+    // `signedEntryTimestamp` deserializes to empty, and `verify_entry`
     // skips SET verification in that case; without the default the whole entry
     // parse would bail and reject a valid SET-less entry.
     #[serde(default)]
@@ -100,7 +100,7 @@ pub(crate) struct RekorSignature {
 /// downstream policy verification.
 #[cfg(feature = "crypto-rustcrypto")]
 #[derive(Debug, Clone)]
-pub(crate) struct AuthenticatedRekorEntry {
+pub(crate) struct VerifiedRekorEntry {
     pub(crate) payload_hash: String,
     // Read by the seam's rekor adapter: the load path threads it into the
     // generated Rego policy for `tng.verify_dsse_signature`, and the on-demand
@@ -116,7 +116,7 @@ pub(crate) struct PayloadHash {
 
 /// Base64-decode `entry.body` and deserialize into [`RekorBody`]. Requires
 /// `kind == "dsse"`.
-pub(crate) fn decode_rekor_body(entry: &RekorEntry) -> Result<RekorBody> {
+pub(crate) fn decode_body(entry: &RekorEntry) -> Result<RekorBody> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(&entry.body)
         .context("base64-decode Rekor entry body")?;
@@ -230,7 +230,7 @@ pub(crate) fn verify_inclusion_proof(entry: &RekorEntry) -> Result<()> {
 /// first 4 bytes (note name/hash-alg header), verify ECDSA P-256 SHA-256 over
 /// `noteBody`. Then require checkpoint treeSize == proof.tree_size and
 /// checkpoint rootHash (base64) == proof.root_hash (hex).
-pub(crate) fn verify_checkpoint(proof: &InclusionProof, key: &RekorKey) -> Result<()> {
+pub(crate) fn verify_checkpoint(proof: &InclusionProof, key: &RekorPublicKey) -> Result<()> {
     use p256::ecdsa::signature::Verifier as _;
 
     let parts: Vec<&str> = proof.checkpoint.splitn(2, "\n\u{2014} ").collect();
@@ -301,7 +301,7 @@ struct SetPayload<'a> {
 /// fixed key order/names, `sha256` it (p256 verify hashes internally), verify
 /// ECDSA P-256 over it with the Rekor public key. Signature is base64-decoded
 /// DER, no prefix skip (unlike checkpoint).
-pub(crate) fn verify_set(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
+pub(crate) fn verify_set(entry: &RekorEntry, key: &RekorPublicKey) -> Result<()> {
     use p256::ecdsa::signature::Verifier as _;
 
     let payload = SetPayload {
@@ -326,7 +326,7 @@ pub(crate) fn verify_set(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
 /// Fetch a Rekor v1 entry: `GET {log_url}/api/v1/log/entries?logIndex={n}`,
 /// 30s timeout, `Accept: application/json`. The response is a map `{uuid: entry}`;
 /// take the single value.
-pub(crate) async fn fetch_rekor_entry(log_url: &str, log_index: i64) -> Result<RekorEntry> {
+pub(crate) async fn fetch_entry(log_url: &str, log_index: i64) -> Result<RekorEntry> {
     let url = format!(
         "{}/api/v1/log/entries?logIndex={}",
         log_url.trim_end_matches('/'),
@@ -375,13 +375,10 @@ pub(crate) async fn fetch_rekor_entry(log_url: &str, log_index: i64) -> Result<R
 /// and return the trusted `payloadHash` plus the in-band DSSE signature. Pure
 /// (no HTTP) so it is unit-testable against a fixture entry.
 #[cfg(feature = "crypto-rustcrypto")]
-pub(crate) fn authenticate_entry(
-    entry: &RekorEntry,
-    key: &RekorKey,
-) -> Result<AuthenticatedRekorEntry> {
+pub(crate) fn verify_entry(entry: &RekorEntry, key: &RekorPublicKey) -> Result<VerifiedRekorEntry> {
     tracing::debug!(log_id = %entry.log_id, log_index = entry.log_index, integrated_time = entry.integrated_time, "Authenticating Rekor entry");
     verify_log_id(entry, key)?;
-    let body = decode_rekor_body(entry)?;
+    let body = decode_body(entry)?;
     tracing::debug!(
         "Rekor entry body decoded: kind={:?}, payloadHash={}",
         body.kind,
@@ -420,7 +417,7 @@ pub(crate) fn authenticate_entry(
         .map(|s| s.signature.clone())
         .unwrap_or_default();
     tracing::debug!(payload_hash = %payload_hash.value, dsse_signature_len = dsse_signature.len(), "Rekor entry authenticated: all checks passed");
-    Ok(AuthenticatedRekorEntry {
+    Ok(VerifiedRekorEntry {
         payload_hash: payload_hash.value.clone(),
         dsse_signature,
     })
@@ -461,9 +458,9 @@ pub(crate) async fn authenticate(
             log_index,
             "Loading transparency_log entry: fetching Rekor v1 entry"
         );
-        let entry = fetch_rekor_entry(log_url, *log_index).await?;
+        let entry = fetch_entry(log_url, *log_index).await?;
         let key = rekor_public_key(log_url, rekor_public_key_pem.as_deref())?;
-        let auth = authenticate_entry(&entry, &key)?;
+        let auth = verify_entry(&entry, &key)?;
         return Ok(Authentication::Rekor(AuthenticatedRekor {
             payload_hash: auth.payload_hash,
             dsse_signature: dsse::require_dsse_signature(&auth.dsse_signature)?.to_string(),
@@ -480,9 +477,9 @@ pub(crate) async fn authenticate(
     let entry = match caches.rekor_entry(&cache_key).await {
         Some(entry) => entry,
         None => {
-            let entry = fetch_rekor_entry(log_url, *log_index).await?;
-            let key = super::key_table::resolve_rekor_key(&entry, log_url)?;
-            let entry = authenticate_entry(&entry, &key)?;
+            let entry = fetch_entry(log_url, *log_index).await?;
+            let key = super::rekor_keys::resolve_rekor_public_key(&entry, log_url)?;
+            let entry = verify_entry(&entry, &key)?;
             // The entry is authentic even when the bound manifest does not
             // match it, so cache it before the manifest-specific checks.
             caches.insert_rekor(cache_key, entry.clone()).await;
@@ -507,7 +504,7 @@ pub(crate) async fn authenticate(
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
-    use super::super::key_table::{rekor_public_key, verify_log_id};
+    use super::super::rekor_keys::{rekor_public_key, verify_log_id};
     use super::*;
     use crate::tee::coco::converter::builtin::test_fixtures;
 
@@ -525,7 +522,7 @@ mod tests {
             entry.log_id,
             "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d"
         );
-        let body = decode_rekor_body(&entry).expect("decode body");
+        let body = decode_body(&entry).expect("decode body");
         assert_eq!(body.kind.as_deref(), Some("dsse"));
         let ph = body.spec.payload_hash.as_ref().expect("payloadHash");
         assert_eq!(ph.algorithm, "sha256");
@@ -588,10 +585,10 @@ mod tests {
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
-    fn authenticate_fixture_entry_returns_trusted_payload_hash() {
+    fn verify_fixture_entry_returns_trusted_payload_hash() {
         let entry = fixture_entry();
         let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
-        let auth = authenticate_entry(&entry, &key).expect("authenticate");
+        let auth = verify_entry(&entry, &key).expect("authenticate");
         assert_eq!(
             auth.payload_hash,
             "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
@@ -601,7 +598,7 @@ mod tests {
     #[test]
     fn decode_fixture_body_extracts_dsse_signature() {
         let entry = fixture_entry();
-        let body = decode_rekor_body(&entry).expect("decode body");
+        let body = decode_body(&entry).expect("decode body");
         let sigs = body.spec.signatures.as_ref().expect("signatures");
         assert_eq!(sigs.len(), 1);
         let sig = &sigs[0];
@@ -611,10 +608,10 @@ mod tests {
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
-    fn authenticate_fixture_entry_returns_signature() {
+    fn verify_fixture_entry_returns_signature() {
         let entry = fixture_entry();
         let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
-        let auth = authenticate_entry(&entry, &key).expect("authenticate");
+        let auth = verify_entry(&entry, &key).expect("authenticate");
         assert_eq!(
             auth.payload_hash,
             "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8"
@@ -646,11 +643,11 @@ mod tests {
         entry
     }
 
-    /// Lines 146-147: `decode_rekor_body` rejects `kind != "dsse"`.
+    /// Lines 146-147: `decode_body` rejects `kind != "dsse"`.
     #[test]
-    fn decode_rekor_body_rejects_non_dsse_kind() {
+    fn decode_body_rejects_non_dsse_kind() {
         let entry = entry_with_body("intoto", serde_json::json!({}));
-        let err = decode_rekor_body(&entry).unwrap_err();
+        let err = decode_body(&entry).unwrap_err();
         assert!(
             err.to_string().contains("unsupported Rekor body kind"),
             "got: {err}"
@@ -778,13 +775,13 @@ mod tests {
         );
     }
 
-    /// Lines 548-549: `authenticate_entry` rejects a non-sha256 payloadHash
+    /// Lines 548-549: `verify_entry` rejects a non-sha256 payloadHash
     /// algorithm. The body is decoded (kind=dsse) but the payloadHash
     /// algorithm is sha512, so the check at line 547-549 bails before any
     /// checkpoint/inclusion/SET verification.
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
-    fn authenticate_entry_rejects_non_sha256_payload_hash() {
+    fn verify_entry_rejects_non_sha256_payload_hash() {
         let entry = entry_with_body(
             "dsse",
             serde_json::json!({
@@ -794,7 +791,7 @@ mod tests {
         );
         // log_id must match the key for verify_log_id (called first) to pass.
         let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
-        let err = authenticate_entry(&entry, &key).unwrap_err();
+        let err = verify_entry(&entry, &key).unwrap_err();
         assert!(
             err.to_string()
                 .contains("unsupported payloadHash algorithm"),
@@ -802,17 +799,17 @@ mod tests {
         );
     }
 
-    /// `authenticate_entry` skips SET verification when
+    /// `verify_entry` skips SET verification when
     /// `signedEntryTimestamp` is empty. The fixture carries a real SET; clear it
     /// and assert authentication still succeeds (checkpoint + inclusion are the
     /// gating checks for this path).
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
-    fn authenticate_entry_skips_set_when_signed_entry_timestamp_empty() {
+    fn verify_entry_skips_set_when_signed_entry_timestamp_empty() {
         let mut entry = fixture_entry();
         entry.verification.signed_entry_timestamp = String::new();
         let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
-        let auth = authenticate_entry(&entry, &key)
+        let auth = verify_entry(&entry, &key)
             .expect("auth must succeed with empty SET (skipped, not rejected)");
         assert_eq!(
             auth.payload_hash,
@@ -825,7 +822,7 @@ mod tests {
     /// missing-field deserialize error. Absent → empty → skip SET.
     #[cfg(feature = "crypto-rustcrypto")]
     #[test]
-    fn authenticate_entry_skips_set_when_signed_entry_timestamp_absent() {
+    fn verify_entry_skips_set_when_signed_entry_timestamp_absent() {
         // Remove the `signedEntryTimestamp` key from the fixture JSON entirely,
         // then deserialize — must succeed because `#[serde(default)]` defaults it
         // to an empty string.
@@ -837,7 +834,7 @@ mod tests {
         });
         assert!(entry.verification.signed_entry_timestamp.is_empty());
         let key = rekor_public_key("https://rekor.sigstore.dev", None).unwrap();
-        let auth = authenticate_entry(&entry, &key)
+        let auth = verify_entry(&entry, &key)
             .expect("auth must succeed with absent SET (defaulted empty, skipped)");
         assert_eq!(
             auth.payload_hash,

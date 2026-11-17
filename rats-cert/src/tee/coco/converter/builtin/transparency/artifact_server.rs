@@ -21,7 +21,7 @@ use super::cache::{
     CanonicalLogServices, ManifestDigest, PublisherKeyId, ResolveCacheKey, TransparencyCaches,
 };
 #[cfg(feature = "crypto-rustcrypto")]
-use super::{dsse, key_table, rekor_v1, Authentication};
+use super::{dsse, rekor_keys, rekor_v1, Authentication};
 use crate::tee::coco::converter::builtin::policy_config::{
     ArtifactLogService, TransparencyServiceConfig,
 };
@@ -202,7 +202,7 @@ pub(crate) fn resolve_artifact_server_host_await(
 ///   binding for a non-trusted resolver; URLs are normalized by
 ///   trimming trailing slashes),
 /// - every entry authenticates (checkpoint + inclusion + SET via
-///   `rekor_v1::authenticate_entry`),
+///   `rekor_v1::verify_entry`),
 /// - every entry's DSSE publisher signature verifies over
 ///   `sha256(DSSEPAE(canonical manifest))` with a trusted publisher key
 ///   (response `entry_verifier.content` when both verifiers are present, or
@@ -304,11 +304,11 @@ async fn resolve_and_authenticate(
         // the built-in hostname→logID resolution when the response omits it
         // (so proxy / mock URLs still resolve via the built-in key table).
         let key = if !entry.log_verifier.public_key_pem.is_empty() {
-            key_table::rekor_public_key(&entry.url, Some(&entry.log_verifier.public_key_pem))?
+            rekor_keys::rekor_public_key(&entry.url, Some(&entry.log_verifier.public_key_pem))?
         } else {
-            key_table::resolve_rekor_key(&rekor_entry, &entry.url)?
+            rekor_keys::resolve_rekor_public_key(&rekor_entry, &entry.url)?
         };
-        let auth = rekor_v1::authenticate_entry(&rekor_entry, &key)?;
+        let auth = rekor_v1::verify_entry(&rekor_entry, &key)?;
         if auth.payload_hash != expected_hash {
             anyhow::bail!(
                 "payloadHash mismatch: entry={} expected={}",
@@ -339,7 +339,7 @@ async fn resolve_and_authenticate(
         // a proxy URL with no built-in hostname match), skip that compare
         // silently rather than denying.
         if !entry.log_verifier.public_key_pem.is_empty() {
-            if let Ok(builtin) = key_table::rekor_public_key(&entry.url, None) {
+            if let Ok(builtin) = rekor_keys::rekor_public_key(&entry.url, None) {
                 if key.spki_der != builtin.spki_der {
                     tracing::warn!(
                         url = %entry.url,
@@ -585,14 +585,14 @@ mod tests {
     /// Fail-closed fallback: a fetch/auth failure MUST return `Ok(Bool(false))`,
     /// never `Err`; an `Err` aborts the entire policy evaluation and breaks
     /// the `fallback_ok → false → executables := 97` contract. Point the
-    /// `log_url` at a dead port so `fetch_rekor_entry` fails to connect; the
+    /// `log_url` at a dead port so `fetch_entry` fails to connect; the
     /// closure must swallow the error into a clean `false`. Asserts on the
     /// raw `Result` (not `invoke_extension`'s `.expect()`, which would mask
     /// an `Err` as a test failure rather than proving the `Ok(false)` outcome).
     #[tokio::test]
     async fn fetch_rekor_on_demand_returns_clean_false_on_fetch_failure() {
         // 127.0.0.1:1 is guaranteed to refuse the TCP connection (no listener
-        // on port 1 on the loopback interface), `fetch_rekor_entry` returns a
+        // on port 1 on the loopback interface), `fetch_entry` returns a
         // connection-refused `Err`, which the closure must map to `Ok(false)`.
         // Use a distinct (log_url, log_index) not exercised by the cache test
         // so the process-global cache cannot short-circuit this into a hit.
@@ -708,7 +708,7 @@ mod tests {
     /// `(release_manifest, log_entry, entry_url)` triple: the entry's
     /// `payloadHash` == `sha256(JCS(release_manifest))` (verified in
     /// `mod.rs`/fixture tests), so a resolve response built from it exercises
-    /// both `authenticate_entry` (real inclusion/checkpoint/SET crypto) and the
+    /// both `verify_entry` (real inclusion/checkpoint/SET crypto) and the
     /// payloadHash comparison → `true`.
     fn cmaas_resolve_triple() -> (serde_json::Value, serde_json::Value, String) {
         let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
@@ -935,7 +935,7 @@ mod tests {
 
     /// Negative: the response supplies a WRONG `log_verifier.public_key_pem`
     /// (a different valid P-256 PEM, the DSSE publisher key, NOT the Sigstore
-    /// rekor key). `authenticate_entry`'s `verify_log_id` fails (the entry's
+    /// rekor key). `verify_entry`'s `verify_log_id` fails (the entry's
     /// `logID` == `sha256(Sigstore SPKI)`, not `sha256(wrong SPKI)`) →
     /// `Ok(Bool(false))`. This is the rekor logID verification failure path.
     #[tokio::test]

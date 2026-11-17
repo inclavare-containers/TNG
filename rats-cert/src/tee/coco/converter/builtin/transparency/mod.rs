@@ -9,7 +9,7 @@
 pub(crate) mod artifact_server;
 pub(crate) mod cache;
 pub(crate) mod dsse;
-pub(crate) mod key_table;
+pub(crate) mod rekor_keys;
 pub(crate) mod rekor_v1;
 
 pub use cache::TransparencyCaches;

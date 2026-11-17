@@ -16,7 +16,7 @@ use super::rekor_v1::RekorEntry;
 /// A resolved Rekor public key: the P-256 verifying key plus its PKIX-SPKI
 /// DER bytes (needed because `logID` = `sha256(SPKI DER)`).
 #[derive(Debug)]
-pub(crate) struct RekorKey {
+pub(crate) struct RekorPublicKey {
     pub(crate) verifying_key: VerifyingKey,
     pub(crate) spki_der: Vec<u8>,
 }
@@ -31,7 +31,7 @@ const OPENANOLIS_REKOR_V1_SPKI_B64: &str =
 
 /// Built-in Rekor v1 `(hostname, base64-SPKI)` pairs, the single source of
 /// truth that [`rekor_public_key`] matches on. Callers that enumerate every
-/// built-in key (the `logID` fallback in [`resolve_rekor_key`]) iterate this
+/// built-in key (the `logID` fallback in [`resolve_rekor_public_key`]) iterate this
 /// table instead of restating the hostnames.
 pub(crate) fn known_rekor_keys() -> &'static [(&'static str, &'static str)] {
     &[
@@ -42,7 +42,7 @@ pub(crate) fn known_rekor_keys() -> &'static [(&'static str, &'static str)] {
 
 /// Resolve the Rekor public key: an explicit PEM if provided, else a built-in
 /// table keyed by `log_url` hostname.
-pub(crate) fn rekor_public_key(log_url: &str, explicit: Option<&str>) -> Result<RekorKey> {
+pub(crate) fn rekor_public_key(log_url: &str, explicit: Option<&str>) -> Result<RekorPublicKey> {
     let spki_b64: String = match explicit {
         Some(p) if !p.is_empty() => pem_to_spki_b64(p)?,
         _ => match hostname_of(log_url)?.as_str() {
@@ -59,7 +59,7 @@ pub(crate) fn rekor_public_key(log_url: &str, explicit: Option<&str>) -> Result<
         .decode(spki_b64.as_bytes())
         .context("base64-decode Rekor public key SPKI")?;
     let verifying_key = verifying_key_from_spki_der(&spki_der)?;
-    Ok(RekorKey {
+    Ok(RekorPublicKey {
         verifying_key,
         spki_der,
     })
@@ -72,7 +72,10 @@ pub(crate) fn rekor_public_key(log_url: &str, explicit: Option<&str>) -> Result<
 /// against the entry's `logID` (= `sha256(SPKI DER)`). This keeps the on-demand
 /// fallback working when the artifact-server proxy fronts a real Rekor instance
 /// under a different hostname, without duplicating the key table.
-pub(crate) fn resolve_rekor_key(entry: &RekorEntry, log_url: &str) -> Result<RekorKey> {
+pub(crate) fn resolve_rekor_public_key(
+    entry: &RekorEntry,
+    log_url: &str,
+) -> Result<RekorPublicKey> {
     // Fast path: hostname-based resolution.
     if let Ok(key) = rekor_public_key(log_url, None) {
         return Ok(key);
@@ -114,7 +117,7 @@ pub(crate) fn public_key_id(spki_der: &[u8]) -> String {
 /// case-insensitively. Rekor logIDs are lowercase hex sha256(SPKI), but a
 /// response/fixture may carry an uppercase encoding; the identity check is
 /// encoding-agnostic.
-pub(crate) fn verify_log_id(entry: &RekorEntry, key: &RekorKey) -> Result<()> {
+pub(crate) fn verify_log_id(entry: &RekorEntry, key: &RekorPublicKey) -> Result<()> {
     let want = public_key_id(&key.spki_der);
     if !entry.log_id.eq_ignore_ascii_case(&want) {
         anyhow::bail!("Rekor logID mismatch: entry={} key={}", entry.log_id, want);
@@ -158,7 +161,7 @@ mod tests {
 
     /// An unknown hostname and a logID matching no built-in key is an error.
     #[test]
-    fn resolve_rekor_key_bails_when_no_key_matches() {
+    fn resolve_rekor_public_key_bails_when_no_key_matches() {
         let entry = RekorEntry {
             body: String::new(),
             integrated_time: 0,
@@ -175,7 +178,7 @@ mod tests {
                 signed_entry_timestamp: String::new(),
             },
         };
-        let err = resolve_rekor_key(&entry, "http://127.0.0.1:99999").unwrap_err();
+        let err = resolve_rekor_public_key(&entry, "http://127.0.0.1:99999").unwrap_err();
         assert!(
             err.to_string()
                 .contains("could not resolve Rekor public key"),
@@ -186,9 +189,10 @@ mod tests {
     /// The fixture entry resolves through the `logID` fallback even when the
     /// URL's hostname is not a built-in one (the artifact-server proxy case).
     #[test]
-    fn resolve_rekor_key_matches_log_id_for_proxy_url() {
+    fn resolve_rekor_public_key_matches_log_id_for_proxy_url() {
         let entry = fixture_entry();
-        let key = resolve_rekor_key(&entry, "http://127.0.0.1:1234").expect("logID fallback");
+        let key =
+            resolve_rekor_public_key(&entry, "http://127.0.0.1:1234").expect("logID fallback");
         verify_log_id(&entry, &key).expect("resolved key must match the entry");
     }
 }

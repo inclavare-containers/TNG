@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use moka::future::Cache;
 use once_cell::sync::Lazy;
 
-use super::rekor_v1::AuthenticatedRekorEntry;
+use super::rekor_v1::VerifiedRekorEntry;
 
 /// A cached artifact-server success must expire so a revocation becomes
 /// visible even without a capacity eviction or a process restart.
@@ -98,7 +98,7 @@ pub(crate) struct RekorCacheKey {
 /// evaluations independent.
 pub struct TransparencyCaches {
     resolve: OnceLock<Cache<ResolveCacheKey, ResolveCacheValue>>,
-    rekor: OnceLock<Cache<RekorCacheKey, AuthenticatedRekorEntry>>,
+    rekor: OnceLock<Cache<RekorCacheKey, VerifiedRekorEntry>>,
 }
 
 impl TransparencyCaches {
@@ -124,7 +124,7 @@ impl TransparencyCaches {
         })
     }
 
-    fn rekor_cache(&self) -> &Cache<RekorCacheKey, AuthenticatedRekorEntry> {
+    fn rekor_cache(&self) -> &Cache<RekorCacheKey, VerifiedRekorEntry> {
         // Capacity 64 covers the handful of rekor entries a policy falls back
         // to.
         self.rekor
@@ -150,11 +150,11 @@ impl TransparencyCaches {
             .await;
     }
 
-    pub(crate) async fn rekor_entry(&self, key: &RekorCacheKey) -> Option<AuthenticatedRekorEntry> {
+    pub(crate) async fn rekor_entry(&self, key: &RekorCacheKey) -> Option<VerifiedRekorEntry> {
         self.rekor_cache().get(key).await
     }
 
-    pub(crate) async fn insert_rekor(&self, key: RekorCacheKey, entry: AuthenticatedRekorEntry) {
+    pub(crate) async fn insert_rekor(&self, key: RekorCacheKey, entry: VerifiedRekorEntry) {
         self.rekor_cache().insert(key, entry).await;
     }
 }
