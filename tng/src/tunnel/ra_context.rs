@@ -10,6 +10,8 @@ use anyhow::Result;
 
 #[cfg(unix)]
 use crate::config::ra::AttestArgs;
+#[cfg(all(unix, feature = "__builtin-as"))]
+use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 use crate::config::ra::{RaArgs, VerifyArgs};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
@@ -122,6 +124,22 @@ impl AttestContext {
                 converter: converter_args,
                 ..
             } => {
+                // A passport token is verified by a remote peer, which cannot
+                // trust the builtin AS's per-process self-signed chain. The
+                // factory can build the converter, but this model must not use
+                // it.
+                #[cfg(feature = "__builtin-as")]
+                if matches!(
+                    converter_args,
+                    ConverterArgs::Coco(CocoConverterArgs::Builtin { .. })
+                ) {
+                    anyhow::bail!(
+                        "The builtin converter is not supported on the passport attest side; \
+                         a remote verifier cannot trust its per-process signer chain. \
+                         Use a restful or grpc converter."
+                    );
+                }
+
                 let attester = create_attester(attester_args).await?;
                 let converter = create_converter(converter_args).await?;
                 Ok(Self::Passport {
@@ -612,18 +630,14 @@ mod tests {
         #[serial]
         // Test Passport mode with Builtin AS should failed
         async fn test_ra_context_two_way_passport_builtin() {
-            // The factory constructs every converter variant, so a builtin
-            // converter is also usable on the attest side of passport mode.
+            // The factory is total, but the passport attest model rejects the
+            // builtin converter: its token is verified by a remote peer that
+            // cannot trust the in-process signer chain.
             let attest_args = make_attest_passport_args();
             let verify_args = make_verify_builtin_args();
             let ra_args = RaArgs::AttestAndVerify(attest_args, verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
-            assert!(result.is_ok(), "Failed: {:?}", result.err());
-            let ctx = result.unwrap();
-            assert!(
-                matches!(ctx, RaContext::AttestAndVerify { .. }),
-                "Expected AttestAndVerify variant"
-            );
+            assert!(result.is_err());
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
