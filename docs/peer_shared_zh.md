@@ -38,7 +38,9 @@
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {
@@ -55,7 +57,9 @@
                     },
                     "verify": {
                         "as_addr": "http://as.example.com:8080/",
-                        "policy_ids": ["default"]
+                        "policy_ids": [
+                            "default"
+                        ]
                     }
                 }
             },
@@ -88,7 +92,9 @@
             "ohttp": {},
             "verify": {
                 "as_addr": "http://as.example.com:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]

@@ -36,7 +36,15 @@
 TNG 将端口映射表序列化为 JSON，通过 `TNG_HOOK_EGRESS_MAPPINGS` 环境变量传递：
 
 ```json
-{"entries":[{"host":"0.0.0.0","origin_port":8080,"real_port":48080}]}
+{
+    "entries": [
+        {
+            "host": "0.0.0.0",
+            "origin_port": 8080,
+            "real_port": 48080
+        }
+    ]
+}
 ```
 
 每条记录含义：当应用调用 `bind(host:origin_port)` 时，重定向到 `host:real_port`。TNG 在 `origin_port` 上监听以接收隧道流量，然后将解密后的连接转发到 `real_port`。
@@ -179,7 +187,23 @@ your-server --port 8080
 TNG 将 ingress 映射表序列化为 JSON，通过 `TNG_HOOK_INGRESS_MAPPINGS` 环境变量传递：
 
 ```json
-{"proxies":[{"proxy_port":49001,"capture_rules":[{"host_cidr":"10.0.0.0/24","port":80},{"host_cidr":"10.0.0.0/24","port":443}]}]}
+{
+    "proxies": [
+        {
+            "proxy_port": 49001,
+            "capture_rules": [
+                {
+                    "host_cidr": "10.0.0.0/24",
+                    "port": 80
+                },
+                {
+                    "host_cidr": "10.0.0.0/24",
+                    "port": 443
+                }
+            ]
+        }
+    ]
+}
 ```
 
 每条代理记录指定一个 `proxy_port` 和一组 `capture_rules`。当应用调用 `connect(host:port)` 匹配捕获规则时，连接会被重定向到内部 HTTP 代理。
@@ -199,19 +223,30 @@ Ingress hook 模式通过 `add_ingress` 中的 `"hook"` 模式配置：
 
 ```json
 {
-  "add_ingress": [
-    {
-      "hook": {
-        "capture_dst": [
-          { "host": "10.0.0.0/24", "port": 80 },
-          { "host": "10.0.0.0/24", "port": 443 },
-          { "port": 8080, "port_end": 8090 }
-        ],
-        "proxy_port": 49001
-      },
-      "attest": { "no_ra": true }
-    }
-  ]
+    "add_ingress": [
+        {
+            "hook": {
+                "capture_dst": [
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 80
+                    },
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 443
+                    },
+                    {
+                        "port": 8080,
+                        "port_end": 8090
+                    }
+                ],
+                "proxy_port": 49001
+            },
+            "attest": {
+                "no_ra": true
+            }
+        }
+    ]
 }
 ```
 

@@ -65,7 +65,9 @@ Each server node runs a TNG Egress instance with `netfilter` + OHTTP (`peer_shar
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {

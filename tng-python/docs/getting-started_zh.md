@@ -264,14 +264,22 @@ async for chunk in await async_client.chat.completions.create(
 
 ```json
 {
-  "add_egress": [{
-    "mapping": {
-      "in":  { "host": "0.0.0.0", "port": 10001 },
-      "out": { "host": "backend", "port": 30001 }
-    },
-    "ohttp": {},
-    "no_ra": true
-  }]
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "backend",
+                    "port": 30001
+                }
+            },
+            "ohttp": {},
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -281,14 +289,22 @@ async for chunk in await async_client.chat.completions.create(
 
 ```json
 {
-  "add_egress": [{
-    "mapping": {
-      "in":  { "host": "0.0.0.0", "port": 10001 },
-      "out": { "host": "backend", "port": 30001 }
-    },
-    "rats_tls": {},
-    "no_ra": true
-  }]
+    "add_egress": [
+        {
+            "mapping": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "backend",
+                    "port": 30001
+                }
+            },
+            "rats_tls": {},
+            "no_ra": true
+        }
+    ]
 }
 ```
 

@@ -36,22 +36,22 @@ TNG Server 前端没有承担 CORS 的网关，由后端业务服务作为 CORS 
 在TNG Server的egress配置上增加如下内容
 ```json
 {
-  "ohttp": {
-    "header_passthrough": {
-      "request_headers": [
-        "origin",
-        "access-control-request-method",
-        "access-control-request-headers"
-      ],
-      "response_headers": [
-        "access-control-allow-origin",
-        "access-control-allow-methods",
-        "access-control-allow-headers",
-        "access-control-allow-credentials",
-        "access-control-max-age"
-      ]
+    "ohttp": {
+        "header_passthrough": {
+            "request_headers": [
+                "origin",
+                "access-control-request-method",
+                "access-control-request-headers"
+            ],
+            "response_headers": [
+                "access-control-allow-origin",
+                "access-control-allow-methods",
+                "access-control-allow-headers",
+                "access-control-allow-credentials",
+                "access-control-max-age"
+            ]
+        }
     }
-  }
 }
 ```
 
@@ -70,15 +70,21 @@ TNG Server 前端没有承担 CORS 的网关，由后端业务服务作为 CORS 
 
 ```json
 {
-  "ohttp": {
-    "cors": {
-      "allow_origins": ["*"],
-      "allow_methods": ["*"],
-      "allow_headers": ["*"],
-      "expose_headers": [],
-      "allow_credentials": false
+    "ohttp": {
+        "cors": {
+            "allow_origins": [
+                "*"
+            ],
+            "allow_methods": [
+                "*"
+            ],
+            "allow_headers": [
+                "*"
+            ],
+            "expose_headers": [],
+            "allow_credentials": false
+        }
     }
-  }
 }
 ```
 

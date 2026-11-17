@@ -174,18 +174,18 @@ If you want to integrate in a Chrome extension, due to manifest v3 restrictions,
 1. Modify the `background` configuration item in the `manifest.json` file, setting the `type` configuration item to `"module"`.
 
 ```json
-  "background": {
+"background": {
     "service_worker": "background.js",
     "type": "module"
-  }
+}
 ```
 
 2. Modify the `content_security_policy` configuration item in the `manifest.json` file to the following content:
 
 ```json
-  "content_security_policy": {
+"content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
-  }
+}
 ```
 
 

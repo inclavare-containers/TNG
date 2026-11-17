@@ -139,18 +139,34 @@ TNG 监听一个或多个本地 TCP 端口（`in.host`、`in.port`，可选 `in.
             "mapping": {
                 "rules": [
                     {
-                        "in": { "host": "0.0.0.0", "port": 10001 },
-                        "out": { "host": "127.0.0.1", "port": 20001 }
+                        "in": {
+                            "host": "0.0.0.0",
+                            "port": 10001
+                        },
+                        "out": {
+                            "host": "127.0.0.1",
+                            "port": 20001
+                        }
                     },
                     {
-                        "in": { "host": "0.0.0.0", "port": 10010, "port_end": 10020 },
-                        "out": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 }
+                        "in": {
+                            "host": "0.0.0.0",
+                            "port": 10010,
+                            "port_end": 10020
+                        },
+                        "out": {
+                            "host": "127.0.0.1",
+                            "port": 20010,
+                            "port_end": 20020
+                        }
                     }
                 ]
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -167,8 +183,14 @@ TNG 监听一个或多个本地 TCP 端口（`in.host`、`in.port`，可选 `in.
     "add_ingress": [
         {
             "mapping": {
-                "in": { "host": "0.0.0.0", "port": 10001 },
-                "out": { "host": "127.0.0.1", "port": 20001 }
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
             }
         }
     ]
@@ -216,14 +238,22 @@ TNG 监听 HTTP 代理端口，客户端通过 `http_proxy` 环境变量将流�
     "add_ingress": [
         {
             "http_proxy": {
-                "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 41000
+                },
                 "dst_filters": [
-                    { "domain": "*.pai-eas.aliyuncs.com", "port": 80 }
+                    {
+                        "domain": "*.pai-eas.aliyuncs.com",
+                        "port": 80
+                    }
                 ]
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -266,11 +296,16 @@ TNG 创建本地 Socks5 代理端口，客户端连接到该代理，TNG 加密�
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": { "host": "0.0.0.0", "port": 1080 }
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                }
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -286,12 +321,20 @@ TNG 创建本地 Socks5 代理端口，客户端连接到该代理，TNG 加密�
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": { "host": "0.0.0.0", "port": 1080 },
-                "auth": { "username": "user", "password": "ppppppwd" }
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
+                "auth": {
+                    "username": "user",
+                    "password": "ppppppwd"
+                }
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -307,14 +350,22 @@ TNG 创建本地 Socks5 代理端口，客户端连接到该代理，TNG 加密�
     "add_ingress": [
         {
             "socks5": {
-                "proxy_listen": { "host": "0.0.0.0", "port": 1080 },
+                "proxy_listen": {
+                    "host": "0.0.0.0",
+                    "port": 1080
+                },
                 "dst_filters": [
-                    { "domain": "*.example.com", "port": 30001 }
+                    {
+                        "domain": "*.example.com",
+                        "port": 30001
+                    }
                 ]
             },
             "verify": {
                 "as_addr": "http://192.168.1.254:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -393,15 +444,24 @@ flowchart TD
         {
             "netfilter": {
                 "capture_dst": [
-                    { "host": "127.0.0.1", "port": 30001 }
+                    {
+                        "host": "127.0.0.1",
+                        "port": 30001
+                    }
                 ],
-                "capture_cgroup": ["/tng_capture.slice"],
-                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "capture_cgroup": [
+                    "/tng_capture.slice"
+                ],
+                "nocapture_cgroup": [
+                    "/tng_nocapture.slice"
+                ],
                 "listen_port": 50000
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -418,15 +478,24 @@ flowchart TD
         {
             "netfilter": {
                 "capture_dst": [
-                    { "host": "192.168.1.0/24", "port": 30001 }
+                    {
+                        "host": "192.168.1.0/24",
+                        "port": 30001
+                    }
                 ],
-                "capture_cgroup": ["/tng_capture.slice"],
-                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "capture_cgroup": [
+                    "/tng_capture.slice"
+                ],
+                "nocapture_cgroup": [
+                    "/tng_nocapture.slice"
+                ],
                 "listen_port": 50000
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -443,16 +512,28 @@ flowchart TD
         {
             "netfilter": {
                 "capture_dst": [
-                    { "ipset": "myset1", "port": 30001 },
-                    { "ipset": "myset2", "port": 30001 }
+                    {
+                        "ipset": "myset1",
+                        "port": 30001
+                    },
+                    {
+                        "ipset": "myset2",
+                        "port": 30001
+                    }
                 ],
-                "capture_cgroup": ["/tng_capture.slice"],
-                "nocapture_cgroup": ["/tng_nocapture.slice"],
+                "capture_cgroup": [
+                    "/tng_capture.slice"
+                ],
+                "nocapture_cgroup": [
+                    "/tng_nocapture.slice"
+                ],
                 "listen_port": 50000
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -469,13 +550,19 @@ flowchart TD
         {
             "netfilter": {
                 "capture_dst": [
-                    { "host": "192.168.1.1", "port": 30000, "port_end": 30031 }
+                    {
+                        "host": "192.168.1.1",
+                        "port": 30000,
+                        "port_end": 30031
+                    }
                 ],
                 "listen_port": 50000
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -508,19 +595,28 @@ flowchart TD
 
 ```json
 {
-  "add_ingress": [
-    {
-      "hook": {
-        "capture_dst": [
-          { "host": "10.0.0.0/24", "port": 80 },
-          { "host": "10.0.0.0/24", "port": 443 },
-          { "port": 8080, "port_end": 8090 }
-        ],
-        "proxy_port": 49001
-      },
-      "no_ra": true
-    }
-  ]
+    "add_ingress": [
+        {
+            "hook": {
+                "capture_dst": [
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 80
+                    },
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 443
+                    },
+                    {
+                        "port": 8080,
+                        "port_end": 8090
+                    }
+                ],
+                "proxy_port": 49001
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -544,16 +640,22 @@ flowchart TD
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping_udp": {
-        "in": { "host": "0.0.0.0", "port": 10001 },
-        "out": { "host": "127.0.0.1", "port": 8443 },
-        "idle_timeout_secs": 60
-      },
-      "no_ra": true
-    }
-  ]
+    "add_ingress": [
+        {
+            "mapping_udp": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 8443
+                },
+                "idle_timeout_secs": 60
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -569,15 +671,21 @@ flowchart TD
 
 ```json
 {
-  "add_egress": [
-    {
-      "mapping_udp": {
-        "in": { "host": "0.0.0.0", "port": 8443 },
-        "out": { "host": "127.0.0.1", "port": 20001 }
-      },
-      "no_ra": true
-    }
-  ]
+    "add_egress": [
+        {
+            "mapping_udp": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 8443
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -591,16 +699,24 @@ flowchart TD
 
 ```json
 {
-  "add_ingress": [
-    {
-      "mapping_udp": {
-        "in": { "host": "0.0.0.0", "port": 10001 },
-        "out": { "host": "127.0.0.1", "port": 8443 }
-      },
-      "quic": { "max_datagram_size": 1200 },
-      "no_ra": true
-    }
-  ]
+    "add_ingress": [
+        {
+            "mapping_udp": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 8443
+                }
+            },
+            "quic": {
+                "max_datagram_size": 1200
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -632,18 +748,23 @@ Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 
 
 ```json
 {
-  "add_ingress": [
-    {
-      "netfilter_udp": {
-        "capture_dst": [
-          { "host": "10.0.0.1", "port": 5000 }
-        ],
-        "listen_port": 10001
-      },
-      "quic": { "max_datagram_size": 1200 },
-      "no_ra": true
-    }
-  ]
+    "add_ingress": [
+        {
+            "netfilter_udp": {
+                "capture_dst": [
+                    {
+                        "host": "10.0.0.1",
+                        "port": 5000
+                    }
+                ],
+                "listen_port": 10001
+            },
+            "quic": {
+                "max_datagram_size": 1200
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -697,10 +818,16 @@ Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [{ "port": 30001 }]
+                "capture_dst": [
+                    {
+                        "port": 30001
+                    }
+                ]
             },
             "direct_forward": [
-                { "http_path": "/public/.*" }
+                {
+                    "http_path": "/public/.*"
+                }
             ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -743,12 +870,26 @@ TNG 监听一个或多个本地端口（`in.host`、`in.port`，可选 `in.port_
             "mapping": {
                 "rules": [
                     {
-                        "in": { "host": "127.0.0.1", "port": 20001 },
-                        "out": { "host": "127.0.0.1", "port": 30001 }
+                        "in": {
+                            "host": "127.0.0.1",
+                            "port": 20001
+                        },
+                        "out": {
+                            "host": "127.0.0.1",
+                            "port": 30001
+                        }
                     },
                     {
-                        "in": { "host": "127.0.0.1", "port": 20010, "port_end": 20020 },
-                        "out": { "host": "127.0.0.1", "port": 30010, "port_end": 30020 }
+                        "in": {
+                            "host": "127.0.0.1",
+                            "port": 20010,
+                            "port_end": 20020
+                        },
+                        "out": {
+                            "host": "127.0.0.1",
+                            "port": 30010,
+                            "port_end": 30020
+                        }
                     }
                 ]
             },
@@ -770,8 +911,14 @@ TNG 监听一个或多个本地端口（`in.host`、`in.port`，可选 `in.port_
     "add_egress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 20001 },
-                "out": { "host": "127.0.0.1", "port": 30001 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
             },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -844,7 +991,11 @@ flowchart TD
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [{ "port": 30001 }],
+                "capture_dst": [
+                    {
+                        "port": 30001
+                    }
+                ],
                 "capture_local_traffic": true,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -866,7 +1017,12 @@ flowchart TD
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [{ "host": "127.0.0.1", "port": 30001 }],
+                "capture_dst": [
+                    {
+                        "host": "127.0.0.1",
+                        "port": 30001
+                    }
+                ],
                 "capture_local_traffic": false,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -889,11 +1045,20 @@ flowchart TD
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 30001 },
-                    { "host": "192.168.1.1", "port": 30002 }
+                    {
+                        "port": 30001
+                    },
+                    {
+                        "host": "192.168.1.1",
+                        "port": 30002
+                    }
                 ],
-                "capture_cgroup": ["/vllm.slice"],
-                "nocapture_cgroup": ["/system.slice"],
+                "capture_cgroup": [
+                    "/vllm.slice"
+                ],
+                "nocapture_cgroup": [
+                    "/system.slice"
+                ],
                 "capture_local_traffic": true,
                 "listen_port": 40000,
                 "so_mark": 565
@@ -915,7 +1080,12 @@ flowchart TD
     "add_egress": [
         {
             "netfilter": {
-                "capture_dst": [{ "port": 30000, "port_end": 30031 }],
+                "capture_dst": [
+                    {
+                        "port": 30000,
+                        "port_end": 30031
+                    }
+                ],
                 "listen_port": 40000,
                 "so_mark": 565
             },
@@ -993,9 +1163,21 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
         {
             "hook": {
                 "capture_listen": [
-                    { "port": 8080 },
-                    { "port": 8080, "port_end": 8090, "redirect_to_port": 48080, "redirect_to_port_end": 48090 },
-                    { "host": "192.168.1.1", "ifname": "docker0", "port": 30002, "redirect_to_port": 45002 }
+                    {
+                        "port": 8080
+                    },
+                    {
+                        "port": 8080,
+                        "port_end": 8090,
+                        "redirect_to_port": 48080,
+                        "redirect_to_port_end": 48090
+                    },
+                    {
+                        "host": "192.168.1.1",
+                        "ifname": "docker0",
+                        "port": 30002,
+                        "redirect_to_port": 45002
+                    }
                 ]
             },
             "attest": {
@@ -1025,16 +1207,22 @@ tng exec --config-file=/etc/tng.json -- vllm serve --host 0.0.0.0 --port 8080
 
 ```json
 {
-  "add_egress": [
-    {
-      "mapping_udp": {
-        "in": { "host": "0.0.0.0", "port": 8443 },
-        "out": { "host": "127.0.0.1", "port": 20001 },
-        "idle_timeout_secs": 60
-      },
-      "no_ra": true
-    }
-  ]
+    "add_egress": [
+        {
+            "mapping_udp": {
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 8443
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "idle_timeout_secs": 60
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -1069,19 +1257,24 @@ Egress 侧在配置了 TPROXY 的 socket 上接收来自 ingress 的 QUIC Datagr
 
 ```json
 {
-  "add_egress": [
-    {
-      "netfilter_udp": {
-        "capture_dst": [
-          { "host": "192.168.1.1", "port": 30001 }
-        ],
-        "capture_local_traffic": true,
-        "listen_port": 20001
-      },
-      "quic": { "max_datagram_size": 1200 },
-      "no_ra": true
-    }
-  ]
+    "add_egress": [
+        {
+            "netfilter_udp": {
+                "capture_dst": [
+                    {
+                        "host": "192.168.1.1",
+                        "port": 30001
+                    }
+                ],
+                "capture_local_traffic": true,
+                "listen_port": 20001
+            },
+            "quic": {
+                "max_datagram_size": 1200
+            },
+            "no_ra": true
+        }
+    ]
 }
 ```
 
@@ -1139,8 +1332,14 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
     "add_ingress": [
         {
             "mapping": {
-                "in": { "host": "0.0.0.0", "port": 10001 },
-                "out": { "host": "127.0.0.1", "port": 20001 }
+                "in": {
+                    "host": "0.0.0.0",
+                    "port": 10001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                }
             },
             "ohttp": {
                 "path_rewrites": [
@@ -1152,7 +1351,9 @@ OHTTP (Oblivious HTTP) 是一种旨在增强隐私保护的网络协议扩展，
             },
             "verify": {
                 "as_addr": "http://127.0.0.1:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -1195,10 +1396,15 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 示例：
 ```json
 "ohttp": {
-  "header_passthrough": {
-    "request_headers": ["x-trace-id", "x-tenant-id"],
-    "response_headers": ["access-control-allow-origin"]
-  }
+    "header_passthrough": {
+        "request_headers": [
+            "x-trace-id",
+            "x-tenant-id"
+        ],
+        "response_headers": [
+            "access-control-allow-origin"
+        ]
+    }
 }
 ```
 
@@ -1262,19 +1468,35 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
     "add_egress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 20001 },
-                "out": { "host": "127.0.0.1", "port": 30001 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 20001
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 30001
+                }
             },
             "ohttp": {
                 "cors": {
-                    "allow_origins": ["https://example.com"],
-                    "allow_methods": ["GET", "POST"],
-                    "allow_headers": ["Content-Type", "Authorization"],
+                    "allow_origins": [
+                        "https://example.com"
+                    ],
+                    "allow_methods": [
+                        "GET",
+                        "POST"
+                    ],
+                    "allow_headers": [
+                        "Content-Type",
+                        "Authorization"
+                    ],
                     "allow_credentials": true
                 }
             },
             "direct_forward": [
-                { "http_path": "/api/builtin/.*" }
+                {
+                    "http_path": "/api/builtin/.*"
+                }
             ],
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -1306,10 +1528,15 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 示例：
 ```json
 "ohttp": {
-  "header_passthrough": {
-    "request_headers": ["x-trace-id"],
-    "response_headers": ["x-custom-header", "x-rate-limit-remaining"]
-  }
+    "header_passthrough": {
+        "request_headers": [
+            "x-trace-id"
+        ],
+        "response_headers": [
+            "x-custom-header",
+            "x-rate-limit-remaining"
+        ]
+    }
 }
 ```
 
@@ -1353,7 +1580,13 @@ TNG 自主生成 HPKE 密钥对并自动轮换。
 {
     "add_egress": [
         {
-            "netfilter": { "capture_dst": [{ "port": 8080 }] },
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "port": 8080
+                    }
+                ]
+            },
             "ohttp": {
                 "key": {
                     "source": "self_generated",
@@ -1396,7 +1629,13 @@ TNG 自主生成 HPKE 密钥对并自动轮换。
 {
     "add_egress": [
         {
-            "netfilter": { "capture_dst": [{ "port": 8080 }] },
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "port": 8080
+                    }
+                ]
+            },
             "ohttp": {
                 "key": {
                     "source": "peer_shared",
@@ -1413,7 +1652,9 @@ TNG 自主生成 HPKE 密钥对并自动轮换。
                     },
                     "verify": {
                         "as_addr": "http://as.example.com:8080/",
-                        "policy_ids": ["default"]
+                        "policy_ids": [
+                            "default"
+                        ]
                     }
                 }
             },
@@ -1461,7 +1702,13 @@ MC4CAQAwBQYDK2VuBCIEILi5PepL11X3ptJneUQu40m2kiuNeLD9MRK4CYh94t1d
 {
     "add_egress": [
         {
-            "netfilter": { "capture_dst": [{ "port": 8080 }] },
+            "netfilter": {
+                "capture_dst": [
+                    {
+                        "port": 8080
+                    }
+                ]
+            },
             "ohttp": {
                 "key": {
                     "source": "file",
@@ -1630,7 +1877,9 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
                 "type": "oltp",
                 "protocol": "http/protobuf",
                 "endpoint": "https://otlp.example.com/url",
-                "headers": { "Authorization": "XXXXXXXXX" },
+                "headers": {
+                    "Authorization": "XXXXXXXXX"
+                },
                 "step": 2
             }
         ]
@@ -1650,7 +1899,10 @@ RUST_LOG=debug tng --log-file tng-debug.log launch --config-file config.json
                 "type": "falcon",
                 "server_url": "http://127.0.0.1:1988",
                 "endpoint": "master-node",
-                "tags": { "namespace": "ns1", "app": "tng" },
+                "tags": {
+                    "namespace": "ns1",
+                    "app": "tng"
+                },
                 "step": 60
             }
         ]

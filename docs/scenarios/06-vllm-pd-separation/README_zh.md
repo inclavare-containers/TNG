@@ -39,13 +39,21 @@
     "add_ingress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 8080 },
-                "out": { "host": "10.0.0.1", "port": 8080 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 8080
+                },
+                "out": {
+                    "host": "10.0.0.1",
+                    "port": 8080
+                }
             },
             "ohttp": {},
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -67,7 +75,9 @@ vLLM Proxy 部署在独立 TEE 中，需要两份配置：接收用户请求（e
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -76,7 +86,9 @@ vLLM Proxy 部署在独立 TEE 中，需要两份配置：接收用户请求（e
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ],
@@ -84,7 +96,9 @@ vLLM Proxy 部署在独立 TEE 中，需要两份配置：接收用户请求（e
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -111,7 +125,10 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
+                    {
+                        "port": 5000,
+                        "port_end": 5031
+                    }
                 ]
             },
             "rats_tls": {
@@ -122,7 +139,9 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ],
@@ -130,7 +149,9 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -139,13 +160,18 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         },
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
+                    {
+                        "port": 5000,
+                        "port_end": 5031
+                    }
                 ]
             },
             "rats_tls": {
@@ -156,7 +182,9 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]

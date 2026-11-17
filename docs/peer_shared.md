@@ -38,7 +38,9 @@ For detailed configuration options, refer to [configuration.md — peer_shared M
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {
@@ -55,7 +57,9 @@ For detailed configuration options, refer to [configuration.md — peer_shared M
                     },
                     "verify": {
                         "as_addr": "http://as.example.com:8080/",
-                        "policy_ids": ["default"]
+                        "policy_ids": [
+                            "default"
+                        ]
                     }
                 }
             },
@@ -88,7 +92,9 @@ The client side uses standard `add_ingress` configuration to send encrypted traf
             "ohttp": {},
             "verify": {
                 "as_addr": "http://as.example.com:8080/",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]

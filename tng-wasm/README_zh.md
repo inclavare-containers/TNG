@@ -173,18 +173,18 @@ TNG SDK 不依赖 `SharedArrayBuffer`，因此页面无需开启跨源隔离，�
 1. 修改 `manifest.json` 文件中的 `background` 配置项，将 `type` 配置项设置为 `"module"`。
 
 ```json
-  "background": {
+"background": {
     "service_worker": "background.js",
     "type": "module"
-  }
+}
 ```
 
 2. 修改 `manifest.json` 文件中的 `content_security_policy` 配置项为以下内容：
 
 ```json
-  "content_security_policy": {
+"content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
-  }
+}
 ```
 
 ## 跨域请求（CORS）

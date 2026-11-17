@@ -38,7 +38,7 @@
                 ]
             }
         }
-    ]
+    ],
     "add_egress": [
         {
             "netfilter": {

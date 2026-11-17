@@ -36,7 +36,15 @@ LD_PRELOAD-based hook library for TNG. Supports egress mode (intercepts `bind()`
 TNG serializes a port mapping table to JSON and passes it via the `TNG_HOOK_EGRESS_MAPPINGS` environment variable:
 
 ```json
-{"entries":[{"host":"0.0.0.0","origin_port":8080,"real_port":48080}]}
+{
+    "entries": [
+        {
+            "host": "0.0.0.0",
+            "origin_port": 8080,
+            "real_port": 48080
+        }
+    ]
+}
 ```
 
 Each entry means: when the application calls `bind(host:origin_port)`, redirect it to `host:real_port`. TNG listens on `origin_port` to receive tunnel traffic, then forwards decrypted connections to `real_port`.
@@ -179,7 +187,23 @@ In addition to egress hook mode (intercepting `bind()`/`getsockname()`), `libtng
 TNG serializes an ingress mapping table to JSON and passes it via the `TNG_HOOK_INGRESS_MAPPINGS` environment variable:
 
 ```json
-{"proxies":[{"proxy_port":49001,"capture_rules":[{"host_cidr":"10.0.0.0/24","port":80},{"host_cidr":"10.0.0.0/24","port":443}]}]}
+{
+    "proxies": [
+        {
+            "proxy_port": 49001,
+            "capture_rules": [
+                {
+                    "host_cidr": "10.0.0.0/24",
+                    "port": 80
+                },
+                {
+                    "host_cidr": "10.0.0.0/24",
+                    "port": 443
+                }
+            ]
+        }
+    ]
+}
 ```
 
 Each proxy entry specifies a `proxy_port` and a list of `capture_rules` that should be routed through it. When the application calls `connect(host:port)` matching a capture rule, the connection is redirected to the internal HTTP proxy.
@@ -199,19 +223,30 @@ Ingress hook mode is configured via `add_ingress` with `"hook"` mode:
 
 ```json
 {
-  "add_ingress": [
-    {
-      "hook": {
-        "capture_dst": [
-          { "host": "10.0.0.0/24", "port": 80 },
-          { "host": "10.0.0.0/24", "port": 443 },
-          { "port": 8080, "port_end": 8090 }
-        ],
-        "proxy_port": 49001
-      },
-      "attest": { "no_ra": true }
-    }
-  ]
+    "add_ingress": [
+        {
+            "hook": {
+                "capture_dst": [
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 80
+                    },
+                    {
+                        "host": "10.0.0.0/24",
+                        "port": 443
+                    },
+                    {
+                        "port": 8080,
+                        "port_end": 8090
+                    }
+                ],
+                "proxy_port": 49001
+            },
+            "attest": {
+                "no_ra": true
+            }
+        }
+    ]
 }
 ```
 

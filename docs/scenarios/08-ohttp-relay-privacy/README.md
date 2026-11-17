@@ -56,8 +56,14 @@ The egress is the OHTTP gateway. It owns the HPKE key, decrypts the ciphertext t
     "add_egress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 9000 },
-                "out": { "host": "127.0.0.1", "port": 8080 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 9000
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 8080
+                }
             },
             "ohttp": {
                 "key": {
@@ -115,7 +121,10 @@ The ingress is the OHTTP client. The application sends ordinary HTTP to the rela
     "verify": {
         "model": "background_check",
         "as_type": "builtin",
-        "attestation_policy": { "type": "inline", "content": "<base64-encoded-policy>" },
+        "attestation_policy": {
+            "type": "inline",
+            "content": "<base64-encoded-policy>"
+        },
         "reference_values": []
     }
     ```

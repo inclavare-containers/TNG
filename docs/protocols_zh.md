@@ -86,11 +86,20 @@ ingress 在加密第一个请求之前，先向 egress 请求 KeyConfig（1-RTT�
 `attestation_request` 的两个变体：
 
 ```json
-{ "attestation_request": { "model": "passport" } }
+{
+    "attestation_request": {
+        "model": "passport"
+    }
+}
 ```
 
 ```json
-{ "attestation_request": { "model": "background_check", "challenge_token": "<从 AS 获取的挑战 JWT>" } }
+{
+    "attestation_request": {
+        "model": "background_check",
+        "challenge_token": "<从 AS 获取的挑战 JWT>"
+    }
+}
 ```
 
 响应体 `KeyConfigResponse`：
@@ -104,11 +113,19 @@ ingress 在加密第一个请求之前，先向 egress 请求 KeyConfig（1-RTT�
 `attestation_info` 的两个变体：
 
 ```json
-{ "model": "passport", "attestation_result": "<egress 自己的 Attestation Result JWT>", "as_provider": "coco" }
+{
+    "model": "passport",
+    "attestation_result": "<egress 自己的 Attestation Result JWT>",
+    "as_provider": "coco"
+}
 ```
 
 ```json
-{ "model": "background_check", "evidence": "<egress 生成的 Evidence JSON>", "aa_provider": "coco" }
+{
+    "model": "background_check",
+    "evidence": "<egress 生成的 Evidence JSON>",
+    "aa_provider": "coco"
+}
 ```
 
 `as_provider` / `aa_provider` 标明令牌/证据属于哪个提供方（取值同 RA 配置的 provider，当前有 `coco`、`ita`），供对端选择对应的验证栈；对老版本客户端可省略。

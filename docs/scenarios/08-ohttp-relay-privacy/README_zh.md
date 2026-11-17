@@ -56,8 +56,14 @@ egress 即 OHTTP gateway。它持有 HPKE key，解密 relay 转发进来的密�
     "add_egress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 9000 },
-                "out": { "host": "127.0.0.1", "port": 8080 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 9000
+                },
+                "out": {
+                    "host": "127.0.0.1",
+                    "port": 8080
+                }
             },
             "ohttp": {
                 "key": {
@@ -115,7 +121,10 @@ ingress 即 OHTTP 客户端。应用通过这个本地代理以普通 HTTP 访�
     "verify": {
         "model": "background_check",
         "as_type": "builtin",
-        "attestation_policy": { "type": "inline", "content": "<base64 编码的策略>" },
+        "attestation_policy": {
+            "type": "inline",
+            "content": "<base64 编码的策略>"
+        },
         "reference_values": []
     }
     ```

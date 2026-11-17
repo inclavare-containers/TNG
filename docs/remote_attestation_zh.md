@@ -36,7 +36,9 @@ graph LR
 ```json
 "verify": {
     "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 
@@ -136,7 +138,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 }
 ```
 
-**3. 按需收紧验证强度。** 先过渡到 `hardware_only_strict`（更严的平台校验）；再以模块化的 `modules` 策略钉住具体校验项（启动度量、容器镜像、模型、GPU、TDX 平台姿态），条目类型与语义见 [`modules` 证明策略](attestation_modules_zh.md)；需要完全自定义判定逻辑时写自定义策略（`inline`/`path` rego）配参考值；高级场景可用带 `transparency_log` 条目的 `modules` 策略锚定到 Rekor 透明日志。详见 [Background Check 模式](#background-check-模式) 下内置 AS 的场景 1 至 4。
+**3. 按需收紧验证强度。** 先过渡到 `hardware_only_strict`（更严的平台校验）；再以模块化的 `modules` 策略钉住具体校验项（启动度量、容器镜像、模型、GPU、TDX 平台姿态），条目类型与语义见 [`modules` 证明策略](attestation_modules_zh.md)；需要完全自定义判定逻辑时写自定义策略（`inline`/`path` rego）配参考值；高级场景可用带 `transparency_log` 条目的 `modules` 策略锚定到 Rekor 透明日志，字段见[透明日志条目参考](attestation_modules_zh.md#透明日志transparency_log)。详见 [Background Check 模式](#background-check-模式) 下内置 AS 的场景 1 至 3。
 
 **4. 大规模 / 中心化场景再上外部 AS。** 若有大量远程证明验证需求、需要中心化的验证与配置管理，改用外部部署的 Attestation Service（[Trustee](https://github.com/openanolis/trustee)），verify 侧切到 `as_type: "restful"`/`"grpc"` + `as_addr`。详见 [Background Check 模式](#background-check-模式) 下的外部 AS 小节。
 
@@ -235,7 +237,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | 策略（`type`） | 校验硬件 TEE | 比对度量值 | 需用户提供 | `reference_values` | 适用 |
 |---|---|---|---|---|---|
 | `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | 非空即拒绝 | 只确认对端是真 TEE |
-| `modules` | ✅ | ✅ 策略内钉住的基线，或透明日志锚定 | ✅ 模块规则列表 | 非空即拒绝 | 钉启动度量、镜像、模型、GPU、TDX 姿态等校验；用 `transparency_log` 条目把基线锚定到透明日志（场景 4） |
+| `modules` | ✅ | ✅ 策略内钉住的基线，或透明日志锚定 | ✅ 模块规则列表 | 非空即拒绝 | 钉启动度量、镜像、模型、GPU、TDX 姿态等校验；用 [`transparency_log` 条目](attestation_modules_zh.md#透明日志transparency_log)把基线锚定到透明日志 |
 | `inline` / `path` | ✅ | 视策略而定 | ✅ rego 策略 | 接受 | 自定义判定逻辑 |
 
 > `trust_all` 仅调试用（全部维度恒通过）且拒绝非空 `reference_values`；空列表对所有策略都放行。见末尾速查表。
@@ -282,65 +284,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 > [!TIP]
 > OPA/rego 是进阶用法。多数部署用场景 1 的 `hardware_only` 即可，仅在需要自定义判定逻辑时才写 rego。也可把自定义 rego 与参考值组合：将 `attestation_policy.type` 设为 `"inline"` / `"path"`，同时提供 `reference_values`，策略里即可读取参考值做判定。
 
-**场景 3：模块化校验规则（`modules`）**
-
-目标：对端的平台姿态、启动链、工作负载制品或 GPU 提出具体、可校验的要求。设 `attestation_policy.type` 为 `"modules"`：每个条目声明一项具类型校验，可信基线直接钉在策略里。组内同一 AR4SI 维度的条目 AND；每个维度在携带该维度条目的组之间 OR，不含某维度条目的组不约束该维度，但 `hardware` 例外，它要求条目证据所属的 TDX 平台被识别；空列表不做任何断言，`hardware` 保持非 affirming；每项校验都 fail-closed：证据缺少被测值、或与钉住的基线不符，评定即非 affirming。`modules` 类型把每个钉住的值作为字面量嵌入生成的规则，并在加载期拒绝非空 `reference_values` 列表。条目类型、各模块字段、以及从已删除的固定策略变体迁移，见 [`modules` 证明策略](attestation_modules_zh.md)。
-
-<details>
-<summary>示例 3a：单组钉住姿态、GPU 与度量</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                { "type": "tdx", "value": {} },
-                { "type": "com.alibabacloud.gpu", "value": {} },
-                { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-                { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-                { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-                { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
-            ]
-        }
-    }
-}
-```
-
-该组要求 strict TDX 姿态、客户机自报的 GPU 证明通过、钉住的 OVMF 与内核度量，以及所钉镜像的 digest 与所钉模型的哈希。摘要值仅为示例，请替换为你自己制品实测得到的值。
-</details>
-
-<details>
-<summary>示例 3b：两条可替代基线（嵌套多组）</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                [
-                    { "type": "tdx", "value": {} },
-                    { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
-                ],
-                [
-                    { "type": "tdx", "value": {} },
-                    { "type": "tdx.td-shim", "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
-                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
-                ]
-            ]
-        }
-    }
-}
-```
-
-任一组整体通过即评定通过：匹配第一条基线的 OVMF 启动虚机，或匹配第二条基线的 td-shim 启动机密容器。度量混搭跨两条基线的证据两组都不命中。
-</details>
-
-`reference_values` 字段只为消费参考值的策略类型提供可信基线：场景 2 的自定义 `inline`/`path` 策略。`trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 的规则从不读取参考值，非空列表在加载期被拒绝。空列表对所有策略都放行。
+`reference_values` 字段只为消费参考值的策略类型提供可信基线：上面的 `inline` 与 `path` 策略。`trust_all`、`hardware_only`（含 `default` 别名）、`hardware_only_strict`、`modules` 的规则从不读取参考值，非空列表在加载期被拒绝。空列表对所有策略都放行。
 
 每个 `reference_values[]` 条目有两个 `type`：外层选参考值**来源**，内层 `payload.type` 选**加载方式**。
 
@@ -380,7 +324,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 嵌套字段含义：`provenance_info.type` 为 `rv-release-manifest` 或 `slsa-intoto-statements`，标识 provenance 格式；`rekor_api_version`（默认 `2`）是 Rekor 日志 API 版本；`provenance_source` 描述参考值来源（`protocol` 如 `oci`、`uri`、`artifact`）；`operation_type` 为 `refresh` 或 `add`。
 
 <details>
-<summary>示例 3c：sample 来源</summary>
+<summary>示例：sample 来源</summary>
 
 ```json
 {
@@ -421,7 +365,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 </details>
 
 <details>
-<summary>示例 3d：slsa 来源</summary>
+<summary>示例：slsa 来源</summary>
 
 ```json
 {
@@ -459,7 +403,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 </details>
 
 <details>
-<summary>示例 3e：release_manifest 来源</summary>
+<summary>示例：release_manifest 来源</summary>
 
 ```json
 {
@@ -502,88 +446,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 ```
 </details>
 
-**场景 4：transparency_log 锚定（高级）**
+**场景 3：模块化校验规则（`modules`）**
 
-目标：把可信度量值放在透明日志记录的 release manifest 里，appraisal 时拿当前度量值和它比对。在 `modules` 策略里加一个 `transparency_log` 条目，提供 `publishedMeasurements` 和一个 service；`schemaVersion` 不写时为 `1.0.0`。需要平台姿态检查时，再加一个 `tdx` 条目。
-
-<details>
-<summary>示例：带 transparency_log 条目的 modules 策略</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                { "type": "tdx", "value": { "sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow" } },
-                { "type": "transparency_log", "value": {
-                    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-                    "schemaVersion": "1.0.0",
-                    "services": [
-                        {
-                            "type": "rekor-v1",
-                            "logUrl": "https://rekor.sigstore.dev",
-                            "logIndex": 2279770888,
-                            "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
-                        }
-                    ]
-                } }
-            ]
-        }
-    }
-}
-```
-</details>
-
-**transparency_log 条目：字段参考**
-
-<details>
-<summary><code>transparency_log</code> 条目校验什么</summary>
-
-条目把可信度量值放在透明日志记录的 release manifest 里。primary 有两种，区别在日志基线从哪里来。
-
-**primary 为 `rekor-v1`，策略加载时：**
-
-- 按配置的 `logUrl` 与 `logIndex` 拉取条目。
-- 校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp（SET）。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。
-
-**primary 为 `artifact-server`，appraisal 时：**
-
-- 把当前证据里的度量值发往配置的 `url` 比对。
-- 可选的 fallback 只在 primary 返回 `fail` 时启用。`ok` 不回退；被撤销的度量返回 `deny`，也不回退。primary 失败且没有 fallback 即拒绝。
-
-**两种 primary 都会检查：**
-
-- TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件报出的 digest，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。容器镜像类型按 digest 集合比对：仓库运行多个版本时，manifest 中同一类型可以按 digest 各出现一条，证据必须与之完全一致。
-- 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
-- 发布者签名始终按可信发布者密钥校验：`artifact-server` 响应自带验证者时用响应密钥，否则用 `publisherPublicKeyPem`。`rekor-v1` 服务自身不带验证者密钥，该字段必填；`artifact-server` 服务只在响应未提供两个验证者密钥时才需要它。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
-
-**字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
-
-**平台姿态：** 由独立的 `tdx` 条目表达。只有 `transparency_log` 条目时，`hardware` 仅依赖 TDX 平台识别；需要 non-debug 与事件日志检查时，加一个 `tdx` 条目，并把属性位门设为 `allow`。
-
-</details>
-
-<details>
-<summary>transparency_log 条目字段表</summary>
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `publishedMeasurements` | — | （必填）非空的度量类型列表；允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名会在加载时被拒绝。同一类型不得重复。顺序不影响结果 |
-| `schemaVersion` | `"1.0.0"` | 必须等于日志 manifest 的 `schemaVersion` |
-| `services` | — | （必填）恰好一个 service，取 `rekor-v1` 或 `artifact-server` |
-| `services[].type` | — | （必填）`"rekor-v1"` 或 `"artifact-server"` |
-| `services[].logUrl` | — | （`rekor-v1` 必填）Rekor v1 日志基地址（如 `https://rekor.sigstore.dev`、`https://rekor.openanolis.cn`） |
-| `services[].logIndex` | — | （`rekor-v1` 必填）要拉取并认证的 Rekor v1 条目索引；必须 `>= 0` |
-| `services[].rekorPublicKeyPem` | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）；省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥，其他日志必须提供 |
-| `services[].url` | — | （`artifact-server` 必填）Artifact-server 基地址 |
-| `services[].logServices` | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
-| `services[].publisherPublicKeyPem` | — | DSSE 签名校验所用的发布者公钥。`rekor-v1` 必填；`artifact-server` 在响应未提供两个验证者密钥时必填，否则使用响应中的验证者密钥 |
-| `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
-| `fallbackServices` | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
-
-</details>
+目标：对端的平台姿态、启动链、工作负载制品或 GPU 提出具体、可校验的要求。将 `attestation_policy.type` 设为 `"modules"`，并在 `modules` 中列出各项校验。条目类型、各模块字段、分组语义、加载期错误，以及从已删除的固定策略变体迁移，见 [`modules` 证明策略](attestation_modules_zh.md)。
 
 ###### 外部 AS（`as_type` = `"restful"` / `"grpc"`）
 
@@ -605,7 +470,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 <details>
 <summary><code>verify_signer_transparency</code> 背景</summary>
 
-当 Trustee 运行在不可信服务商托管的 TEE 内时，其 JWT 签名证书缺乏内生可信机制。`signer_transparency` 功能通过将签名证书与 TEE 证据绑定并记录到 Rekor **v2** 透明度日志中来解决此问题（与场景 4 的 Rekor **v1** `transparency_log` 模块条目是两套独立机制）。验证内容包括证书 DER SHA-256 匹配、report_data 绑定、Rekor 检查点签名验证等。完整规范见 [Trustee AS signer transparency 文档](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md)。
+当 Trustee 运行在不可信服务商托管的 TEE 内时，其 JWT 签名证书缺乏内生可信机制。`signer_transparency` 功能通过将签名证书与 TEE 证据绑定并记录到 Rekor **v2** 透明度日志中来解决此问题（与 [`modules` 证明策略中的 Rekor **v1** `transparency_log` 条目](attestation_modules_zh.md#透明日志transparency_log)是两套独立机制）。验证内容包括证书 DER SHA-256 匹配、report_data 绑定、Rekor 检查点签名验证等。完整规范见 [Trustee AS signer transparency 文档](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md)。
 </details>
 
 **示例**
@@ -618,7 +483,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
     "as_headers": {
         "Authorization": "Bearer your-token-here"
     },
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 
@@ -629,7 +496,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 "verify": {
     "as_type": "grpc",
     "as_addr": "http://127.0.0.1:5000/",
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 </details>
@@ -640,8 +509,12 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 ```json
 "verify": {
     "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": ["default"],
-    "trusted_certs_paths": ["/tmp/as-ca.pem"]
+    "policy_ids": [
+        "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
+    ]
 }
 ```
 </details>
@@ -652,7 +525,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 |---|---|---|
 | `hardware_only`（别名 `default`） | 仅校验硬件 TEE 识别；拒绝非空 `reference_values`（默认） | 场景 1 |
 | `hardware_only_strict` | 同上，但要求 TDX 非 debug 且包含 eventlog | 场景 1 注 |
-| `modules` | 模块化校验规则：按模块设校验、基线内联钉住，或用 `transparency_log` 条目锚定到 Rekor v1 日志；同一维度条目在组内 AND，每个维度在携带该维度的组间 OR | 场景 3、场景 4 |
+| `modules` | 模块化校验规则：按模块设校验、基线内联钉住，或用 `transparency_log` 条目锚定到 Rekor v1 日志；同一维度条目在组内 AND，每个维度在携带该维度的组间 OR | 场景 3；[`transparency_log` 条目](attestation_modules_zh.md#透明日志transparency_log) |
 | `trust_all` | 全部维度恒通过（仅调试/测试）且拒绝非空 `reference_values` | — |
 | `inline` | 内联 base64 rego | 场景 2 |
 | `path` | rego 文件路径 | 场景 2 |
@@ -704,7 +577,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 "verify": {
     "as_provider": "ita",
     "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 
@@ -840,7 +715,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
     "as_provider": "ita",
     "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 </details>
@@ -863,7 +740,9 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 "verify": {
     "model": "passport",
     "as_provider": "ita",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 </details>

@@ -36,7 +36,9 @@ Client (configures `verify`; `as_addr` points to the AS):
 ```json
 "verify": {
     "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 
@@ -136,7 +138,7 @@ Adopt remote attestation progressively, from the simplest link to a production-g
 }
 ```
 
-**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then pin concrete checks (boot measurements, container images, models, GPU, TDX platform posture) with the modular `modules` policy, whose entry types and semantics are in [Modules Attestation Policy](attestation_modules.md); write a custom policy (`inline`/`path` rego) with reference values when you need fully custom decision logic; for advanced cases use a `modules` policy with a `transparency_log` entry to anchor to a Rekor transparency log. See Scenarios 1 to 4 under the built-in AS in [Background Check Mode](#background-check-mode).
+**3. Tighten verification strength as needed.** Move to `hardware_only_strict` (stricter platform checks) first; then pin concrete checks (boot measurements, container images, models, GPU, TDX platform posture) with the modular `modules` policy, whose entry types and semantics are in [Modules Attestation Policy](attestation_modules.md); write a custom policy (`inline`/`path` rego) with reference values when you need fully custom decision logic; for advanced cases use a `modules` policy with a `transparency_log` entry to anchor to a Rekor transparency log, whose fields are in the [transparency log entry reference](attestation_modules.md#transparency-log-transparency_log). See Scenarios 1 to 3 under the built-in AS in [Background Check Mode](#background-check-mode).
 
 **4. Use an external AS for large-scale / centralized cases.** If you have a high volume of remote-attestation verifications and need centralized verification and configuration management, switch to an externally deployed Attestation Service ([Trustee](https://github.com/openanolis/trustee)) and set the verify side to `as_type: "restful"`/`"grpc"` + `as_addr`. See the External AS section under [Background Check Mode](#background-check-mode).
 
@@ -235,7 +237,7 @@ Compare the three strategies below, then pick one matching your goal; the `type`
 | Strategy (`type`) | Hardware TEE check | Compare measurements | Requires user input | `reference_values` | Use case |
 |---|---|---|---|---|---|
 | `hardware_only` / `hardware_only_strict` | ✅ | ❌ | ❌ | rejected when non-empty | Only confirm the peer is a genuine TEE |
-| `modules` | ✅ | ✅ values pinned in the policy, or a transparency-log anchor | ✅ module list | rejected when non-empty | Pin checks on boot measurements, images, models, GPUs, and TDX posture; anchor baselines to a transparency log with a `transparency_log` entry (Scenario 4) |
+| `modules` | ✅ | ✅ values pinned in the policy, or a transparency-log anchor | ✅ module list | rejected when non-empty | Pin checks on boot measurements, images, models, GPUs, and TDX posture; anchor baselines to a transparency log with a [`transparency_log` entry](attestation_modules.md#transparency-log-transparency_log) |
 | `inline` / `path` | ✅ | depends on policy | ✅ rego policy | accepted | Custom decision logic |
 
 > `trust_all` is debug-only (affirms every dimension) and rejects a non-empty `reference_values`; an empty list is accepted by every policy. See the cheat-sheet at the end.
@@ -282,65 +284,7 @@ Goal: verify evidence with your own rules. Set `attestation_policy.type` to `"in
 > [!TIP]
 > OPA/rego is an advanced feature. Most deployments are fine with `hardware_only` from Scenario 1; write rego only when you need custom decision logic. You can also combine custom rego with reference values: set `attestation_policy.type` to `"inline"` / `"path"` and also provide `reference_values`; the policy can then read the reference values to make decisions.
 
-**Scenario 3: Modular verification rules (`modules`)**
-
-Goal: pin concrete, checkable requirements on the peer's platform posture, boot chain, workload artifacts, or GPUs. Set `attestation_policy.type` to `"modules"`: each entry declares one typed check and pins its trusted baseline directly in the policy. Entries of the same AR4SI dimension within a group AND together; each dimension is OR-ed over the groups that carry entries of that dimension, and a group without entries of a dimension does not constrain that dimension, except `hardware`, which requires the TDX platform every entry's evidence comes from; an empty list asserts nothing and leaves `hardware` non-affirming; every check fails closed, so a measured value missing from the evidence or differing from the pinned baseline makes the appraisal non-affirming. The `modules` type embeds each pinned value as a literal in the generated rules and rejects a non-empty `reference_values` list at load. The entry types, per-module fields, and the migration from the removed fixed policy types are in [Modules Attestation Policy](attestation_modules.md).
-
-<details>
-<summary>Example 3a: single group pinning posture, GPU, and measurements</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                { "type": "tdx", "value": {} },
-                { "type": "com.alibabacloud.gpu", "value": {} },
-                { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-                { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-                { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-                { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
-            ]
-        }
-    }
-}
-```
-
-The group requires the strict TDX posture, a successful guest-reported GPU attestation, the pinned OVMF and kernel measurements, and the pinned digest and hash for the named image and model. The digests are examples; use the values measured for your own artifacts.
-</details>
-
-<details>
-<summary>Example 3b: two alternative baselines (nested groups)</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                [
-                    { "type": "tdx", "value": {} },
-                    { "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
-                ],
-                [
-                    { "type": "tdx", "value": {} },
-                    { "type": "tdx.td-shim", "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
-                    { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
-                ]
-            ]
-        }
-    }
-}
-```
-
-The appraisal passes when either group passes in full: an OVMF-booted VM matching the first baseline, or a td-shim-booted confidential container matching the second. Measurements mixed across the two baselines pass neither.
-</details>
-
-The `reference_values` field supplies trusted baselines only to the policy types that consume them: the custom `inline`/`path` policies of Scenario 2. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values. An empty list is accepted by every policy.
+The `reference_values` field supplies trusted baselines only to the policy types that consume them: the `inline` and `path` policies above. The `trust_all`, `hardware_only` (including the `default` alias), `hardware_only_strict`, and `modules` policies reject a non-empty list at load because their rules never read reference values. An empty list is accepted by every policy.
 
 Each `reference_values[]` entry has two `type` fields: the outer one selects the reference-value **source**, the inner `payload.type` selects the **loading method**.
 
@@ -380,7 +324,7 @@ Structure of `ReferenceValueListPayload` (`release_manifest` / `slsa`):
 Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-intoto-statements`, identifying the provenance format; `rekor_api_version` (default `2`) is the Rekor log API version; `provenance_source` describes the reference-value source (`protocol` e.g. `oci`, `uri`, `artifact`); `operation_type` is `refresh` or `add`.
 
 <details>
-<summary>Example 3c: sample source</summary>
+<summary>Example: sample source</summary>
 
 ```json
 {
@@ -421,7 +365,7 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 </details>
 
 <details>
-<summary>Example 3d: slsa source</summary>
+<summary>Example: slsa source</summary>
 
 ```json
 {
@@ -459,7 +403,7 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 </details>
 
 <details>
-<summary>Example 3e: release_manifest source</summary>
+<summary>Example: release_manifest source</summary>
 
 ```json
 {
@@ -502,88 +446,9 @@ Nested field meanings: `provenance_info.type` is `rv-release-manifest` or `slsa-
 ```
 </details>
 
-**Scenario 4: transparency_log anchoring (advanced)**
+**Scenario 3: Modular verification rules (`modules`)**
 
-Goal: keep the trusted measurement values in a release manifest recorded in a transparency log, and compare the current measurements with it during appraisal. Add a `transparency_log` entry to a `modules` policy with `publishedMeasurements` and one service; `schemaVersion` defaults to `1.0.0`. Add a `tdx` entry when you also want platform posture checks.
-
-<details>
-<summary>Example: modules policy with a transparency_log entry</summary>
-
-```json
-{
-    "verify": {
-        "as_type": "builtin",
-        "attestation_policy": {
-            "type": "modules",
-            "modules": [
-                { "type": "tdx", "value": { "sept_ve_disable": "allow", "perfmon": "allow", "service_td": "allow" } },
-                { "type": "transparency_log", "value": {
-                    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-                    "schemaVersion": "1.0.0",
-                    "services": [
-                        {
-                            "type": "rekor-v1",
-                            "logUrl": "https://rekor.sigstore.dev",
-                            "logIndex": 2279770888,
-                            "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
-                        }
-                    ]
-                } }
-            ]
-        }
-    }
-}
-```
-</details>
-
-**transparency_log entry: field reference**
-
-<details>
-<summary>What the <code>transparency_log</code> entry verifies</summary>
-
-The entry keeps the trusted measurement values in a release manifest recorded in a transparency log. There are two primary types; they differ in where the logged baseline comes from.
-
-**Primary `rekor-v1`, at policy load:**
-
-- Fetch the entry by `logUrl` and `logIndex`.
-- Check the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp (SET). When `rekorPublicKeyPem` is omitted, the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key is used; other logs must supply their own.
-
-**Primary `artifact-server`, at appraisal:**
-
-- Send the measurements from the current evidence to the configured `url` for comparison.
-- The optional fallback runs only when the primary returns `fail`. `ok` does not fall back; a revoked measurement returns `deny`, which does not fall back either. A failed primary with no fallback rejects.
-
-**What both primaries check:**
-
-- The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` digests for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`. A container image type compares digest sets: when the repository runs several versions the manifest may list that type once per digest, and the evidence must equal it exactly.
-- If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
-- The publisher signature is always checked against a trusted publisher key: the response verifier for an `artifact-server` service that supplies one, otherwise `publisherPublicKeyPem`. A `rekor-v1` service carries no verifier keys of its own, so the field is required there; an `artifact-server` service needs it only when the response omits both verifier keys. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
-
-**Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For the container image and `rootfs.cc` types, use exactly the names the transparency log records; the `com.alibabacloud.` aliases do not match and are rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
-
-**Platform posture:** expressed by a separate `tdx` entry. With only a `transparency_log` entry, `hardware` depends on TDX platform recognition alone; add a `tdx` entry with its attribute-bit gates set to `allow` when you need the non-debug and event-log checks.
-
-</details>
-
-<details>
-<summary>transparency_log entry field table</summary>
-
-| Field | Default | Description |
-|---|---|---|
-| `publishedMeasurements` | — | (required) Non-empty measurement type list; accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For container images and `rootfs.cc`, use exactly the names the transparency log records; the `com.alibabacloud.` aliases are rejected at load. A type may not repeat. Order does not matter |
-| `schemaVersion` | `"1.0.0"` | Must equal the logged manifest's `schemaVersion` |
-| `services` | — | (required) Exactly one service, either a `rekor-v1` or an `artifact-server` entry |
-| `services[].type` | — | (required) `"rekor-v1"` or `"artifact-server"` |
-| `services[].logUrl` | — | (required for `rekor-v1`) Rekor v1 log base URL (e.g. `https://rekor.sigstore.dev`, `https://rekor.openanolis.cn`) |
-| `services[].logIndex` | — | (required for `rekor-v1`) The Rekor v1 entry index to fetch and authenticate; must be `>= 0` |
-| `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies checkpoint/SET); omit for the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`, required for other logs |
-| `services[].url` | — | (required for `artifact-server`) Artifact-server base URL |
-| `services[].logServices` | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
-| `services[].publisherPublicKeyPem` | — | The publisher key the DSSE signature is verified against. Required for `rekor-v1`; required for `artifact-server` when the response omits both verifier keys, otherwise the response verifier is used |
-| `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
-| `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
-
-</details>
+Goal: pin concrete, checkable requirements on the peer's platform posture, boot chain, workload artifacts, or GPUs. Set `attestation_policy.type` to `"modules"` and list the checks in `modules`. Entry types, per-module fields, grouping semantics, load-time errors, and the migration from the removed fixed policy types are in [Modules Attestation Policy](attestation_modules.md).
 
 ###### External AS (`as_type` = `"restful"` / `"grpc"`)
 
@@ -605,7 +470,7 @@ Connect to an external Attestation Service (restful HTTP or gRPC). Verification 
 <details>
 <summary><code>verify_signer_transparency</code> background</summary>
 
-When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor **v2** transparency log (a separate mechanism from the Rekor **v1** `transparency_log` module entry in Scenario 4). Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
+When Trustee runs inside a TEE hosted by an untrusted provider, its JWT signing certificate lacks inherent trust mechanisms. The `signer_transparency` feature solves this by binding the signing certificate to TEE evidence and recording it in a Rekor **v2** transparency log (a separate mechanism from the Rekor **v1** [`transparency_log` module entry](attestation_modules.md#transparency-log-transparency_log)). Verification includes certificate DER SHA-256 match, report_data binding, Rekor checkpoint signature verification, etc. See the [Trustee AS signer transparency document](https://github.com/openanolis/trustee/blob/main/attestation-service/docs/as_signer_transparency.md) for the full specification.
 </details>
 
 **Examples**
@@ -618,7 +483,9 @@ Basic example (Restful):
     "as_headers": {
         "Authorization": "Bearer your-token-here"
     },
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 
@@ -629,7 +496,9 @@ Basic example (Restful):
 "verify": {
     "as_type": "grpc",
     "as_addr": "http://127.0.0.1:5000/",
-    "policy_ids": ["default"]
+    "policy_ids": [
+        "default"
+    ]
 }
 ```
 </details>
@@ -640,8 +509,12 @@ Basic example (Restful):
 ```json
 "verify": {
     "as_addr": "http://127.0.0.1:8080/",
-    "policy_ids": ["default"],
-    "trusted_certs_paths": ["/tmp/as-ca.pem"]
+    "policy_ids": [
+        "default"
+    ],
+    "trusted_certs_paths": [
+        "/tmp/as-ca.pem"
+    ]
 }
 ```
 </details>
@@ -652,7 +525,7 @@ Basic example (Restful):
 |---|---|---|
 | `hardware_only` (alias `default`) | Only verifies hardware TEE recognition; rejects a non-empty `reference_values` (default) | Scenario 1 |
 | `hardware_only_strict` | Same, but TDX must be non-debug and include an event log | Scenario 1 note |
-| `modules` | Modular verification rules: per-module checks with baselines pinned inline, or a `transparency_log` entry anchored to a Rekor v1 log; entries of one dimension AND within a group, and each dimension is OR-ed over the groups carrying it | Scenario 3, Scenario 4 |
+| `modules` | Modular verification rules: per-module checks with baselines pinned inline, or a `transparency_log` entry anchored to a Rekor v1 log; entries of one dimension AND within a group, and each dimension is OR-ed over the groups carrying it | Scenario 3; [`transparency_log` entry](attestation_modules.md#transparency-log-transparency_log) |
 | `trust_all` | Affirms every dimension unconditionally (debug/test only) and rejects a non-empty `reference_values` | — |
 | `inline` | Inline base64 rego | Scenario 2 |
 | `path` | rego file path | Scenario 2 |
@@ -704,7 +577,9 @@ When `as_provider` = `"ita"`, the Verify configuration uses the following fields
 "verify": {
     "as_provider": "ita",
     "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 
@@ -840,7 +715,9 @@ When the AA Unix socket is not directly reachable, change `aa_provider` to `"ita
     "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock",
     "as_provider": "ita",
     "api_key": "your-ita-api-key",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 </details>
@@ -863,7 +740,9 @@ When `as_provider` is set to `"ita"`, the Verify configuration uses the followin
 "verify": {
     "model": "passport",
     "as_provider": "ita",
-    "policy_ids": ["my-policy"]
+    "policy_ids": [
+        "my-policy"
+    ]
 }
 ```
 </details>

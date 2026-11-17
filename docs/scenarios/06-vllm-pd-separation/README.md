@@ -39,13 +39,21 @@ The user initiates inference requests through a TNG Client using `mapping` mode 
     "add_ingress": [
         {
             "mapping": {
-                "in": { "host": "127.0.0.1", "port": 8080 },
-                "out": { "host": "10.0.0.1", "port": 8080 }
+                "in": {
+                    "host": "127.0.0.1",
+                    "port": 8080
+                },
+                "out": {
+                    "host": "10.0.0.1",
+                    "port": 8080
+                }
             },
             "ohttp": {},
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
@@ -67,7 +75,9 @@ The vLLM Proxy runs in an independent TEE and requires two TNG rules: receiving 
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -76,7 +86,9 @@ The vLLM Proxy runs in an independent TEE and requires two TNG rules: receiving 
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ],
@@ -84,7 +96,9 @@ The vLLM Proxy runs in an independent TEE and requires two TNG rules: receiving 
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -111,7 +125,10 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
+                    {
+                        "port": 5000,
+                        "port_end": 5031
+                    }
                 ]
             },
             "rats_tls": {
@@ -122,7 +139,9 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ],
@@ -130,7 +149,9 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 8080 }
+                    {
+                        "port": 8080
+                    }
                 ]
             },
             "ohttp": {},
@@ -139,13 +160,18 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         },
         {
             "netfilter": {
                 "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
+                    {
+                        "port": 5000,
+                        "port_end": 5031
+                    }
                 ]
             },
             "rats_tls": {
@@ -156,7 +182,9 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
             },
             "verify": {
                 "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
+                "policy_ids": [
+                    "default"
+                ]
             }
         }
     ]
