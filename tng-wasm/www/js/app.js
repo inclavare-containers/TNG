@@ -3,6 +3,8 @@ import { HTTP_METHODS, BODY_METHODS, METHOD_EXAMPLE_BODIES, LLM_ENDPOINTS, LLM_E
 import { readSseStream } from "./sse.js";
 import {
   buildTngConfig as buildTngConfigFromInputs,
+  configCapabilitiesReady,
+  initConfigCapabilities,
   initPolicyCapabilities,
   visibleFields,
   DEFAULT_ITA_API_URL,
@@ -59,11 +61,14 @@ async function initSdk() {
     tng_init = mod.default;
     tng_fetch = mod.fetch;
     await tng_init();
-    // Policy kinds and the reference-value rule come from Rust.
+    // Policy kinds, the reference-value rule, and the field matrix come from
+    // Rust.
     await initPolicyCapabilities(mod);
+    initConfigCapabilities(mod);
     sdkState = "ready";
     sdkReady = true;
     updateInitBadge();
+    updateProviderFields();
     updateFormValidity();
     // The config preview may have been opened before the capabilities loaded.
     renderConfigPreview();
@@ -134,6 +139,9 @@ function buildTngConfig() {
 // when switching to ITA background_check — but only if the user has not typed a
 // value. Visibility rules come from visibleFields() in config.js.
 function updateProviderFields() {
+  // The field matrix arrives with the wasm SDK. Leave the HTML defaults in
+  // place until then; initSdk calls this again once the export is cached.
+  if (!configCapabilitiesReady()) return;
   const provider = document.getElementById("tng-as-provider").value;
   const model = document.getElementById("tng-model").value;
   const asTypeSelect = document.getElementById("tng-as-type");

@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use gloo::utils::format::JsValueSerdeExt;
 use serde::Serialize;
+use tng::config::capabilities::ConfigCapabilities;
 use tng::{
     config::ra::{
         CocoConverterArgs, CocoVerifierArgs, ConverterArgs, RaArgs, VerifierArgs, VerifyArgs,
@@ -10,6 +11,58 @@ use tng::{
 use wasm_bindgen::prelude::*;
 
 use super::to_js_error;
+
+/// The `as_type` tag of a CoCo converter variant.
+fn coco_converter_as_type(converter: &CocoConverterArgs) -> &'static str {
+    match converter {
+        CocoConverterArgs::Restful { .. } => "restful",
+        CocoConverterArgs::Grpc { .. } => "grpc",
+        CocoConverterArgs::Builtin { .. } => "builtin",
+    }
+}
+
+/// The `as_type` tag of a CoCo verifier variant.
+fn coco_verifier_as_type(verifier: &CocoVerifierArgs) -> &'static str {
+    match verifier {
+        CocoVerifierArgs::Restful { .. } => "restful",
+        CocoVerifierArgs::Grpc { .. } => "grpc",
+        CocoVerifierArgs::Builtin => "builtin",
+    }
+}
+
+/// Address and policy IDs a CoCo converter would send to the AS.
+fn coco_converter_service(converter: &CocoConverterArgs) -> (Option<String>, Option<Vec<String>>) {
+    match converter {
+        CocoConverterArgs::Restful {
+            as_addr,
+            policy_ids,
+            ..
+        }
+        | CocoConverterArgs::Grpc {
+            as_addr,
+            policy_ids,
+            ..
+        } => (Some(as_addr.clone()), Some(policy_ids.clone())),
+        CocoConverterArgs::Builtin { .. } => (None, None),
+    }
+}
+
+/// Address and policy IDs a CoCo verifier consults.
+fn coco_verifier_service(verifier: &CocoVerifierArgs) -> (Option<String>, Option<Vec<String>>) {
+    match verifier {
+        CocoVerifierArgs::Restful {
+            as_addr,
+            policy_ids,
+            ..
+        }
+        | CocoVerifierArgs::Grpc {
+            as_addr,
+            policy_ids,
+            ..
+        } => (as_addr.clone(), Some(policy_ids.clone())),
+        CocoVerifierArgs::Builtin => (None, None),
+    }
+}
 
 /// Non-sensitive subset of verification config exposed to JavaScript.
 ///
@@ -53,29 +106,25 @@ pub(super) fn attach_attestation_info(
             VerifyArgs::Passport { verifier } => match verifier {
                 VerifierArgs::Coco(coco) => {
                     attest_info.as_provider = Some("coco".into());
-                    match coco {
-                        CocoVerifierArgs::Restful {
-                            as_addr,
-                            policy_ids,
-                            ..
-                        }
-                        | CocoVerifierArgs::Grpc {
-                            as_addr,
-                            policy_ids,
-                            ..
-                        } => {
-                            attest_info.as_addr = as_addr.clone();
-                            attest_info.policy_ids = Some(policy_ids.clone());
-                        }
-                        CocoVerifierArgs::Builtin => {
-                            // Nothing to do
-                        }
+                    let caps =
+                        ConfigCapabilities::new("coco", "passport", coco_verifier_as_type(coco));
+                    let (as_addr, policy_ids) = coco_verifier_service(coco);
+                    if caps.as_addr {
+                        attest_info.as_addr = as_addr;
+                    }
+                    if caps.policy_ids {
+                        attest_info.policy_ids = policy_ids;
                     }
                 }
                 VerifierArgs::Ita(ita) => {
                     attest_info.as_provider = Some("ita".into());
-                    attest_info.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
-                    attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    let caps = ConfigCapabilities::new("ita", "passport", "restful");
+                    if caps.ita_jwks_addr {
+                        attest_info.ita_jwks_addr = Some(ita.ita_jwks_addr.clone());
+                    }
+                    if caps.policy_ids {
+                        attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    }
                 }
             },
             VerifyArgs::BackgroundCheck {
@@ -84,31 +133,32 @@ pub(super) fn attach_attestation_info(
             } => match converter {
                 ConverterArgs::Coco(coco) => {
                     attest_info.as_provider = Some("coco".into());
-                    match coco {
-                        CocoConverterArgs::Restful {
-                            as_addr,
-                            policy_ids,
-                            ..
-                        }
-                        | CocoConverterArgs::Grpc {
-                            as_addr,
-                            policy_ids,
-                            ..
-                        } => {
-                            attest_info.as_addr = Some(as_addr.clone());
-                            attest_info.policy_ids = Some(policy_ids.clone());
-                        }
-                        CocoConverterArgs::Builtin { .. } => {
-                            // Nothing to do
-                        }
+                    let caps = ConfigCapabilities::new(
+                        "coco",
+                        "background_check",
+                        coco_converter_as_type(coco),
+                    );
+                    let (as_addr, policy_ids) = coco_converter_service(coco);
+                    if caps.as_addr {
+                        attest_info.as_addr = as_addr;
+                    }
+                    if caps.policy_ids {
+                        attest_info.policy_ids = policy_ids;
                     }
                 }
                 ConverterArgs::Ita(ita) => {
                     attest_info.as_provider = Some("ita".into());
-                    attest_info.as_addr = Some(ita.as_addr.clone());
-                    attest_info.policy_ids = Some(ita.policy_ids.clone());
-                    if let VerifierArgs::Ita(v) = verifier {
-                        attest_info.ita_jwks_addr = Some(v.ita_jwks_addr.clone());
+                    let caps = ConfigCapabilities::new("ita", "background_check", "restful");
+                    if caps.as_addr {
+                        attest_info.as_addr = Some(ita.as_addr.clone());
+                    }
+                    if caps.policy_ids {
+                        attest_info.policy_ids = Some(ita.policy_ids.clone());
+                    }
+                    if caps.ita_jwks_addr {
+                        if let VerifierArgs::Ita(v) = verifier {
+                            attest_info.ita_jwks_addr = Some(v.ita_jwks_addr.clone());
+                        }
                     }
                 }
             },

@@ -1,10 +1,6 @@
 // Pure TNG verify/ohttp config builder for the demo. No DOM access; imported
-// by app.js (browser) and by tests/config.test.mjs (Node). Policy kinds are
-// loaded once from the wasm SDK before a builtin config is built.
-//
-// The field matrix (which verify fields each provider×model consumes) mirrors
-// tng-wasm/src/fetch/attestation.rs:51-105 and is documented in
-// docs/superpowers/specs/2026-07-10-www-ita-provider-support-design.md.
+// by app.js (browser) and by tests/config.test.mjs (Node). Policy kinds and
+// the config-field matrix are loaded once from the wasm SDK at init.
 
 export const DEFAULT_ITA_API_URL = "https://api.trustauthority.intel.com";
 export const DEFAULT_ITA_JWKS_URL = "https://portal.trustauthority.intel.com";
@@ -29,30 +25,31 @@ function findPolicyCapability(type) {
   return (policyCapabilities || []).find((cap) => cap.type === type) || null;
 }
 
+// The provider x model x as_type field matrix is owned by Rust
+// (ConfigCapabilities) and exported as config_capabilities(). Cache the
+// function itself so visibleFields stays synchronous.
+let configCapabilities = null;
+
+export function initConfigCapabilities(sdk) {
+  if (typeof sdk.config_capabilities !== "function") {
+    throw new Error("config_capabilities() is not exported by the SDK");
+  }
+  configCapabilities = sdk.config_capabilities;
+}
+
+export function configCapabilitiesReady() {
+  return configCapabilities !== null;
+}
+
 // Which form rows should be visible for a given (provider, model, asType).
-// Centralized so the visibility rule cannot drift from buildTngConfig().
-// asType defaults to "restful" (the server-side default) so existing two-arg
-// callers behave as before.
+// The matrix itself lives in tng (ConfigCapabilities); this forwards to the
+// exported capability. asType defaults to "restful" (the server-side default)
+// so existing two-arg callers behave as before.
 export function visibleFields(provider, model, asType = "restful") {
-  const isIta = provider === "ita";
-  const isPassport = model === "passport";
-  const isCoco = provider === "coco";
-  const isBuiltin = isCoco && asType === "builtin";
-  return {
-    // AS access-mode selector: CoCo only. ITA has no as_type concept.
-    asType: isCoco,
-    // as_addr: CoCo restful/grpc show it, builtin hides it; ITA background_check only.
-    asAddr: isCoco ? !isBuiltin : (!isIta || !isPassport),
-    // ita background_check only: the converter needs the key to call Intel's cloud.
-    apiKey: isIta && !isPassport,
-    // ita both models (advanced/optional).
-    itaJwksAddr: isIta,
-    // CoCo restful/grpc only (external AS TLS cert fetch); ITA never.
-    skipAsTokenCertVerify: isCoco ? !isBuiltin : !isIta,
-    // Builtin (internal AS) policy + reference values: CoCo builtin only.
-    builtinPolicy: isBuiltin,
-    builtinReferenceValues: isBuiltin,
-  };
+  if (!configCapabilities) {
+    throw new Error("config capabilities not loaded");
+  }
+  return configCapabilities(provider, model, asType);
 }
 
 // Build a single CoCo reference value (inline payload) from a { type, content } row.

@@ -4,6 +4,8 @@ use ingress::AddIngressArgs;
 use observability::{metric::MetricArgs, trace::TraceArgs};
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, wasm))]
+pub mod capabilities;
 pub mod control_interface;
 pub mod egress;
 pub mod egress_hook;

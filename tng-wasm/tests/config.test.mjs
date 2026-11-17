@@ -1,10 +1,11 @@
-// Unit tests for the pure config builder. Runs under `node --test` — no browser,
-// no DOM, no wasm SDK. Covers every (provider, model) combo in the field matrix
-// from docs/superpowers/specs/2026-07-10-www-ita-provider-support-design.md.
+// Unit tests for the pure config builder. Runs under `node --test`: no browser,
+// no DOM, no wasm SDK. The field matrix itself is covered by Rust tests; these
+// tests exercise the builder and the capability delegation.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTngConfig,
+  initConfigCapabilities,
   initPolicyCapabilities,
   visibleFields,
   DEFAULT_ITA_API_URL,
@@ -22,6 +23,13 @@ await initPolicyCapabilities({
     { type: "trust_all", name: "Trust all", accepts_reference_values: false, is_default: false, has_content: false },
     { type: "inline", name: "Inline", accepts_reference_values: true, is_default: false, has_content: true },
   ],
+});
+
+// The field matrix is owned by tng (ConfigCapabilities) and exported by the
+// wasm SDK. Node cannot load the wasm module, so inject a stub. The matrix
+// itself is covered by tng's Rust tests.
+initConfigCapabilities({
+  config_capabilities: (provider, model, asType) => ({ provider, model, asType }),
 });
 
 const base = { model: "background_check", policyIds: ["default"] };
@@ -126,63 +134,28 @@ test("ohttp: emits path_default only when original, path_rewrites when present",
   });
 });
 
-test("visibleFields: coco background_check restful shows asType + asAddr + skip, hides apiKey/itaJwks/builtin", () => {
-  assert.deepEqual(visibleFields("coco", "background_check"), {
-    asType: true,
-    asAddr: true,
-    apiKey: false,
-    itaJwksAddr: false,
-    skipAsTokenCertVerify: true,
-    builtinPolicy: false,
-    builtinReferenceValues: false,
-  });
-});
-
-test("visibleFields: coco builtin shows asType + builtinPolicy + builtinRV, hides asAddr + skip", () => {
-  assert.deepEqual(visibleFields("coco", "background_check", "builtin"), {
-    asType: true,
-    asAddr: false,
-    apiKey: false,
-    itaJwksAddr: false,
-    skipAsTokenCertVerify: false,
-    builtinPolicy: true,
-    builtinReferenceValues: true,
-  });
-});
-
-test("visibleFields: coco grpc shows asType + asAddr + skip, hides builtin", () => {
+test("visibleFields: forwards provider/model/asType to the SDK capability export", () => {
   assert.deepEqual(visibleFields("coco", "background_check", "grpc"), {
-    asType: true,
-    asAddr: true,
-    apiKey: false,
-    itaJwksAddr: false,
-    skipAsTokenCertVerify: true,
-    builtinPolicy: false,
-    builtinReferenceValues: false,
+    provider: "coco",
+    model: "background_check",
+    asType: "grpc",
   });
 });
 
-test("visibleFields: ita background_check hides asType + builtin", () => {
-  assert.deepEqual(visibleFields("ita", "background_check"), {
-    asType: false,
-    asAddr: true,
-    apiKey: true,
-    itaJwksAddr: true,
-    skipAsTokenCertVerify: false,
-    builtinPolicy: false,
-    builtinReferenceValues: false,
-  });
-});
-
-test("visibleFields: ita passport hides asType + asAddr + apiKey + skip + builtin", () => {
+test("visibleFields: defaults asType to restful", () => {
   assert.deepEqual(visibleFields("ita", "passport"), {
-    asType: false,
-    asAddr: false,
-    apiKey: false,
-    itaJwksAddr: true,
-    skipAsTokenCertVerify: false,
-    builtinPolicy: false,
-    builtinReferenceValues: false,
+    provider: "ita",
+    model: "passport",
+    asType: "restful",
+  });
+});
+
+test("visibleFields: returns the SDK capability object unchanged", () => {
+  const marker = { asType: "marker" };
+  initConfigCapabilities({ config_capabilities: () => marker });
+  assert.equal(visibleFields("ignored", "ignored", "ignored"), marker);
+  initConfigCapabilities({
+    config_capabilities: (provider, model, asType) => ({ provider, model, asType }),
   });
 });
 

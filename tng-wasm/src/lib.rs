@@ -2,6 +2,7 @@
 #![deny(clippy::expect_used)]
 
 use gloo::utils::format::JsValueSerdeExt;
+use tng::config::capabilities::ConfigCapabilities;
 use tng::config::ra::PolicyConfig;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::Layer;
@@ -20,6 +21,17 @@ pub fn policy_capabilities() -> Result<JsValue, JsValue> {
     let capabilities = PolicyConfig::capabilities();
     JsValue::from_serde(&capabilities).map_err(|error| {
         JsError::new(&format!("Failed to serialize policy capabilities: {error}")).into()
+    })
+}
+
+/// Field capabilities for the demo's provider x model x as_type selectors, as
+/// `{ asType, asAddr, apiKey, itaJwksAddr, skipAsTokenCertVerify,
+/// builtinPolicy, builtinReferenceValues, policyIds, trustedCerts }`.
+#[wasm_bindgen]
+pub fn config_capabilities(provider: &str, model: &str, as_type: &str) -> Result<JsValue, JsValue> {
+    let capabilities = ConfigCapabilities::new(provider, model, as_type);
+    JsValue::from_serde(&capabilities).map_err(|error| {
+        JsError::new(&format!("Failed to serialize config capabilities: {error}")).into()
     })
 }
 
@@ -126,5 +138,43 @@ mod tests {
         assert!(types.contains(&"trust_all".to_string()));
         assert!(types.contains(&"inline".to_string()));
         assert!(!types.contains(&"path".to_string()));
+    }
+
+    // The exported matrix must serialize with the camelCase keys the demo
+    // reads, and the builtin/ITA distinctions must survive the boundary.
+    #[wasm_bindgen_test]
+    fn config_capabilities_cover_the_demo_matrix() {
+        fn capabilities(provider: &str, model: &str, as_type: &str) -> wasm_bindgen::JsValue {
+            match crate::config_capabilities(provider, model, as_type) {
+                Ok(value) => value,
+                Err(error) => panic!("config capabilities did not serialize: {error:?}"),
+            }
+        }
+
+        fn flag(capabilities: &wasm_bindgen::JsValue, key: &str) -> bool {
+            let value =
+                match js_sys::Reflect::get(capabilities, &wasm_bindgen::JsValue::from_str(key)) {
+                    Ok(value) => value,
+                    Err(_) => panic!("missing {key}"),
+                };
+            match value.as_bool() {
+                Some(value) => value,
+                None => panic!("{key} is not a bool"),
+            }
+        }
+
+        let coco_builtin = capabilities("coco", "background_check", "builtin");
+        assert!(flag(&coco_builtin, "asType"));
+        assert!(!flag(&coco_builtin, "asAddr"));
+        assert!(!flag(&coco_builtin, "policyIds"));
+        assert!(flag(&coco_builtin, "builtinPolicy"));
+        assert!(flag(&coco_builtin, "builtinReferenceValues"));
+
+        let ita_passport = capabilities("ita", "passport", "restful");
+        assert!(!flag(&ita_passport, "asType"));
+        assert!(!flag(&ita_passport, "asAddr"));
+        assert!(!flag(&ita_passport, "apiKey"));
+        assert!(flag(&ita_passport, "itaJwksAddr"));
+        assert!(flag(&ita_passport, "policyIds"));
     }
 }
