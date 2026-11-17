@@ -250,7 +250,8 @@
 { "type": "transparency_log", "value": {
     "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
     "schemaVersion": "1.0.0",
-    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944 }]
+    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944,
+                   "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }]
 } }
 ```
 
@@ -258,7 +259,7 @@
 
 **加载期与 appraisal 期。** primary 为 `rekor-v1` 时，TNG 在策略加载时拉取并检查日志条目：按 `logIndex` 取出条目，校验签名 checkpoint、Merkle 包含证明与 Signed Entry Timestamp。省略 `rekorPublicKeyPem` 时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥；其他日志必须提供自己的公钥。条目逐个拉取，因此包含多个 `rekor-v1` 条目的策略会为每个条目各做一次查询。primary 为 `artifact-server` 时，策略加载不访问网络，条目在 appraisal 时解析。
 
-**校验内容。** 条目把当前 TDX 证据里的度量值与透明日志记录的基线比对。度量类型、任一取值或 `schemaVersion` 与基线不一致时，验证失败。`publishedMeasurements` 的顺序不影响结果。容器镜像类型按 digest 集合比对：manifest 中同一类型可以按 digest 各出现一条，证据必须与之完全一致。证据缺少任一配置的度量时，验证失败；TNG 不会拿少了这一项的基线与证据比对。发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。
+**校验内容。** 条目把当前 TDX 证据里的度量值与透明日志记录的基线比对。度量类型、任一取值或 `schemaVersion` 与基线不一致时，验证失败。`publishedMeasurements` 的顺序不影响结果。容器镜像类型按 digest 集合比对：manifest 中同一类型可以按 digest 各出现一条，证据必须与之完全一致。证据缺少任一配置的度量时，验证失败；TNG 不会拿少了这一项的基线与证据比对。发布者签名始终按可信发布者密钥校验：`artifact-server` 响应自带验证者时用响应密钥，否则用 `publisherPublicKeyPem`。该字段对 `rekor-v1` 必填（它自身不带验证者密钥）；`artifact-server` 仅在响应未提供两个验证者密钥时必填。
 
 **fallback。** 可选的 fallback 只在 primary 返回 `fail` 时使用。`ok` 不会触发；`deny` 表示度量被撤销，是直接拒绝，不会回退。primary 因为缺少配置的度量而无法评定时，按 `fail` 处理，fallback 仍会被咨询。primary 失败且没有配置 fallback，条目拒绝。
 
@@ -268,15 +269,15 @@
 
 ```json
 "modules": [
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } },
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200 }] } }
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } },
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }
 ]
 ```
 
 ```json
 "modules": [
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } }],
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200 }] } }]
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }],
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }]
 ]
 ```
 
@@ -289,11 +290,11 @@
 | `services[].logUrl` | string | — | （`rekor-v1` 必填）Rekor v1 日志基地址 |
 | `services[].logIndex` | int | — | （`rekor-v1` 必填）要拉取并认证的 Rekor v1 条目索引；必须 `>= 0` |
 | `services[].rekorPublicKeyPem` | string | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）；省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥，其他日志必须提供 |
-| `services[].publisherPublicKeyPem` | string | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
+| `services[].publisherPublicKeyPem` | string | — | DSSE 签名校验所用的发布者公钥。`rekor-v1` 必填；`artifact-server` 在响应未提供验证者密钥时必填，响应自带验证者密钥时忽略该字段并使用响应中的密钥 |
 | `services[].url` | string | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | 列表 | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
 | `fallbackPublishedMeasurements` | string 列表 | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
-| `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
+| `fallbackServices` | 列表 | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，该条目需要自己的 `publisherPublicKeyPem`，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 
 **从顶层类型迁移。** 把旧策略的取值包进一个 `modules` 条目：`{"type": "modules", "modules": [{"type": "transparency_log", "value": <旧取值>}]}`。若需要旧的 non-debug 与事件日志检查，再加一个 `tdx` 条目（TDX 识别是自动的）；只有 `transparency_log` 条目时 `hardware` 退化为仅要求该识别。删除任何非空 `reference_values`，新策略会在加载期拒绝它。
 

@@ -557,7 +557,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 
 - TNG 从 TDX quote 与 UEFI 事件日志提取的度量值，必须与日志记录的基线一致。例如 `tdx.td-shim` 对应 `mr_td`，`container.image.cmaas-runtime` 对应 AAEL `kangaroo/pull-image` 事件报出的 digest，`rootfs.cc` 对应 `td_payload_info` 事件里的 dm-verity 根哈希。容器镜像类型按 digest 集合比对：仓库运行多个版本时，manifest 中同一类型可以按 digest 各出现一条，证据必须与之完全一致。
 - 度量类型、任一取值或 `schemaVersion` 与记录不一致时，条目拒绝。`publishedMeasurements` 的顺序不影响结果。
-- 发布者签名始终校验：配置了 `publisherPublicKeyPem` 就用它，否则用内置发布者公钥。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
+- 发布者签名始终按可信发布者密钥校验：`artifact-server` 响应自带验证者时用响应密钥，否则用 `publisherPublicKeyPem`。`rekor-v1` 服务自身不带验证者密钥，该字段必填；`artifact-server` 服务只在响应未提供两个验证者密钥时才需要它。这样条目绑定到可信 publisher，防止 `logIndex` 被替换。
 
 **字段约束：** `publishedMeasurements` 必填且非空，允许 `tdx.td-shim`、`tdx.kernel`、`rootfs.cc` 以及任意单段 `container.image.<repo>`。容器镜像与 `rootfs.cc` 类型要使用透明日志记录的名字；`com.alibabacloud.` 别名与记录不一致，会在加载时被拒绝。同一类型不能重复。`schemaVersion` 默认为 `1.0.0`，必须等于日志里的值。
 
@@ -579,7 +579,7 @@ Background Check 把原始 evidence 留到 verify 侧验证（Verifier 联系 AS
 | `services[].rekorPublicKeyPem` | 内建 | 可选的日志公钥 PEM（校验 checkpoint/SET）；省略时使用 `rekor.sigstore.dev` / `rekor.openanolis.cn` 的知名公钥，其他日志必须提供 |
 | `services[].url` | — | （`artifact-server` 必填）Artifact-server 基地址 |
 | `services[].logServices` | — | （`artifact-server` 必填）非空的 `{"type": "rekor-v1", "url": "<rekor url>"}` 条目列表，各 URL 不得重复 |
-| `services[].publisherPublicKeyPem` | 内建发布者公钥 | 覆盖 DSSE 签名校验所用的发布者公钥 |
+| `services[].publisherPublicKeyPem` | — | DSSE 签名校验所用的发布者公钥。`rekor-v1` 必填；`artifact-server` 在响应未提供两个验证者密钥时必填，否则使用响应中的验证者密钥 |
 | `fallbackPublishedMeasurements` | 缺省 | fallback 路径使用的度量类型；非空，且是 `publishedMeasurements` 的子集。只有该字段与 `fallbackServices` 同时设置时 fallback 才生效；只设置该字段而不设 `fallbackServices` 会被拒绝 |
 | `fallbackServices` | 缺省 | 非空的 `rekor-v1` service 列表；只能与 `artifact-server` primary 一起使用。只使用第一个条目，且 fallback 还需要 `fallbackPublishedMeasurements`，因此该字段单独设置不产生效果 |
 

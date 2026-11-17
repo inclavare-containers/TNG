@@ -557,7 +557,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 
 - The measurement values TNG extracts from the TDX quote and the UEFI event log must match the baseline recorded in the log. Examples: `mr_td` for `tdx.td-shim`, the AAEL `kangaroo/pull-image` digests for `container.image.cmaas-runtime`, and the dm-verity root hash from the `td_payload_info` event for `rootfs.cc`. A container image type compares digest sets: when the repository runs several versions the manifest may list that type once per digest, and the evidence must equal it exactly.
 - If the measurement types, any value, or the `schemaVersion` differ from the record, the entry rejects. The order of `publishedMeasurements` does not matter.
-- The publisher signature is always checked: with `publisherPublicKeyPem` when set, otherwise with the built-in publisher key. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
+- The publisher signature is always checked against a trusted publisher key: the response verifier for an `artifact-server` service that supplies one, otherwise `publisherPublicKeyPem`. A `rekor-v1` service carries no verifier keys of its own, so the field is required there; an `artifact-server` service needs it only when the response omits both verifier keys. This binds the entry to a trusted publisher and guards against a substituted `logIndex`.
 
 **Field constraints:** `publishedMeasurements` is required and non-empty. It accepts `tdx.td-shim`, `tdx.kernel`, `rootfs.cc`, and any single-segment `container.image.<repo>`. For the container image and `rootfs.cc` types, use exactly the names the transparency log records; the `com.alibabacloud.` aliases do not match and are rejected at load. A type may not repeat. `schemaVersion` defaults to `1.0.0` and must equal the value in the log.
 
@@ -579,7 +579,7 @@ The entry keeps the trusted measurement values in a release manifest recorded in
 | `services[].rekorPublicKeyPem` | built-in | Optional PEM of the log's public key (verifies checkpoint/SET); omit for the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`, required for other logs |
 | `services[].url` | — | (required for `artifact-server`) Artifact-server base URL |
 | `services[].logServices` | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
-| `services[].publisherPublicKeyPem` | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
+| `services[].publisherPublicKeyPem` | — | The publisher key the DSSE signature is verified against. Required for `rekor-v1`; required for `artifact-server` when the response omits both verifier keys, otherwise the response verifier is used |
 | `fallbackPublishedMeasurements` | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
 | `fallbackServices` | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 

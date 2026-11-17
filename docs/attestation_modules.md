@@ -250,7 +250,8 @@ The whitelist fields compare exact strings; an empty list means no restriction. 
 { "type": "transparency_log", "value": {
     "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
     "schemaVersion": "1.0.0",
-    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944 }]
+    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944,
+                   "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }]
 } }
 ```
 
@@ -258,7 +259,7 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 
 **When it loads and when it appraises.** With a `rekor-v1` primary, TNG fetches and checks the log entry when the policy loads: it looks up the entry by `logIndex` and verifies the signed checkpoint, the Merkle inclusion proof, and the Signed Entry Timestamp. If `rekorPublicKeyPem` is omitted, TNG uses the well-known key for `rekor.sigstore.dev` / `rekor.openanolis.cn`; other logs must supply their own. Entries are fetched one by one, so a policy with several `rekor-v1` entries performs one lookup per entry. With an `artifact-server` primary, the policy loads without network access and the entry is resolved at appraisal.
 
-**What it verifies.** The entry compares the measurements in the current TDX evidence with the baseline recorded in the transparency log. If the measurement types, any value, or the `schemaVersion` differ from the baseline, verification fails. The order of `publishedMeasurements` does not matter. A container image type is compared as a digest set: the manifest may list that type once per digest, and the evidence must equal it exactly. If the evidence lacks any configured measurement, verification fails; TNG does not compare a baseline with that measurement left out. The publisher signature is always checked, with `publisherPublicKeyPem` when set and the built-in publisher key otherwise.
+**What it verifies.** The entry compares the measurements in the current TDX evidence with the baseline recorded in the transparency log. If the measurement types, any value, or the `schemaVersion` differ from the baseline, verification fails. The order of `publishedMeasurements` does not matter. A container image type is compared as a digest set: the manifest may list that type once per digest, and the evidence must equal it exactly. If the evidence lacks any configured measurement, verification fails; TNG does not compare a baseline with that measurement left out. The publisher signature is always checked against a trusted publisher key: the response verifier for an `artifact-server` service that supplies one, otherwise `publisherPublicKeyPem`. That field is required for `rekor-v1`, which carries no verifier keys of its own, and for an `artifact-server` service only when the response omits both verifier keys.
 
 **Fallback.** The optional fallback is used only when the primary returns `fail`. `ok` never triggers it, and `deny` (a revoked measurement) is a hard rejection that never falls back. If the primary cannot be evaluated because a configured measurement is missing, that counts as `fail`, so the fallback baseline is still consulted. A failed primary with no fallback rejects.
 
@@ -268,15 +269,15 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 
 ```json
 "modules": [
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } },
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200 }] } }
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } },
+    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }
 ]
 ```
 
 ```json
 "modules": [
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100 }] } }],
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200 }] } }]
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }],
+    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }]
 ]
 ```
 
@@ -289,11 +290,11 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 | `services[].logUrl` | string | — | (required for `rekor-v1`) Rekor v1 log base URL |
 | `services[].logIndex` | int | — | (required for `rekor-v1`) Rekor v1 entry index to fetch and authenticate; must be `>= 0` |
 | `services[].rekorPublicKeyPem` | string | built-in | Optional log public key PEM (verifies checkpoint/SET); omit for the well-known `rekor.sigstore.dev` / `rekor.openanolis.cn` key, required for other logs |
-| `services[].publisherPublicKeyPem` | string | built-in publisher key | Overrides the publisher key the DSSE signature is verified against |
+| `services[].publisherPublicKeyPem` | string | — | The publisher key the DSSE signature is verified against. Required for `rekor-v1`; required for `artifact-server` when the response omits verifier keys, otherwise the response verifier is used |
 | `services[].url` | string | — | (required for `artifact-server`) Artifact-server base URL |
 | `services[].logServices` | list | — | (required for `artifact-server`) Non-empty list of `{"type": "rekor-v1", "url": "<rekor url>"}` entries, with distinct URLs |
 | `fallbackPublishedMeasurements` | list of strings | absent | Measurement types used on the fallback path; non-empty and a subset of `publishedMeasurements`. The fallback takes effect only when both this field and `fallbackServices` are set; setting this field without `fallbackServices` is rejected |
-| `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
+| `fallbackServices` | list | absent | Non-empty list of `rekor-v1` services; only valid with an `artifact-server` primary. Only the first entry is used, it needs its own `publisherPublicKeyPem`, and the fallback also requires `fallbackPublishedMeasurements`, so this field alone has no effect |
 
 **Migrating from the top-level type.** Wrap the old policy value in a `modules` entry: `{"type": "modules", "modules": [{"type": "transparency_log", "value": <old value>}]}`. Add a `tdx` entry if the old non-debug and event-log checks are wanted (TDX recognition is automatic); with only the `transparency_log` entry, `hardware` reduces to that recognition. Delete any non-empty `reference_values`, which the new policy rejects at load.
 
