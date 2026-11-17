@@ -1,5 +1,6 @@
-// Pure TNG verify/ohttp config builder for the demo. No DOM access, no side
-// effects — imported by app.js (browser) and by tests/config.test.mjs (Node).
+// Pure TNG verify/ohttp config builder for the demo. No DOM access; imported
+// by app.js (browser) and by tests/config.test.mjs (Node). Policy kinds are
+// loaded once from the wasm SDK before a builtin config is built.
 //
 // The field matrix (which verify fields each provider×model consumes) mirrors
 // tng-wasm/src/fetch/attestation.rs:51-105 and is documented in
@@ -7,6 +8,26 @@
 
 export const DEFAULT_ITA_API_URL = "https://api.trustauthority.intel.com";
 export const DEFAULT_ITA_JWKS_URL = "https://portal.trustauthority.intel.com";
+
+// Policy kinds and the reference-value rule are owned by Rust
+// (PolicyConfig::capabilities) and exported by the wasm SDK as
+// policy_capabilities(). This module only consumes that list.
+let policyCapabilities = null;
+
+// Load the policy capabilities from the initialized wasm SDK. Must be awaited
+// before building a builtin converter config.
+export async function initPolicyCapabilities(sdk) {
+  const capabilities = await sdk.policy_capabilities();
+  if (!Array.isArray(capabilities)) {
+    throw new Error("policy_capabilities() did not return an array");
+  }
+  policyCapabilities = capabilities;
+  return capabilities;
+}
+
+function findPolicyCapability(type) {
+  return (policyCapabilities || []).find((cap) => cap.type === type) || null;
+}
 
 // Which form rows should be visible for a given (provider, model, asType).
 // Centralized so the visibility rule cannot drift from buildTngConfig().
@@ -49,20 +70,15 @@ function buildBuiltinReferenceValue(row) {
   return { type, payload: { type: "inline", content } };
 }
 
-// Build the CoCo builtin attestation_policy object, or null when it is the
-// default (hardware_only) / empty inline — omitted per the minimal-config rule.
-function buildBuiltinPolicy(policy, content) {
-  switch (policy) {
-    case "hardware_only_strict":
-      return { type: "hardware_only_strict" };
-    case "trust_all":
-      return { type: "trust_all" };
-    case "inline":
-      return content && content.trim() ? { type: "inline", content: content.trim() } : null;
-    // hardware_only is the default; emit nothing.
-    default:
-      return null;
+// Build the CoCo builtin attestation_policy object, or null when the selected
+// kind is the default (omitted per the minimal-config rule) or carries empty
+// content. The kind list and content rule come from Rust.
+function buildBuiltinPolicy(cap, content) {
+  if (cap.is_default) return null;
+  if (cap.has_content) {
+    return content && content.trim() ? { type: cap.type, content: content.trim() } : null;
   }
+  return { type: cap.type };
 }
 
 // Build the { ohttp, verify } config object passed to tng_fetch().
@@ -106,11 +122,17 @@ export function buildTngConfig(inputs) {
     // converter/verifier carry attestation_policy + reference_values instead;
     // defaults (hardware_only + empty RVs) are omitted.
     verify.as_type = "builtin";
-    const policy = buildBuiltinPolicy(builtinPolicy, builtinPolicyContent);
+    const cap = findPolicyCapability(builtinPolicy);
+    if (!cap) {
+      throw new Error(
+        `unknown builtin attestation policy "${builtinPolicy}"; policy capabilities not loaded`
+      );
+    }
+    const policy = buildBuiltinPolicy(cap, builtinPolicyContent);
     if (policy) verify.attestation_policy = policy;
-    // Only the inline policy consumes reference_values; the bundled templates
-    // reject a non-empty list, so do not attach rows to them.
-    if (builtinPolicy === "inline") {
+    // Only kinds whose rules consume reference values accept them; the bundled
+    // templates reject a non-empty list.
+    if (cap.accepts_reference_values) {
       const rvs = builtinReferenceValues
         .map(buildBuiltinReferenceValue)
         .filter(Boolean);

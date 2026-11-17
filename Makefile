@@ -386,10 +386,13 @@ wasm-unit-test-firefox: install-wasm-build-dependencies
 wasm-integration-test: wasm-build-debug install-test-deps
 	cargo test --no-default-features --features on-source-code,js-sdk --package tng-testsuite --test 'js_sdk*' -- --nocapture
 
-.PHONY: www-demo
-www-demo: wasm-build-debug
+.PHONY: www-bundle
+www-bundle: wasm-build-debug
 	cp tng-wasm/pkg/tng_wasm.js tng-wasm/www/
 	cp tng-wasm/pkg/tng_wasm_bg.wasm tng-wasm/www/
+
+.PHONY: www-demo
+www-demo: www-bundle
 	miniserve ./tng-wasm/www \
 		--port 8083
 
