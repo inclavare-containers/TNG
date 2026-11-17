@@ -17,21 +17,21 @@
 
 - [顶层配置对象](#顶层配置对象)
 - [Ingress（隧道入口）](#ingress隧道入口)
-  - [通用字段](#ingress通用字段)
+  - [通用字段](#ingress-通用字段)
   - [传输层通用配置](#ratstlsargs)
-  - [模式：mapping（端口映射）](#mapping端口映射)
-  - [模式：http_proxy（HTTP 代理）](#http_proxyhttp-代理)
-  - [模式：socks5（Socks5 代理）](#socks5socks5-代理)
-  - [模式：netfilter（透明代理）](#netfilter透明代理)
+  - [模式：mapping（端口映射）](#ingress-mapping端口映射)
+  - [模式：http_proxy（HTTP 代理）](#ingress-http_proxyhttp-代理)
+  - [模式：socks5（Socks5 代理）](#ingress-socks5socks5-代理)
+  - [模式：netfilter（透明代理）](#ingress-netfilter透明代理)
   - [模式：hook（LD_PRELOAD）](#ingress-hook-ld_preload)
   - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
   - [模式：netfilter_udp（透明 UDP 代理）](#模式netfilter_udp透明-udp-代理)
-    - [逐条目 QUIC 配置](#udp-over-quic-配置)
+    - [逐条目 QUIC 配置](#逐条目-quic-配置quic)
 - [Egress（隧道出口）](#egress隧道出口)
-  - [通用字段](#egress通用字段)
+  - [通用字段](#egress-通用字段)
   - [direct_forward 规则](#direct_forward-规则)
-  - [模式：mapping（端口映射）](#mapping端口映射)
-  - [模式：netfilter（端口劫持）](#netfilter端口劫持)
+  - [模式：mapping（端口映射）](#egress-mapping端口映射)
+  - [模式：netfilter（端口劫持）](#egress-netfilter端口劫持)
   - [模式：hook（LD_PRELOAD）](#egress-hookld_preload)
   - [模式：mapping_udp（UDP over QUIC）](#模式mapping_udpudp-over-quic-datagram-隧道)
   - [模式：netfilter_udp（透明 UDP 代理）](#模式netfilter_udp透明-udp-代理-1)
@@ -40,15 +40,15 @@
   - [Ingress 侧配置](#ingress-侧配置)
   - [Egress 侧配置](#egress-侧配置)
   - [密钥管理](#密钥管理)
-    - [self_generated 模式](#self_generated模式默认)
-    - [peer_shared 模式](#peer_shared模式)
-    - [file 模式](#file模式)
+    - [self_generated 模式](#ohttp-key-self_generated)
+    - [peer_shared 模式](#ohttp-key-peer_shared)
+    - [file 模式](#ohttp-key-file)
 - [Control Interface](#control-interface)
   - [RESTful API](#restful-api)
 - [废弃配置](#废弃配置)
 - [可观测性](#可观测性)
   - [Log](#log)
-    - [`--log-file`](#---log-file-file-)
+    - [`--log-file`](#--log-file-file)
   - [Metric](#metric)
   - [Trace](#trace)
 - [附录：正则表达式语法](#附录正则表达式语法)
@@ -86,7 +86,7 @@
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
 | `attest` | [Attest](remote_attestation_zh.md) | 无 | 在本端点扮演 Attester |
 | `verify` | [Verify](remote_attestation_zh.md) | 无 | 在本端点扮演 Verifier |
-| `quic` | [UdpQuicArgs](#udp-over-quic-配置) | 无 | UDP 隧道的 QUIC Datagram 设置 |
+| `quic` | [UdpQuicArgs](#逐条目-quic-配置quic) | 无 | UDP 隧道的 QUIC Datagram 设置 |
 
 > [!WARNING]
 > `ohttp` 和 `rats_tls` 互斥。同一 Ingress/Egress 中同时指定两者将导致错误。
@@ -579,7 +579,7 @@ Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 
 
 | 字段 | 类型 | 默认值 | 描述 |
 |---|---|---|---|
-| `capture_dst` | 数组或对象 [[CaptureDst](#netfilter-捕获目的地址)] | 全部 | 目的地址过滤：劫持哪些 UDP 流量（host/ipset/port/port_end 组合）。为空时劫持所有 UDP |
+| `capture_dst` | 数组或对象 [[CaptureDst](#capturedst)] | 全部 | 目的地址过滤：劫持哪些 UDP 流量（host/ipset/port/port_end 组合）。为空时劫持所有 UDP |
 | `listen_port` | 整数 | 否（自动分配） | TPROXY 重定向劫持包到的本地端口 |
 | `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |
 | `capture_cgroup` | 字符串数组 | 无 | 仅劫持这些 cgroup 路径的流量（仅 cgroup v2） |
@@ -628,7 +628,7 @@ Ingress 侧通过 iptables TPROXY（mangle 表 PREROUTING 链）劫持客户端 
 | `no_ra` | boolean | `false` | 禁用远程证明（调试用，不可与 `attest`/`verify` 共存） |
 | `attest` | [Attest](remote_attestation_zh.md) | 无 | 在本端点扮演 Attester |
 | `verify` | [Verify](remote_attestation_zh.md) | 无 | 在本端点扮演 Verifier |
-| `quic` | [UdpQuicArgs](#udp-over-quic-配置) | 无 | UDP 隧道的 QUIC Datagram 设置 |
+| `quic` | [UdpQuicArgs](#逐条目-quic-配置quic) | 无 | UDP 隧道的 QUIC Datagram 设置 |
 
 > `rats_tls.multiplex` 等传输层字段与 Ingress 共用同一组定义，但 `rats_tls.multiplex_max_streams_per_connection` 与 `rats_tls.multiplex_max_connections` 仅 Ingress 生效，见 [RatsTlsArgs](#ratstlsargs)。
 
@@ -783,7 +783,7 @@ flowchart TD
 > 发往其他主机的流量（`其他主机→其他主机`、`本机→其他主机`）永远不会被捕获，即使 `capture_local_traffic: true`——egress 只拦截目标为本机地址的流量。
 
 > [!NOTE]
-> **在无 `CAP_NET_ADMIN` 的容器中运行**：同上，参考 [Ingress netfilter 章节](#netfilter透明代理)中的 pasta 方案。
+> **在无 `CAP_NET_ADMIN` 的容器中运行**：同上，参考 [Ingress netfilter 章节](#ingress-netfilter透明代理)中的 pasta 方案。
 
 <details>
 <summary>示例：捕获目标端口 30001 的入站流量</summary>
@@ -1013,7 +1013,7 @@ Egress 侧在配置了 TPROXY 的 socket 上接收来自 ingress 的 QUIC Datagr
 
 | 字段 | 类型 | 默认值 | 描述 |
 |---|---|---|---|
-| `capture_dst` | 数组或对象 [[CaptureDst](#netfilter-捕获目的地址)] | 全部 | 在 egress 机器上劫持哪些 UDP 流量 |
+| `capture_dst` | 数组或对象 [[CaptureDst](#capturedst)] | 全部 | 在 egress 机器上劫持哪些 UDP 流量 |
 | `capture_local_traffic` | 布尔值 | `false` | 是否捕获源 IP 为本机的流量（本机自身发出的流量；当网关本机上的客户端访问同机后端时需开启） |
 | `listen_port` | 整数 | 必填 | TPROXY 重定向 QUIC UDP 包到的本地端口 |
 | `so_mark` | 整数 | `565` | SO_MARK 值，用于排除 TNG 自身发出的包 |

@@ -26,7 +26,7 @@
   - [Mode: hook (LD_PRELOAD)](#mode-ingress-hook-ld-preload)
   - [Mode: mapping_udp (UDP over QUIC)](#mode-mapping_udp-udp-over-quic-datagram-tunnel)
   - [Mode: netfilter_udp (Transparent UDP Proxy)](#mode-netfilter_udp-transparent-udp-proxy)
-    - [Per-Entry QUIC Configuration](#udp-over-quic-configuration)
+    - [Per-Entry QUIC Configuration](#per-entry-quic-configuration-quic)
 - [Egress (Tunnel Exit)](#egress-tunnel-exit)
   - [Common Fields](#common-fields)
   - [direct_forward Rules](#direct_forward-rules)
@@ -48,7 +48,7 @@
 - [Deprecated Configuration](#deprecated-configuration)
 - [Observability](#observability)
   - [Log](#log)
-    - [`--log-file`](#---log-file-file-)
+    - [`--log-file`](#--log-file-file)
   - [Metric](#metric)
   - [Trace](#trace)
 - [Appendix: Regular Expression Syntax](#appendix-regular-expression-syntax)
@@ -86,7 +86,7 @@ The `Ingress` object configures the tunnel's entry endpoints, controlling how tr
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](remote_attestation.md) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](remote_attestation.md) | None | Act as Verifier at this endpoint |
-| `quic` | [UdpQuicArgs](#udp-over-quic-configuration) | None | QUIC datagram settings for UDP tunneling |
+| `quic` | [UdpQuicArgs](#per-entry-quic-configuration-quic) | None | QUIC datagram settings for UDP tunneling |
 
 > [!WARNING]
 > `ohttp` and `rats_tls` are mutually exclusive. Specifying both in the same Ingress/Egress will result in an error.
@@ -579,7 +579,7 @@ The ingress side intercepts client UDP packets using iptables TPROXY in the mang
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `capture_dst` | array or object [[CaptureDst](#netfilter-capture-destination)] | All | Destination filter: which UDP traffic to intercept (host/ipset/port/port_end combinations). If empty, captures all UDP traffic |
+| `capture_dst` | array or object [[CaptureDst](#capturedst)] | All | Destination filter: which UDP traffic to intercept (host/ipset/port/port_end combinations). If empty, captures all UDP traffic |
 | `listen_port` | integer | No (auto-assigned) | Local port for TPROXY to redirect intercepted packets to |
 | `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets from interception |
 | `capture_cgroup` | array of string | None | Only capture traffic from these cgroup paths (cgroup v2 only) |
@@ -628,7 +628,7 @@ The `Egress` object configures the tunnel's exit endpoints, controlling how traf
 | `no_ra` | boolean | `false` | Disable remote attestation (for debugging only; cannot coexist with `attest`/`verify`) |
 | `attest` | [Attest](remote_attestation.md) | None | Act as Attester at this endpoint |
 | `verify` | [Verify](remote_attestation.md) | None | Act as Verifier at this endpoint |
-| `quic` | [UdpQuicArgs](#udp-over-quic-configuration) | None | QUIC datagram settings for UDP tunneling |
+| `quic` | [UdpQuicArgs](#per-entry-quic-configuration-quic) | None | QUIC datagram settings for UDP tunneling |
 
 > Transport layer fields like `rats_tls.multiplex` share the same definition as Ingress, except `rats_tls.multiplex_max_streams_per_connection` and `rats_tls.multiplex_max_connections` which are ingress-only. See [RatsTlsArgs](#transport-layer-common-configuration).
 
@@ -1013,7 +1013,7 @@ The egress side accepts incoming QUIC datagram connections on a TPROXY-configure
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `capture_dst` | array or object [[CaptureDst](#netfilter-capture-destination)] | All | Which UDP traffic to intercept on the egress machine |
+| `capture_dst` | array or object [[CaptureDst](#capturedst)] | All | Which UDP traffic to intercept on the egress machine |
 | `capture_local_traffic` | boolean | `false` | Whether to capture traffic whose source IP is the local machine (locally-originated traffic; enable when a local client on the gateway talks to a co-located backend) |
 | `listen_port` | integer | Yes | Local port for TPROXY to redirect QUIC UDP packets to |
 | `so_mark` | integer | `565` | SO_MARK value to exclude TNG's own packets |
