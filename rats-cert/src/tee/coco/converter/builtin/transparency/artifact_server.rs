@@ -23,7 +23,7 @@ use super::cache::{
 #[cfg(feature = "crypto-rustcrypto")]
 use super::{dsse, rekor_keys, rekor_v1, VerifyOutcome};
 use crate::tee::coco::converter::builtin::policy_config::{
-    ArtifactLogService, TransparencyServiceConfig,
+    ArtifactLogService, ArtifactServerService, RekorV1Service, TransparencyServiceConfig,
 };
 
 // Wire types and the resolve POST live in the upstream `artifact-resolve-sdk`
@@ -40,33 +40,25 @@ use crate::tee::coco::converter::builtin::policy_config::{
 /// revocation is returned as [`VerifyOutcome::Revoked`] and never cached.
 pub(crate) async fn verify_manifest(
     manifest: &serde_json::Value,
-    service: &TransparencyServiceConfig,
+    service: &ArtifactServerService,
     caches: &TransparencyCaches,
 ) -> Result<VerifyOutcome> {
-    let TransparencyServiceConfig::ArtifactServer {
-        url,
-        log_services,
-        publisher_public_key_pem,
-    } = service
-    else {
-        anyhow::bail!("artifact_server::verify_manifest called with a non-artifact service");
-    };
     let expected = dsse::canonical_manifest_sha256(manifest)?;
     let cache_key = ResolveCacheKey {
-        artifact_server_url: url.clone(),
+        artifact_server_url: service.url.clone(),
         manifest_digest: ManifestDigest::new(&expected)?,
-        log_services: CanonicalLogServices::new(&serde_json::to_string(log_services)?)?,
-        publisher_key: PublisherKeyId::new(publisher_public_key_pem.as_deref()),
+        log_services: CanonicalLogServices::new(&serde_json::to_string(&service.log_services)?)?,
+        publisher_key: PublisherKeyId::new(service.publisher_public_key_pem.as_deref()),
     };
     if caches.resolve_hit(&cache_key).await {
         return Ok(VerifyOutcome::Verified);
     }
     match resolve_and_verify(
         manifest,
-        url,
-        log_services,
+        &service.url,
+        &service.log_services,
         &expected,
-        publisher_public_key_pem.as_deref(),
+        service.publisher_public_key_pem.as_deref(),
     )
     .await?
     {
@@ -120,12 +112,12 @@ pub(crate) fn fetch_rekor_on_demand_host_await(
                 } else {
                     None
                 };
-                let service = TransparencyServiceConfig::RekorV1 {
+                let service = TransparencyServiceConfig::RekorV1(RekorV1Service {
                     log_url,
                     log_index,
                     rekor_public_key_pem: None,
                     publisher_public_key_pem,
-                };
+                });
                 match super::verify_manifest(&manifest, &service, &caches).await {
                     Ok(VerifyOutcome::Verified) => Some(true),
                     _ => None,
@@ -177,11 +169,11 @@ pub(crate) fn resolve_artifact_server_host_await(
                 } else {
                     None
                 };
-                let service = TransparencyServiceConfig::ArtifactServer {
+                let service = TransparencyServiceConfig::ArtifactServer(ArtifactServerService {
                     url,
                     log_services,
                     publisher_public_key_pem,
-                };
+                });
                 match super::verify_manifest(&manifest, &service, &caches).await {
                     Ok(VerifyOutcome::Verified) => Some("ok"),
                     Ok(VerifyOutcome::Revoked) => Some("deny"),

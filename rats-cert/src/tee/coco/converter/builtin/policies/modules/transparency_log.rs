@@ -1,7 +1,9 @@
 //! The `transparency_log` module entry: config validation and Rego fragments.
 //! The rekor-v1 and artifact-server services live in `builtin/transparency`.
 
-use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
+use super::super::super::policy_config::{
+    ArtifactServerService, TransparencyLogEntryConfig, TransparencyServiceConfig,
+};
 use super::super::super::transparency::{RekorBaseline, VerifiedRekorEntry};
 
 /// Render the Rego that reconstructs one ReleaseManifest and binds it to
@@ -71,7 +73,7 @@ pub(super) fn build_entry_rules(
     let schema_expr = format!("{prefix}_schema_version");
 
     match primary {
-        TransparencyServiceConfig::RekorV1 { .. } => {
+        TransparencyServiceConfig::RekorV1(_) => {
             let resolved = resolved.ok_or_else(|| {
                 anyhow::anyhow!("rekor-v1 transparency_log entry was not resolved")
             })?;
@@ -110,11 +112,12 @@ pub(super) fn build_entry_rules(
                 pred = pred,
             ))
         }
-        TransparencyServiceConfig::ArtifactServer {
-            url,
-            log_services,
-            publisher_public_key_pem,
-        } => {
+        TransparencyServiceConfig::ArtifactServer(service) => {
+            let ArtifactServerService {
+                url,
+                log_services,
+                publisher_public_key_pem,
+            } = service;
             let manifest =
                 manifest_rules(&sorted_pm, &schema_expr, &format!("{prefix}_full_manifest"));
             let url_lit = serde_json::to_string(url)?;
@@ -135,9 +138,9 @@ pub(super) fn build_entry_rules(
             ) {
                 (Some(fpm), Some(fs)) => {
                     let (log_url, log_index) = match fs.first() {
-                        Some(TransparencyServiceConfig::RekorV1 {
-                            log_url, log_index, ..
-                        }) => (log_url, *log_index),
+                        Some(TransparencyServiceConfig::RekorV1(service)) => {
+                            (&service.log_url, service.log_index)
+                        }
                         Some(_) => {
                             anyhow::bail!("fallbackServices must contain only rekor-v1 services")
                         }
@@ -540,11 +543,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
             type_: "rekor-v1".to_string(),
             url: "https://rekor.sigstore.dev".to_string(),
         }];
-        let primary = TransparencyServiceConfig::ArtifactServer {
+        let primary = TransparencyServiceConfig::ArtifactServer(ArtifactServerService {
             url: "https://x".to_string(),
             log_services,
             publisher_public_key_pem: None,
-        };
+        });
         let base = TransparencyLogEntryConfig {
             published_measurements: vec!["tdx.td-shim".to_string()],
             schema_version: "1.0.0".to_string(),
@@ -556,11 +559,13 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         // A non-rekor-v1 fallback service is rejected even when validation is
         // bypassed (defense in depth for direct callers).
         let mut cfg = base.clone();
-        cfg.fallback_services = Some(vec![TransparencyServiceConfig::ArtifactServer {
-            url: "https://x2".to_string(),
-            log_services: vec![],
-            publisher_public_key_pem: None,
-        }]);
+        cfg.fallback_services = Some(vec![TransparencyServiceConfig::ArtifactServer(
+            ArtifactServerService {
+                url: "https://x2".to_string(),
+                log_services: vec![],
+                publisher_public_key_pem: None,
+            },
+        )]);
         let err = build_entry_rules(&cfg, None, "m_0_0", "t_0_0").unwrap_err();
         assert!(
             err.to_string()

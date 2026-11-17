@@ -191,21 +191,19 @@ impl TransparencyLogEntryConfig {
         let mut artifact_server = false;
         for service in &self.services {
             match service {
-                TransparencyServiceConfig::ArtifactServer {
-                    url, log_services, ..
-                } => {
+                TransparencyServiceConfig::ArtifactServer(service) => {
                     artifact_server = true;
                     if self.services.len() != 1 {
                         anyhow::bail!("artifact-server must be the only primary service");
                     }
-                    if url.is_empty() {
+                    if service.url.is_empty() {
                         anyhow::bail!("artifact-server url is required");
                     }
-                    if log_services.is_empty() {
+                    if service.log_services.is_empty() {
                         anyhow::bail!("artifact-server logServices non-empty");
                     }
                     let mut seen_log_services = std::collections::HashSet::new();
-                    for log_service in log_services {
+                    for log_service in &service.log_services {
                         if log_service.type_ != "rekor-v1" {
                             anyhow::bail!("artifact-server logServices type must be rekor-v1");
                         }
@@ -220,13 +218,11 @@ impl TransparencyLogEntryConfig {
                         }
                     }
                 }
-                TransparencyServiceConfig::RekorV1 {
-                    log_url, log_index, ..
-                } => {
-                    if log_url.is_empty() {
+                TransparencyServiceConfig::RekorV1(service) => {
+                    if service.log_url.is_empty() {
                         anyhow::bail!("rekor-v1 logUrl required");
                     }
-                    if *log_index < 0 {
+                    if service.log_index < 0 {
                         anyhow::bail!("rekor-v1 logIndex must be >= 0");
                     }
                 }
@@ -258,13 +254,11 @@ impl TransparencyLogEntryConfig {
                 }
                 for service in fallback_services {
                     match service {
-                        TransparencyServiceConfig::RekorV1 {
-                            log_url, log_index, ..
-                        } => {
-                            if log_url.is_empty() {
+                        TransparencyServiceConfig::RekorV1(service) => {
+                            if service.log_url.is_empty() {
                                 anyhow::bail!("fallbackServices logUrl required");
                             }
-                            if *log_index < 0 {
+                            if service.log_index < 0 {
                                 anyhow::bail!("fallbackServices logIndex >= 0");
                             }
                         }
@@ -517,32 +511,44 @@ pub(crate) fn value_shape(v: &serde_json::Value) -> &'static str {
 /// measurements. `rekor-v1` fetches an entry by logIndex; `artifact-server`
 /// delegates to a log-services list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", deny_unknown_fields)]
+#[serde(tag = "type")]
 pub enum TransparencyServiceConfig {
     #[serde(rename = "rekor-v1")]
-    RekorV1 {
-        #[serde(rename = "logUrl")]
-        log_url: String,
-        #[serde(rename = "logIndex")]
-        log_index: i64,
-        #[serde(rename = "rekorPublicKeyPem", default)]
-        rekor_public_key_pem: Option<String>,
-        #[serde(rename = "publisherPublicKeyPem", default)]
-        publisher_public_key_pem: Option<String>,
-    },
+    RekorV1(RekorV1Service),
     #[serde(rename = "artifact-server")]
-    ArtifactServer {
-        #[serde(rename = "url")]
-        url: String,
-        #[serde(rename = "logServices")]
-        log_services: Vec<ArtifactLogService>,
-        /// Optional DSSE publisher public key (PEM) overriding the built-in
-        /// publisher key baseline: when empty, DSSE verification falls back to
-        /// the built-in publisher key. Used for both the primary resolve path
-        /// and (when absent) the built-in default.
-        #[serde(rename = "publisherPublicKeyPem", default)]
-        publisher_public_key_pem: Option<String>,
-    },
+    ArtifactServer(ArtifactServerService),
+}
+
+/// A `rekor-v1` transparency service: fetch one entry by `logIndex` and verify
+/// it against the Rekor key and the publisher key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RekorV1Service {
+    #[serde(rename = "logUrl")]
+    pub log_url: String,
+    #[serde(rename = "logIndex")]
+    pub log_index: i64,
+    #[serde(rename = "rekorPublicKeyPem", default)]
+    pub rekor_public_key_pem: Option<String>,
+    #[serde(rename = "publisherPublicKeyPem", default)]
+    pub publisher_public_key_pem: Option<String>,
+}
+
+/// An `artifact-server` transparency service: resolve the manifest through the
+/// server and verify every returned log entry against the listed log services.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactServerService {
+    #[serde(rename = "url")]
+    pub url: String,
+    #[serde(rename = "logServices")]
+    pub log_services: Vec<ArtifactLogService>,
+    /// Optional DSSE publisher public key (PEM) overriding the built-in
+    /// publisher key baseline: when empty, DSSE verification falls back to
+    /// the built-in publisher key. Used for both the primary resolve path
+    /// and (when absent) the built-in default.
+    #[serde(rename = "publisherPublicKeyPem", default)]
+    pub publisher_public_key_pem: Option<String>,
 }
 
 /// A single log-service entry nested under an `artifact-server` transparency
@@ -856,6 +862,17 @@ mod tests {
         let serialized = serde_json::to_value(&cfg).expect("serialize entry");
         assert_eq!(serialized["schemaVersion"], "1.0.0");
         assert!(serialized.get("fallbackServices").is_some());
+        // The tagged newtype preserves the flat wire object exactly.
+        assert_eq!(
+            serialized["services"][0],
+            json!({
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.example.com",
+                "logIndex": 1,
+                "rekorPublicKeyPem": null,
+                "publisherPublicKeyPem": null,
+            })
+        );
 
         // Structural invariants are rejected where the value is created, with
         // no hand-built location strings.
@@ -963,11 +980,9 @@ mod tests {
                 assert_eq!(cfg.schema_version, "1.0.0");
                 assert_eq!(cfg.services.len(), 1);
                 match &cfg.services[0] {
-                    TransparencyServiceConfig::RekorV1 {
-                        log_url, log_index, ..
-                    } => {
-                        assert_eq!(log_url, "https://rekor.example.com");
-                        assert_eq!(*log_index, 7);
+                    TransparencyServiceConfig::RekorV1(service) => {
+                        assert_eq!(service.log_url, "https://rekor.example.com");
+                        assert_eq!(service.log_index, 7);
                     }
                     other => panic!("expected RekorV1, got {other:?}"),
                 }
@@ -1008,10 +1023,8 @@ mod tests {
         assert_eq!(entry.schema_version, "1.0.0");
         assert!(matches!(
             &entry.services[0],
-            TransparencyServiceConfig::RekorV1 {
-                publisher_public_key_pem: Some(_),
-                ..
-            }
+            TransparencyServiceConfig::RekorV1(service)
+                if service.publisher_public_key_pem.is_some()
         ));
     }
 

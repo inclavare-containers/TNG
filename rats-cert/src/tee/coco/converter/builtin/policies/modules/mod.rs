@@ -361,12 +361,12 @@ async fn resolve_module_groups(groups: &mut [Vec<Module>]) -> Result<()> {
                 Error::TransparencyLogFetchFailed(anyhow::anyhow!("services must be non-empty"))
             })?;
             *resolved = match service {
-                TransparencyServiceConfig::RekorV1 { .. } => Some(
+                TransparencyServiceConfig::RekorV1(service) => Some(
                     transparency::load_rekor_baseline(service)
                         .await
                         .map_err(Error::TransparencyLogFetchFailed)?,
                 ),
-                TransparencyServiceConfig::ArtifactServer { .. } => None,
+                TransparencyServiceConfig::ArtifactServer(_) => None,
             };
         }
     }

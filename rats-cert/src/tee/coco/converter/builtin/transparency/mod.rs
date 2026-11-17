@@ -16,7 +16,7 @@ pub(crate) mod rekor_v1;
 pub use cache::TransparencyCaches;
 pub(crate) use rekor_v1::VerifiedRekorEntry;
 
-use super::policy_config::TransparencyServiceConfig;
+use super::policy_config::{ArtifactServerService, RekorV1Service, TransparencyServiceConfig};
 
 /// The verified baseline a rekor-direct entry contributes to a policy: the
 /// trusted entry data plus the effective publisher key its signature is
@@ -42,9 +42,7 @@ pub(crate) enum VerifyOutcome {
 /// resolves at appraisal time and must not reach this call. The entry is
 /// deliberately not cached: a load re-authenticates against the configured key,
 /// so a cached success from a different key configuration cannot satisfy it.
-pub(crate) async fn load_rekor_baseline(
-    service: &TransparencyServiceConfig,
-) -> anyhow::Result<RekorBaseline> {
+pub(crate) async fn load_rekor_baseline(service: &RekorV1Service) -> anyhow::Result<RekorBaseline> {
     rekor_v1::load_baseline(service).await
 }
 
@@ -60,10 +58,10 @@ pub(crate) async fn verify_manifest(
     caches: &TransparencyCaches,
 ) -> anyhow::Result<VerifyOutcome> {
     match service {
-        TransparencyServiceConfig::RekorV1 { .. } => {
+        TransparencyServiceConfig::RekorV1(service) => {
             rekor_v1::verify_manifest(manifest, service, caches).await
         }
-        TransparencyServiceConfig::ArtifactServer { .. } => {
+        TransparencyServiceConfig::ArtifactServer(service) => {
             artifact_server::verify_manifest(manifest, service, caches).await
         }
     }
@@ -88,8 +86,8 @@ mod tests {
         log_index: i64,
         rekor_public_key_pem: Option<&str>,
         publisher_public_key_pem: Option<&str>,
-    ) -> TransparencyServiceConfig {
-        TransparencyServiceConfig::RekorV1 {
+    ) -> RekorV1Service {
+        RekorV1Service {
             log_url: log_url.to_string(),
             log_index,
             rekor_public_key_pem: rekor_public_key_pem.map(str::to_string),
@@ -97,16 +95,30 @@ mod tests {
         }
     }
 
+    fn rekor_config(
+        log_url: &str,
+        log_index: i64,
+        rekor_public_key_pem: Option<&str>,
+        publisher_public_key_pem: Option<&str>,
+    ) -> TransparencyServiceConfig {
+        TransparencyServiceConfig::RekorV1(rekor_service(
+            log_url,
+            log_index,
+            rekor_public_key_pem,
+            publisher_public_key_pem,
+        ))
+    }
+
     fn artifact_service(
         url: &str,
         log_services: Vec<ArtifactLogService>,
         publisher_public_key_pem: Option<&str>,
     ) -> TransparencyServiceConfig {
-        TransparencyServiceConfig::ArtifactServer {
+        TransparencyServiceConfig::ArtifactServer(ArtifactServerService {
             url: url.to_string(),
             log_services,
             publisher_public_key_pem: publisher_public_key_pem.map(str::to_string),
-        }
+        })
     }
 
     fn log_service(url: &str) -> ArtifactLogService {
@@ -186,7 +198,7 @@ mod tests {
         let server = MockServer::start().await;
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
 
-        let service = rekor_service(&server.uri(), log_index, None, None);
+        let service = rekor_config(&server.uri(), log_index, None, None);
         let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("bound rekor authentication");
@@ -201,7 +213,7 @@ mod tests {
         let server = MockServer::start().await;
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
 
-        let service = rekor_service(
+        let service = rekor_config(
             &server.uri(),
             log_index,
             None,
@@ -415,20 +427,5 @@ mod tests {
         }
         drop(mock);
         server.verify().await;
-    }
-
-    /// An artifact-server primary has no load-time rekor baseline: it resolves
-    /// at appraisal time, so the load seam rejects it.
-    #[tokio::test]
-    async fn load_rekor_baseline_rejects_an_artifact_server_service() {
-        let service = artifact_service(
-            "http://127.0.0.1:1",
-            vec![log_service("https://rekor.sigstore.dev")],
-            None,
-        );
-        let err = load_rekor_baseline(&service)
-            .await
-            .expect_err("an artifact-server primary must not load a rekor baseline");
-        assert!(err.to_string().contains("non-rekor service"), "{err}");
     }
 }

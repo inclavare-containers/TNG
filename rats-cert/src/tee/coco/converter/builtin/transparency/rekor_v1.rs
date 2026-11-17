@@ -20,7 +20,7 @@ use super::dsse;
 use super::rekor_keys::verify_log_id;
 use super::rekor_keys::{rekor_public_key, RekorPublicKey};
 use super::{RekorBaseline, VerifyOutcome};
-use crate::tee::coco::converter::builtin::policy_config::TransparencyServiceConfig;
+use crate::tee::coco::converter::builtin::policy_config::RekorV1Service;
 
 /// A Rekor v1 transparency-log entry (the raw object returned by
 /// `GET /api/v1/log/entries?logIndex=<n>`).
@@ -431,16 +431,13 @@ pub(crate) fn verify_entry(entry: &RekorEntry, key: &RekorPublicKey) -> Result<V
 /// The entry is deliberately not cached: a load must re-verify against the
 /// configured `rekorPublicKeyPem`, so a cached success from a different key
 /// configuration must not satisfy it.
-pub(crate) async fn load_baseline(service: &TransparencyServiceConfig) -> Result<RekorBaseline> {
-    let TransparencyServiceConfig::RekorV1 {
+pub(crate) async fn load_baseline(service: &RekorV1Service) -> Result<RekorBaseline> {
+    let RekorV1Service {
         log_url,
         log_index,
         rekor_public_key_pem,
         publisher_public_key_pem,
-    } = service
-    else {
-        anyhow::bail!("rekor_v1::load_baseline called with a non-rekor service");
-    };
+    } = service;
 
     tracing::info!(
         log_url,
@@ -467,29 +464,19 @@ pub(crate) async fn load_baseline(service: &TransparencyServiceConfig) -> Result
 /// check, so a cache hit does not weaken the binding.
 pub(crate) async fn verify_manifest(
     manifest: &serde_json::Value,
-    service: &TransparencyServiceConfig,
+    service: &RekorV1Service,
     caches: &TransparencyCaches,
 ) -> Result<VerifyOutcome> {
-    let TransparencyServiceConfig::RekorV1 {
-        log_url,
-        log_index,
-        publisher_public_key_pem,
-        ..
-    } = service
-    else {
-        anyhow::bail!("rekor_v1::verify_manifest called with a non-rekor service");
-    };
-
     let expected = dsse::canonical_manifest_sha256(manifest)?;
     let cache_key = RekorCacheKey {
-        log_url: log_url.clone(),
-        log_index: *log_index,
+        log_url: service.log_url.clone(),
+        log_index: service.log_index,
     };
     let entry = match caches.rekor_entry(&cache_key).await {
         Some(entry) => entry,
         None => {
-            let entry = fetch_entry(log_url, *log_index).await?;
-            let key = super::rekor_keys::resolve_rekor_public_key(&entry, log_url)?;
+            let entry = fetch_entry(&service.log_url, service.log_index).await?;
+            let key = super::rekor_keys::resolve_rekor_public_key(&entry, &service.log_url)?;
             let entry = verify_entry(&entry, &key)?;
             // The entry is authentic even when the bound manifest does not
             // match it, so cache it before the manifest-specific checks.
@@ -499,7 +486,7 @@ pub(crate) async fn verify_manifest(
     };
 
     let dsse_signature = dsse::require_dsse_signature(&entry.dsse_signature)?;
-    let publisher_pem = dsse::effective_publisher_pem(publisher_public_key_pem.as_deref());
+    let publisher_pem = dsse::effective_publisher_pem(service.publisher_public_key_pem.as_deref());
     let canonical_manifest = dsse::canonical_manifest_bytes(manifest)?;
     dsse::verify_publisher_signature(publisher_pem, canonical_manifest.as_bytes(), dsse_signature)?;
     if entry.payload_hash != expected {
