@@ -11,15 +11,6 @@ use anyhow::Result;
 #[cfg(unix)]
 use crate::config::ra::AttestArgs;
 use crate::config::ra::{RaArgs, VerifyArgs};
-#[cfg(feature = "__builtin-as")]
-use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
-#[cfg(feature = "__builtin-as")]
-use rats_cert::tee::coco::converter::CocoConverter;
-#[cfg(feature = "__builtin-as")]
-use rats_cert::tee::coco::verifier::CocoVerifier;
-
-#[cfg(feature = "__builtin-as")]
-use crate::config::ra::{CocoConverterArgs, ConverterArgs};
 #[cfg(unix)]
 use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 
@@ -27,7 +18,9 @@ use crate::tunnel::utils::maybe_cached::RefreshStrategy;
 use crate::tunnel::provider::create_attester;
 #[cfg(unix)]
 use crate::tunnel::provider::TngAttester;
-use crate::tunnel::provider::{create_converter, create_verifier, TngConverter, TngVerifier};
+use crate::tunnel::provider::{
+    create_converter, create_verifier, create_verifier_for_converter, TngConverter, TngVerifier,
+};
 
 /// Pre-instantiated RA context for OHTTP security
 ///
@@ -130,7 +123,7 @@ impl AttestContext {
                 ..
             } => {
                 let attester = create_attester(attester_args).await?;
-                let converter = create_converter(converter_args)?;
+                let converter = create_converter(converter_args).await?;
                 Ok(Self::Passport {
                     attester,
                     converter,
@@ -210,24 +203,8 @@ impl VerifyContext {
                 converter: converter_args,
                 verifier: verifier_args,
             } => {
-                #[cfg(feature = "__builtin-as")]
-                if let ConverterArgs::Coco(CocoConverterArgs::Builtin {
-                    attestation_policy,
-                    reference_values,
-                }) = converter_args
-                {
-                    let builtin_converter =
-                        BuiltinCocoConverter::new(attestation_policy, reference_values).await?;
-                    let builtin_verifier =
-                        CocoVerifier::Builtin(builtin_converter.new_verifier().await?);
-                    return Ok(Self::BackgroundCheck {
-                        converter: TngConverter::Coco(CocoConverter::Builtin(builtin_converter)),
-                        verifier: TngVerifier::Coco(builtin_verifier),
-                    });
-                }
-
-                let converter = create_converter(converter_args)?;
-                let verifier = create_verifier(verifier_args).await?;
+                let converter = create_converter(converter_args).await?;
+                let verifier = create_verifier_for_converter(&converter, verifier_args).await?;
                 Ok(Self::BackgroundCheck {
                     converter,
                     verifier,
@@ -635,11 +612,18 @@ mod tests {
         #[serial]
         // Test Passport mode with Builtin AS should failed
         async fn test_ra_context_two_way_passport_builtin() {
+            // The factory constructs every converter variant, so a builtin
+            // converter is also usable on the attest side of passport mode.
             let attest_args = make_attest_passport_args();
             let verify_args = make_verify_builtin_args();
             let ra_args = RaArgs::AttestAndVerify(attest_args, verify_args);
             let result = RaContext::from_ra_args(&ra_args).await;
-            assert!(result.is_err());
+            assert!(result.is_ok(), "Failed: {:?}", result.err());
+            let ctx = result.unwrap();
+            assert!(
+                matches!(ctx, RaContext::AttestAndVerify { .. }),
+                "Expected AttestAndVerify variant"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -679,6 +663,7 @@ mod tests {
             PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
             SlsaReferenceValuePayloadConfig,
         };
+        use rats_cert::tee::coco::converter::CocoConverter;
         use rats_cert::tee::GenericConverter;
         use serial_test::serial;
 
