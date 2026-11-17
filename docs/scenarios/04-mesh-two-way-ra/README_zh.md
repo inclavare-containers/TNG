@@ -23,38 +23,20 @@
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 9001
-                }
-            },
+            "netfilter": { "capture_dst": { "port": 9001 } },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
-    ]
+    ],
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 9001
-                }
-            },
+            "netfilter": { "capture_dst": { "port": 9001 } },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }

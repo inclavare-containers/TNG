@@ -28,22 +28,11 @@ The client side starts TNG Ingress as a local HTTP proxy. Applications send requ
     "add_ingress": [
         {
             "http_proxy": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 41000
-                },
-                "dst_filters": {
-                    "domain": "*",
-                    "port": 8080
-                }
+                "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                "dst_filters": { "domain": "*", "port": 8080 }
             },
             "ohttp": {},
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -63,30 +52,18 @@ Each server node runs a TNG Egress instance with `netfilter` + OHTTP (`peer_shar
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {
                 "key": {
                     "source": "peer_shared",
                     "rotation_interval": 300,
                     "host": "0.0.0.0",
                     "port": 8301,
-                    "peers": [
-                        "192.168.1.12:8301",
-                        "192.168.1.13:8301"
-                    ],
+                    "peers": ["192.168.1.12:8301", "192.168.1.13:8301"],
                     "attest": {
                         "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     },
-                    "verify": {
-                        "as_addr": "<attestation-service-url>",
-                        "policy_ids": [
-                            "default"
-                        ]
-                    }
+                    "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
                 }
             },
             "attest": {

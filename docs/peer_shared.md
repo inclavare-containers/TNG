@@ -36,27 +36,18 @@ For detailed configuration options, refer to [configuration.md — peer_shared M
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {
                 "key": {
                     "source": "peer_shared",
                     "rotation_interval": 300,
                     "host": "0.0.0.0",
                     "port": 8301,
-                    "peers": [
-                        "10.0.0.1:8301"
-                    ],
+                    "peers": ["10.0.0.1:8301"],
                     "attest": {
                         "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
                     },
-                    "verify": {
-                        "as_addr": "http://as.example.com:8080/",
-                        "policy_ids": ["default"]
-                    }
+                    "verify": { "as_addr": "http://as.example.com:8080/", "policy_ids": ["default"] }
                 }
             },
             "attest": {
@@ -76,20 +67,11 @@ The client side uses standard `add_ingress` configuration to send encrypted traf
     "add_ingress": [
         {
             "mapping": {
-                "in": {
-                    "host": "127.0.0.1",
-                    "port": 8080
-                },
-                "out": {
-                    "host": "10.0.0.10",
-                    "port": 8080
-                }
+                "in": { "host": "127.0.0.1", "port": 8080 },
+                "out": { "host": "10.0.0.10", "port": 8080 }
             },
             "ohttp": {},
-            "verify": {
-                "as_addr": "http://as.example.com:8080/",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "http://as.example.com:8080/", "policy_ids": ["default"] }
         }
     ]
 }

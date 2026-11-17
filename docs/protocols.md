@@ -90,7 +90,9 @@ The two `attestation_request` variants:
 ```
 
 ```json
-{ "attestation_request": { "model": "background_check", "challenge_token": "<challenge JWT obtained from the AS>" } }
+{
+    "attestation_request": { "model": "background_check", "challenge_token": "<challenge JWT obtained from the AS>" }
+}
 ```
 
 Response body `KeyConfigResponse`:
@@ -104,11 +106,19 @@ Response body `KeyConfigResponse`:
 The two `attestation_info` variants:
 
 ```json
-{ "model": "passport", "attestation_result": "<the egress's own Attestation Result JWT>", "as_provider": "coco" }
+{
+    "model": "passport",
+    "attestation_result": "<the egress's own Attestation Result JWT>",
+    "as_provider": "coco"
+}
 ```
 
 ```json
-{ "model": "background_check", "evidence": "<Evidence JSON produced by the egress>", "aa_provider": "coco" }
+{
+    "model": "background_check",
+    "evidence": "<Evidence JSON produced by the egress>",
+    "aa_provider": "coco"
+}
 ```
 
 `as_provider` / `aa_provider` mark which provider the token/evidence belongs to (the same string values as the RA config providers, currently `coco` and `ita`), letting the peer pick the matching verification stack; they may be omitted for legacy clients.

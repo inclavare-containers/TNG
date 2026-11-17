@@ -12,12 +12,24 @@
 "attestation_policy": {
     "type": "modules",
     "modules": [
-        { "type": "tdx",       "value": {} },
-        { "type": "nvidia",    "value": {} },
-        { "type": "tdx.ovmf",  "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-        { "type": "tdx.kernel","value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-        { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-        { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",    "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+        { "type": "tdx", "value": {} },
+        { "type": "nvidia", "value": {} },
+        {
+            "type": "tdx.ovmf",
+            "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+        },
+        {
+            "type": "tdx.kernel",
+            "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+        },
+        {
+            "type": "com.alibabacloud.container.image.model-server",
+            "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0"
+        },
+        {
+            "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+            "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9"
+        }
     ]
 }
 ```
@@ -32,14 +44,26 @@
     "type": "modules",
     "modules": [
         [
-            { "type": "tdx",       "value": {} },
-            { "type": "tdx.ovmf",  "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-            { "type": "tdx.kernel","value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+            { "type": "tdx", "value": {} },
+            {
+                "type": "tdx.ovmf",
+                "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+            },
+            {
+                "type": "tdx.kernel",
+                "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+            }
         ],
         [
-            { "type": "tdx",        "value": {} },
-            { "type": "tdx.td-shim","value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
-            { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+            { "type": "tdx", "value": {} },
+            {
+                "type": "tdx.td-shim",
+                "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5"
+            },
+            {
+                "type": "tdx.kernel",
+                "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+            }
         ]
     ]
 }
@@ -107,7 +131,10 @@
 ### 客户机固件度量：`tdx.td-shim`、`tdx.ovmf`
 
 ```json
-{ "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" }
+{
+    "type": "tdx.ovmf",
+    "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+}
 ```
 
 钉住 TD 的启动度量，也就是 TDX quote 里的 `mr_td`。这是 TD 创建时硬件对客户机固件构建出的初始 TD 镜像算出的 SHA-384 值。条目要求 quote 的 `mr_td` 等于钉住的值；字段缺失或值不相等都失败。`tdx.td-shim` 和 `tdx.ovmf` 读的是同一个字段，按 TD 的启动方式选一个。
@@ -115,7 +142,10 @@
 ### 内核度量：`tdx.kernel`
 
 ```json
-{ "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+{
+    "type": "tdx.kernel",
+    "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+}
 ```
 
 钉住启动时的内核度量，也就是固件为 TD payload（内核）blob 记录的 SHA-384 摘要。条目读取 UEFI 事件日志里的 `td_payload` 事件。事件必须记在 RTMR1（寄存器索引 2），每个匹配事件都要带 SHA-384 摘要，这些事件里的 SHA-384 摘要必须全部相同。没有匹配事件、索引不是 2 或缺失、事件没有 SHA-384 摘要，或者摘要不一致，条目都失败。事件里声明的 blob 长度不参与校验。
@@ -123,7 +153,10 @@
 ### UKI 度量：`tdx.uki`
 
 ```json
-{ "type": "tdx.uki", "value": "5bee5bdf63538ba7aa5c60d4725193c88932aa17083276fe9d61e4963ab6f871cdf3b3dd5d99733169b8c87a5e8e62b3" }
+{
+    "type": "tdx.uki",
+    "value": "5bee5bdf63538ba7aa5c60d4725193c88932aa17083276fe9d61e4963ab6f871cdf3b3dd5d99733169b8c87a5e8e62b3"
+}
 ```
 
 钉住统一内核镜像（UKI）的度量。固件把 UKI 当作 EFI 启动应用测度，记一条 `EV_EFI_BOOT_SERVICES_APPLICATION` 事件。条目要求至少有一条这样的事件。每条事件都要带 SHA-384 摘要，这些事件里的 SHA-384 摘要必须全部相同，且等于钉住的值。条目不看 device path，所以只适合只有一份启动应用的部署；日志里出现另一个摘要不同的启动应用，条目就失败。不用 UKI 启动的部署不会产生这类事件，配置这个条目会让它们失败，这类部署应该改用 `tdx.kernel`。
@@ -131,7 +164,10 @@
 ### 容器镜像：`com.alibabacloud.container.image.<repo>`
 
 ```json
-{ "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
+{
+    "type": "com.alibabacloud.container.image.model-server",
+    "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0"
+}
 ```
 
 该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住工作负载镜像可接受的 OCI manifest digest。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `kangaroo/pull-image` 事件。条目看的是仓库名为 `<repo>` 的事件。至少要有这样一条事件，每条都带 `digest`。`<repo>` 是镜像 reference 的最后一段路径，去掉 registry 主机、路径前缀、tag 和 digest。只能使用 ASCII 字母、数字、`.`、`_`、`-`；包含 `/`、`@`、`:` 的名字不可能与 reference 匹配，会在策略加载时被拒绝。
@@ -143,7 +179,10 @@
 ### 模型：`com.alibabacloud.ai.model.<model-id>`
 
 ```json
-{ "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+{
+    "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+    "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9"
+}
 ```
 
 该条目与阿里云耦合：证据来自 AAEL `alibabacloud.com` 事件。它钉住模型的完整性度量哈希，64 位小写 hex。证据是事件类型为 `EV_EVENT_TAG` 的 AAEL `pai/load-model` 事件。`<model-id>` 要与事件里的模型标识逐字一致（建议用 modelscope-id 风格），可以包含 ASCII 字母、数字、`.`、`_`、`/`、`@`、`:`、`+`、`-`；其它字符在加载期即被拒绝。至少要有这样一条加载事件。每条事件都要带 `model-id` 和 `hash`；所有 `model-id` 都等于 `<model-id>`，所有 `hash` 都等于钉住的值。出现另一个模型的加载事件也会让条目失败。哈希怎么算由模型自己的度量约定决定，例如对落盘模型算 fs-verity digest。
@@ -151,7 +190,10 @@
 ### 根文件系统：`rootfs.cc`
 
 ```json
-{ "type": "com.alibabacloud.rootfs.cc", "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230" }
+{
+    "type": "com.alibabacloud.rootfs.cc",
+    "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230"
+}
 ```
 
 该条目钉住机密容器根文件系统的 dm-verity hash tree 根哈希，64 位小写 hex，不带 `sha256:` 前缀。证据是 UEFI 事件日志里 `details.string` 以 `td_payload_info ` 开头的 `EV_PLATFORM_CONFIG_FLAGS` 事件。所有这类事件都必须记录在 RTMR1（寄存器索引 2）；索引不是 2 或缺失时条目失败。根哈希取自事件字符串里的 `dm-mod.create="verity-root,..."` 表：设备名必须是 `verity-root`，算法为 `sha256`，哈希为小写 hex。同一字符串里的其它 dm 设备不参与提取。不带 `verity-root` 表的事件被忽略，但至少要有一条事件带表，且提取出的所有根哈希必须相同并等于钉住的值。没有匹配事件、没有 `verity-root` 表，或者出现两个不同的根哈希，条目都失败。
@@ -197,10 +239,17 @@
 | `max_collateral_age_days` | int | 缺省 | 要求 collateral 的签发距评定不超过 N 天 |
 
 ```json
-{ "type": "tdx", "value": {
-    "tcb": { "min_status": "up_to_date", "reject_advisories": ["INTEL-SA-00001"], "allow_advisories": ["INTEL-SA-00002"] },
-    "collateral": { "allow_expired": false, "min_tcb_date": "2026-06-01", "max_collateral_age_days": 30 }
-} }
+{
+    "type": "tdx",
+    "value": {
+        "tcb": {
+            "min_status": "up_to_date",
+            "reject_advisories": ["INTEL-SA-00001"],
+            "allow_advisories": ["INTEL-SA-00002"]
+        },
+        "collateral": { "allow_expired": false, "min_tcb_date": "2026-06-01", "max_collateral_age_days": 30 }
+    }
+}
 ```
 
 开启对应检查时，debug TD、被吊销的 TCB、命中 `reject_advisories` 且未被 `allow_advisories` 豁免的 advisory，以及 `allow_expired` 为 `false` 时过期的 collateral，都会让条目失败。
@@ -232,14 +281,19 @@
 白名单字段按整串精确匹配；空列表即不设限。检查只覆盖驱动枚举到的 GPU；未被枚举的卡不在其范围内。
 
 ```json
-{ "type": "nvidia", "value": {
-    "require_cc_mode": true,
-    "min_count": 1,
-    "allow_uuids": ["GPU-3f9c2a1b-88d4-4e17-9c2a-71f0d5a4b6e8"],
-    "allow_driver_versions": ["570.148.05"],
-    "allow_vbios_versions": ["96.00.f4.00.07"],
-    "measurement_digest": ["7430ef5370b61ba48a61739b6ea4a038e6456924a0af6d3b757cbc4fe98b85a087ed4bca2df36543902377da0c673e8a"]
-} }
+{
+    "type": "nvidia",
+    "value": {
+        "require_cc_mode": true,
+        "min_count": 1,
+        "allow_uuids": ["GPU-3f9c2a1b-88d4-4e17-9c2a-71f0d5a4b6e8"],
+        "allow_driver_versions": ["570.148.05"],
+        "allow_vbios_versions": ["96.00.f4.00.07"],
+        "measurement_digest": [
+            "7430ef5370b61ba48a61739b6ea4a038e6456924a0af6d3b757cbc4fe98b85a087ed4bca2df36543902377da0c673e8a"
+        ]
+    }
+}
 ```
 
 **当前强度上限。** 该评定比对的是经评定的设备 claims。GPU 证明报告的签名、GPU 证书链、驱动 RIM 文件的密码学校验属验证器侧后续工作；补齐之前，评定反映的是验证器解析报告时记录的 claims，而非报告本体的真实性。
@@ -247,12 +301,21 @@
 ### 透明日志：`transparency_log`
 
 ```json
-{ "type": "transparency_log", "value": {
-    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-    "schemaVersion": "1.0.0",
-    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944,
-                   "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }]
-} }
+{
+    "type": "transparency_log",
+    "value": {
+        "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+        "schemaVersion": "1.0.0",
+        "services": [
+            {
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.sigstore.dev",
+                "logIndex": 2310520944,
+                "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+            }
+        ]
+    }
+}
 ```
 
 用这个条目把可信度量值放在透明日志记录的 ReleaseManifest 里，不必把摘要写进策略。appraisal 时，TNG 把当前证据里的度量值与日志里的基线比对，策略只负责指向那条日志记录。这是 `modules` 的条目类型；早期版本顶层 `attestation_policy.type = "transparency_log"` 的写法已不存在。
@@ -269,15 +332,71 @@
 
 ```json
 "modules": [
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } },
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }
+    {
+        "type": "transparency_log",
+        "value": {
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 100,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    },
+    {
+        "type": "transparency_log",
+        "value": {
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.openanolis.cn",
+                    "logIndex": 200,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    }
 ]
 ```
 
 ```json
 "modules": [
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }],
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }]
+    [
+        {
+            "type": "transparency_log",
+            "value": {
+                "publishedMeasurements": ["container.image.cmaas-runtime"],
+                "services": [
+                    {
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.sigstore.dev",
+                        "logIndex": 100,
+                        "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                    }
+                ]
+            }
+        }
+    ],
+    [
+        {
+            "type": "transparency_log",
+            "value": {
+                "publishedMeasurements": ["container.image.cmaas-runtime"],
+                "services": [
+                    {
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.sigstore.dev",
+                        "logIndex": 200,
+                        "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                    }
+                ]
+            }
+        }
+    ]
 ]
 ```
 

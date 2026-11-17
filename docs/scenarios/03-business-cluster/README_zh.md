@@ -24,25 +24,11 @@
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                }
-            },
+            "netfilter": { "capture_dst": { "port": 8080 } },
             "ohttp": {
-                "path_rewrites": [
-                    {
-                        "match_regex": "^/foo/([^/]+)([/]?.*)$",
-                        "substitution": "/foo/$1"
-                    }
-                ]
+                "path_rewrites": [{ "match_regex": "^/foo/([^/]+)([/]?.*)$", "substitution": "/foo/$1" }]
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -61,17 +47,8 @@
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                },
-                "capture_local_traffic": true
-            },
-            "ohttp": {
-                "key": {
-                    "source": "self_generated"
-                }
-            },
+            "netfilter": { "capture_dst": { "port": 8080 }, "capture_local_traffic": true },
+            "ohttp": { "key": { "source": "self_generated" } },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }

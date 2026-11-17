@@ -37,22 +37,18 @@ Add the following to the TNG Server egress configuration:
 
 ```json
 {
-  "ohttp": {
-    "header_passthrough": {
-      "request_headers": [
-        "origin",
-        "access-control-request-method",
-        "access-control-request-headers"
-      ],
-      "response_headers": [
-        "access-control-allow-origin",
-        "access-control-allow-methods",
-        "access-control-allow-headers",
-        "access-control-allow-credentials",
-        "access-control-max-age"
-      ]
+    "ohttp": {
+        "header_passthrough": {
+            "request_headers": ["origin", "access-control-request-method", "access-control-request-headers"],
+            "response_headers": [
+                "access-control-allow-origin",
+                "access-control-allow-methods",
+                "access-control-allow-headers",
+                "access-control-allow-credentials",
+                "access-control-max-age"
+            ]
+        }
     }
-  }
 }
 ```
 
@@ -71,15 +67,15 @@ Configure `ohttp.cors` to have TNG handle preflight requests using its built-in 
 
 ```json
 {
-  "ohttp": {
-    "cors": {
-      "allow_origins": ["*"],
-      "allow_methods": ["*"],
-      "allow_headers": ["*"],
-      "expose_headers": [],
-      "allow_credentials": false
+    "ohttp": {
+        "cors": {
+            "allow_origins": ["*"],
+            "allow_methods": ["*"],
+            "allow_headers": ["*"],
+            "expose_headers": [],
+            "allow_credentials": false
+        }
     }
-  }
 }
 ```
 

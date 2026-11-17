@@ -24,17 +24,8 @@
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                }
-            },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "netfilter": { "capture_dst": { "port": 8080 } },
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -54,12 +45,7 @@
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                },
-                "capture_local_traffic": true
-            },
+            "netfilter": { "capture_dst": { "port": 8080 }, "capture_local_traffic": true },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }

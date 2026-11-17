@@ -43,10 +43,7 @@ The user initiates inference requests through a TNG Client using `mapping` mode 
                 "out": { "host": "10.0.0.1", "port": 8080 }
             },
             "ohttp": {},
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -65,28 +62,17 @@ The vLLM Proxy runs in an independent TEE and requires two TNG rules: receiving 
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ],
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -109,55 +95,30 @@ P and D nodes share the same TNG configuration. Each node handles two types of t
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
-                ]
-            },
-            "rats_tls": {
-                "multiplex": false
-            },
+            "netfilter": { "capture_dst": [{ "port": 5000, "port_end": 5031 }] },
+            "rats_tls": { "multiplex": false },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ],
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         },
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
-                ]
-            },
-            "rats_tls": {
-                "multiplex": false
-            },
+            "netfilter": { "capture_dst": [{ "port": 5000, "port_end": 5031 }] },
+            "rats_tls": { "multiplex": false },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }

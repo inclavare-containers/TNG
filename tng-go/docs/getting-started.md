@@ -163,14 +163,16 @@ The server-side TNG process must be deployed separately. Minimal config:
 
 ```json
 {
-  "add_egress": [{
-    "mapping": {
-      "in":  { "host": "0.0.0.0", "port": 10001 },
-      "out": { "host": "backend", "port": 30001 }
-    },
-    "ohttp": {},
-    "no_ra": true
-  }]
+    "add_egress": [
+        {
+            "mapping": {
+                "in": { "host": "0.0.0.0", "port": 10001 },
+                "out": { "host": "backend", "port": 30001 }
+            },
+            "ohttp": {},
+            "no_ra": true
+        }
+    ]
 }
 ```
 

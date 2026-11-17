@@ -43,10 +43,7 @@
                 "out": { "host": "10.0.0.1", "port": 8080 }
             },
             "ohttp": {},
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -65,28 +62,17 @@ vLLM Proxy 部署在独立 TEE 中，需要两份配置：接收用户请求（e
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ],
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
@@ -109,55 +95,30 @@ P 和 D 节点使用相同的 TNG 配置。每个节点处理两类流量：接�
 {
     "add_ingress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
-                ]
-            },
-            "rats_tls": {
-                "multiplex": false
-            },
+            "netfilter": { "capture_dst": [{ "port": 5000, "port_end": 5031 }] },
+            "rats_tls": { "multiplex": false },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ],
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 8080 }
-                ]
-            },
+            "netfilter": { "capture_dst": [{ "port": 8080 }] },
             "ohttp": {},
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         },
         {
-            "netfilter": {
-                "capture_dst": [
-                    { "port": 5000, "port_end": 5031 }
-                ]
-            },
-            "rats_tls": {
-                "multiplex": false
-            },
+            "netfilter": { "capture_dst": [{ "port": 5000, "port_end": 5031 }] },
+            "rats_tls": { "multiplex": false },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": ["default"]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }

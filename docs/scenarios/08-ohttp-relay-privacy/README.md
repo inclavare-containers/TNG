@@ -59,12 +59,7 @@ The egress is the OHTTP gateway. It owns the HPKE key, decrypts the ciphertext t
                 "in": { "host": "127.0.0.1", "port": 9000 },
                 "out": { "host": "127.0.0.1", "port": 8080 }
             },
-            "ohttp": {
-                "key": {
-                    "source": "self_generated",
-                    "rotation_interval": 300
-                }
-            },
+            "ohttp": { "key": { "source": "self_generated", "rotation_interval": 300 } },
             "no_ra": true
         }
     ]
@@ -86,19 +81,10 @@ The ingress is the OHTTP client. The application sends ordinary HTTP to the rela
     "add_ingress": [
         {
             "http_proxy": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 41000
-                },
-                "dst_filters": {
-                    "domain": "relay.example.com",
-                    "port": 443
-                }
+                "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                "dst_filters": { "domain": "relay.example.com", "port": 443 }
             },
-            "ohttp": {
-                "tls": true,
-                "path_default": "original"
-            },
+            "ohttp": { "tls": true, "path_default": "original" },
             "no_ra": true
         }
     ]

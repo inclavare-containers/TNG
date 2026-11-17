@@ -25,21 +25,10 @@
     "add_ingress": [
         {
             "http_proxy": {
-                "proxy_listen": {
-                    "host": "0.0.0.0",
-                    "port": 41000
-                },
-                "dst_filters": {
-                    "domain": "*",
-                    "port": 8080
-                }
+                "proxy_listen": { "host": "0.0.0.0", "port": 41000 },
+                "dst_filters": { "domain": "*", "port": 8080 }
             },
-            "verify": {
-                "as_addr": "<attestation-service-url>",
-                "policy_ids": [
-                    "default"
-                ]
-            }
+            "verify": { "as_addr": "<attestation-service-url>", "policy_ids": ["default"] }
         }
     ]
 }
@@ -60,12 +49,7 @@
 {
     "add_egress": [
         {
-            "netfilter": {
-                "capture_dst": {
-                    "port": 8080
-                },
-                "capture_local_traffic": true
-            },
+            "netfilter": { "capture_dst": { "port": 8080 }, "capture_local_traffic": true },
             "attest": {
                 "aa_addr": "unix:///run/confidential-containers/attestation-agent/attestation-agent.sock"
             }

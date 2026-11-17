@@ -104,7 +104,11 @@ ingress 在加密第一个请求之前，先向 egress 请求 KeyConfig（1-RTT�
 `attestation_info` 的两个变体：
 
 ```json
-{ "model": "passport", "attestation_result": "<egress 自己的 Attestation Result JWT>", "as_provider": "coco" }
+{
+    "model": "passport",
+    "attestation_result": "<egress 自己的 Attestation Result JWT>",
+    "as_provider": "coco"
+}
 ```
 
 ```json

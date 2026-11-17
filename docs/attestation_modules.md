@@ -12,12 +12,24 @@ A flat list is one group:
 "attestation_policy": {
     "type": "modules",
     "modules": [
-        { "type": "tdx",       "value": {} },
-        { "type": "nvidia",    "value": {} },
-        { "type": "tdx.ovmf",  "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-        { "type": "tdx.kernel","value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" },
-        { "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" },
-        { "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",    "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+        { "type": "tdx", "value": {} },
+        { "type": "nvidia", "value": {} },
+        {
+            "type": "tdx.ovmf",
+            "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+        },
+        {
+            "type": "tdx.kernel",
+            "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+        },
+        {
+            "type": "com.alibabacloud.container.image.model-server",
+            "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0"
+        },
+        {
+            "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+            "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9"
+        }
     ]
 }
 ```
@@ -32,14 +44,26 @@ Entries within one group AND when they belong to the same AR4SI dimension. A lis
     "type": "modules",
     "modules": [
         [
-            { "type": "tdx",       "value": {} },
-            { "type": "tdx.ovmf",  "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" },
-            { "type": "tdx.kernel","value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+            { "type": "tdx", "value": {} },
+            {
+                "type": "tdx.ovmf",
+                "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+            },
+            {
+                "type": "tdx.kernel",
+                "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+            }
         ],
         [
-            { "type": "tdx",        "value": {} },
-            { "type": "tdx.td-shim","value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5" },
-            { "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+            { "type": "tdx", "value": {} },
+            {
+                "type": "tdx.td-shim",
+                "value": "04caf4fb18079198bec7cfcf4883dc3ae93f8deae6fa99b4d3af9e27ef69d71e2d4774551edb334abd05f871041c52a5"
+            },
+            {
+                "type": "tdx.kernel",
+                "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+            }
         ]
     ]
 }
@@ -89,7 +113,7 @@ These are rejected when the policy loads, before any appraisal runs:
 ## Module types
 
 | Type | Alias | Value shape | Measured against |
-|---|---|---|
+|---|---|---|---|
 | `tdx.td-shim` | — | 96 lowercase hex | quote `mr_td`, TD booted through td-shim guest firmware |
 | `tdx.ovmf` | — | 96 lowercase hex | quote `mr_td`, TD booted through OVMF firmware |
 | `tdx.kernel` | — | 96 lowercase hex | the `td_payload` event in the UEFI event log, recorded in RTMR1 (SHA-384) |
@@ -107,7 +131,10 @@ To see the exact Rego a configuration generates, run `tng tools policy export` (
 ### Guest firmware measurement: `tdx.td-shim`, `tdx.ovmf`
 
 ```json
-{ "type": "tdx.ovmf", "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5" }
+{
+    "type": "tdx.ovmf",
+    "value": "19de6c23abcb441c128f7070a95bb75fed723ae6e3276c80e44367b03d543d48ed3377a954d21b32f8c5bc474e068fe5"
+}
 ```
 
 Pins the TD launch measurement, the `mr_td` field of the TDX quote. This is the SHA-384 value the hardware recorded for the initial TD image built from the guest firmware when the TD was created. The entry requires `mr_td` to equal the pinned value. A missing field or any other value fails it. `tdx.td-shim` and `tdx.ovmf` read the same field, so use the one that matches how the TD is booted.
@@ -115,7 +142,10 @@ Pins the TD launch measurement, the `mr_td` field of the TDX quote. This is the 
 ### Kernel measurement: `tdx.kernel`
 
 ```json
-{ "type": "tdx.kernel", "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265" }
+{
+    "type": "tdx.kernel",
+    "value": "1f709fa8a1171ebafcdd70b74d40c6225e8e671555379e082a5636e3981ad61f98441c0f3369a22e5a74c63b0ac2f265"
+}
 ```
 
 Pins the kernel measurement taken at boot: the SHA-384 digest the firmware logged for the TD payload (kernel) blob. The entry reads the `td_payload` event in the UEFI event log. The event must be recorded in RTMR1 (register index 2), every matching event must carry a SHA-384 digest, and every SHA-384 digest across those events must be the same. No matching event, an event at another index or with no index, an event without a SHA-384 digest, or a digest mismatch fails the entry. The blob length in the event is not checked.
@@ -123,7 +153,10 @@ Pins the kernel measurement taken at boot: the SHA-384 digest the firmware logge
 ### UKI measurement: `tdx.uki`
 
 ```json
-{ "type": "tdx.uki", "value": "5bee5bdf63538ba7aa5c60d4725193c88932aa17083276fe9d61e4963ab6f871cdf3b3dd5d99733169b8c87a5e8e62b3" }
+{
+    "type": "tdx.uki",
+    "value": "5bee5bdf63538ba7aa5c60d4725193c88932aa17083276fe9d61e4963ab6f871cdf3b3dd5d99733169b8c87a5e8e62b3"
+}
 ```
 
 Pins the unified kernel image (UKI) measurement. The firmware measures the UKI as an EFI boot application and logs an `EV_EFI_BOOT_SERVICES_APPLICATION` event. The entry needs at least one such event. Every event must carry a SHA-384 digest, and every SHA-384 digest across those events must be the same, equal to the pinned value. The entry has no device path selector, so it assumes a single boot application: an extra boot application with a different digest fails it. A deployment that does not boot a UKI has no such event, so configuring this entry fails it; use `tdx.kernel` for that boot path.
@@ -131,7 +164,10 @@ Pins the unified kernel image (UKI) measurement. The firmware measures the UKI a
 ### Container image: `com.alibabacloud.container.image.<repo>`
 
 ```json
-{ "type": "com.alibabacloud.container.image.model-server", "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0" }
+{
+    "type": "com.alibabacloud.container.image.model-server",
+    "value": "sha256:c5945b51138c975fe3f0315a17a469b87f009ceaa6fc69ba461c5811fbb781a0"
+}
 ```
 
 This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins the OCI manifest digests accepted for a workload image. The evidence is the AAEL `kangaroo/pull-image` event with event type `EV_EVENT_TAG`. The entry looks at the events whose repository name is `<repo>`. There must be at least one, and each must carry a `digest`. `<repo>` is the last path segment of the image reference, after removing the registry host, path prefix, tag, and digest. Use only ASCII letters, digits, `.`, `_`, and `-`; a name with `/`, `@`, or `:` cannot match the reference and is rejected when the policy loads.
@@ -143,7 +179,10 @@ When the same type appears in a `transparency_log` entry's `publishedMeasurement
 ### Model: `com.alibabacloud.ai.model.<model-id>`
 
 ```json
-{ "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B", "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9" }
+{
+    "type": "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+    "value": "c2d3b69b8fe371d95c80e3962669156810c0328c6165306b8decf843149184a9"
+}
 ```
 
 This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` events. It pins a model's measured integrity hash, 64 lowercase hex. The evidence is the AAEL `pai/load-model` event with event type `EV_EVENT_TAG`. `<model-id>` must match the model identifier in the event exactly (a modelscope-id style name is the convention); it may contain ASCII letters, digits, `.`, `_`, `/`, `@`, `:`, `+`, and `-`, and any other character is rejected at load. There must be at least one load event. Every event must carry both `model-id` and `hash`; all `model-id` values must equal `<model-id>`, and all `hash` values must equal the pinned value. A load event for another model fails the entry. Each model defines how its hash is computed, for example an fs-verity digest over the stored model.
@@ -151,7 +190,10 @@ This entry is Alibaba-coupled: the evidence comes from AAEL `alibabacloud.com` e
 ### Root filesystem: `rootfs.cc`
 
 ```json
-{ "type": "com.alibabacloud.rootfs.cc", "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230" }
+{
+    "type": "com.alibabacloud.rootfs.cc",
+    "value": "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230"
+}
 ```
 
 This entry pins the dm-verity hash tree root hash of the confidential-container root filesystem, 64 lowercase hex without a `sha256:` prefix. The evidence is the `EV_PLATFORM_CONFIG_FLAGS` event in the UEFI event log whose `details.string` starts with `td_payload_info `. Every such event must be recorded in RTMR1 (register index 2); an event at another index or with no index fails the entry. The root hash is read from the `dm-mod.create="verity-root,..."` table in the event string: the device name must be `verity-root`, the algorithm `sha256`, and the hash lowercase hex. Other dm devices in the same string are not read. An event whose string has no `verity-root` table is ignored, at least one event must carry the table, and every extracted root hash must be identical and equal to the pinned value. No matching event, no `verity-root` table, or two different root hashes fails the entry.
@@ -197,10 +239,17 @@ Adding this entry checks the TDX quote's platform attributes. Each field default
 | `max_collateral_age_days` | int | absent | require the collateral issued no more than N days before the appraisal |
 
 ```json
-{ "type": "tdx", "value": {
-    "tcb": { "min_status": "up_to_date", "reject_advisories": ["INTEL-SA-00001"], "allow_advisories": ["INTEL-SA-00002"] },
-    "collateral": { "allow_expired": false, "min_tcb_date": "2026-06-01", "max_collateral_age_days": 30 }
-} }
+{
+    "type": "tdx",
+    "value": {
+        "tcb": {
+            "min_status": "up_to_date",
+            "reject_advisories": ["INTEL-SA-00001"],
+            "allow_advisories": ["INTEL-SA-00002"]
+        },
+        "collateral": { "allow_expired": false, "min_tcb_date": "2026-06-01", "max_collateral_age_days": 30 }
+    }
+}
 ```
 
 A debug TD, a revoked TCB, an advisory in `reject_advisories` that is not in `allow_advisories`, or expired collateral while `allow_expired` is `false` fails the entry when the corresponding check is enabled.
@@ -232,14 +281,19 @@ Omitting the entry skips GPU appraisal entirely. Present, the entry appraises th
 The whitelist fields compare exact strings; an empty list means no restriction. The checks cover only the GPUs the driver enumerates; a GPU hidden from enumeration escapes them.
 
 ```json
-{ "type": "nvidia", "value": {
-    "require_cc_mode": true,
-    "min_count": 1,
-    "allow_uuids": ["GPU-3f9c2a1b-88d4-4e17-9c2a-71f0d5a4b6e8"],
-    "allow_driver_versions": ["570.148.05"],
-    "allow_vbios_versions": ["96.00.f4.00.07"],
-    "measurement_digest": ["7430ef5370b61ba48a61739b6ea4a038e6456924a0af6d3b757cbc4fe98b85a087ed4bca2df36543902377da0c673e8a"]
-} }
+{
+    "type": "nvidia",
+    "value": {
+        "require_cc_mode": true,
+        "min_count": 1,
+        "allow_uuids": ["GPU-3f9c2a1b-88d4-4e17-9c2a-71f0d5a4b6e8"],
+        "allow_driver_versions": ["570.148.05"],
+        "allow_vbios_versions": ["96.00.f4.00.07"],
+        "measurement_digest": [
+            "7430ef5370b61ba48a61739b6ea4a038e6456924a0af6d3b757cbc4fe98b85a087ed4bca2df36543902377da0c673e8a"
+        ]
+    }
+}
 ```
 
 **Current strength limit.** The appraisal compares the appraised device claims. Cryptographic verification of the GPU attestation report's signature, the GPU certificate chain, and the driver RIM file is verifier-side follow-up work; until it lands, appraisal reflects the claims recorded when the verifier parses the report, not the report's own authenticity.
@@ -247,12 +301,21 @@ The whitelist fields compare exact strings; an empty list means no restriction. 
 ### Transparency log: `transparency_log`
 
 ```json
-{ "type": "transparency_log", "value": {
-    "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
-    "schemaVersion": "1.0.0",
-    "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2310520944,
-                   "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }]
-} }
+{
+    "type": "transparency_log",
+    "value": {
+        "publishedMeasurements": ["tdx.td-shim", "container.image.cmaas-runtime"],
+        "schemaVersion": "1.0.0",
+        "services": [
+            {
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.sigstore.dev",
+                "logIndex": 2310520944,
+                "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+            }
+        ]
+    }
+}
 ```
 
 Use this entry to keep the trusted measurement values in a release manifest recorded in a transparency log, instead of writing the digests into the policy. At appraisal, TNG compares the measurements in the current evidence with the recorded baseline, so the policy only points to the log entry. This is a `modules` entry type. The top-level `attestation_policy.type = "transparency_log"` form from earlier releases no longer exists.
@@ -269,15 +332,71 @@ Use this entry to keep the trusted measurement values in a release manifest reco
 
 ```json
 "modules": [
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } },
-    { "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.openanolis.cn", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }
+    {
+        "type": "transparency_log",
+        "value": {
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.sigstore.dev",
+                    "logIndex": 100,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    },
+    {
+        "type": "transparency_log",
+        "value": {
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "services": [
+                {
+                    "type": "rekor-v1",
+                    "logUrl": "https://rekor.openanolis.cn",
+                    "logIndex": 200,
+                    "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                }
+            ]
+        }
+    }
 ]
 ```
 
 ```json
 "modules": [
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 100, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }],
-    [{ "type": "transparency_log", "value": { "publishedMeasurements": ["container.image.cmaas-runtime"], "services": [{ "type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 200, "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----" }] } }]
+    [
+        {
+            "type": "transparency_log",
+            "value": {
+                "publishedMeasurements": ["container.image.cmaas-runtime"],
+                "services": [
+                    {
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.sigstore.dev",
+                        "logIndex": 100,
+                        "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                    }
+                ]
+            }
+        }
+    ],
+    [
+        {
+            "type": "transparency_log",
+            "value": {
+                "publishedMeasurements": ["container.image.cmaas-runtime"],
+                "services": [
+                    {
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.sigstore.dev",
+                        "logIndex": 200,
+                        "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                    }
+                ]
+            }
+        }
+    ]
 ]
 ```
 
