@@ -44,23 +44,6 @@ impl CanonicalLogServices {
     }
 }
 
-/// The identity of the publisher key a resolve was performed under: the
-/// sha256 of the effective configured-or-built-in PEM. A resolve success is
-/// only reusable under the same publisher key, so two policies that differ
-/// only in `publisherPublicKeyPem` cannot share a cached success.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PublisherKeyId(String);
-
-impl PublisherKeyId {
-    pub(crate) fn new(configured_pem: Option<&str>) -> Self {
-        use sha2::Digest as _;
-
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(super::dsse::effective_publisher_pem(configured_pem).as_bytes());
-        Self(hex::encode(hasher.finalize()))
-    }
-}
-
 /// The key of one artifact-server resolve: the server, the manifest, the
 /// requested log services, and the publisher key all participate, so a cached
 /// success is only reused for the identical trust configuration.
@@ -69,7 +52,10 @@ pub(crate) struct ResolveCacheKey {
     pub(crate) artifact_server_url: String,
     pub(crate) manifest_digest: ManifestDigest,
     pub(crate) log_services: CanonicalLogServices,
-    pub(crate) publisher_key: PublisherKeyId,
+    /// The configured publisher PEM, `None` when the service carries none. A
+    /// resolve success is only reusable under the same key, so a configured
+    /// and an unconfigured policy cannot share a cached success.
+    pub(crate) publisher_pem: Option<String>,
 }
 
 /// The marker stored for a verified resolve. The value carries no data: the
@@ -191,14 +177,17 @@ mod tests {
     }
 
     #[test]
-    fn publisher_key_id_uses_the_effective_key() {
-        let builtin = PublisherKeyId::new(None);
-        assert_eq!(builtin, PublisherKeyId::new(Some("")));
-        assert_eq!(
-            builtin,
-            PublisherKeyId::new(Some(super::super::dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM))
-        );
-        assert_ne!(builtin, PublisherKeyId::new(Some("another key")));
+    fn publisher_pem_distinguishes_configured_from_unconfigured() {
+        let key = |pem: Option<&str>| ResolveCacheKey {
+            artifact_server_url: "https://as".to_string(),
+            manifest_digest: ManifestDigest::new(&hex::encode([1u8; 32])).unwrap(),
+            log_services: CanonicalLogServices::new("[]").unwrap(),
+            publisher_pem: pem.map(str::to_owned),
+        };
+
+        assert_ne!(key(None), key(Some("pem a")));
+        assert_ne!(key(Some("pem a")), key(Some("pem b")));
+        assert_eq!(key(Some("pem a")), key(Some("pem a")));
     }
 
     #[tokio::test]
@@ -208,7 +197,7 @@ mod tests {
             artifact_server_url: "https://as".to_string(),
             manifest_digest: ManifestDigest::new(&hex::encode([1u8; 32])).unwrap(),
             log_services: CanonicalLogServices::new("[]").unwrap(),
-            publisher_key: PublisherKeyId::new(None),
+            publisher_pem: None,
         };
         assert!(!caches.resolve_hit(&key).await);
         caches.insert_resolve(key.clone()).await;

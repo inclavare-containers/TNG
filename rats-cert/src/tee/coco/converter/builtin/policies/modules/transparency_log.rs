@@ -123,8 +123,8 @@ pub(super) fn build_entry_rules(
             let url_lit = serde_json::to_string(url)?;
             let ls_lit = serde_json::to_string(log_services)?;
             // Bake the configured publisher key, or empty string when none is
-            // set; the host-await treats empty as "use the built-in publisher
-            // key", so baking "" preserves the default path.
+            // set; the host-await requires a key only when the response omits
+            // both verifiers, so baking "" preserves the response-key path.
             let publisher_key_lit = serde_json::to_string(
                 publisher_public_key_pem
                     .as_deref()
@@ -137,9 +137,19 @@ pub(super) fn build_entry_rules(
                 &cfg.fallback_services,
             ) {
                 (Some(fpm), Some(fs)) => {
-                    let (log_url, log_index) = match fs.first() {
+                    let (log_url, log_index, fallback_publisher_key) = match fs.first() {
                         Some(TransparencyServiceConfig::RekorV1(service)) => {
-                            (&service.log_url, service.log_index)
+                            // The fallback is its own rekor-v1 service, so its
+                            // configured publisher key is the DSSE trust anchor
+                            // for the on-demand fetch.
+                            let publisher_key = serde_json::to_string(
+                                service
+                                    .publisher_public_key_pem
+                                    .as_deref()
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or(""),
+                            )?;
+                            (&service.log_url, service.log_index, publisher_key)
                         }
                         Some(_) => {
                             anyhow::bail!("fallbackServices must contain only rekor-v1 services")
@@ -156,14 +166,15 @@ pub(super) fn build_entry_rules(
                     (
                         format!(
                             "\n{prefix}_fallback_log_url := {log_url:?}\n\
-                                 {prefix}_fallback_log_index := {log_index}\n"
+                                 {prefix}_fallback_log_index := {log_index}\n\
+                                 {prefix}_fallback_publisher_key := {fallback_publisher_key}\n"
                         ),
                         format!(
                             r#"
 {fallback_manifest}
 {pred} if {{
     {prefix}_primary_status == "fail"
-    tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_publisher_key]) == true
+    tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_fallback_publisher_key]) == true
 }}
 "#
                         ),
@@ -177,8 +188,8 @@ pub(super) fn build_entry_rules(
 {prefix}_schema_version := {schema_version:?}
 {prefix}_artifact_server_url := {url_lit}
 {prefix}_log_services := {ls_lit}
-# baked: configured publisher key PEM (empty string → host-await uses the
-# built-in publisher key baseline)
+# baked: configured publisher key PEM (empty string when unset; required only
+# when the artifact-server response omits both verifier keys)
 {prefix}_publisher_key := {publisher_key_lit}{fallback_lit}
 
 {manifest}
@@ -222,7 +233,6 @@ mod tests {
     };
     use super::*;
     use crate::tee::coco::converter::builtin::policy_config::ArtifactLogService;
-    use crate::tee::coco::converter::builtin::transparency::dsse;
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
     use serde_json::{json, Value};
@@ -494,7 +504,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
 
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test]
-    async fn transparency_log_rekor_dsse_verifies_against_builtin_publisher_key() {
+    async fn transparency_log_rekor_dsse_verifies_against_configured_publisher_key() {
         // Extract the real DSSE signature from the fixture entry.
         let entry_raw = test_fixtures::REKOR_V1_ENTRY_JSON;
         let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
@@ -511,28 +521,28 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
         let ok = tdx_input(&[aael_event(digest)]);
 
-        // Built-in key + real signature -> DSSE verifies -> affirm.
+        // Configured publisher key + real signature -> DSSE verifies -> affirm.
         let mut resolved = RekorBaseline {
             entry: VerifiedRekorEntry {
                 payload_hash: payload_hash.to_string(),
                 dsse_signature: dsse_signature.clone(),
             },
-            publisher_key: dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM.to_string(),
+            publisher_key: test_fixtures::ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM.to_string(),
         };
         let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
             (2, 2, 2, 2),
-            "built-in publisher key + real DSSE signature must affirm"
+            "configured publisher key + real DSSE signature must affirm"
         );
 
-        // A bogus signature with the built-in key rejects.
+        // A bogus signature with the configured key rejects.
         resolved.entry.dsse_signature = BASE64_STANDARD.encode([0u8; 64]);
         let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
             (97, 2, 2, 2),
-            "wrong DSSE signature must reject against the built-in publisher key"
+            "wrong DSSE signature must reject against the configured publisher key"
         );
     }
 

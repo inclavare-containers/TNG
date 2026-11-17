@@ -157,7 +157,7 @@ mod tests {
             &server.uri(),
             log_index,
             Some(SIGSTORE_REKOR_V1_PUB_KEY_PEM),
-            None,
+            Some(DSSE_PUBLISHER_PUB_KEY_PEM),
         );
         let outcome = load_rekor_baseline(&service)
             .await
@@ -167,7 +167,32 @@ mod tests {
             "b40611d4faa5c667f125fe2b9f52a9ef40171ff63b775a95d08b126fba640564"
         );
         assert!(!outcome.entry.dsse_signature.is_empty());
-        assert_eq!(outcome.publisher_key, dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+        assert_eq!(outcome.publisher_key, DSSE_PUBLISHER_PUB_KEY_PEM);
+    }
+
+    /// A rekor-v1 service carries no verifier keys, so a missing publisher key
+    /// fails before the network fetch; there is no built-in fallback.
+    #[tokio::test]
+    async fn rekor_load_time_requires_a_publisher_key() {
+        // The URL is a dead port: if the key check did not fire first, the
+        // failure would be a connection error instead of the key error.
+        let service = rekor_service("http://127.0.0.1:1", 1, None, None);
+        let err = load_rekor_baseline(&service)
+            .await
+            .expect_err("a missing publisher key must fail");
+        assert!(
+            format!("{err:#}").contains("publisherPublicKeyPem"),
+            "{err:#}"
+        );
+
+        let service = rekor_service("http://127.0.0.1:1", 1, None, Some(""));
+        let err = load_rekor_baseline(&service)
+            .await
+            .expect_err("an empty publisher key must fail");
+        assert!(
+            format!("{err:#}").contains("publisherPublicKeyPem"),
+            "{err:#}"
+        );
     }
 
     /// A wrong explicit rekor key fails the logID check.
@@ -177,13 +202,13 @@ mod tests {
         let server = MockServer::start().await;
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
 
-        // The built-in publisher key is a valid P-256 key, but its SPKI hash
+        // The fixture publisher key is a valid P-256 key, but its SPKI hash
         // is not the fixture entry's logID.
         let service = rekor_service(
             &server.uri(),
             log_index,
             Some(DSSE_PUBLISHER_PUB_KEY_PEM),
-            None,
+            Some(DSSE_PUBLISHER_PUB_KEY_PEM),
         );
         let err = load_rekor_baseline(&service)
             .await
@@ -198,7 +223,12 @@ mod tests {
         let server = MockServer::start().await;
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
 
-        let service = rekor_config(&server.uri(), log_index, None, None);
+        let service = rekor_config(
+            &server.uri(),
+            log_index,
+            None,
+            Some(DSSE_PUBLISHER_PUB_KEY_PEM),
+        );
         let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("bound rekor authentication");
@@ -228,7 +258,9 @@ mod tests {
         );
     }
 
-    /// The artifact-server adapter authenticates every returned entry.
+    /// The artifact-server adapter authenticates every returned entry. The
+    /// response supplies both verifier keys, so no configured publisher key is
+    /// needed.
     #[tokio::test]
     async fn artifact_server_resolve_verifies() {
         let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
@@ -398,6 +430,37 @@ mod tests {
         );
     }
 
+    /// A response that omits both verifiers leaves the configured publisher
+    /// key as the only trust anchor. With no configured key there is no
+    /// built-in fallback, so the resolve is an ordinary error.
+    #[tokio::test]
+    async fn artifact_server_requires_a_publisher_key_when_verifiers_are_absent() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let server = MockServer::start().await;
+        let body = json!({
+            "status": "resolved",
+            "release_manifest": manifest,
+            "log_entries": [{
+                "type": "rekor-v1",
+                "url": entry_url,
+                "log_entry": log_entry,
+                "entry_verifier": {"type": "", "content": ""},
+                "log_verifier": {"public_key_pem": ""},
+            }],
+        })
+        .to_string();
+        let _mock = mount_resolve(&server, ResponseTemplate::new(200).set_body_string(body)).await;
+
+        let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], None);
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
+            .await
+            .expect_err("no configured key and no response verifiers must fail");
+        assert!(
+            format!("{err:#}").contains("publisherPublicKeyPem"),
+            "{err:#}"
+        );
+    }
+
     /// The resolve cache key includes the publisher key identity, so a success
     /// cached under one configured key does not satisfy a policy that differs
     /// only in `publisherPublicKeyPem`.
@@ -420,6 +483,35 @@ mod tests {
                 vec![log_service(&entry_url)],
                 Some(publisher),
             );
+            let outcome = verify_manifest(&manifest, &service, &caches)
+                .await
+                .expect("resolve authentication");
+            assert!(matches!(outcome, VerifyOutcome::Verified), "{outcome:?}");
+        }
+        drop(mock);
+        server.verify().await;
+    }
+
+    /// An unconfigured context and a configured one have distinct cache
+    /// identities even when both resolves succeed through the response keys, so
+    /// the second call must reach the server instead of reusing the first
+    /// success.
+    #[tokio::test]
+    async fn resolve_cache_does_not_share_between_configured_and_unconfigured() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let server = MockServer::start().await;
+        // Both verifiers are present in the response, so both policies verify.
+        let body = resolve_response_body(&manifest, &log_entry, &entry_url);
+        let mock = Mock::given(method("POST"))
+            .and(path("/api/v1/transparency/resolve"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(2) // both calls must reach the server: the key identities differ
+            .mount_as_scoped(&server)
+            .await;
+
+        let caches = TransparencyCaches::new();
+        for publisher in [None, Some(DSSE_PUBLISHER_PUB_KEY_PEM)] {
+            let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], publisher);
             let outcome = verify_manifest(&manifest, &service, &caches)
                 .await
                 .expect("resolve authentication");

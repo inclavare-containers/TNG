@@ -425,7 +425,7 @@ pub(crate) fn verify_entry(entry: &RekorEntry, key: &RekorPublicKey) -> Result<V
 
 /// Load the rekor-v1 baseline a policy bakes at render time: fetch the entry,
 /// verify it against the configured-or-built-in rekor key, and return the
-/// trusted payload hash, the in-band DSSE signature, and the effective
+/// trusted payload hash, the in-band DSSE signature, and the configured
 /// publisher key.
 ///
 /// The entry is deliberately not cached: a load must re-verify against the
@@ -438,6 +438,11 @@ pub(crate) async fn load_baseline(service: &RekorV1Service) -> Result<RekorBasel
         rekor_public_key_pem,
         publisher_public_key_pem,
     } = service;
+    // A rekor-v1 entry carries no verifier keys of its own, so the DSSE
+    // publisher key has to come from the configuration. Fail before the
+    // network fetch.
+    let publisher_key =
+        dsse::required_publisher_pem(publisher_public_key_pem.as_deref())?.to_string();
 
     tracing::info!(
         log_url,
@@ -452,8 +457,7 @@ pub(crate) async fn load_baseline(service: &RekorV1Service) -> Result<RekorBasel
             payload_hash: verified.payload_hash,
             dsse_signature: dsse::require_dsse_signature(&verified.dsse_signature)?.to_string(),
         },
-        publisher_key: dsse::effective_publisher_pem(publisher_public_key_pem.as_deref())
-            .to_string(),
+        publisher_key,
     })
 }
 
@@ -467,6 +471,9 @@ pub(crate) async fn verify_manifest(
     service: &RekorV1Service,
     caches: &TransparencyCaches,
 ) -> Result<VerifyOutcome> {
+    // A rekor-v1 entry carries no verifier keys, so a configured publisher key
+    // is mandatory. Fail before fetching.
+    let publisher_pem = dsse::required_publisher_pem(service.publisher_public_key_pem.as_deref())?;
     let expected = dsse::canonical_manifest_sha256(manifest)?;
     let cache_key = RekorCacheKey {
         log_url: service.log_url.clone(),
@@ -486,7 +493,6 @@ pub(crate) async fn verify_manifest(
     };
 
     let dsse_signature = dsse::require_dsse_signature(&entry.dsse_signature)?;
-    let publisher_pem = dsse::effective_publisher_pem(service.publisher_public_key_pem.as_deref());
     let canonical_manifest = dsse::canonical_manifest_bytes(manifest)?;
     dsse::verify_publisher_signature(publisher_pem, canonical_manifest.as_bytes(), dsse_signature)?;
     if entry.payload_hash != expected {

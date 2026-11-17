@@ -24,7 +24,8 @@
           {
             "type": "rekor-v1",
             "logUrl": "https://rekor.sigstore.dev",
-            "logIndex": 123456
+            "logIndex": 123456,
+            "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----"
           }
         ]
       }

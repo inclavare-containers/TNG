@@ -219,12 +219,7 @@ impl TransparencyLogEntryConfig {
                     }
                 }
                 TransparencyServiceConfig::RekorV1(service) => {
-                    if service.log_url.is_empty() {
-                        anyhow::bail!("rekor-v1 logUrl required");
-                    }
-                    if service.log_index < 0 {
-                        anyhow::bail!("rekor-v1 logIndex must be >= 0");
-                    }
+                    service.validate()?;
                 }
             }
         }
@@ -260,6 +255,14 @@ impl TransparencyLogEntryConfig {
                             }
                             if service.log_index < 0 {
                                 anyhow::bail!("fallbackServices logIndex >= 0");
+                            }
+                            if service
+                                .publisher_public_key_pem
+                                .as_deref()
+                                .unwrap_or("")
+                                .is_empty()
+                            {
+                                anyhow::bail!("fallbackServices publisherPublicKeyPem required");
                             }
                         }
                         _ => anyhow::bail!("fallbackServices must be rekor-v1"),
@@ -530,8 +533,30 @@ pub struct RekorV1Service {
     pub log_index: i64,
     #[serde(rename = "rekorPublicKeyPem", default)]
     pub rekor_public_key_pem: Option<String>,
+    /// The DSSE publisher public key (PEM). Required: a rekor-v1 entry carries
+    /// no verifier keys of its own, and there is no built-in publisher key.
     #[serde(rename = "publisherPublicKeyPem", default)]
     pub publisher_public_key_pem: Option<String>,
+}
+
+impl RekorV1Service {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.log_url.is_empty() {
+            anyhow::bail!("rekor-v1 logUrl required");
+        }
+        if self.log_index < 0 {
+            anyhow::bail!("rekor-v1 logIndex must be >= 0");
+        }
+        if self
+            .publisher_public_key_pem
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            anyhow::bail!("rekor-v1 publisherPublicKeyPem required");
+        }
+        Ok(())
+    }
 }
 
 /// An `artifact-server` transparency service: resolve the manifest through the
@@ -543,10 +568,10 @@ pub struct ArtifactServerService {
     pub url: String,
     #[serde(rename = "logServices")]
     pub log_services: Vec<ArtifactLogService>,
-    /// Optional DSSE publisher public key (PEM) overriding the built-in
-    /// publisher key baseline: when empty, DSSE verification falls back to
-    /// the built-in publisher key. Used for both the primary resolve path
-    /// and (when absent) the built-in default.
+    /// Optional DSSE publisher public key (PEM). It is used when the artifact
+    /// server response omits both verifier keys; a response that supplies them
+    /// takes precedence. Leaving it unset is valid only while every response
+    /// carries its own verifiers.
     #[serde(rename = "publisherPublicKeyPem", default)]
     pub publisher_public_key_pem: Option<String>,
 }
@@ -608,7 +633,7 @@ mod tests {
     use crate::tee::coco::converter::builtin::policies::modules::{parse_module_groups, Module};
     use crate::tee::coco::converter::builtin::test_fixtures::{
         artifact_entry_value, rekor_entry_value, transparency_entry,
-        SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON,
+        ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM, SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON,
     };
 
     use super::*;
@@ -848,6 +873,7 @@ mod tests {
                 "type": "rekor-v1",
                 "logUrl": "https://rekor.example.com",
                 "logIndex": 1,
+                "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
             }],
         })
     }
@@ -870,7 +896,7 @@ mod tests {
                 "logUrl": "https://rekor.example.com",
                 "logIndex": 1,
                 "rekorPublicKeyPem": null,
-                "publisherPublicKeyPem": null,
+                "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
             })
         );
 
@@ -1036,7 +1062,8 @@ mod tests {
             format!("{:#}", parse_module_groups(&cfg).unwrap_err())
         }
 
-        let rekor = json!({"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1});
+        let rekor = json!({"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                           "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM});
         let artifact = json!({
             "type": "artifact-server",
             "url": "https://as",
@@ -1061,17 +1088,20 @@ mod tests {
         );
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.uki"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         }))
         .contains("unsupported publishedMeasurements type"));
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim", "tdx.td-shim"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         }))
         .contains("duplicate publishedMeasurements type"));
         assert!(entry_error(json!({
             "publishedMeasurements": ["container.image.busybox", "container.image.busybox"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         }))
         .contains("duplicate publishedMeasurements type"));
 
@@ -1079,7 +1109,8 @@ mod tests {
         // rootfs measurement type.
         let accepted = json!({
             "publishedMeasurements": ["tdx.td-shim", "rootfs.cc", "container.image.busybox"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         });
         let cfg: ModuleGroupsConfig =
             serde_json::from_value(json!([transparency_entry(accepted)])).expect("modules parse");
@@ -1093,7 +1124,8 @@ mod tests {
         ] {
             let error = entry_error(json!({
                 "publishedMeasurements": [measurement_type],
-                "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+                "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             }));
             assert!(
                 error.contains("invalid container image repository"),
@@ -1103,13 +1135,15 @@ mod tests {
 
         assert!(entry_error(json!({
             "publishedMeasurements": ["com.alibabacloud.container.image.busybox"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         }))
         .contains("unsupported publishedMeasurements type"));
 
         assert!(entry_error(json!({
             "publishedMeasurements": ["com.alibabacloud.rootfs.cc"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
         }))
         .contains("unsupported publishedMeasurements type"));
 
@@ -1117,7 +1151,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["container.image.busybox"],
         });
         let cfg: ModuleGroupsConfig =
@@ -1129,7 +1164,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["container.image.nginx"],
         }))
         .contains("not in publishedMeasurements"));
@@ -1138,7 +1174,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": [],
         }))
         .contains("fallbackPublishedMeasurements non-empty"));
@@ -1161,8 +1198,10 @@ mod tests {
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [
-                {"type": "rekor-v1", "logUrl": "https://r1", "logIndex": 1},
-                {"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2},
+                {"type": "rekor-v1", "logUrl": "https://r1", "logIndex": 1,
+                 "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM},
+                {"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2,
+                 "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM},
             ],
         }))
         .contains("exactly one rekor-v1 service"));
@@ -1216,13 +1255,15 @@ mod tests {
         // fallback pairing.
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
         .contains("fallbackPublishedMeasurements requires fallbackServices"));
         assert!(entry_error(json!({
             "publishedMeasurements": ["tdx.td-shim"],
-            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 2}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
@@ -1249,7 +1290,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["tdx.kernel"],
         }))
         .contains("not in publishedMeasurements"));
@@ -1257,7 +1299,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "", "logIndex": 1}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "", "logIndex": 1,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
         .contains("fallbackServices logUrl required"));
@@ -1265,7 +1308,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": -1}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": -1,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         }))
         .contains("fallbackServices logIndex >= 0"));
@@ -1273,7 +1317,8 @@ mod tests {
             "publishedMeasurements": ["tdx.td-shim"],
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": [],
         }))
         .contains("fallbackPublishedMeasurements non-empty"));
@@ -1332,11 +1377,55 @@ mod tests {
             "services": [{"type": "artifact-server", "url": "https://as",
                           "logServices": [{"type": "rekor-v1", "url": "https://r"}],
                           "publisherPublicKeyPem": "pem"}],
-            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2,
+                                  "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM}],
             "fallbackPublishedMeasurements": ["tdx.td-shim"],
         });
         let cfg: ModuleGroupsConfig =
             serde_json::from_value(json!([transparency_entry(valid_artifact_entry)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+    }
+
+    /// A rekor-v1 service carries no verifier keys, so the publisher key is
+    /// required in both the primary and the fallback list. An artifact-server
+    /// service stays optional: its response normally supplies the verifiers.
+    #[test]
+    fn transparency_log_rekor_v1_requires_a_publisher_key() {
+        fn entry_error(value: Value) -> String {
+            let cfg: ModuleGroupsConfig =
+                serde_json::from_value(json!([transparency_entry(value)])).expect("modules parse");
+            format!("{:#}", parse_module_groups(&cfg).unwrap_err())
+        }
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("publisherPublicKeyPem required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPem": ""}],
+        }))
+        .contains("publisherPublicKeyPem required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("fallbackServices publisherPublicKeyPem required"));
+
+        // The artifact-server primary needs no configured key by itself.
+        let artifact_only = json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(artifact_only)]))
                 .expect("modules parse");
         assert!(parse_module_groups(&cfg).is_ok());
     }
@@ -1369,8 +1458,10 @@ mod tests {
                 "publishedMeasurements": ["tdx.td-shim"],
                 "schemaVersion": "1.0.0",
                 "services": [
-                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 1},
-                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2},
+                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 1,
+                     "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM},
+                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2,
+                     "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM},
                 ],
             }))],
         });

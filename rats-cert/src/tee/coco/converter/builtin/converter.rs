@@ -406,7 +406,10 @@ impl GenericConverter for BuiltinCocoConverter {
 #[cfg(test)]
 mod tests {
     use crate::crypto::HashAlgo;
-    use crate::tee::coco::converter::builtin::test_fixtures::cmaas_fixture_quote_and_eventlog;
+    use crate::tee::coco::converter::builtin::test_fixtures::{
+        cmaas_fixture_quote_and_eventlog, ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
+        SIGSTORE_REKOR_V1_PUB_KEY_PEM,
+    };
     use crate::tee::coco::evidence::{tee_from_str, CocoEvidence};
     use crate::tee::{GenericConverter, GenericVerifier, ReportData};
     use anyhow::Result;
@@ -843,23 +846,22 @@ default file_system := 2"#,
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn new_with_transparency_log_policy_fetches_reference_values() {
-        let cfg: PolicyConfig = serde_json::from_str(
-            r#"{
-                "type": "modules",
-                "modules": [{
-                    "type": "transparency_log",
-                    "value": {
-                        "publishedMeasurements": ["container.image.cmaas-runtime"],
-                        "schemaVersion": "1.0.0",
-                        "services": [{
-                            "type": "rekor-v1",
-                            "logUrl": "https://rekor.sigstore.dev",
-                            "logIndex": 2544139140
-                        }]
-                    }
-                }]
-            }"#,
-        )
+        let cfg: PolicyConfig = serde_json::from_value(json!({
+            "type": "modules",
+            "modules": [{
+                "type": "transparency_log",
+                "value": {
+                    "publishedMeasurements": ["container.image.cmaas-runtime"],
+                    "schemaVersion": "1.0.0",
+                    "services": [{
+                        "type": "rekor-v1",
+                        "logUrl": "https://rekor.sigstore.dev",
+                        "logIndex": 2544139140i64,
+                        "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM
+                    }]
+                }
+            }]
+        }))
         .expect("parse modules transparency_log config");
         let result = BuiltinCocoConverter::new(&cfg, &[]).await;
         assert!(
@@ -932,12 +934,24 @@ default file_system := 2"#,
     #[cfg(feature = "crypto-rustcrypto")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn evidence_appraises_with_transparency_log_policy() {
-        let cfg = r#"{"type":"modules","modules":[{"type":"transparency_log","value":{"publishedMeasurements":["container.image.cmaas-runtime"],"schemaVersion":"1.0.0","services":[{"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":2310520944}]}}]}"#;
+        let base = r#"{"type":"modules","modules":[{"type":"transparency_log","value":{"publishedMeasurements":["container.image.cmaas-runtime"],"schemaVersion":"1.0.0","services":[{"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":2310520944}]}}]}"#;
+        // Insert the publisher key (a rekor-v1 service carries none of its own)
+        // plus optional extra fields, keeping the JSON single-line.
+        let build = |publisher: &str, extra: &str| {
+            base.replace(
+                "\"logIndex\":2310520944}",
+                &format!(
+                    "\"logIndex\":2310520944,\"publisherPublicKeyPem\":\"{}\"{extra}}}",
+                    publisher.replace('\n', "\\n")
+                ),
+            )
+        };
+        let cfg = build(ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM, "");
         let (quote, cc_eventlog) = cmaas_fixture_quote_and_eventlog();
 
         // Happy path.
         assert!(
-            run_transparency_log_appraisal(cfg, &quote, &cc_eventlog)
+            run_transparency_log_appraisal(&cfg, &quote, &cc_eventlog)
                 .await
                 .is_ok(),
             "correct config + evidence must affirm"
@@ -983,11 +997,11 @@ default file_system := 2"#,
         );
 
         // 5. Wrong rekorPublicKeyPem (bogus P-256 key).
-        let cfg_t5 = cfg.replace(
-            "\"logIndex\":2310520944}",
+        let cfg_t5 = build(
+            ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
             &format!(
-                "\"logIndex\":2310520944,\"rekorPublicKeyPem\":\"{}\"}}",
-                BOGUS_P256_PEM
+                ",\"rekorPublicKeyPem\":\"{}\"",
+                BOGUS_P256_PEM.replace('\n', "\\n")
             ),
         );
         assert!(
@@ -997,14 +1011,10 @@ default file_system := 2"#,
             "wrong rekorPublicKeyPem must fail"
         );
 
-        // 6. Wrong publisherPublicKeyPem (bogus key -> DSSE verify fails).
-        let cfg_t6 = cfg.replace(
-            "\"logIndex\":2310520944}",
-            &format!(
-                "\"logIndex\":2310520944,\"publisherPublicKeyPem\":\"{}\"}}",
-                BOGUS_P256_PEM
-            ),
-        );
+        // 6. Wrong publisherPublicKeyPem (a different valid P-256 key -> DSSE verify
+        // fails). The bogus rekor key used above is actually the fixture
+        // publisher key, so it would affirm here.
+        let cfg_t6 = build(SIGSTORE_REKOR_V1_PUB_KEY_PEM, "");
         assert!(
             run_transparency_log_appraisal(&cfg_t6, &quote, &cc_eventlog)
                 .await
@@ -1015,7 +1025,7 @@ default file_system := 2"#,
         // 7. Tampered quote.
         let tampered_quote = flip_one_char(&quote);
         assert!(
-            run_transparency_log_appraisal(cfg, &tampered_quote, &cc_eventlog)
+            run_transparency_log_appraisal(&cfg, &tampered_quote, &cc_eventlog)
                 .await
                 .is_err(),
             "tampered quote must fail"
@@ -1023,7 +1033,7 @@ default file_system := 2"#,
 
         // 8. Tampered cc_eventlog (no AAEL events -> reject).
         assert!(
-            run_transparency_log_appraisal(cfg, &quote, "AAAA")
+            run_transparency_log_appraisal(&cfg, &quote, "AAAA")
                 .await
                 .is_err(),
             "tampered cc_eventlog must fail"

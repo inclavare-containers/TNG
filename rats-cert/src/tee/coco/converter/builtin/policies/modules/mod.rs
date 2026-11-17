@@ -1397,8 +1397,8 @@ mod tests {
         // duplicate rejection: several log-anchored baselines are AND-ed.
         let dup_transparency = modules_cfg(
             r#"[
-              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r1","logIndex":1}]}},
-              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r2","logIndex":2}]}}
+              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r1","logIndex":1,"publisherPublicKeyPem":"pem"}]}},
+              {"type":"transparency_log","value":{"publishedMeasurements":["tdx.td-shim"],"services":[{"type":"rekor-v1","logUrl":"https://r2","logIndex":2,"publisherPublicKeyPem":"pem"}]}}
             ]"#,
         );
         assert!(

@@ -26,12 +26,15 @@ pub(crate) const TDX_VENDOR_ID: &str = "939a7233f79c4ca9940a0db3957f0607";
 /// fixture entry's `logID` is `sha256(SPKI)` of this key.
 pub(crate) const SIGSTORE_REKOR_V1_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\nkBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n-----END PUBLIC KEY-----";
 
-/// The DSSE publisher key that signed the fixtures. The production code uses
-/// the same PEM as its fail-closed default, so this aliases that constant
-/// instead of maintaining a second literal.
+/// Alibaba Cloud's DSSE publisher key for confidential-computing release
+/// manifests. Test fixture only: production configurations must set
+/// `publisherPublicKeyPem` on every transparency-log service that supplies no
+/// verifier keys.
+pub(crate) const ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
+
+/// The DSSE publisher key that signed the fixtures.
 #[cfg(feature = "crypto-rustcrypto")]
-pub(crate) const DSSE_PUBLISHER_PUB_KEY_PEM: &str =
-    super::transparency::dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM;
+pub(crate) const DSSE_PUBLISHER_PUB_KEY_PEM: &str = ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM;
 
 /// Lowercase hex string of `len` characters made of `ch` repeated.
 pub(crate) fn hex_repeat(ch: char, len: usize) -> String {
@@ -339,7 +342,9 @@ pub(crate) fn transparency_entry(value: Value) -> Value {
     json!({"type": "transparency_log", "value": value})
 }
 
-/// A `transparency_log` entry value with a rekor-v1 primary.
+/// A `transparency_log` entry value with a rekor-v1 primary. A rekor-v1
+/// service supplies no verifier keys, so the fixture publisher key is
+/// configured explicitly.
 pub(crate) fn rekor_entry_value(published_measurements: &[&str], log_index: i64) -> Value {
     json!({
         "publishedMeasurements": published_measurements,
@@ -348,6 +353,7 @@ pub(crate) fn rekor_entry_value(published_measurements: &[&str], log_index: i64)
             "type": "rekor-v1",
             "logUrl": "https://rekor.example.com",
             "logIndex": log_index,
+            "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
         }],
     })
 }
@@ -373,6 +379,7 @@ pub(crate) fn artifact_entry_value(
             "type": "rekor-v1",
             "logUrl": fallback_url,
             "logIndex": fallback_index,
+            "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
         }]);
     }
     value

@@ -17,9 +17,7 @@ use anyhow::Result;
 use attestation_service::policy_engine::opa::ExtensionFunction;
 
 #[cfg(feature = "crypto-rustcrypto")]
-use super::cache::{
-    CanonicalLogServices, ManifestDigest, PublisherKeyId, ResolveCacheKey, TransparencyCaches,
-};
+use super::cache::{CanonicalLogServices, ManifestDigest, ResolveCacheKey, TransparencyCaches};
 #[cfg(feature = "crypto-rustcrypto")]
 use super::{dsse, rekor_keys, rekor_v1, VerifyOutcome};
 use crate::tee::coco::converter::builtin::policy_config::{
@@ -48,7 +46,8 @@ pub(crate) async fn verify_manifest(
         artifact_server_url: service.url.clone(),
         manifest_digest: ManifestDigest::new(&expected)?,
         log_services: CanonicalLogServices::new(&serde_json::to_string(&service.log_services)?)?,
-        publisher_key: PublisherKeyId::new(service.publisher_public_key_pem.as_deref()),
+        publisher_pem: dsse::configured_publisher_pem(service.publisher_public_key_pem.as_deref())
+            .map(str::to_owned),
     };
     if caches.resolve_hit(&cache_key).await {
         return Ok(VerifyOutcome::Verified);
@@ -76,15 +75,15 @@ pub(crate) async fn verify_manifest(
 /// Fallback path: fetch a Rekor v1 entry by `logIndex` on demand, authenticate
 /// it (checkpoint + Merkle inclusion + SET), verify its DSSE publisher
 /// signature over `sha256(DSSEPAE(canonical manifest))` with the
-/// configured-or-built-in publisher key, and compare its trusted `payloadHash`
-/// to `sha256(canonical manifest)`. The canonical manifest is the JCS (RFC
+/// configured publisher key, and compare its trusted `payloadHash` to
+/// `sha256(canonical manifest)`. The canonical manifest is the JCS (RFC
 /// 8785) sorted-compact serialization, exactly what Rego's
 /// `json.marshal(manifest)` produces for this (number-free) shape, so the
 /// comparison agrees with the load-time `tng.sha256` path.
 ///
 /// The optional 4th arg is a configured publisher PEM (from the fallback
-/// `RekorV1` service's `publisherPublicKeyPem`); empty/absent falls back to
-/// the built-in publisher key.
+/// `RekorV1` service's `publisherPublicKeyPem`). It is required: an
+/// empty/absent value makes the fallback fail closed.
 ///
 /// Fail-closed / clean-deny: all failures return `Ok(Bool(false))`, never
 /// `Err`. An `Err` would abort the entire policy evaluation and break the
@@ -198,13 +197,14 @@ pub(crate) fn resolve_artifact_server_host_await(
 /// - every entry's DSSE publisher signature verifies over
 ///   `sha256(DSSEPAE(canonical manifest))` with a trusted publisher key
 ///   (response `entry_verifier.content` when both verifiers are present, or
-///   the configured/built-in publisher key when both are absent; mixed
+///   the configured `publisherPublicKeyPem` when both are absent; mixed
 ///   one-present-one-absent is rejected),
 ///   and
 /// - every entry's `payloadHash == expected_hash`.
 ///
-/// `configured_publisher_pem` is the optional `ArtifactServer` config override;
-/// empty/None falls back to the built-in publisher key.
+/// `configured_publisher_pem` is the optional `ArtifactServer` config override.
+/// An empty/absent value is valid only when the response supplies both
+/// verifier keys; if the response omits them too, the resolve fails.
 ///
 /// Returns `Ok(VerifyOutcome::Revoked)` (distinct from any error) when the
 /// artifact server answers `measurement_revoked`, so the caller reports a
@@ -303,10 +303,10 @@ async fn resolve_and_verify(
         // DSSE publisher-signature verification — ALWAYS run with a trusted
         // publisher key. The publisher key is the response
         // `entry_verifier.content` when both verifiers are present
-        // (response-key path), or the configured-or-built-in publisher key when
-        // both are absent (configured-key path). A mixed (one present, one
-        // absent) is rejected: the two verifiers must be both-present-or-both
-        // -absent. The signature
+        // (response-key path), or the configured publisher key when both are
+        // absent (configured-key path, required there). A mixed (one present,
+        // one absent) is rejected: the two verifiers must be
+        // both-present-or-both-absent. The signature
         // (`body.spec.signatures[0].signature`, base64) is verified over
         // `sha256(DSSEPAE(canonical_manifest))`.
         let (publisher_pem, used_response_key) =
@@ -334,24 +334,25 @@ async fn resolve_and_verify(
             }
         }
         if used_response_key {
-            // Compare the response publisher key to the configured/built-in
-            // baseline publisher key (warn-and-pass). The baseline is the
-            // configured key when one is set, else the built-in publisher key.
-            // Compare by the encoded SEC1 point bytes (VerifyingKey has no
-            // SPKI DER field, but the encoded point is a canonical public-key
-            // identity).
-            let baseline_pem = dsse::effective_publisher_pem(configured_publisher_pem);
-            if let (Ok(resp_key), Ok(baseline_key)) = (
-                dsse::parse_p256_public_key(&publisher_pem),
-                dsse::parse_p256_public_key(baseline_pem),
-            ) {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
-                if resp_key.to_encoded_point(false) != baseline_key.to_encoded_point(false) {
-                    tracing::warn!(
-                        url = %entry.url,
-                        "transparency publisher key differs from built-in baseline; \
-                         the artifact-server supplied a different DSSE publisher key"
-                    );
+            // Compare the response publisher key to the configured publisher
+            // key baseline (warn-and-pass). With no configured key there is no
+            // baseline to compare against, so skip the check.
+            if let Some(baseline_pem) = dsse::configured_publisher_pem(configured_publisher_pem) {
+                // Compare by the encoded SEC1 point bytes (VerifyingKey has no
+                // SPKI DER field, but the encoded point is a canonical
+                // public-key identity).
+                if let (Ok(resp_key), Ok(baseline_key)) = (
+                    dsse::parse_p256_public_key(&publisher_pem),
+                    dsse::parse_p256_public_key(baseline_pem),
+                ) {
+                    use p256::elliptic_curve::sec1::ToEncodedPoint;
+                    if resp_key.to_encoded_point(false) != baseline_key.to_encoded_point(false) {
+                        tracing::warn!(
+                            url = %entry.url,
+                            "transparency publisher key differs from the configured baseline; \
+                             the artifact-server supplied a different DSSE publisher key"
+                        );
+                    }
                 }
             }
         }
@@ -383,12 +384,11 @@ async fn resolve_and_verify(
 /// - **mixed** (one verifier declared, the other empty): rejected (the two
 ///   verifiers must be both-present-or-both-absent).
 /// - **both-absent** (genuinely empty-struct `entry_verifier` with empty
-///   `type_` paired with empty `public_key_pem`): fall back to the
-///   configured-or-built-in publisher key (R5: when the transparency config
-///   supplies no `publisherPublicKeyPem`, the built-in
-///   `BUILTIN_LOG_ENTRY_PUB_KEY_PEM` is the default DSSE key). This is the
-///   only response shape that still deserializes without a declared verifier
-///   type and is kept reachable for a genuinely empty-struct response.
+///   `type_` paired with empty `public_key_pem`): use the configured
+///   `publisherPublicKeyPem`, which is required for this response shape. If
+///   the configuration carries none, reject with an error: there is no
+///   built-in publisher key. This is the only response shape that still
+///   deserializes without a declared verifier type.
 ///
 /// Returns the resolved publisher PEM to verify DSSE against, plus a flag
 /// indicating whether the response key was used (for the baseline-compare warn
@@ -431,15 +431,19 @@ fn resolve_publisher_key(
         );
     }
     if ev_absent {
-        // Both absent (genuinely empty struct) → configured-or-built-in
-        // publisher key (R5: the built-in BUILTIN_LOG_ENTRY_PUB_KEY_PEM is
-        // the config-default DSSE key when no publisherPublicKeyPem is set).
-        let pem = dsse::effective_publisher_pem(configured_publisher_pem);
+        // Both absent (genuinely empty struct) → the configured publisher key
+        // is the only trust anchor for this response shape.
+        let pem = dsse::configured_publisher_pem(configured_publisher_pem).ok_or_else(|| {
+            anyhow::anyhow!(
+                "publisherPublicKeyPem is required when the artifact-server response omits \
+                 both entry_verifier and log_verifier"
+            )
+        })?;
         return Ok((pem.to_string(), false));
     }
     // Both verifiers are present (`type_ == "public_key"`). A
     // present-but-empty `entry_verifier.content` is rejected (cmaas "empty
-    // verifier public key") — do NOT fall back to the built-in key.
+    // verifier public key") — do NOT fall back to a configured key.
     // (`log_verifier.public_key_pem` is guaranteed non-empty here: a
     // present-but-empty pem would have been rejected above as mixed, since
     // `ev_absent=false != lv_absent=true`.)
@@ -489,6 +493,66 @@ mod tests {
     /// resolve/on-demand results.
     fn test_caches() -> std::sync::Arc<super::TransparencyCaches> {
         std::sync::Arc::new(super::TransparencyCaches::new())
+    }
+
+    /// The publisher-key rule for one resolve response entry. Both verifiers
+    /// present uses the response key; both absent falls back to the configured
+    /// key, which is required there; the mixed, present-but-empty, and
+    /// wrong-type shapes are rejected.
+    #[test]
+    fn resolve_publisher_key_rule() {
+        let entry = |entry_verifier: serde_json::Value, log_verifier: serde_json::Value| {
+            let entry: artifact_resolve_sdk::LogEntry = serde_json::from_value(serde_json::json!({
+                "type": "rekor-v1",
+                "url": "https://rekor.example.com",
+                "log_entry": {},
+                "entry_verifier": entry_verifier,
+                "log_verifier": log_verifier,
+            }))
+            .expect("log entry parses");
+            entry
+        };
+
+        let both_present = entry(
+            serde_json::json!({"type": "public_key", "content": "response-key"}),
+            serde_json::json!({"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}),
+        );
+        assert_eq!(
+            resolve_publisher_key(&both_present, None).expect("response key"),
+            ("response-key".to_string(), true)
+        );
+
+        let both_absent = entry(
+            serde_json::json!({"type": "", "content": ""}),
+            serde_json::json!({"public_key_pem": ""}),
+        );
+        assert_eq!(
+            resolve_publisher_key(&both_absent, Some("configured-key")).expect("configured key"),
+            ("configured-key".to_string(), false)
+        );
+        for configured in [None, Some("")] {
+            let err = resolve_publisher_key(&both_absent, configured)
+                .expect_err("a missing configured key must fail");
+            assert!(err.to_string().contains("publisherPublicKeyPem"), "{err}");
+        }
+
+        let present_but_empty = entry(
+            serde_json::json!({"type": "public_key", "content": ""}),
+            serde_json::json!({"public_key_pem": ""}),
+        );
+        assert!(resolve_publisher_key(&present_but_empty, Some("configured-key")).is_err());
+
+        let mixed = entry(
+            serde_json::json!({"type": "", "content": ""}),
+            serde_json::json!({"public_key_pem": SIGSTORE_REKOR_V1_PUB_KEY_PEM}),
+        );
+        assert!(resolve_publisher_key(&mixed, Some("configured-key")).is_err());
+
+        let wrong_type = entry(
+            serde_json::json!({"type": "other", "content": ""}),
+            serde_json::json!({"public_key_pem": ""}),
+        );
+        assert!(resolve_publisher_key(&wrong_type, Some("configured-key")).is_err());
     }
 
     /// Link smoke for the `artifact-resolve-sdk` crate: construct the basic
@@ -556,6 +620,7 @@ mod tests {
             regorus::Value::from(url.as_str()),
             regorus::Value::from(2279770888i64),
             regorus::Value::from(DUMMY_MISMATCH_MANIFEST),
+            regorus::Value::from(DSSE_PUBLISHER_PUB_KEY_PEM),
         ]);
         // first call hits the mock; auth succeeds; manifest mismatches → false;
         // the authenticated payload_hash is cached under (url, logIndex).
@@ -586,6 +651,7 @@ mod tests {
             regorus::Value::from(url),
             regorus::Value::from(9999999999i64),
             regorus::Value::from(DUMMY_MISMATCH_MANIFEST),
+            regorus::Value::from(DSSE_PUBLISHER_PUB_KEY_PEM),
         ]);
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
@@ -640,6 +706,7 @@ mod tests {
             regorus::Value::from(server.uri().as_str()),
             regorus::Value::from(log_index),
             regorus::Value::from(manifest_json.as_str()),
+            regorus::Value::from(DSSE_PUBLISHER_PUB_KEY_PEM),
         ]);
         let hv = hv.clone();
         let result: Result<regorus::Value, _> = hv(arg).await;
@@ -654,7 +721,7 @@ mod tests {
     /// DSSE verification is mandatory in the on-demand fallback. Passing a
     /// WRONG publisher key as the 4th arg must fail DSSE → `Ok(Bool(false))`
     /// even though the entry's payloadHash matches the manifest. Uses the
-    /// fixture (real DSSE signature signed by the built-in publisher key);
+    /// fixture (real DSSE signature signed by the fixture publisher key);
     /// the Sigstore rekor key (a valid P-256 key that did NOT sign the envelope)
     /// is the wrong publisher → DSSE verify fails → clean-deny.
     #[tokio::test]
@@ -1302,11 +1369,9 @@ mod tests {
     /// Present-but-empty response verifiers must be REJECTED (fail-closed):
     /// when `entry_verifier.type_ == "public_key"` but `content` is empty
     /// (and/or `log_verifier.public_key_pem` is empty), cmaas rejects with
-    /// `"empty verifier public key"` (`rekorv1.go:179-181`). The previous TNG
-    /// behavior treated present-but-empty as "absent" and fell back to the
-    /// built-in publisher key — here the fixture's DSSE signature is signed by
-    /// the built-in key, so that fallback would SUCCEED (`Ok(Bool(true))`),
-    /// a fail-open gap. After the fix `resolve_publisher_key` rejects
+    /// `"empty verifier public key"` (`rekorv1.go:179-181`). A fallback to a
+    /// configured publisher key would SUCCEED here when that key signed the
+    /// fixture envelope, a fail-open gap. `resolve_publisher_key` rejects
     /// present-but-empty instead of falling back → `Ok(Bool(false))`.
     #[tokio::test]
     async fn resolve_artifact_server_false_on_empty_verifier_content() {
@@ -1347,9 +1412,9 @@ mod tests {
     /// Mixed verifiers (entry_verifier absent/unsupported + log_verifier
     /// present, or vice versa) must reject: `entry_verifier` and
     /// `log_verifier` must be both-present-or-both-absent. DSSE verification is
-    /// now always mandatory: when both are present it runs against the response
-    /// publisher key; when both are absent it runs against the
-    /// configured/built-in publisher key; a mixed pair is rejected. Here
+    /// always mandatory: when both are present it runs against the response
+    /// publisher key; when both are absent it runs against the configured
+    /// publisher key; a mixed pair is rejected. Here
     /// `entry_verifier.type_ == "other"` (not `public_key`, so treated as
     /// absent) while `log_verifier` is present → mixed → `Ok(Bool(false))`.
     #[tokio::test]
@@ -1398,18 +1463,18 @@ mod tests {
     /// regardless of `log_verifier`.
     /// Before R2, TNG treated `type_ == "other"` as `ev_present=false`; paired
     /// with an absent `log_verifier` (`lv_present=false`) this collapsed into
-    /// the both-absent branch → built-in publisher key fallback → DSSE would
-    /// verify against the built-in key (the fixture's signature is signed by
-    /// it) and the resolve would SUCCEED — a wrong-type verifier silently
-    /// bypassed. After R2 the wrong-type check fires first → reject (false).
+    /// the both-absent branch → configured publisher key fallback → DSSE could
+    /// verify against a configured key and the resolve would SUCCEED, silently
+    /// bypassing the wrong-type verifier. After R2 the wrong-type check fires
+    /// first → reject (false).
     #[tokio::test]
     async fn resolve_artifact_server_false_on_wrong_type_entry_verifier_with_absent_log_verifier() {
         let server = MockServer::start().await;
         let (manifest, log_entry, entry_url) = cmaas_resolve_triple();
         // entry_verifier carries an unsupported type ("other"); log_verifier is
-        // absent (empty pem). The fixture's DSSE signature is signed by the
-        // built-in publisher key, so without the wrong-type guard the
-        // both-absent fallback would verify DSSE and return true (bug). The
+        // absent (empty pem). Without the wrong-type guard the both-absent
+        // fallback would verify DSSE against a configured key (the fixture's
+        // signature was made by the fixture key) and return true (bug). The
         // guard must reject before the fallback.
         let body = serde_json::json!({
             "status": "resolved",
@@ -1694,6 +1759,7 @@ mod tests {
                 "type": "rekor-v1",
                 "logUrl": rekor_server.uri(),
                 "logIndex": log_index,
+                "publisherPublicKeyPem": DSSE_PUBLISHER_PUB_KEY_PEM,
             }],
         });
         let policy = render_policy(value).await;
@@ -1738,6 +1804,7 @@ mod tests {
                 "type": "rekor-v1",
                 "logUrl": rekor_server.uri(),
                 "logIndex": log_index,
+                "publisherPublicKeyPem": DSSE_PUBLISHER_PUB_KEY_PEM,
             }],
         });
         let policy = render_policy(value).await;

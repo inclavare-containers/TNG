@@ -16,7 +16,7 @@ use super::super::test_fixtures::{
     gpu_attestation_event, hex64, hex96, load_model_event, manifest, pai_tdx_input,
     rekor_entries_body, rekor_entry_value, resolve_response_body, rootfs_event, sha384_digests,
     td_payload_event, tdx_input, tdx_input_full, tdx_input_with_body, transparency_entry,
-    uki_event, TDX_VENDOR_ID,
+    uki_event, ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM, TDX_VENDOR_ID,
 };
 use super::test_harness::{eval_policy_vector, render_modules_json, resolved_from_manifest};
 use serde_json::{json, Value};
@@ -731,6 +731,7 @@ fn artifact_value(fallback: Option<MockResponse>) -> Value {
             "type": "rekor-v1",
             "logUrl": "{rekor_url}",
             "logIndex": "{log_index}",
+            "publisherPublicKeyPem": ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM,
         }]);
     }
     value

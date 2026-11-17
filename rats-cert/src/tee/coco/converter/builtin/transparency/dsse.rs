@@ -22,11 +22,6 @@ use x509_cert::spki::SubjectPublicKeyInfoRef;
 pub(crate) const DSSE_PAYLOAD_TYPE: &str =
     "application/vnd.alibabacloud.confidential-computing.release+json";
 
-/// The built-in DSSE publisher key, used as the fail-closed default when no
-/// publisher key is configured. DSSE verification is mandatory, so there is
-/// always a trusted publisher key.
-pub(crate) const BUILTIN_LOG_ENTRY_PUB_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----";
-
 /// DSSE v1 pre-authentication encoding:
 /// `DSSEv1 {len(ptype)} {ptype} {len(payload)} {payload}`. The PAE (with the
 /// payload bytes appended after the space-terminated prefix) is what a DSSE
@@ -43,13 +38,18 @@ pub(crate) fn dsse_pae(payload_type: &str, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The trusted publisher PEM: the configured key when non-empty, the built-in
-/// key otherwise. Every transparency path requires a publisher key, so this
-/// never returns an empty string.
-pub(crate) fn effective_publisher_pem(configured: Option<&str>) -> &str {
-    configured
-        .filter(|s| !s.is_empty())
-        .unwrap_or(BUILTIN_LOG_ENTRY_PUB_KEY_PEM)
+/// The configured publisher PEM when one is set and non-empty.
+pub(crate) fn configured_publisher_pem(configured: Option<&str>) -> Option<&str> {
+    configured.filter(|s| !s.is_empty())
+}
+
+/// The trusted publisher PEM, required. There is no built-in key: a
+/// transparency-log service that supplies no verifier keys must carry an
+/// explicit `publisherPublicKeyPem`.
+pub(crate) fn required_publisher_pem(configured: Option<&str>) -> Result<&str> {
+    configured_publisher_pem(configured).ok_or_else(|| {
+        anyhow::anyhow!("publisherPublicKeyPem is required: no built-in publisher key is available")
+    })
 }
 
 /// Resolve the DSSE signature to bake into a `transparency_log` entry.
@@ -169,16 +169,24 @@ mod tests {
         );
     }
 
-    /// A non-empty configured key wins; an empty/absent one falls back to the
-    /// built-in publisher key.
+    /// A configured key is used as-is; an empty or absent one is an error, so
+    /// nothing silently verifies against an implicit global key.
     #[test]
-    fn effective_publisher_pem_falls_back_to_builtin() {
-        assert_eq!(effective_publisher_pem(None), BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+    fn required_publisher_pem_rejects_missing_and_keeps_configured() {
         assert_eq!(
-            effective_publisher_pem(Some("")),
-            BUILTIN_LOG_ENTRY_PUB_KEY_PEM
+            required_publisher_pem(Some("configured")).expect("configured key"),
+            "configured"
         );
-        assert_eq!(effective_publisher_pem(Some("configured")), "configured");
+        let err = required_publisher_pem(None).expect_err("absent key must fail");
+        assert!(err.to_string().contains("publisherPublicKeyPem"), "{err}");
+        let err = required_publisher_pem(Some("")).expect_err("empty key must fail");
+        assert!(err.to_string().contains("publisherPublicKeyPem"), "{err}");
+        assert_eq!(configured_publisher_pem(None), None);
+        assert_eq!(configured_publisher_pem(Some("")), None);
+        assert_eq!(
+            configured_publisher_pem(Some("configured")),
+            Some("configured")
+        );
     }
 
     /// The canonical form sorts object keys and drops whitespace.
