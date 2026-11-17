@@ -753,7 +753,7 @@ fn inject_ita_api_key_default(obj: &mut serde_json::Map<String, serde_json::Valu
 // Re-export config types from rats-cert to ensure consistency
 #[cfg(feature = "__builtin-as")]
 pub use rats_cert::cert::verify::{
-    PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+    PolicyCapability, PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     SlsaReferenceValuePayloadConfig,
 };
 
