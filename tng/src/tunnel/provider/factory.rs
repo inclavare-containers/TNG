@@ -1,6 +1,8 @@
 use anyhow::Result;
 #[cfg(unix)]
 use rats_cert::tee::coco::attester::CocoAttester;
+#[cfg(feature = "__builtin-as")]
+use rats_cert::tee::coco::converter::builtin::BuiltinCocoConverter;
 use rats_cert::tee::coco::converter::grpc::CocoGrpcConverter;
 use rats_cert::tee::coco::converter::restful::CocoRestfulConverter;
 use rats_cert::tee::coco::converter::CocoConverter;
@@ -38,8 +40,11 @@ pub async fn create_attester(config: &AttesterArgs) -> Result<TngAttester> {
 }
 
 /// Instantiate a `TngConverter` from config. Dispatches on provider, then sub-type.
-/// Note: Builtin AS converter creation via factory is not supported.
-pub fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
+///
+/// Every config variant is constructible here, including the in-process
+/// builtin AS. A builtin verifier must be paired with the converter that owns
+/// the signer chain; use [`create_verifier_for_converter`] for that.
+pub async fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
     match config {
         ConverterArgs::Coco(coco) => match coco {
             CocoConverterArgs::Restful {
@@ -57,16 +62,23 @@ pub fn create_converter(config: &ConverterArgs) -> Result<TngConverter> {
                 CocoGrpcConverter::new(as_addr, policy_ids, as_headers)?,
             ))),
             #[cfg(feature = "__builtin-as")]
-            CocoConverterArgs::Builtin { .. } => {
-                anyhow::bail!("Builtin AS converter creation via factory is not supported")
-            }
+            CocoConverterArgs::Builtin {
+                attestation_policy,
+                reference_values,
+            } => Ok(TngConverter::Coco(CocoConverter::Builtin(
+                BuiltinCocoConverter::new(attestation_policy, reference_values).await?,
+            ))),
         },
         ConverterArgs::Ita(args) => Ok(TngConverter::Ita(args.to_converter()?)),
     }
 }
 
-/// Instantiate a `TngVerifier` from config. Dispatches on provider, then sub-type.
-/// Note: Builtin AS verifier creation via factory is not supported.
+/// Instantiate a `TngVerifier` that does not depend on a converter.
+///
+/// The builtin verifier cannot be built this way: it must trust the
+/// self-signed chain of the in-process AS that signs the converter's tokens.
+/// Background-check verification builds it through
+/// [`create_verifier_for_converter`] instead.
 pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
     match config {
         VerifierArgs::Coco(coco) => match coco {
@@ -128,9 +140,205 @@ pub async fn create_verifier(config: &VerifierArgs) -> Result<TngVerifier> {
             }
             #[cfg(feature = "__builtin-as")]
             CocoVerifierArgs::Builtin => {
-                anyhow::bail!("Builtin AS verifier creation via factory is not supported")
+                anyhow::bail!(
+                    "Builtin AS verifier must be built from the builtin converter; use create_verifier_for_converter"
+                )
             }
         },
         VerifierArgs::Ita(args) => Ok(TngVerifier::Ita(args.to_verifier()?)),
+    }
+}
+
+/// Instantiate a `TngVerifier` paired with an already-constructed converter.
+///
+/// Only the builtin verifier depends on the converter. It trusts the
+/// self-signed chain that the in-process AS signs its tokens with, so building
+/// it from that same converter instance keeps the pair consistent and avoids
+/// standing up a second in-process AS. Remote verifiers ignore the converter
+/// and delegate to [`create_verifier`].
+pub async fn create_verifier_for_converter(
+    converter: &TngConverter,
+    config: &VerifierArgs,
+) -> Result<TngVerifier> {
+    #[cfg(feature = "__builtin-as")]
+    if matches!(config, VerifierArgs::Coco(CocoVerifierArgs::Builtin)) {
+        return match converter {
+            TngConverter::Coco(CocoConverter::Builtin(builtin)) => Ok(TngVerifier::Coco(
+                CocoVerifier::Builtin(builtin.new_verifier().await?),
+            )),
+            other => anyhow::bail!(
+                "Builtin AS verifier requires the builtin converter, got provider {}",
+                other.provider_type()
+            ),
+        };
+    }
+
+    create_verifier(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rats_cert::tee::coco::converter::CocoConverter;
+    use rats_cert::tee::coco::verifier::CocoVerifier;
+    use rats_cert::tee::{FallbackCapability, NonceCapability};
+
+    use super::*;
+    use crate::config::ra::ItaConverterArgs;
+    use crate::tunnel::provider::ProviderType;
+
+    fn restful_converter_args() -> ConverterArgs {
+        ConverterArgs::Coco(CocoConverterArgs::Restful {
+            as_addr: "http://127.0.0.1:8080".to_string(),
+            policy_ids: vec!["default".to_string()],
+            as_headers: HashMap::new(),
+        })
+    }
+
+    fn grpc_converter_args() -> ConverterArgs {
+        ConverterArgs::Coco(CocoConverterArgs::Grpc {
+            as_addr: "http://127.0.0.1:5000".to_string(),
+            policy_ids: vec!["default".to_string()],
+            as_headers: HashMap::new(),
+        })
+    }
+
+    fn ita_converter_args() -> ConverterArgs {
+        ConverterArgs::Ita(ItaConverterArgs {
+            as_addr: "https://api.trustauthority.example.com".to_string(),
+            api_key: Some("test-key".to_string()),
+            policy_ids: vec!["default".to_string()],
+        })
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    fn builtin_converter_args() -> ConverterArgs {
+        ConverterArgs::Coco(CocoConverterArgs::Builtin {
+            attestation_policy: crate::config::ra::PolicyConfig::HardwareOnly,
+            reference_values: vec![],
+        })
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    fn builtin_verifier_args() -> VerifierArgs {
+        VerifierArgs::Coco(CocoVerifierArgs::Builtin)
+    }
+
+    #[tokio::test]
+    async fn create_converter_constructs_remote_variants() {
+        let restful = create_converter(&restful_converter_args())
+            .await
+            .expect("restful converter constructs");
+        assert_eq!(restful.provider_type(), ProviderType::Coco);
+
+        let grpc = create_converter(&grpc_converter_args())
+            .await
+            .expect("grpc converter constructs");
+        assert_eq!(grpc.provider_type(), ProviderType::Coco);
+
+        let ita = create_converter(&ita_converter_args())
+            .await
+            .expect("ita converter constructs");
+        assert_eq!(ita.provider_type(), ProviderType::Ita);
+    }
+
+    #[tokio::test]
+    async fn converter_capabilities_describe_each_adapter() {
+        let restful = create_converter(&restful_converter_args()).await.unwrap();
+        assert_eq!(
+            restful.capabilities(),
+            rats_cert::tee::ConverterCapabilities {
+                nonce: NonceCapability::SignedOrDummy,
+                fallback: FallbackCapability::OnSpecificError,
+                policy_ids: true,
+                additional_evidence: true,
+            }
+        );
+
+        let grpc = create_converter(&grpc_converter_args()).await.unwrap();
+        assert_eq!(
+            grpc.capabilities(),
+            rats_cert::tee::ConverterCapabilities {
+                nonce: NonceCapability::Dummy,
+                fallback: FallbackCapability::OnAnyError,
+                policy_ids: true,
+                additional_evidence: false,
+            }
+        );
+
+        let ita = create_converter(&ita_converter_args()).await.unwrap();
+        assert_eq!(
+            ita.capabilities(),
+            rats_cert::tee::ConverterCapabilities {
+                nonce: NonceCapability::Signed,
+                fallback: FallbackCapability::None,
+                policy_ids: true,
+                additional_evidence: false,
+            }
+        );
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn builtin_converter_constructs_and_reports_its_capabilities() {
+        let converter = create_converter(&builtin_converter_args())
+            .await
+            .expect("builtin converter constructs");
+        assert!(
+            matches!(converter, TngConverter::Coco(CocoConverter::Builtin(_))),
+            "expected the builtin adapter"
+        );
+        assert_eq!(
+            converter.capabilities(),
+            rats_cert::tee::ConverterCapabilities {
+                nonce: NonceCapability::Signed,
+                fallback: FallbackCapability::None,
+                policy_ids: false,
+                additional_evidence: true,
+            }
+        );
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn builtin_verifier_is_built_from_the_converter_signer_chain() {
+        let converter = create_converter(&builtin_converter_args()).await.unwrap();
+        let converter_chain = match &converter {
+            TngConverter::Coco(CocoConverter::Builtin(c)) => c.signer_cert_chain().to_vec(),
+            _ => panic!("expected the builtin adapter"),
+        };
+
+        let verifier = create_verifier_for_converter(&converter, &builtin_verifier_args())
+            .await
+            .expect("builtin verifier is built from the converter");
+        let trusted = match &verifier {
+            TngVerifier::Coco(CocoVerifier::Builtin(v)) => v.trusted_certs().to_vec(),
+            _ => panic!("expected the builtin verifier"),
+        };
+        assert_eq!(
+            trusted, converter_chain,
+            "the verifier must trust the converter's signer chain"
+        );
+    }
+
+    #[cfg(feature = "__builtin-as")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn builtin_verifier_rejects_standalone_and_unpaired_construction() {
+        assert!(
+            create_verifier(&builtin_verifier_args()).await.is_err(),
+            "a builtin verifier cannot be built without its converter"
+        );
+
+        let restful = create_converter(&restful_converter_args()).await.unwrap();
+        assert!(
+            create_verifier_for_converter(&restful, &builtin_verifier_args())
+                .await
+                .is_err(),
+            "a builtin verifier cannot pair with a remote converter"
+        );
     }
 }

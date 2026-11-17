@@ -1,7 +1,7 @@
 use rats_cert::errors::*;
 use rats_cert::tee::coco::converter::CocoConverter;
 use rats_cert::tee::ita::ItaConverter;
-use rats_cert::tee::GenericConverter;
+use rats_cert::tee::{ConverterCapabilities, GenericConverter};
 
 use super::evidence::TngEvidence;
 use super::token::TngToken;
@@ -26,6 +26,14 @@ impl TngConverter {
         match self {
             Self::Coco(c) => c.as_addr(),
             Self::Ita(c) => c.as_addr(),
+        }
+    }
+
+    /// The observable behavior of the selected provider and adapter.
+    pub fn capabilities(&self) -> ConverterCapabilities {
+        match self {
+            Self::Coco(c) => c.capabilities(),
+            Self::Ita(c) => c.capabilities(),
         }
     }
 }
