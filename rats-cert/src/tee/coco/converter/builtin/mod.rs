@@ -6,6 +6,8 @@
 mod converter;
 mod host_fns;
 mod policies;
+#[cfg(any(test, wasm))]
+pub(crate) mod policy_capabilities;
 mod policy_config;
 mod reference_values;
 mod signer;
@@ -26,6 +28,10 @@ pub use policy_config::{
     TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe, TdxTcbConfig,
     TransparencyLogEntryConfig, TransparencyServiceConfig,
 };
+
+// The policy chooser list is only needed by the wasm SDK and tests.
+#[cfg(any(test, wasm))]
+pub use policy_capabilities::PolicyCapability;
 
 /// Render the Rego source a builtin AS loads for `policy`. This is the same
 /// function the tunnel uses; the tunnel additionally base64-encodes the result.

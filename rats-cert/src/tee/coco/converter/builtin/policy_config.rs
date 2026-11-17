@@ -66,7 +66,7 @@ impl PolicyConfig {
         }
     }
 
-    /// Short policy name used in configuration errors.
+    /// Short policy name used in configuration errors and as the `type` tag.
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::HardwareOnly => "hardware_only",

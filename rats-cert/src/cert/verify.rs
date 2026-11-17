@@ -37,6 +37,8 @@ use rustls_webpki::ring::{
 };
 
 // Re-export builtin config types for external use
+#[cfg(all(feature = "__builtin-as", any(test, wasm)))]
+pub use crate::tee::coco::converter::builtin::PolicyCapability;
 #[cfg(feature = "__builtin-as")]
 pub use crate::tee::coco::converter::builtin::{
     ModuleEntryConfig, ModuleGroupsConfig, PolicyConfig, ReferenceValueConfig,
