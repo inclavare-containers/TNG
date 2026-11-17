@@ -2,9 +2,16 @@
 help:
 	@echo "Read README.md first"
 
+# The CI image already carries these deps and its yum cache is cleaned, so an
+# unconditional yum call would re-download the repo metadata on every run.
+TEST_DEPS := iptables iputils gcc bind-utils tar llvm yum-utils curl openssl iproute ipset jq perl openssl-devel clang
+# cargo and rust come from rustup in CI, not from system packages.
+BUILD_DEPS := $(shell sed -n 's/^BuildRequires:[[:space:]]*//p' ./trusted-network-gateway.spec | awk '{print $$1}' | grep -v -x -e cargo -e rust)
+
 .PHONE: install-test-deps
 install-test-deps:
-	yum install -y iptables iputils gcc bind-utils tar llvm yum-utils curl iptables openssl iproute ipset jq perl openssl-devel clang
+	missing=$$(for p in $(TEST_DEPS); do rpm -q "$$p" >/dev/null 2>&1 || echo "$$p"; done | tr '\n' ' '); \
+	if [ -n "$$missing" ]; then echo "installing test deps: $$missing"; yum install -y $$missing; fi
 
 .PHONE: run-test
 run-test: install-test-deps
@@ -14,7 +21,8 @@ run-test: install-test-deps
 
 .PHONE: run-test-coverage
 run-test-coverage: install-test-deps
-	yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec
+	missing=$$(for p in $(BUILD_DEPS); do rpm -q --whatprovides "$$p" >/dev/null 2>&1 || echo "$$p"; done | tr '\n' ' '); \
+	if [ -n "$$missing" ]; then echo "installing build deps: $$missing"; yum-builddep -y --skip-unavailable ./trusted-network-gateway.spec; fi
 
 	./tng-testsuite/run-test.sh --coverage $(COV_ARGS)
 

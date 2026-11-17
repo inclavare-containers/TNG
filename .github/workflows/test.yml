@@ -160,9 +160,10 @@ jobs:
 
   unit:
     name: unit (alinux3)
-    # Normal duration is ~25 min; cap a hung run to fail in 45 instead of
-    # burning GitHub's 6-hour default.
-    timeout-minutes: 45
+    # When the image already carries the test dependencies the yum metadata
+    # refresh is skipped, leaving the instrumented build and the tests. 60
+    # minutes still fails a hung run well inside GitHub's 6-hour default.
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -291,7 +292,7 @@ jobs:
     # RPM used by the unit job. Mainline issues EAR JWT tokens with JWK x5c
     # chains and has no /certificate endpoint, so this catches drift in the
     # token verification path as upstream evolves. First run after upstream
-    # moves also builds the AS, hence the wider cap than the unit job.
+    # moves also builds the AS, hence the 60-minute cap.
     timeout-minutes: 60
     runs-on: ubuntu-latest
     defaults:
